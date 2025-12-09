@@ -115,7 +115,7 @@ function main()
     jumps::Vector{JumpOp} = []
     for pauli in jump_paulis
             for site in 1:num_qubits
-                jump_op = Matrix(pad_term(pauli, num_qubits, site)) / jump_normalization
+                jump_op = pad_term(pauli, num_qubits, site) / jump_normalization
                 jump_op_in_eigenbasis = hamiltonian.eigvecs' * jump_op * hamiltonian.eigvecs
                 # jump_op_in_eigenbasis = trotter.eigvecs' * jump_op * trotter.eigvecs  #! Uncomment for Trotter
                 orthogonal = (jump_op == transpose(jump_op))

@@ -14,6 +14,7 @@ using DataStructures
 using SpecialFunctions: erfc
 using QuadGK
 using Base
+using Optim
 
 # --- Public API ---
 export LiouvConfig, ThermalizeConfig, HamHam, TrottTrott, HotAlgorithmResults, HotSpectralResults, JumpOp,
@@ -22,9 +23,11 @@ export run_liouvillian, run_thermalization
 export generate_filename, validate_config!, create_trotter, compute_trotter_error, gibbs_state, gibbs_state_in_eigen,
        create_bohr_dict, pad_term, pick_transition, create_hamham, find_ideal_heisenberg, create_alpha, expm_pauli_padded, 
        finalize_hamham
-       add_gibbs_to_hamham
-export KrausFramework, build_krausframework
-export X, Y, Z, id, Had
+# Quantum Trajectory
+export KrausFramework, build_krausframework, step_along_the_trajectory!, evolve_along_trajectory, construct_gksl_lindbladian
+# Log Sobolev bound
+export LSIFramework, LSI
+export X, Y, Z, Had
 
 # --- Internal Implementation ---
 include("constants.jl")

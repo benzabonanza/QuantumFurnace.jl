@@ -154,8 +154,8 @@ end
     - `in_eigenbasis`: The operator transformed into the Hamiltonian's eigenbasis (or Trotter basis).
     - `orthogonal`: Boolean flag indicating if this operator is self-orthogonal. If yes, the algorithm simplifies a bit.
 """
-mutable struct JumpOp
-    data::Matrix{ComplexF64}
+struct JumpOp{T <: AbstractMatrix{ComplexF64}}
+    data::T
     in_eigenbasis::Matrix{ComplexF64}
     orthogonal::Bool
 end
