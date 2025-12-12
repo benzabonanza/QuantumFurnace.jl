@@ -1,4 +1,19 @@
-#* Sadly, slow. Misery.
+
+#TODO: Finish this with precomputed kraus operators.
+function construct_linbdladian_map()
+
+
+    function liouv_linearmap!(dv_vec::AbstractVector, v_vec::AbstractVector)
+        rho = reshape(v_vec, size(hamiltonian.data))
+
+        apply_lindbladian!(rho)
+        copyto!(dv_vec, vec(d_rho))
+        return dv_vec
+    end
+    return LinearMap{ComplexF64}(liouv_linearmap!, dim^2, ismutating=true)
+end
+
+#* Sadly, slow. Misery. (Because calling time_oft and such all the time)
 # function create_liouvillian_map(jumps::Vector{JumpOp}, config::LiouvConfig,
 #     hamiltonian::HamHam;
 #     trotter::Union{TrottTrott, Nothing}=nothing)

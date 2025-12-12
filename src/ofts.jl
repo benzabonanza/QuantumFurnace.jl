@@ -8,10 +8,10 @@ using Pkg
 
 function oft(jump::JumpOp, energy::Float64, hamiltonian::HamHam, beta::Float64)
     """sigma_E = 1 / beta. Subnormalized, multiply by sqrt(beta / sqrt(2 * pi))"""
-    return jump.in_eigenbasis .* exp.(-beta^2 * (energy .- hamiltonian.bohr_freqs).^2 / 4) 
+    return @. jump.in_eigenbasis * exp(-beta^2 * (energy - hamiltonian.bohr_freqs)^2 / 4) 
 end
 
-function oft_fast!(out_matrix::Matrix{ComplexF64}, jump::JumpOp, energy::Float64, hamiltonian::HamHam, beta::Float64)
+function oft!(out_matrix::Matrix{ComplexF64}, jump::JumpOp, energy::Float64, hamiltonian::HamHam, beta::Float64)
     """sigma_E = 1 / beta. Subnormalized, multiply by sqrt(beta / sqrt(2 * pi))"""
     @. out_matrix = jump.in_eigenbasis * exp(-beta^2 * (energy - hamiltonian.bohr_freqs)^2 / 4) 
     return out_matrix
@@ -108,17 +108,22 @@ function time_oft_fast!(out_matrix::Matrix{ComplexF64}, caches::OFTCaches,
     # --- Re-use the cache matrices U and temp_op inside the loops ---
     if jump.orthogonal
         # t = 0.0 case: U = I
-        @fastmath out_matrix .+= caches.prefactors[1] .* jump.in_eigenbasis
+        @. out_matrix += caches.prefactors[1] * jump.in_eigenbasis
 
         for i in 2:mid_point
             t = time_labels[i]
             @fastmath caches.U.diag .= exp.(1im .* hamiltonian.eigvals .* t)
             
-            mul!(caches.temp_op, caches.U, jump.in_eigenbasis)
-            mul!(caches.temp_op, caches.temp_op, caches.U') # temp_op = U*jump*U'
+            copyto!(caches.temp_op, jump.in_eigenbasis)
+            # temp_op = U*jump*U', for diagonal U's:
+            @. caches.temp_op *= caches.U.diag * caches.U.diag'  
+
+            # old, unsafe for mul!(A, A, B)
+            # mul!(caches.temp_op, caches.U, jump.in_eigenbasis)
+            # mul!(caches.temp_op, caches.temp_op, caches.U') 
             
-            out_matrix .+= caches.prefactors[i] .* caches.temp_op
-            out_matrix .+= conj(caches.prefactors[i]) .* transpose(caches.temp_op)
+            @. out_matrix += caches.prefactors[i] * caches.temp_op
+            @. out_matrix += conj(caches.prefactors[i]) * transpose(caches.temp_op)
         end
     else
         for i in eachindex(time_labels)
@@ -154,10 +159,14 @@ function trotter_oft_fast!(out_matrix::Matrix{ComplexF64}, caches::OFTCaches,
         for i in 2:mid_point
             n_steps = i - 1
             @fastmath caches.U.diag .= trotter.eigvals_t0 .^ n_steps
+
+            copyto!(caches.temp_op, jump.in_eigenbasis)
+            # temp_op = U*jump*U', for diagonal U's:
+            @. caches.temp_op *= caches.U.diag * caches.U.diag'  
             
-            # temp_op = U * jump.in_eigenbasis * U'
-            mul!(caches.temp_op, caches.U, jump.in_eigenbasis)
-            mul!(caches.temp_op, caches.temp_op, caches.U')
+            # unsafe:
+            # mul!(caches.temp_op, caches.U, jump.in_eigenbasis)
+            # mul!(caches.temp_op, caches.temp_op, caches.U')
             
             # Accumulate both terms in-place
             LinearAlgebra.axpby!(caches.prefactors[i], caches.temp_op, 1.0, out_matrix)

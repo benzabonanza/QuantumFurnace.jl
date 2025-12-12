@@ -15,20 +15,28 @@ function run_liouvillian(jumps::Vector{JumpOp}, config::LiouvConfig, hamiltonian
 
     # Arpack eigs
     # eigvals_near_zero, eigvecs_near_zero = eigs(liouv, nev=2, which=:SM, tol=1e-12)
-    shift = 1e-8 * (1 + 1im)
+    shift = 1e-9 * (1 + 1im)
     eigvals_near_zero, eigvecs_near_zero = eigs(liouv, nev=2, sigma=shift, tol=1e-12)
-    ss_index = findmin(abs.(eigvals_near_zero))[2]
-    gap_index = (ss_index == 1) ? 2 : 1
-    lambda_2 = eigvals_near_zero[gap_index] # Spectral gap
+    sorted_permutation_eigen = sortperm(abs.(real.(eigvals_near_zero)))
+    
+    ss_index = sorted_permutation_eigen[1]   # Smallest
+    gap_index = sorted_permutation_eigen[2]  # Second smallest
+    spectral_gap = eigvals_near_zero[gap_index] # Spectral gap
 
     steady_state_vec = eigvecs_near_zero[:, ss_index]
     steady_state_dm = reshape(steady_state_vec, size(hamiltonian.data))
+    steady_state_dm = (steady_state_dm + steady_state_dm') / 2
     steady_state_dm ./= tr(steady_state_dm) # Normalize
+
+    # Gap mode used for LSI
+    gap_vec = eigvecs_near_zero[:, gap_index]
+    gap_mode_op = reshape(gap_vec, size(hamiltonian.data))
 
     result = HotSpectralResults(
         data = liouv,
         fixed_point = steady_state_dm,
-        lambda_2 = lambda_2,
+        gap_mode = gap_mode_op,
+        spectral_gap = spectral_gap,
         hamiltonian = hamiltonian,
         trotter = trotter, 
         config = config
@@ -50,6 +58,7 @@ function construct_liouvillian(jumps::Vector{JumpOp}, config::LiouvConfig, hamil
     end
 
     labels = precompute_labels(config.domain, config)
+    @printf "\nNumber of energy labels: %d\n" length(labels[1])
 
     total_liouv = @distributed (+) for jump in jumps
         jump_contribution(config.domain, jump, ham_or_trott, config, labels...)

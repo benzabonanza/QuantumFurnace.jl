@@ -15,6 +15,8 @@ using SpecialFunctions: erfc
 using QuadGK
 using Base
 using Optim
+using Base.Threads 
+using LinearMaps
 
 # --- Public API ---
 export LiouvConfig, ThermalizeConfig, HamHam, TrottTrott, HotAlgorithmResults, HotSpectralResults, JumpOp,
@@ -26,7 +28,7 @@ export generate_filename, validate_config!, create_trotter, compute_trotter_erro
 # Quantum Trajectory
 export KrausFramework, build_krausframework, step_along_the_trajectory!, evolve_along_trajectory, construct_gksl_lindbladian
 # Log Sobolev bound
-export LSIFramework, LSI
+export LSIFramework, compute_LSI_alpha2
 export X, Y, Z, Had
 
 # --- Internal Implementation ---
@@ -45,7 +47,10 @@ include("time_domain.jl")
 include("timelike_tools.jl")
 include("trotter_domain.jl")
 include("trajectories.jl")
-include("oven_utensils.jl")
-include("oven.jl")
+include("furnace_utensils.jl")
+include("furnace.jl")
+include("log_sobolev.jl")
+include("log_sobolev_manopt.jl")
+include("linearmaps_liouv.jl")
 
 end

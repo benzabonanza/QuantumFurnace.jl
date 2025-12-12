@@ -1,23 +1,42 @@
-using Distributed
+# using Distributed
 
-if "SLURM_JOB_ID" in keys(ENV)
-    # For HPC environments
-    using ClusterManagers
-    num_tasks = parse(Int, ENV["SLURM_NTASKS"])
-    addprocs(SlurmManager(num_tasks))
-    println("Slurm environment. Added $(nworkers()) workers.")
-else
-    # For local testing
-    if nprocs() == 1
-        println("No external workers detected. Adding 4 local workers for testing...")
-        addprocs(4)
-        println("Workers available: ", workers())
-    end
+# if "SLURM_JOB_ID" in keys(ENV)
+#     # For HPC environments
+#     using ClusterManagers
+#     num_tasks = parse(Int, ENV["SLURM_NTASKS"])
+#     addprocs(SlurmManager(num_tasks))
+#     println("Slurm environment. Added $(nworkers()) workers.")
+# else
+#     # For local testing
+#     if nprocs() == 1
+#         println("No external workers detected. Adding 4 local workers for testing...")
+#         addprocs(4)
+#         println("Workers available: ", workers())
+#     end
+# end
+
+# println("Loading QuantumFurnace on all $(nworkers()) workers...")
+# @everywhere using QuantumFurnace
+# # @everywhere using Pkg, LinearAlgebra, Random, Printf, SparseArrays, BSON, Arpack
+using Distributed
+using Revise
+
+if nprocs() == 1
+    addprocs(4, exeflags="--project")  # Add workers
 end
 
-println("Loading QuantumFurnace on all $(nworkers()) workers...")
-@everywhere using QuantumFurnace
-# @everywhere using Pkg, LinearAlgebra, Random, Printf, SparseArrays, BSON, Arpack
+if !isdefined(Main, :QuantumFurnace)
+    includet("../src/QuantumFurnace.jl")
+end
+using .QuantumFurnace
+using Pkg, LinearAlgebra, Random, Printf, SparseArrays, BSON, Arpack
+
+@everywhere begin
+    if !isdefined(Main, :QuantumFurnace)
+        using QuantumFurnace
+    end
+    using Pkg, LinearAlgebra, Random, Printf, SparseArrays, BSON, Arpack
+end
 
 function main()
         #* Config
@@ -38,27 +57,12 @@ function main()
         with_coherent = true
         with_linear_combination = true
         # energy_domain = EnergyDomain()
-        domain = TimeDomain()
-        num_energy_bits = 11  # 11
+        domain = EnergyDomain()
+        num_energy_bits = 12  # 11
         w0 = 0.05
         max_E = w0 * 2^num_energy_bits / 2
         t0 = 2pi / (2^num_energy_bits * w0)  # Max time evolution pi / w0
         num_trotter_steps_per_t0 = 10
-
-        # energy_config = LiouvConfig(
-        #         num_qubits = num_qubits, 
-        #         with_coherent = with_coherent,
-        #         with_linear_combination = with_linear_combination, 
-        #         domain = energy_domain,
-        #         beta = beta,
-        #         a = a,
-        #         b = b,
-        #         num_energy_bits = num_energy_bits,
-        #         w0 = w0,
-        #         t0 = t0,
-        #         eta = eta,
-        #         num_trotter_steps_per_t0 = num_trotter_steps_per_t0
-        # )
 
         config = LiouvConfig(
                 num_qubits = num_qubits, 
@@ -81,19 +85,15 @@ function main()
         # hamiltonian_coeffs = fill(1.0, length(hamiltonian_terms))
         # hamiltonian = create_hamham(hamiltonian_terms, hamiltonian_coeffs, num_qubits)
 
-        # Hamiltonian path
+        # Load Hamiltonian
         project_root = Pkg.project().path |> dirname
         data_dir = joinpath(project_root, "hamiltonians")
         output_filename = join(["heis", "disordered", "periodic", "n$num_qubits"], "_") * ".bson"
         ham_path = joinpath(data_dir, output_filename)
-
-        # Load Hamiltonian
-        bson_ham_data = BSON.load(ham_path)
-        hamiltonian = bson_ham_data[:hamiltonian]
-        @printf("Hamiltonian is loaded.\n")
-        hamiltonian.bohr_freqs = hamiltonian.eigvals .- transpose(hamiltonian.eigvals)
-        hamiltonian.bohr_dict = create_bohr_dict(hamiltonian)
-        hamiltonian.gibbs = Hermitian(gibbs_state_in_eigen(hamiltonian, beta))
+        bson_hamiltonian_data = BSON.load(ham_path)
+        hamiltonian = bson_hamiltonian_data[:hamiltonian]
+        hamiltonian = finalize_hamham(hamiltonian, beta)
+    
         initial_dm = Matrix{ComplexF64}(I(dim) / dim)
         @assert norm(real(tr(initial_dm)) - 1.) < 1e-15 "Trace is not 1.0"
         @assert norm(initial_dm - initial_dm') < 1e-15 "Not Hermitian"
@@ -107,12 +107,13 @@ function main()
         #* Jumps
         jump_paulis = [[X], [Y], [Z]]
 
-        num_of_jumps = length(jump_paulis) * num_qubits
+        jump_sites = 1:num_qubits
+        num_of_jumps = length(jump_paulis) * length(jump_sites)
         jump_normalization = sqrt(num_of_jumps)
         # jump_normalization = 1.0
         jumps::Vector{JumpOp} = []
         for pauli in jump_paulis
-                for site in 1:num_qubits
+                for site in jump_sites
                         jump_op = Matrix(pad_term(pauli, num_qubits, site)) / jump_normalization
                         jump_op_in_eigenbasis = hamiltonian.eigvecs' * jump_op * hamiltonian.eigvecs
                         # jump_op_in_eigenbasis = trotter.eigvecs' * jump_op * trotter.eigvecs  #! Uncomment for Trotter
@@ -129,7 +130,7 @@ function main()
         liouv_result = @time run_liouvillian(jumps, config, hamiltonian; trotter = trotter)
         @printf("Distance to Gibbs: %s\n", norm(liouv_result.fixed_point - hamiltonian.gibbs))
         @printf("Distance to Gibbs (TROTTER): %s\n", norm(liouv_result.fixed_point - gibbs_in_trotter))
-        @printf("Spectral gap: %s\n", abs(real(liouv_result.lambda_2)))
+        @printf("Spectral gap: %s\n", abs(real(liouv_result.spectral_gap)))
 
 
         # opt_delta =  2 / (abs(liouv_eigvals[2]) + abs(liouv_eigvals[end]))

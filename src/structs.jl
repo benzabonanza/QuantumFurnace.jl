@@ -194,7 +194,7 @@ mutable struct TrottTrott
     num_trotter_steps_per_t0::Float64
     eigvals_t0::Vector{ComplexF64}
     eigvecs::Matrix{ComplexF64}
-    trafo_from_eigen_to_trotter::Matrix{ComplexF64}
+    trafo_from_eigen_to_trotter::Matrix{ComplexF64}  # U' X_trott U = X_eigenbasis in H
 end
 
 """
@@ -225,9 +225,10 @@ end
     Results from the spectral analysis of the Liouvillian.
 
     # Fields
-    - `data`: The Liouvillian matrix. #? In corresponding domain basis? #TODO:
+    - `data`: The Liouvillian matrix.
     - `fixed_point`: The steady state found via spectral analysis.
-    - `lambda_2`: The first non-zero eigenvalue (gap).
+    - `gap_mode`: The next eigenmode after the steady state.
+    - `spectral_gap`: The first non-zero eigenvalue (gap).
     - `hamiltonian`: The [`HamHam`](@ref) data used.
     - `trotter`: The [`TrottTrott`](@ref) data used, in case of a TrotterDomain simulation.
     - `config`: The given configuration used.
@@ -235,7 +236,8 @@ end
 @kwdef struct HotSpectralResults{D}
     data::Matrix{ComplexF64}  #! Remove when space matters
     fixed_point::Matrix{ComplexF64}
-    lambda_2::ComplexF64    # For spectral gap
+    gap_mode::Matrix{ComplexF64}
+    spectral_gap::ComplexF64
     hamiltonian::HamHam
     trotter::Union{TrottTrott,Nothing} = nothing
     config::LiouvConfig{D}
