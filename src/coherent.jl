@@ -31,6 +31,38 @@ function B_time(jump::JumpOp, hamiltonian::HamHam, b_minus::Dict{Float64, Comple
     return B * t0^2
 end
 
+function B_time(jumps::Vector{JumpOp}, hamiltonian::HamHam, b_minus::Dict{Float64, ComplexF64}, 
+    b_plus::Dict{Float64, ComplexF64}, t0::Float64, beta::Float64)
+    
+    dim = size(hamiltonian.data)
+    diag_time_evolve(t) = Diagonal(exp.(1im * hamiltonian.eigvals * t * beta))  # beta factor comes in for b_1,2
+
+    # Inner summand b_plus
+    b_plus_summand = zeros(ComplexF64, dim)  # For all jumps A^a
+    U = zeros(ComplexF64, dim)
+    U_minus_2 = zeros(ComplexF64, dim)
+    for jump_a in jumps
+        for s in keys(b_plus)
+            U .= diag_time_evolve(s)
+            U_minus_2 .= diag_time_evolve(-2.0 * s)
+            b_plus_summand .+= b_plus[s] * U * jump_a.in_eigenbasis' * U_minus_2 * jump_a.in_eigenbasis * U
+        end
+    end
+
+    # Outer summand b_minus
+    # A is Hermitian
+    B = zeros(ComplexF64, dim)
+    for t in keys(b_minus)
+        U .= diag_time_evolve(t)
+        B .+= b_minus[t] * U' * b_plus_summand * U
+    end
+
+    # If A is non-Hermitian
+    # ...
+
+    return B * t0^2
+end
+
 function B_trotter(jump::JumpOp, trotter::TrottTrott, b_minus::Dict{Float64, ComplexF64}, 
     b_plus::Dict{Float64, ComplexF64}, beta::Float64)
 
@@ -60,6 +92,8 @@ function B_trotter(jump::JumpOp, trotter::TrottTrott, b_minus::Dict{Float64, Com
 
     return B * trotter.t0^2  # B in Trotter basis
 end
+
+#TODO: B trotter for all jumps at once.
 
 function coherent_term_time(jump::JumpOp, hamiltonian::HamHam, f_minus::Dict{Float64, ComplexF64}, 
     f_plus::Dict{Float64, ComplexF64}, t0::Float64)

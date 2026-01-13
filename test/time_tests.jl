@@ -76,59 +76,15 @@ for pauli in jump_paulis
         end
 end
 
-kraus_jumps = precompute_kraus_jumps(config.domain, jumps, hamiltonian, config, precomputed_data, time_oft_caches)
-R = precompute_R(kraus_jumps)
-# B_from_R = precompute_B(R, hamiltonian, beta)
-# norm(B_from_R)
+dim = 2^num_qubits
+A = jumps[2]
+w = -3 * w0
+A_oft = oft(A, w, hamiltonian, beta) * sqrt(beta / sqrt(2 * pi))
+A_oft_time = time_oft(A, w, hamiltonian, precomputed_data.oft_time_labels, beta) * t0 * sqrt((sqrt(2 / pi)/beta) / (2 * pi))
+norm(A_oft - A_oft_time)
 
-# B = B_time(jumps, hamiltonian, precomputed_data.b_minus, precomputed_data.b_plus, t0, beta)
-# norm(B) #! Why is the norm of summed B zero?
-B = coherent_bohr(hamiltonian, jumps, config)
-
-fw = build_krausframework(B, kraus_jumps, R, delta)
-
-#TODO: Fix me for time domain and trotter; energy domain works. Possibly in kraus jump computation.
-lindbladian_from_kraus = construct_gksl_lindbladian(B, kraus_jumps)
-result = run_liouvillian(jumps, config, hamiltonian)
-norm(lindbladian_from_kraus - result.data)
-
-eigvals_near_zero, eigvecs_near_zero = eigen(lindbladian_from_kraus)
-sorted_permutation_eigen = sortperm(abs.(real.(eigvals_near_zero)))
-
-ss_index = sorted_permutation_eigen[1]   # Smallest
-gap_index = sorted_permutation_eigen[2]  # Second smallest
-spectral_gap = eigvals_near_zero[gap_index] # Spectral gap
-
-steady_state_vec = eigvecs_near_zero[:, ss_index]
-steady_state_dm = reshape(steady_state_vec, size(hamiltonian.data))
-steady_state_dm = (steady_state_dm + steady_state_dm') / 2
-steady_state_dm ./= tr(steady_state_dm) # Normalize
-
-norm(hamiltonian.gibbs - steady_state_dm)
-
-
-norm(result.fixed_point - hamiltonian.gibbs)
-
-eigvals, eigvecs = eigen(lindbladian_from_kraus)
-
-eigvecs[:, end]
-
-
-
-
-
-
-
-
-# jump_rate = 0.5
-# jump_op = (X + 1im * Y) / 2
-# padded_jump = pad_term([jump_op], num_qubits, 1)
-# L = sqrt(jump_rate) * padded_jump
-# L_in_eigenbasis = hamiltonian.eigvecs' * L * hamiltonian.eigvecs
-# orthogonal = (L == transpose(L))
-# jump = JumpOp(L, L_in_eigenbasis, orthogonal)
-
-# [jump.in_eigenbasis]
-
-# delta = 0.01
-# fw = build_krausframework(hamiltonian.data, [jump.in_eigenbasis], R, delta)
+A_oft_time_fast = zeros(ComplexF64, dim, dim)
+time_oft_caches = OFTCaches(dim)
+time_oft_fast!(A_oft_time_fast, time_oft_caches, A, w, hamiltonian, precomputed_data.oft_time_labels, beta)
+A_oft_time_fast *= (t0 * sqrt((sqrt(2 / pi)/beta) / (2 * pi)))
+norm(A_oft - A_oft_time_fast)

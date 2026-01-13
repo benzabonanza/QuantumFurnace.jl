@@ -118,6 +118,28 @@ function coherent_bohr(hamiltonian::HamHam, jump::JumpOp, config::Union{LiouvCon
     return B
 end
 
+function coherent_bohr(hamiltonian::HamHam, jumps::Vector{JumpOp}, config::Union{LiouvConfig, ThermalizeConfig})
+
+    dim = size(hamiltonian.data, 1)
+    unique_freqs = keys(hamiltonian.bohr_dict)
+
+    f = pick_f(config)  # Picks rates for B in Bohr domain
+
+    B = zeros(ComplexF64, dim, dim)
+    for jump in jumps
+        f_A_nu_1 = zeros(ComplexF64, dim, dim)
+        for nu_2 in unique_freqs
+            A_nu_2::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
+            indices = hamiltonian.bohr_dict[nu_2]
+            A_nu_2[indices] .= jump.in_eigenbasis[indices]
+            @. f_A_nu_1 = f(hamiltonian.bohr_freqs, nu_2, config.beta, config.a, config.b) * jump.in_eigenbasis
+
+            B .+= A_nu_2' * f_A_nu_1
+        end
+    end
+    return B
+end
+
 function pick_f(config::Union{LiouvConfig, ThermalizeConfig})
     if config.with_linear_combination
         return (nu_1, nu_2, beta, a, b) -> create_f(nu_1, nu_2, config.beta, config.a, config.b)

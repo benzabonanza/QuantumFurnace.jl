@@ -57,8 +57,8 @@ function main()
         with_coherent = true
         with_linear_combination = true
         # energy_domain = EnergyDomain()
-        domain = EnergyDomain()
-        num_energy_bits = 12  # 11
+        domain = TimeDomain()
+        num_energy_bits = 14  # 11
         w0 = 0.05
         max_E = w0 * 2^num_energy_bits / 2
         t0 = 2pi / (2^num_energy_bits * w0)  # Max time evolution pi / w0
@@ -86,12 +86,7 @@ function main()
         # hamiltonian = create_hamham(hamiltonian_terms, hamiltonian_coeffs, num_qubits)
 
         # Load Hamiltonian
-        project_root = Pkg.project().path |> dirname
-        data_dir = joinpath(project_root, "hamiltonians")
-        output_filename = join(["heis", "disordered", "periodic", "n$num_qubits"], "_") * ".bson"
-        ham_path = joinpath(data_dir, output_filename)
-        bson_hamiltonian_data = BSON.load(ham_path)
-        hamiltonian = bson_hamiltonian_data[:hamiltonian]
+        hamiltonian = load_hamiltonian("heis", num_qubits)
         hamiltonian = finalize_hamham(hamiltonian, beta)
     
         initial_dm = Matrix{ComplexF64}(I(dim) / dim)
@@ -105,7 +100,7 @@ function main()
         @printf("Trotter is created.\n")
 
         #* Jumps
-        jump_paulis = [[X], [Y], [Z]]
+        jump_paulis = [[X], [Z]]
 
         jump_sites = 1:num_qubits
         num_of_jumps = length(jump_paulis) * length(jump_sites)

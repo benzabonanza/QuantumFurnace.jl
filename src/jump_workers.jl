@@ -1,4 +1,5 @@
 #* Liouvillian (vectorized) jump contributions
+#TODO: Why don't these functions use precomputed data?
 function jump_contribution(::BohrDomain, jump::JumpOp, hamiltonian::HamHam, config::LiouvConfig)
 
     dim = size(hamiltonian.data, 1)
@@ -345,7 +346,9 @@ function precompute_kraus_jumps(
     _
     )
 
-    (; w0, _, transition, _, _, energy_labels, _) = precomputed_data
+    dim = size(hamiltonian.data, 1)
+    (; w0, transition, energy_labels) = precomputed_data
+
 
     misc_factors = w0 * config.beta / sqrt(2 * pi)
     transition_rates = transition.(energy_labels)
@@ -357,7 +360,8 @@ function precompute_kraus_jumps(
     k = 1
     for jump in jumps
         for (i, w) in enumerate(energy_labels)
-            kraus_jump = oft(kraus_jumps[k], jump, w, hamiltonian, config.beta)
+            kraus_jump = Matrix{ComplexF64}(undef, dim, dim)
+            oft!(kraus_jump, jump, w, hamiltonian, config.beta)
             rmul!(kraus_jump, kraus_jump_rates[i])
             kraus_jumps[k] = kraus_jump
             k += 1
@@ -366,18 +370,18 @@ function precompute_kraus_jumps(
     return kraus_jumps
 end
 
+#TODO: Possible error here
 function precompute_kraus_jumps(
     ::TimeDomain,
     jumps::Vector{JumpOp}, 
     hamiltonian::HamHam,
     config::LiouvConfig,
     precomputed_data,
-    caches
+    oft_caches
     )
 
     dim = size(hamiltonian.data, 1)
-    (; w0, t0, transition, f_minus, f_plus, energy_labels, oft_time_labels) = precomputed_data
-    (; _, oft_caches) = caches
+    (; w0, t0, transition, b_minus, b_plus, energy_labels, oft_time_labels) = precomputed_data
 
     misc_factors = w0 * t0^2 * (sqrt(2 / pi) / config.beta) / (2 * pi)
     transition_rates = transition.(energy_labels)
@@ -405,12 +409,11 @@ function precompute_kraus_jumps(
     trotter::TrottTrott,
     config::LiouvConfig,
     precomputed_data,
-    caches;
+    oft_caches
     )
 
     dim = size(trotter.eigvecs, 1)
-    (; w0, t0, transition, _, _, energy_labels, oft_time_labels) = precomputed_data
-    (; _, oft_caches) = caches
+    (; w0, t0, transition, b_minus, b_plus, energy_labels, oft_time_labels) = precomputed_data
 
     misc_factors = w0 * t0^2 * (sqrt(2 / pi) / config.beta) / (2 * pi)
     transition_rates = transition.(energy_labels)
@@ -447,8 +450,8 @@ function precompute_R(kraus_jumps::Vector{Matrix{ComplexF64}})
     dim = size(kraus_jumps[1], 1)
     R = zeros(ComplexF64, dim, dim)
     # herk! only updates the upper triangle
-    for kraus_jump in kraus_jumps
-        BLAS.herk!('U', 'C', 1.0, kraus_jump, 1.0, R)
+    for kraus_jump in kraus_jumps  
+        BLAS.herk!('U', 'C', 1.0, kraus_jump, 1.0, R)  # R += L' L
     end
 
     # Symmetrize it to full Hermitian matrix
@@ -484,8 +487,7 @@ function apply_lindbladian!(
     kraus_jumps::Vector{Matrix{ComplexF64}}, 
     B::Matrix{ComplexF64},
     R::Matrix{ComplexF64},
-    ws::LindbladWorkspace{ComplexF64}
-)
+    ws::LindbladWorkspace{ComplexF64})
     
     #  mul!(C, A, B, alpha, beta) = alpha A B + beta C
     # Coherent: -i [B, rho]
@@ -532,8 +534,7 @@ function apply_lindbladian_dagger!(
     kraus_jumps::Vector{Matrix{ComplexF64}}, 
     B::Matrix{ComplexF64},
     R::Matrix{ComplexF64},
-    ws::LindbladWorkspace{ComplexF64}
-)
+    ws::LindbladWorkspace{ComplexF64})
     
     # Coherent: -i [B, rho]
     mul!(target, B, rho, 1im, 0.0)  # target <- i * B * rho
@@ -578,7 +579,7 @@ function apply_jump_contribution!(
     hamiltonian::HamHam,
     config::LiouvConfig,
     precomputed_data,
-    caches
+    caches  # (jump_caches, oft_caches)
     )
 
     (; jump_caches, oft_caches) = caches

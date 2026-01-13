@@ -19,13 +19,12 @@ struct OFTCaches
     end
 end
 
-# For Linear Maps (for single node)
-struct JumpCaches
+struct LindbladianJumpCaches
     jump_1::Matrix{ComplexF64}
     jump_2_dag_jump_1::Matrix{ComplexF64}
     temp1::Matrix{ComplexF64}
 
-    function JumpCaches(dim::Int)
+    function LindbladianJumpCaches(dim::Int)
         jump_1 = zeros(ComplexF64, dim, dim)
         jump_2_dag_jump_1 = zeros(ComplexF64, dim, dim)
         temp1 = zeros(ComplexF64, dim, dim)

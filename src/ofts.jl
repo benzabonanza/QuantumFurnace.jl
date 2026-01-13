@@ -80,14 +80,6 @@ function time_oft(jump::JumpOp, energy::Float64, hamiltonian::HamHam, time_label
     return jump_oft
 end
 
-# function time_oft_integrated(energy::Float64, jump::JumpOp, hamiltonian::HamHam, beta::Float64)
-
-#     diag_exponentiate(t) = Diagonal(exp.(1im * hamiltonian.eigvals * t))
-#     integrand(t) = exp(-t^2 / beta^2 - 1im * energy * t) * diag_exponentiate(t) * jump.in_eigenbasis * diag_exponentiate(-t)
-#     jump_oft = quadgk(integrand, -Inf, Inf)[1] / sqrt(2 * pi) * sqrt(sqrt(2 / pi) / beta)
-#     return jump_oft
-# end
-
 function time_oft_fast!(out_matrix::Matrix{ComplexF64}, caches::OFTCaches,
                    jump::JumpOp, energy::Float64, hamiltonian::HamHam, 
                    time_labels::Vector{Float64}, beta::Float64)
@@ -106,7 +98,7 @@ function time_oft_fast!(out_matrix::Matrix{ComplexF64}, caches::OFTCaches,
     fill!(out_matrix, 0.0)
     
     # --- Re-use the cache matrices U and temp_op inside the loops ---
-    if jump.orthogonal
+    if jump.orthogonal  # Orthogonal (X, Z)
         # t = 0.0 case: U = I
         @. out_matrix += caches.prefactors[1] * jump.in_eigenbasis
 
@@ -116,27 +108,33 @@ function time_oft_fast!(out_matrix::Matrix{ComplexF64}, caches::OFTCaches,
             
             copyto!(caches.temp_op, jump.in_eigenbasis)
             # temp_op = U*jump*U', for diagonal U's:
-            @. caches.temp_op *= caches.U.diag * caches.U.diag'  
-
-            # old, unsafe for mul!(A, A, B)
-            # mul!(caches.temp_op, caches.U, jump.in_eigenbasis)
-            # mul!(caches.temp_op, caches.temp_op, caches.U') 
+            caches.temp_op .*= (caches.U.diag * caches.U.diag')
             
             @. out_matrix += caches.prefactors[i] * caches.temp_op
-            @. out_matrix += conj(caches.prefactors[i]) * transpose(caches.temp_op)
+            @. out_matrix += conj(caches.prefactors[i]) * $(transpose(caches.temp_op))  # We learnt: @. makes transpose.()
         end
-    else
+    else  # Non-orthogonal (Y)
         for i in eachindex(time_labels)
             t = time_labels[i]
             @fastmath caches.U.diag .= exp.(1im .* hamiltonian.eigvals .* t)
             
-            mul!(caches.temp_op, caches.U, jump.in_eigenbasis)
+            mul!(caches.temp_op, caches.U, jump.in_eigenbasis)  # temp = U * jump
             mul!(out_matrix, caches.temp_op, caches.U', caches.prefactors[i], 1.0) # out += prefactor * U*jump*U'
         end
     end
     
     return out_matrix
 end
+
+
+# function time_oft_integrated(energy::Float64, jump::JumpOp, hamiltonian::HamHam, beta::Float64)
+
+#     diag_exponentiate(t) = Diagonal(exp.(1im * hamiltonian.eigvals * t))
+#     integrand(t) = exp(-t^2 / beta^2 - 1im * energy * t) * diag_exponentiate(t) * jump.in_eigenbasis * diag_exponentiate(-t)
+#     jump_oft = quadgk(integrand, -Inf, Inf)[1] / sqrt(2 * pi) * sqrt(sqrt(2 / pi) / beta)
+#     return jump_oft
+# end
+
 
 function trotter_oft_fast!(out_matrix::Matrix{ComplexF64}, caches::OFTCaches,
                       jump::JumpOp, energy::Float64, trotter::TrottTrott, 

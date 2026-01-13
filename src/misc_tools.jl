@@ -1,3 +1,12 @@
+function load_hamiltonian(type::String, num_qubits::Int)
+    project_root = Pkg.project().path |> dirname
+    data_dir = joinpath(project_root, "hamiltonians")
+    output_filename = join([type, "disordered", "periodic", "n$num_qubits"], "_") * ".bson"
+    ham_path = joinpath(data_dir, output_filename)
+    bson_hamiltonian_data = BSON.load(ham_path)
+    return bson_hamiltonian_data[:hamiltonian]
+end
+
 function generate_filename(config::LiouvConfig)
     pic_str = string(typeof(config.domain))
     
