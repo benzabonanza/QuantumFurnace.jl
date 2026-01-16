@@ -26,9 +26,9 @@ function build_krausframework(H::AbstractMatrix{T},
 end
 
 
-function evolve_along_trajectory(psi0::Vector{ComplexF64}, fw::KrausFramework, T::Float64)
+function evolve_along_trajectory(psi0::Vector{ComplexF64}, fw::KrausFramework, total_time::Float64)::Vector{ComplexF64}
 
-    num_steps = round(Int, T / fw.delta)  # Number of trajectory steps
+    num_steps = round(Int, total_time / fw.delta)  # Number of trajectory steps
 
     psi = copy(psi0)
     for _ in 1:num_steps
@@ -78,7 +78,7 @@ function step_along_the_trajectory!(psi::Vector{ComplexF64}, fw::KrausFramework)
     prob_no_jump = norm(fw.psi_temp)^2
 
     # Total jump probability
-    p_jump_total = delta * real(dot(psi, fw.R, psi))
+    p_jump_total = fw.delta * real(dot(psi, fw.R, psi))
 
     total_weight = prob_no_jump + p_jump_total
 
@@ -90,8 +90,7 @@ function step_along_the_trajectory!(psi::Vector{ComplexF64}, fw::KrausFramework)
 
         # Force normalize
         rmul!(psi, 1.0 / sqrt(prob_no_jump))
-    else
-        # Jump, but which jump?
+    else  # Jump.
         # Iterate through jumps and their probabilites till we find the winner
         target_cummulative = r - prob_no_jump
         current_cummulative = 0.0
@@ -99,11 +98,13 @@ function step_along_the_trajectory!(psi::Vector{ComplexF64}, fw::KrausFramework)
         for k in 1:length(fw.M_jumps)
             mul!(fw.psi_temp, fw.M_jumps[k], psi)
             prob_jump_k = norm(fw.psi_temp)^2
+            println("Prob of jump k")
+            println(prob_jump_k)
 
             current_cummulative += prob_jump_k
 
             if current_cummulative >= target_cummulative
-                copyto!(psi,  fw.psi_temp)
+                copyto!(psi, fw.psi_temp)
 
                 # Force normalize
                 rmul!(psi, 1.0 / sqrt(prob_jump_k))
@@ -134,6 +135,7 @@ function construct_gksl_lindbladian(
     # Add coherent part
     vectorize_liouvillian_coherent!(lindblad, H)
 
+    # Add dissipative part
     for kraus_jump in kraus_jumps
         vectorize_liouv_diss_and_add!(lindblad, kraus_jump, 1.0)
     end

@@ -3,8 +3,10 @@ using SparseArrays
 using Random
 using Printf
 
-# Computes C .+= alpha .* kron(A, B) completely in-place, without allocating
-# the result of the Kronecker product. This is the key to memory efficiency.
+"""
+    Computes C .+= alpha .* kron(A, B) completely in-place, without allocating
+    the result of the Kronecker product. Speed.
+"""
 function kron!(
     C::AbstractMatrix,
     A::AbstractMatrix,
@@ -40,13 +42,14 @@ function kron!(
     return C
 end
 
-
-# Takes in a jump operator, vectorizes it and adds it to the target liouvillian. 
-# L = J1 * X * J2 - 0.5 * (J2 * J1 * X + X * J2 * J1)
-# The way it is coded, makes it sure, that we allocate the least amount of times, i.e. the liouvillian is only allocated once, 
-# there is no unnecessary copies during the calculations. 
-# Note, that since it adds the liouvillian parts one by one to the liouvillian, on large scales
-# there is some arithmetic error to an implementation that adds the parts together and then to the liouvillian.
+"""
+    Takes in a jump operator, vectorizes it and adds it to the target liouvillian. 
+    L = J1 * X * J2 - 0.5 * (J2 * J1 * X + X * J2 * J1)
+    The way it is coded, makes it sure, that we allocate the least amount of times, i.e. the liouvillian is only allocated 
+    once, there is no unnecessary copies during the calculations. 
+    Note, that since it adds the liouvillian parts one by one to the liouvillian, on large scales
+    there is some arithmetic error to an implementation that adds the parts together and then to the liouvillian.
+"""
 function vectorize_liouv_diss_and_add!(
     L_target::AbstractMatrix{ComplexF64},
     jump::AbstractMatrix{ComplexF64},

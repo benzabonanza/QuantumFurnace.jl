@@ -56,7 +56,7 @@ function jump_contribution(::TimeDomain, jump::JumpOp, hamiltonian::HamHam, conf
 
     dim = size(hamiltonian.data, 1)
     w0 = abs(energy_labels[2] - energy_labels[1])
-    t0 = time_labels[2] - time_labels[1]
+    t0 = abs(time_labels[2] - time_labels[1])
     oft_time_labels = truncate_time_labels_for_oft(time_labels, config.beta)
 
     transition = pick_transition(config.beta, config.a, config.b, config.with_linear_combination)
@@ -110,7 +110,7 @@ function jump_contribution(::TrotterDomain, jump::JumpOp, trotter::TrottTrott, c
 
     dim = size(trotter.eigvecs, 1)
     w0 = abs(energy_labels[2] - energy_labels[1])
-    t0 = time_labels[2] - time_labels[1]
+    t0 = abs(time_labels[2] - time_labels[1])
     oft_time_labels = truncate_time_labels_for_oft(time_labels, config.beta)
 
     transition = pick_transition(config.beta, config.a, config.b, config.with_linear_combination)
@@ -370,7 +370,6 @@ function precompute_kraus_jumps(
     return kraus_jumps
 end
 
-#TODO: Possible error here
 function precompute_kraus_jumps(
     ::TimeDomain,
     jumps::Vector{JumpOp}, 
@@ -422,17 +421,17 @@ function precompute_kraus_jumps(
 
     num_kraus_jumps = length(energy_labels) * length(jumps)
     kraus_jumps = Vector{Matrix{ComplexF64}}(undef, num_kraus_jumps)
-    temp_buffer = Matrix{ComplexF64}(undef, dim, dim)
+    # temp_buffer = Matrix{ComplexF64}(undef, dim, dim)
 
     k = 1
     for jump in jumps
         for (i, w) in enumerate(energy_labels)
             kraus_jump = Matrix{ComplexF64}(undef, dim, dim)
 
+            trotter_oft_fast!(kraus_jump, oft_caches, jump, w, trotter, oft_time_labels, config.beta)
             # temp_buffer = OFT in Trotter basis:
-            trotter_oft_fast!(temp_buffer, oft_caches, jump, w, trotter, oft_time_labels, config.beta)
-            mul!(oft_caches.temp_op, temp_buffer, trotter.trafo_from_eigen_to_trotter)  # temp_op = OFT U
-            mul!(kraus_jump, trotter.trafo_from_eigen_to_trotter', oft_caches.temp_op)  # kraus_jump = OFT in eigenbasis H
+            # mul!(oft_caches.temp_op, temp_buffer, trotter.trafo_from_eigen_to_trotter)  # temp_op = OFT U
+            # mul!(kraus_jump, trotter.trafo_from_eigen_to_trotter', oft_caches.temp_op)  # kraus_jump = OFT in eigenbasis H
 
             rmul!(kraus_jump, kraus_jump_rates[i])
             kraus_jumps[k] = kraus_jump

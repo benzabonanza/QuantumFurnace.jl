@@ -100,7 +100,7 @@ function main()
         @printf("Trotter is created.\n")
 
         #* Jumps
-        jump_paulis = [[X], [Z]]
+        jump_paulis = [[X], [Y], [Z]]
 
         jump_sites = 1:num_qubits
         num_of_jumps = length(jump_paulis) * length(jump_sites)

@@ -160,7 +160,7 @@ function trotter_oft_fast!(out_matrix::Matrix{ComplexF64}, caches::OFTCaches,
 
             copyto!(caches.temp_op, jump.in_eigenbasis)
             # temp_op = U*jump*U', for diagonal U's:
-            @. caches.temp_op *= caches.U.diag * caches.U.diag'  
+            caches.temp_op .*= (caches.U.diag * caches.U.diag')  
             
             # unsafe:
             # mul!(caches.temp_op, caches.U, jump.in_eigenbasis)

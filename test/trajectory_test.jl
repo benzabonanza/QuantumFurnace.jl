@@ -51,12 +51,20 @@ config = LiouvConfig(
 precomputed_data = precompute_data(config.domain, config)
 time_oft_caches = OFTCaches(dim)
 
+length(precomputed_data.energy_labels)
+
 #* Hamiltonian
 # hamiltonian_terms = [[X, X], [Y, Y], [Z, Z]]
 # hamiltonian_coeffs = fill(1.0, length(hamiltonian_terms))
 # hamiltonian = create_hamham(hamiltonian_terms, hamiltonian_coeffs, num_qubits)
 hamiltonian = load_hamiltonian("heis", num_qubits)
 hamiltonian = finalize_hamham(hamiltonian, beta)
+
+#* Trotter
+trotter = nothing
+# trotter = create_trotter(hamiltonian, t0, num_trotter_steps_per_t0)
+# trotter_error_T = compute_trotter_error(hamiltonian, trotter, 2^num_energy_bits * t0 / 2)
+# gibbs_in_trotter = Hermitian(trotter.eigvecs' * gibbs_state(hamiltonian, beta) * trotter.eigvecs)
 
 #* Jumps
 jump_paulis = [[X], [Y], [Z]]
@@ -76,59 +84,52 @@ for pauli in jump_paulis
         end
 end
 
-kraus_jumps = precompute_kraus_jumps(config.domain, jumps, hamiltonian, config, precomputed_data, time_oft_caches)
-R = precompute_R(kraus_jumps)
-# B_from_R = precompute_B(R, hamiltonian, beta)
-# norm(B_from_R)
+kraus_jumps = @time precompute_kraus_jumps(config.domain, jumps, hamiltonian, config, precomputed_data, time_oft_caches)
+# For Trotter
+# kraus_jumps = precompute_kraus_jumps(config.domain, jumps, trotter, config, precomputed_data, time_oft_caches)
+R = @time precompute_R(kraus_jumps)
 
-# B = B_time(jumps, hamiltonian, precomputed_data.b_minus, precomputed_data.b_plus, t0, beta)
-# norm(B) #! Why is the norm of summed B zero?
-B = coherent_bohr(hamiltonian, jumps, config)
+if with_coherent
+        B = @time B_time(jumps, hamiltonian, precomputed_data.b_minus, precomputed_data.b_plus, t0, beta)
+        # B = B_trotter(jumps, trotter, precomputed_data.b_minus, precomputed_data.b_plus, beta)
+else
+        B = zeros(ComplexF64, dim, dim)
+end
 
 fw = build_krausframework(B, kraus_jumps, R, delta)
 
-#TODO: Fix me for time domain and trotter; energy domain works. Possibly in kraus jump computation.
-lindbladian_from_kraus = construct_gksl_lindbladian(B, kraus_jumps)
-result = run_liouvillian(jumps, config, hamiltonian)
-norm(lindbladian_from_kraus - result.data)
+psi0 = ones(ComplexF64, dim)
+psi0 ./= norm(psi0)
 
-eigvals_near_zero, eigvecs_near_zero = eigen(lindbladian_from_kraus)
-sorted_permutation_eigen = sortperm(abs.(real.(eigvals_near_zero)))
+total_time = 20.0
+num_trajectories = 1
+rho_combined = zeros(ComplexF64, dim, dim)
 
-ss_index = sorted_permutation_eigen[1]   # Smallest
-gap_index = sorted_permutation_eigen[2]  # Second smallest
-spectral_gap = eigvals_near_zero[gap_index] # Spectral gap
+@time for trajectory in 1:num_trajectories
+        psi = evolve_along_trajectory(psi0, fw, total_time)
+        BLAS.herk!('U', 'N', 1.0/num_trajectories, psi, 1.0, rho_combined)
+end
+LinearAlgebra.copytri!(rho_combined, 'U', true)
 
-steady_state_vec = eigvecs_near_zero[:, ss_index]
-steady_state_dm = reshape(steady_state_vec, size(hamiltonian.data))
-steady_state_dm = (steady_state_dm + steady_state_dm') / 2
-steady_state_dm ./= tr(steady_state_dm) # Normalize
-
-norm(hamiltonian.gibbs - steady_state_dm)
+norm(hamiltonian.gibbs - rho_combined)
 
 
-norm(result.fixed_point - hamiltonian.gibbs)
+# lindbladian_from_kraus = construct_gksl_lindbladian(B, kraus_jumps)
+# result = run_liouvillian(jumps, config, hamiltonian; trotter=trotter)
+# norm(lindbladian_from_kraus - result.data)
+# norm(result.fixed_point - hamiltonian.gibbs)
 
-eigvals, eigvecs = eigen(lindbladian_from_kraus)
+# eigvals_near_zero, eigvecs_near_zero = eigen(lindbladian_from_kraus)
+# sorted_permutation_eigen = sortperm(abs.(real.(eigvals_near_zero)))
 
-eigvecs[:, end]
+# ss_index = sorted_permutation_eigen[1]   # Smallest
+# gap_index = sorted_permutation_eigen[2]  # Second smallest
+# spectral_gap = eigvals_near_zero[gap_index] # Spectral gap
 
+# steady_state_vec = eigvecs_near_zero[:, ss_index]
+# steady_state_dm = reshape(steady_state_vec, size(hamiltonian.data))
+# steady_state_dm = (steady_state_dm + steady_state_dm') / 2
+# steady_state_dm ./= tr(steady_state_dm) # Normalize
 
-
-
-
-
-
-
-# jump_rate = 0.5
-# jump_op = (X + 1im * Y) / 2
-# padded_jump = pad_term([jump_op], num_qubits, 1)
-# L = sqrt(jump_rate) * padded_jump
-# L_in_eigenbasis = hamiltonian.eigvecs' * L * hamiltonian.eigvecs
-# orthogonal = (L == transpose(L))
-# jump = JumpOp(L, L_in_eigenbasis, orthogonal)
-
-# [jump.in_eigenbasis]
-
-# delta = 0.01
-# fw = build_krausframework(hamiltonian.data, [jump.in_eigenbasis], R, delta)
+# norm(hamiltonian.gibbs - steady_state_dm)
+# norm(gibbs_in_trotter - steady_state_dm)
