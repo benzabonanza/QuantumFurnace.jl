@@ -1,4 +1,5 @@
 using Revise
+using BenchmarkTools
 
 if !isdefined(Main, :QuantumFurnace)
     includet("../src/QuantumFurnace.jl")
@@ -14,7 +15,7 @@ beta = 10.
 
 # Smooth Metro
 a = beta / 30. # a = beta / 50.
-b = 0.4  # b = 0.5
+b = 0.3  # b = 0.5
 eta = 0.0  # eta = 0.2
 
 # Kinky Metro 
@@ -97,6 +98,7 @@ else
 end
 
 fw = build_krausframework(B, kraus_jumps, R, delta)
+# Base.summarysize(kraus_jumps)  # Size
 
 psi0 = ones(ComplexF64, dim)
 psi0 ./= norm(psi0)
@@ -105,13 +107,16 @@ total_time = 20.0
 num_trajectories = 1
 rho_combined = zeros(ComplexF64, dim, dim)
 
-@time for trajectory in 1:num_trajectories
-        psi = evolve_along_trajectory(psi0, fw, total_time)
-        BLAS.herk!('U', 'N', 1.0/num_trajectories, psi, 1.0, rho_combined)
-end
-LinearAlgebra.copytri!(rho_combined, 'U', true)
+psi = @btime evolve_along_trajectory(psi0, fw, total_time)
 
-norm(hamiltonian.gibbs - rho_combined)
+# @time for trajectory in 1:num_trajectories
+#         evolve_along_trajectory(psi0, fw, total_time)
+#         BLAS.herk!('U', 'N', 1.0/num_trajectories, psi, 1.0, rho_combined)
+# end
+# println("done")
+# LinearAlgebra.copytri!(rho_combined, 'U', true)
+
+# norm(hamiltonian.gibbs - rho_combined)
 
 
 # lindbladian_from_kraus = construct_gksl_lindbladian(B, kraus_jumps)

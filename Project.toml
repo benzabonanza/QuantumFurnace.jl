@@ -6,6 +6,7 @@ authors = ["Bence Temesi <temesi.bence@gmail.com>"]
 [deps]
 Arpack = "7d9fca2a-8960-54d3-9f78-7d1dccf2cb97"
 BSON = "fbb218c0-5317-5bc6-957e-2ee96dd4b1f0"
+BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 ClusterManagers = "34f1f09b-3a8b-5176-ab39-66d58a4d544e"
 DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
 Debugger = "31a5f54b-26ea-5ae9-a837-f05ce5417438"
@@ -27,6 +28,7 @@ SpecialFunctions = "276daf66-3868-5448-9aa4-cd146d93841b"
 
 [compat]
 Arpack = "0.5.4"
+BenchmarkTools = "1.6.3"
 Debugger = "0.7.15"
 Documenter = "1.15.0"
 DocumenterTools = "0.1.20"

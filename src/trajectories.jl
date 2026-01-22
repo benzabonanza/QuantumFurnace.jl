@@ -98,8 +98,8 @@ function step_along_the_trajectory!(psi::Vector{ComplexF64}, fw::KrausFramework)
         for k in 1:length(fw.M_jumps)
             mul!(fw.psi_temp, fw.M_jumps[k], psi)
             prob_jump_k = norm(fw.psi_temp)^2
-            println("Prob of jump k")
-            println(prob_jump_k)
+            # println("Prob of jump k")
+            # println(prob_jump_k)
 
             current_cummulative += prob_jump_k
 

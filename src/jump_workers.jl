@@ -384,6 +384,8 @@ function precompute_kraus_jumps(
 
     misc_factors = w0 * t0^2 * (sqrt(2 / pi) / config.beta) / (2 * pi)
     transition_rates = transition.(energy_labels)
+    println("MAXIMUM OF GAMMA")
+    println(maximum(transition_rates))
     
     kraus_jump_rates = @. sqrt(misc_factors * transition_rates)
 
