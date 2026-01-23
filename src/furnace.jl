@@ -76,6 +76,7 @@ function run_thermalization(jumps::Vector{JumpOp}, config::ThermalizeConfig, evo
     hamiltonian::HamHam;
     trotter::Union{TrottTrott, Nothing}=nothing)
 
+    dim = size(hamiltonian.data, 1)
     validate_config!(config)
     print_press(config)
     domain_name = replace(string(typeof(config.domain)), "Domain" => "")
@@ -98,10 +99,15 @@ function run_thermalization(jumps::Vector{JumpOp}, config::ThermalizeConfig, evo
     convergence_cutoff = 1e-5
     distances_to_gibbs = [trace_distance_h(Hermitian(evolving_dm), gibbs)]
     for step in 1:num_liouv_steps
-        update_dm = zeros(size(evolving_dm))
+        update_dm = zeros(ComplexF64, dim, dim)
+
         update_dm = @distributed (+) for jump in jumps  # Does this wait until its done and then continue?
             jump_contribution(config.domain, evolving_dm, jump, ham_or_trott, config, precomputed_data)
         end
+
+        # for jump in jumps  # Does this wait until its done and then continue?
+        #     update_dm .+= jump_contribution(config.domain, evolving_dm, jump, ham_or_trott, config, precomputed_data)
+        # end
 
         evolving_dm .+= update_dm
 

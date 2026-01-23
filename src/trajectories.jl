@@ -1,4 +1,3 @@
-#TODO: Test this code!
 struct KrausFramework{T}
     M0::Matrix{T}                   # non-Hermitian no jump evolution
     M_jumps::Vector{Matrix{T}}      # jump Kraus

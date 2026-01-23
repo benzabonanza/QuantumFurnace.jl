@@ -54,11 +54,18 @@ function jump_contribution(::EnergyDomain,
 
     jump_oft = zeros(ComplexF64, dim, dim)
     prefactor = (config.w0 * config.beta / sqrt(2 * pi)) * gamma_norm_factor # w0, OFT norm^2, Fourier, norm factor
-    for w in energy_labels
-        oft!(jump_oft, jump, w, hamiltonian, config.beta) # subnorm = t0 * sqrt((sqrt(2 / pi)/beta) / (2 * pi))
-        loop_scalar = prefactor * transition(w)
 
-        vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft, loop_scalar)
+    energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
+    for w in energies
+        oft!(jump_oft, jump, w, hamiltonian, config.beta) # subnorm = t0 * sqrt((sqrt(2 / pi)/beta) / (2 * pi))
+        scalar_w = prefactor * transition(w)
+
+        vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft, scalar_w)
+        
+        if jump.hermitian && w > 1e-12
+            scalar_negative_w = prefactor * transition(-w)
+            vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft', scalar_negative_w)
+        end
     end
     return liouv_for_jump
 end
@@ -82,11 +89,18 @@ function jump_contribution(::TimeDomain,
     jump_oft = zeros(ComplexF64, dim, dim)
     time_oft_caches = OFTCaches(dim)
     prefactor = config.w0 * config.t0^2 * (sqrt(2 / pi) / config.beta) / (2 * pi) * gamma_norm_factor
-    for w in energy_labels
-        time_oft_fast!(jump_oft, time_oft_caches, jump, w, hamiltonian, oft_time_labels, config.beta) # subnorm = t0 * sqrt((sqrt(2 / pi)/beta) / (2 * pi))
-        loop_scalar = prefactor * transition(w)
 
-        vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft, loop_scalar)
+    energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
+    for w in energies
+        time_oft_fast!(jump_oft, time_oft_caches, jump, w, hamiltonian, oft_time_labels, config.beta) # subnorm = t0 * sqrt((sqrt(2 / pi)/beta) / (2 * pi))
+        scalar_w = prefactor * transition(w)
+
+        vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft, scalar_w)
+
+        if jump.hermitian && w > 1e-12
+            scalar_negative_w = prefactor * transition(-w)
+            vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft', scalar_negative_w)
+        end
     end
     return liouv_for_jump
 end
@@ -98,7 +112,7 @@ function jump_contribution(::TrotterDomain,
     precomputed_data)
 
     dim = size(trotter.eigvecs, 1)
-    (;transition, gamma_norm_factor, energy_labels, oft_time_labels, b_minus, b_plus) = precomputed_data
+    (; transition, gamma_norm_factor, energy_labels, oft_time_labels, b_minus, b_plus) = precomputed_data
 
     liouv_for_jump = zeros(ComplexF64, dim^2, dim^2)
     if config.with_coherent 
@@ -110,11 +124,18 @@ function jump_contribution(::TrotterDomain,
     jump_oft = zeros(ComplexF64, dim, dim)
     time_oft_caches = OFTCaches(dim)
     prefactor = config.w0 * config.t0^2 * (sqrt(2 / pi) / config.beta) / (2 * pi) * gamma_norm_factor # time ints t0^2, energy int w0, OFT time norm^2, Fourier
-    for w in energy_labels
+    
+    energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
+    for w in energies
         trotter_oft_fast!(jump_oft, time_oft_caches, jump, w, trotter, oft_time_labels, config.beta) # subnorm = t0 * sqrt((sqrt(2 / pi)/beta) / (2 * pi))
-        loop_scalar = prefactor * transition(w)
+        scalar_w = prefactor * transition(w)
 
-        vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft, loop_scalar)
+        vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft, scalar_w)
+
+        if jump.hermitian && w > 1e-12
+            scalar_negative_w = prefactor * transition(-w)
+            vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft', scalar_negative_w)
+        end
     end
     return liouv_for_jump
 end
@@ -200,20 +221,34 @@ function jump_contribution(::EnergyDomain,
     jump_dag_jump = similar(jump_oft)
     temp1 = similar(jump_oft)
     # mul!(C, A, B, α, β) computes C = α*A*B + β*C
-    for w in energy_labels
+
+    energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
+    for w in energies
         oft!(jump_oft, jump, w, hamiltonian, config.beta)
         mul!(jump_dag_jump, jump_oft', jump_oft)
 
-        loop_factor = transition(w) * prefactor
+        scalar_w = transition(w) * prefactor
         # Term 1
         mul!(temp1, evolving_dm, jump_oft')  # rho * A'
-        mul!(jump_dm_contribution, jump_oft, temp1, loop_factor, 1.0)  # L += prefactor * A * rho * A'
+        mul!(jump_dm_contribution, jump_oft, temp1, scalar_w, 1.0)  # L += prefactor * A * rho * A'
 
         # Term 2
-        mul!(jump_dm_contribution, jump_dag_jump, evolving_dm, -0.5 * loop_factor, 1.0)
+        mul!(jump_dm_contribution, jump_dag_jump, evolving_dm, -0.5 * scalar_w, 1.0)
         
         # Term 3
-        mul!(jump_dm_contribution, evolving_dm, jump_dag_jump, -0.5 * loop_factor, 1.0)
+        mul!(jump_dm_contribution, evolving_dm, jump_dag_jump, -0.5 * scalar_w, 1.0)
+
+        if jump.hermitian && w > 1e-12
+            scalar_negative_w = transition(-w) * prefactor
+
+            mul!(temp1, evolving_dm, jump_oft)          # temp1 = rho * A
+            mul!(jump_dm_contribution, jump_oft', temp1, scalar_negative_w, 1.0)  # A' rho A
+
+            mul!(jump_dag_jump, jump_oft, jump_oft')  # A A'
+
+            mul!(jump_dm_contribution, jump_dag_jump, evolving_dm, -0.5 * scalar_negative_w, 1.0)
+            mul!(jump_dm_contribution, evolving_dm, jump_dag_jump, -0.5 * scalar_negative_w, 1.0)
+        end
     end
     
     return jump_dm_contribution
@@ -247,7 +282,9 @@ function jump_contribution(
     # Pre-allocate caches for the time_oft function as well
     oft_caches = OFTCaches(dim)
     prefactor = scaled_delta * config.w0 * config.t0^2 * (sqrt(2 / pi) / config.beta) / (2 * pi)
-    for w in energy_labels
+
+    energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
+    for w in energies
         time_oft_fast!(jump_oft, oft_caches, jump, w, hamiltonian, oft_time_labels, config.beta)
         
         # jump_dag_jump = jump_oft' * jump_oft
@@ -263,6 +300,18 @@ function jump_contribution(
 
         # Term 3
         mul!(jump_dm_contribution, evolving_dm, jump_dag_jump, -0.5 * loop_factor, 1.0)
+
+        if jump.hermitian && w > 1e-12
+            scalar_negative_w = transition(-w) * prefactor
+
+            mul!(temp1, evolving_dm, jump_oft)          # temp1 = rho * A
+            mul!(jump_dm_contribution, jump_oft', temp1, scalar_negative_w, 1.0)  # A' rho A
+
+            mul!(jump_dag_jump, jump_oft, jump_oft')  # A A'
+
+            mul!(jump_dm_contribution, jump_dag_jump, evolving_dm, -0.5 * scalar_negative_w, 1.0)
+            mul!(jump_dm_contribution, evolving_dm, jump_dag_jump, -0.5 * scalar_negative_w, 1.0)
+        end
     end
     return jump_dm_contribution
 end
@@ -282,8 +331,7 @@ function jump_contribution(::TrotterDomain,
     jump_dm_contribution = zeros(ComplexF64, dim, dim)
     # Coherent part
     if config.with_coherent
-        # coherent_term_f = coherent_term_trotter(jump, trotter, f_minus, f_plus)
-        coherent_term = B_trotter(jump, trotter, b_minus, b_plus, beta)
+        coherent_term = B_trotter(jump, trotter, b_minus, b_plus, config.beta)
         mul!(jump_dm_contribution, coherent_term, evolving_dm, -1im * scaled_delta, 1.0)
         mul!(jump_dm_contribution, evolving_dm, coherent_term, 1im * scaled_delta, 1.0)
     end
@@ -295,7 +343,9 @@ function jump_contribution(::TrotterDomain,
 
     oft_caches = OFTCaches(dim)
     prefactor = scaled_delta * config.w0 * config.t0^2 * (sqrt(2 / pi) / config.beta) / (2 * pi)
-    for w in energy_labels
+
+    energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
+    for w in energies
         trotter_oft_fast!(jump_oft, oft_caches, jump, w, trotter, oft_time_labels, config.beta)
         
         # jump_dag_jump = jump_oft' * jump_oft
@@ -311,6 +361,18 @@ function jump_contribution(::TrotterDomain,
 
         # Term 3
         mul!(jump_dm_contribution, evolving_dm, jump_dag_jump, -0.5 * loop_factor, 1.0)
+
+        if jump.hermitian && w > 1e-12
+            scalar_negative_w = transition(-w) * prefactor
+
+            mul!(temp1, evolving_dm, jump_oft)          # temp1 = rho * A
+            mul!(jump_dm_contribution, jump_oft', temp1, scalar_negative_w, 1.0)  # A' rho A
+
+            mul!(jump_dag_jump, jump_oft, jump_oft')  # A A'
+
+            mul!(jump_dm_contribution, jump_dag_jump, evolving_dm, -0.5 * scalar_negative_w, 1.0)
+            mul!(jump_dm_contribution, evolving_dm, jump_dag_jump, -0.5 * scalar_negative_w, 1.0)
+        end
     end
 
     return jump_dm_contribution
@@ -332,22 +394,22 @@ function precompute_kraus_jumps(
     dim = size(hamiltonian.data, 1)
     (; transition, gamma_norm_factor, energy_labels) = precomputed_data
 
+    base_prefactor = config.w0 * config.beta / sqrt(2 * pi) * gamma_norm_factor
 
-    misc_factors = config.w0 * config.beta / sqrt(2 * pi)
-    transition_rates = transition.(energy_labels) .* gamma_norm_factor
-    
-    kraus_jump_rates = @. sqrt(misc_factors * transition_rates)
+    kraus_jumps = Vector{Tuple{Float64, AbstractMatrix{ComplexF64}}}()
 
-    num_kraus_jumps = length(energy_labels) * length(jumps)
-    kraus_jumps = Vector{Matrix{ComplexF64}}(undef, num_kraus_jumps)
-    k = 1
     for jump in jumps
-        for (i, w) in enumerate(energy_labels)
+        energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
+        for w in energies
             kraus_jump = Matrix{ComplexF64}(undef, dim, dim)
             oft!(kraus_jump, jump, w, hamiltonian, config.beta)
-            rmul!(kraus_jump, kraus_jump_rates[i])
-            kraus_jumps[k] = kraus_jump
-            k += 1
+            rate_positive = sqrt(base_prefactor * transition(w))
+            push!(kraus_jumps, (rate_positive, kraus_jump))
+
+            if jump.hermitian && w > 1e-12
+                rate_negative = sqrt(base_prefactor * transition(-w))
+                push!(kraus_jumps, (rate_negative, kraus_jump'))  # ()' doesn't create a new matrix
+            end
         end
     end
     return kraus_jumps
@@ -365,23 +427,20 @@ function precompute_kraus_jumps(
     dim = size(hamiltonian.data, 1)
     (; transition, gamma_norm_factor, b_minus, b_plus, energy_labels, oft_time_labels) = precomputed_data
 
-    misc_factors = config.w0 * config.t0^2 * (sqrt(2 / pi) / config.beta) / (2 * pi)
-    transition_rates = transition.(energy_labels) .* gamma_norm_factor
-    println("MAXIMUM OF GAMMA")
-    println(maximum(transition_rates))
-    
-    kraus_jump_rates = @. sqrt(misc_factors * transition_rates)
-
-    num_kraus_jumps = length(energy_labels) * length(jumps)
-    kraus_jumps = Vector{Matrix{ComplexF64}}(undef, num_kraus_jumps)
-    k = 1
+    base_prefactor = config.w0 * config.t0^2 * (sqrt(2 / pi) / config.beta) / (2 * pi) * gamma_norm_factor
+    kraus_jumps = Vector{Tuple{Float64, AbstractMatrix{ComplexF64}}}()
     for jump in jumps
-        for (i, w) in enumerate(energy_labels)
+        energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
+        for w in energies
             kraus_jump = Matrix{ComplexF64}(undef, dim, dim)
             time_oft_fast!(kraus_jump, oft_caches, jump, w, hamiltonian, oft_time_labels, config.beta)
-            rmul!(kraus_jump, kraus_jump_rates[i])
-            kraus_jumps[k] = kraus_jump
-            k += 1
+            rate_positive = sqrt(base_prefactor * transition(w))
+            push!(kraus_jumps, (rate_positive, kraus_jump))
+
+            if jump.hermitian && w > 1e-12
+                rate_negative = sqrt(base_prefactor * transition(-w))
+                push!(kraus_jumps, (rate_negative, kraus_jump'))  # ()' doesn't create a new matrix
+            end
         end
     end
     return kraus_jumps
@@ -399,47 +458,46 @@ function precompute_kraus_jumps(
     dim = size(trotter.eigvecs, 1)
     (; transition, gamma_norm_factor, b_minus, b_plus, energy_labels, oft_time_labels) = precomputed_data
 
-    misc_factors = config.w0 * config.t0^2 * (sqrt(2 / pi) / config.beta) / (2 * pi)
-    transition_rates = transition.(energy_labels) .* gamma_norm_factor
-    
-    kraus_jump_rates = @. sqrt(misc_factors * transition_rates)
-
-    num_kraus_jumps = length(energy_labels) * length(jumps)
-    kraus_jumps = Vector{Matrix{ComplexF64}}(undef, num_kraus_jumps)
-    # temp_buffer = Matrix{ComplexF64}(undef, dim, dim)
-
-    k = 1
+    base_prefactor = config.w0 * config.t0^2 * (sqrt(2 / pi) / config.beta) / (2 * pi) * gamma_norm_factor
+    kraus_jumps = Vector{Tuple{Float64, AbstractMatrix{ComplexF64}}}()
     for jump in jumps
-        for (i, w) in enumerate(energy_labels)
+        energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
+        for w in energies
             kraus_jump = Matrix{ComplexF64}(undef, dim, dim)
-
             trotter_oft_fast!(kraus_jump, oft_caches, jump, w, trotter, oft_time_labels, config.beta)
-            # temp_buffer = OFT in Trotter basis:
-            # mul!(oft_caches.temp_op, temp_buffer, trotter.trafo_from_eigen_to_trotter)  # temp_op = OFT U
-            # mul!(kraus_jump, trotter.trafo_from_eigen_to_trotter', oft_caches.temp_op)  # kraus_jump = OFT in eigenbasis H
+            rate_positive = sqrt(base_prefactor * transition(w))
+            push!(kraus_jumps, (rate_positive, kraus_jump))
 
-            rmul!(kraus_jump, kraus_jump_rates[i])
-            kraus_jumps[k] = kraus_jump
-            k += 1
+            if jump.hermitian && w > 1e-12
+                rate_negative = sqrt(base_prefactor * transition(-w))
+                push!(kraus_jumps, (rate_negative, kraus_jump'))  # ()' doesn't create a new matrix
+            end
         end
     end
     return kraus_jumps  # in Trotter basis
 end
 
+function verify_completeness(kraus_jumps)
+    n = size(kraus_jumps[1], 1)
+    total = zeros(ComplexF64, n, n)
+    for K in kraus_jumps
+        total .+= K' * K
+    end
+    # Completeness check
+    return norm(total - I(n)) / n
+end
+
 """
 R = \\sum_k L_k^\\dagger L_k, in eigenbasis of H.
 """
-function precompute_R(kraus_jumps::Vector{Matrix{ComplexF64}})
+function precompute_R(kraus_jumps::Vector{Tuple{Float64, AbstractMatrix{ComplexF64}}})
 
-    dim = size(kraus_jumps[1], 1)
+    dim = size(kraus_jumps[1][2], 1)
     R = zeros(ComplexF64, dim, dim)
-    # herk! only updates the upper triangle
-    for kraus_jump in kraus_jumps  
-        BLAS.herk!('U', 'C', 1.0, kraus_jump, 1.0, R)  # R += L' L
+    for (rate, op) in kraus_jumps  
+        R .+= rate^2 .* (op' * op)
     end
 
-    # Symmetrize it to full Hermitian matrix
-    LinearAlgebra.copytri!(R, 'U', true)
     return R
 end
 

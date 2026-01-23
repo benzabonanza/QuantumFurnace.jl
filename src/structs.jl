@@ -156,6 +156,7 @@ struct JumpOp{T <: AbstractMatrix{ComplexF64}}
     data::T
     in_eigenbasis::Matrix{ComplexF64}
     orthogonal::Bool
+    hermitian::Bool
 end
 
 """

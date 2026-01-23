@@ -328,8 +328,7 @@ end
 
 function truncate_energy_labels(energy_labels::Vector{Float64}, beta::Float64, a::Float64, b::Float64,
     with_linear_combination::Bool; cutoff::Float64=1e-12)
-
-    transition = pick_transition(beta, a, b, with_linear_combination)
+    transition = pick_transition(beta, a, b, with_linear_combination)  # not normalized with max(gamma) but it is irrelevant for these scales
 
     gaussfilter(w, nu, beta) = exp(-beta^2 * (w - nu)^2 / 4) * sqrt(beta / sqrt(2 * pi))
     integrand_lb(w, nu1, nu2) = transition(w) * gaussfilter(w, nu1, beta) * gaussfilter(w, nu2, beta)

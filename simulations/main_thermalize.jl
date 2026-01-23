@@ -1,4 +1,3 @@
-#TODO: I haven't debugged this since changing f -> b. (liouvillian one was debugged.)
 # using Distributed
 # using Revise
 
@@ -49,21 +48,21 @@ function main()
     beta = 10.  # 5, 10, 30
 
     # Smooth Metro
-    a = beta / 50. # a = beta / 50.
-    b = 0.5  # b = 0.5
+    a = beta / 30. # a = beta / 50.
+    b = 0.4  # b = 0.5
     eta = 0.0  # eta = 0.2
 
     with_coherent = true
     with_linear_combination = true
-    domain = TimeDomain()
-    num_energy_bits = 11
+    domain = EnergyDomain()
+    num_energy_bits = 12
     w0 = 0.05
     max_E = w0 * 2^num_energy_bits / 2
     t0 = 2pi / (2^num_energy_bits * w0)
     num_trotter_steps_per_t0 = 10
 
     # Thermalizing configs:
-    mixing_time = 10.0
+    mixing_time = 20.0
     delta = 0.1
 
     config = ThermalizeConfig(
@@ -116,12 +115,16 @@ function main()
     for pauli in jump_paulis
             for site in 1:num_qubits
                 jump_op = pad_term(pauli, num_qubits, site) / jump_normalization
-                jump_op_in_eigenbasis = hamiltonian.eigvecs' * jump_op * hamiltonian.eigvecs
-                # jump_op_in_eigenbasis = trotter.eigvecs' * jump_op * trotter.eigvecs  #! Uncomment for Trotter
+
+                basis_unitary = (domain isa TrotterDomain) ? trotter.eigvecs : hamiltonian.eigvecs
+                jump_op_in_eigenbasis = basis_unitary' * jump_op * basis_unitary
+
                 orthogonal = (jump_op == transpose(jump_op))
+                hermitian = (jump_op == jump_op')
                 jump = JumpOp(jump_op,
                         jump_op_in_eigenbasis,
-                        orthogonal)
+                        orthogonal,
+                        hermitian)
                 push!(jumps, jump)
             end
     end

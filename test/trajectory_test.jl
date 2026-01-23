@@ -15,7 +15,7 @@ beta = 10.
 
 # Smooth Metro
 a = beta / 30. # a = beta / 50.
-b = 0.3  # b = 0.5
+b = 0.4  # b = 0.5
 eta = 0.0  # eta = 0.2
 
 # Kinky Metro 
@@ -25,7 +25,7 @@ eta = 0.0  # eta = 0.2
 
 with_coherent = true
 with_linear_combination = true
-domain = TimeDomain()
+domain = EnergyDomain()
 num_energy_bits = 12  # 11
 w0 = 0.05
 max_E = w0 * 2^num_energy_bits / 2
@@ -52,8 +52,6 @@ config = LiouvConfig(
 precomputed_data = precompute_data(config.domain, config)
 time_oft_caches = OFTCaches(dim)
 
-length(precomputed_data.energy_labels)
-
 #* Hamiltonian
 # hamiltonian_terms = [[X, X], [Y, Y], [Z, Z]]
 # hamiltonian_coeffs = fill(1.0, length(hamiltonian_terms))
@@ -74,19 +72,35 @@ num_of_jumps = length(jump_paulis) * length(jump_sites)
 jump_normalization = sqrt(num_of_jumps)
 jumps::Vector{JumpOp} = []
 for pauli in jump_paulis
-        for site in jump_sites
-                jump_op = Matrix(pad_term(pauli, num_qubits, site)) / jump_normalization
-                jump_op_in_eigenbasis = hamiltonian.eigvecs' * jump_op * hamiltonian.eigvecs
+        for site in 1:num_qubits
+                jump_op = pad_term(pauli, num_qubits, site) / jump_normalization
+                
+                basis_unitary = (domain isa TrotterDomain) ? trotter.eigvecs : hamiltonian.eigvecs
+                jump_op_in_eigenbasis = basis_unitary' * jump_op * basis_unitary
+
                 orthogonal = (jump_op == transpose(jump_op))
+                hermitian = (jump_op == jump_op')
                 jump = JumpOp(jump_op,
                         jump_op_in_eigenbasis,
-                        orthogonal)
+                        orthogonal,
+                        hermitian)
                 push!(jumps, jump)
         end
 end
 
 kraus_jumps = @time precompute_kraus_jumps(config.domain, jumps, hamiltonian, config, precomputed_data, time_oft_caches)
-# For Trotter
+# verify_completeness(kraus_jumps)
+
+# num_sparse_jumps = 0
+# for kraus_jump in kraus_jumps
+#         replace!(x -> abs(x) <= 1e-12 ? zero(x) : x, kraus_jump)
+#         sparsity = count(iszero, kraus_jump) / length(kraus_jump)
+#         if sparsity >= 0.9
+#                 num_sparse_jumps += 1
+#         end
+# end
+# num_sparse_jumps
+
 # kraus_jumps = precompute_kraus_jumps(config.domain, jumps, trotter, config, precomputed_data, time_oft_caches)
 R = @time precompute_R(kraus_jumps)
 

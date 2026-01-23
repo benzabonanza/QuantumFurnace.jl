@@ -17,6 +17,36 @@ function oft!(out_matrix::Matrix{ComplexF64}, jump::JumpOp, energy::Float64, ham
     return out_matrix
 end
 
+
+function time_oft(jump::JumpOp, energy::Float64, hamiltonian::HamHam, time_labels::Vector{Float64}, beta::Float64)
+    """sigma_E = 1 / beta, subnormalized OFT: multiply by: t0 * sqrt(sqrt(2 / pi)/beta) / sqrt(2 * pi)"""
+
+    prefactors = @fastmath exp.(- time_labels.^2 / beta^2 .- 1im * energy * time_labels) # Gauss and Fourier factors
+    mid_point = findlast(t -> t >= 0, time_labels) # Up to positive times
+
+    time_evolve(t) = Diagonal(exp.(1im * hamiltonian.eigvals * t))
+
+    jump_oft = zeros(ComplexF64, size(jump.data))
+    if jump.orthogonal # Orthogonal symmetry that halves time labels
+        # t = 0.0
+        jump_oft .+= @fastmath (prefactors[1] * jump.in_eigenbasis)
+
+        for i in range(2, mid_point)  # t > 0.0
+            U_plus = time_evolve(time_labels[i])
+
+            temp_op = U_plus * jump.in_eigenbasis * adjoint(U_plus)
+            jump_oft .+=  @fastmath (prefactors[i] * temp_op)
+            jump_oft .+=  @fastmath (conj(prefactors[i]) * transpose(temp_op))
+        end
+    else  # For non-orthogonal jumps
+        for i in eachindex(time_labels)
+            U = time_evolve(time_labels[i])
+            jump_oft .+= @fastmath (prefactors[i] * U * jump.in_eigenbasis * adjoint(U))
+        end
+    end
+    return jump_oft
+end
+
 function trotter_oft(jump::JumpOp, energy::Float64, trotter::TrottTrott, time_labels::Vector{Float64}, beta::Float64)
 
     prefactors = @fastmath exp.(- time_labels.^2 / beta^2 .- 1im * energy * time_labels) # Gauss and Fourier factors
@@ -48,35 +78,6 @@ function trotter_oft(jump::JumpOp, energy::Float64, trotter::TrottTrott, time_la
         end
     end
     # Return in Trotter basis
-    return jump_oft
-end
-
-function time_oft(jump::JumpOp, energy::Float64, hamiltonian::HamHam, time_labels::Vector{Float64}, beta::Float64)
-    """sigma_E = 1 / beta, subnormalized OFT: multiply by: t0 * sqrt(sqrt(2 / pi)/beta) / sqrt(2 * pi)"""
-
-    prefactors = @fastmath exp.(- time_labels.^2 / beta^2 .- 1im * energy * time_labels) # Gauss and Fourier factors
-    mid_point = findlast(t -> t >= 0, time_labels) # Up to positive times
-
-    time_evolve(t) = Diagonal(exp.(1im * hamiltonian.eigvals * t))
-
-    jump_oft = zeros(ComplexF64, size(jump.data))
-    if jump.orthogonal # Orthogonal symmetry that halves time labels
-        # t = 0.0
-        jump_oft .+= @fastmath (prefactors[1] * jump.in_eigenbasis)
-
-        for i in range(2, mid_point)  # t > 0.0
-            U_plus = time_evolve(time_labels[i])
-
-            temp_op = U_plus * jump.in_eigenbasis * adjoint(U_plus)
-            jump_oft .+=  @fastmath (prefactors[i] * temp_op)
-            jump_oft .+=  @fastmath (conj(prefactors[i]) * transpose(temp_op))
-        end
-    else  # For non-orthogonal jumps
-        for i in eachindex(time_labels)
-            U = time_evolve(time_labels[i])
-            jump_oft .+= @fastmath (prefactors[i] * U * jump.in_eigenbasis * adjoint(U))
-        end
-    end
     return jump_oft
 end
 

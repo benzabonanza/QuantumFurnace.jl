@@ -29,7 +29,7 @@ export generate_filename, validate_config!, create_trotter, compute_trotter_erro
 # Quantum Trajectory
 export build_krausframework, step_along_the_trajectory!, evolve_along_trajectory, construct_gksl_lindbladian,
        apply_jump_contribution!, apply_lindbladian_dagger!, apply_lindbladian!, precompute_B, precompute_R, 
-       precompute_kraus_jumps, precompute_data
+       precompute_kraus_jumps, precompute_data, verify_completeness
 # Log Sobolev bound
 export compute_LSI_alpha2
 export X, Y, Z, Had

@@ -57,7 +57,7 @@ function main()
         with_coherent = true
         with_linear_combination = true
         # energy_domain = EnergyDomain()
-        domain = BohrDomain()
+        domain = TimeDomain()
         num_energy_bits = 12  # 11
         w0 = 0.05
         max_E = w0 * 2^num_energy_bits / 2
@@ -115,9 +115,11 @@ function main()
                         jump_op_in_eigenbasis = basis_unitary' * jump_op * basis_unitary
 
                         orthogonal = (jump_op == transpose(jump_op))
+                        hermitian = (jump_op == jump_op')
                         jump = JumpOp(jump_op,
                                 jump_op_in_eigenbasis,
-                                orthogonal)
+                                orthogonal,
+                                hermitian)
                         push!(jumps, jump)
                 end
         end
