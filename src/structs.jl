@@ -30,7 +30,6 @@ struct LindbladianJumpCaches
         temp1 = zeros(ComplexF64, dim, dim)
         new(jump_1, jump_2_dag_jump_1, temp1)
     end
-
 end
 
 # Let's keep this structure, and have the "give w0 for desired energy integral error" type of config optimization

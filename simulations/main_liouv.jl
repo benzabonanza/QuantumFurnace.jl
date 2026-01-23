@@ -40,7 +40,7 @@ end
 
 function main()
         #* Config
-        num_qubits = 4
+        num_qubits = 5
         dim = 2^num_qubits
         beta = 10.  # 5, 10, 30
 
@@ -57,8 +57,8 @@ function main()
         with_coherent = true
         with_linear_combination = true
         # energy_domain = EnergyDomain()
-        domain = TimeDomain()
-        num_energy_bits = 14  # 11
+        domain = BohrDomain()
+        num_energy_bits = 12  # 11
         w0 = 0.05
         max_E = w0 * 2^num_energy_bits / 2
         t0 = 2pi / (2^num_energy_bits * w0)  # Max time evolution pi / w0
@@ -110,8 +110,10 @@ function main()
         for pauli in jump_paulis
                 for site in jump_sites
                         jump_op = Matrix(pad_term(pauli, num_qubits, site)) / jump_normalization
-                        jump_op_in_eigenbasis = hamiltonian.eigvecs' * jump_op * hamiltonian.eigvecs
-                        # jump_op_in_eigenbasis = trotter.eigvecs' * jump_op * trotter.eigvecs  #! Uncomment for Trotter
+
+                        basis_unitary = (domain isa TrotterDomain) ? trotter.eigvecs : hamiltonian.eigvecs
+                        jump_op_in_eigenbasis = basis_unitary' * jump_op * basis_unitary
+
                         orthogonal = (jump_op == transpose(jump_op))
                         jump = JumpOp(jump_op,
                                 jump_op_in_eigenbasis,

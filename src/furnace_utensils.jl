@@ -1,8 +1,4 @@
-function precompute_labels(::BohrDomain, config::Union{LiouvConfig, ThermalizeConfig})
-    return ()# Bohr needs no labels
-end
-
-function precompute_labels(::EnergyDomain, config::Union{LiouvConfig, ThermalizeConfig})
+function precompute_labels(::Union{BohrDomain, EnergyDomain}, config::Union{LiouvConfig, ThermalizeConfig})
     energy_labels = create_energy_labels(config.num_energy_bits, config.w0)
     truncated_energy_labels = truncate_energy_labels(energy_labels, config.beta, config.a, config.b, 
     config.with_linear_combination)
@@ -18,19 +14,26 @@ function precompute_labels(::Union{TimeDomain, TrotterDomain}, config::Union{Lio
 end  
 
 function precompute_data(::BohrDomain, config::Union{LiouvConfig, ThermalizeConfig})
+
     alpha = pick_alpha(config)
+    # Was the only way to bring in the normalizing factor 1 / ||γ||_∞
+    energy_labels, = precompute_labels(config.domain, config)
+    transition = pick_transition(config.beta, config.a, config.b, config.with_linear_combination)
+    gamma_norm_factor =  1.0 / maximum(transition.(energy_labels))
     return (
-        alpha = alpha
+        alpha = alpha,
+        gamma_norm_factor
     )
 end
 
 function precompute_data(::EnergyDomain, config::Union{LiouvConfig, ThermalizeConfig})
     energy_labels, = precompute_labels(config.domain, config)
-    w0 = abs(energy_labels[2] - energy_labels[1])
     transition = pick_transition(config.beta, config.a, config.b, config.with_linear_combination)
+    gamma_norm_factor =  1.0 / maximum(transition.(energy_labels))
+    
     return (
-        w0 = w0,
         transition = transition,
+        gamma_norm_factor,
         energy_labels = energy_labels
     )
 end
@@ -38,9 +41,8 @@ end
 function precompute_data(::Union{TimeDomain, TrotterDomain}, config::Union{LiouvConfig, ThermalizeConfig})
     energy_labels, time_labels = precompute_labels(config.domain, config)
     oft_time_labels = truncate_time_labels_for_oft(time_labels, config.beta)
-    w0 = abs(energy_labels[2] - energy_labels[1])
-    t0 = abs(time_labels[2] - time_labels[1])
     transition = pick_transition(config.beta, config.a, config.b, config.with_linear_combination)
+    gamma_norm_factor =  1.0 / maximum(transition.(energy_labels))
 
     # f_minus, f_plus = if config.with_coherent
     #     _f_minus = compute_truncated_func(compute_f_minus, time_labels, config.beta)
@@ -56,9 +58,8 @@ function precompute_data(::Union{TimeDomain, TrotterDomain}, config::Union{Liouv
         (nothing, nothing)
     end
     return (
-        w0 = w0,
-        t0 = t0,
         transition = transition,
+        gamma_norm_factor,
         energy_labels = energy_labels,
         oft_time_labels = oft_time_labels,
         b_minus = b_minus,
