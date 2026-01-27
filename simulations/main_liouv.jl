@@ -40,7 +40,7 @@ end
 
 function main()
         #* Config
-        num_qubits = 5
+        num_qubits = 4
         dim = 2^num_qubits
         beta = 10.  # 5, 10, 30
 

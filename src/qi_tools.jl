@@ -59,7 +59,7 @@ function vectorize_liouv_diss_and_add!(
     Id = Matrix{ComplexF64}(I, dim, dim)
 
     kron!(L_target, jump, conj(jump), scalar)
-
+    
     jump_dag_jump = jump' * jump
     kron!(L_target, jump_dag_jump, Id, -0.5 * scalar)
     kron!(L_target, Id, transpose(jump_dag_jump), -0.5 * scalar)

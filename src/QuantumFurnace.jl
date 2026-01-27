@@ -27,7 +27,7 @@ export generate_filename, validate_config!, create_trotter, compute_trotter_erro
        create_bohr_dict, pad_term, pick_transition, create_hamham, find_ideal_heisenberg, create_alpha, expm_pauli_padded, 
        finalize_hamham, load_hamiltonian, time_oft_fast!, time_oft, oft!, oft
 # Quantum Trajectory
-export build_krausframework, step_along_the_trajectory!, evolve_along_trajectory, construct_gksl_lindbladian,
+export krausframework, step_along_the_trajectory!, evolve_along_trajectory, construct_gksl_lindbladian,
        apply_jump_contribution!, apply_lindbladian_dagger!, apply_lindbladian!, precompute_B, precompute_R, 
        precompute_kraus_jumps, precompute_data, verify_completeness
 # Log Sobolev bound

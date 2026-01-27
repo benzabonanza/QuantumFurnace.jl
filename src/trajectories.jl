@@ -1,30 +1,3 @@
-struct KrausFramework{T}
-    M0::Matrix{T}                   # non-Hermitian no jump evolution
-    M_jumps::Vector{Matrix{T}}      # jump Kraus
-    R::Matrix{T}                    # sum(M^\dagger M) (without delta)
-    psi_temp::Vector{T}             # buffer for less allocations
-    delta::Float64                  # delta steps for trajectory
-end
-
-function build_krausframework(H::AbstractMatrix{T}, 
-                              kraus_jumps::Vector{<:AbstractMatrix{T}}, 
-                              R::AbstractMatrix{T},
-                              delta::Float64) where T
-    dim = size(H, 1)
-    
-    M_jumps = [Matrix{T}(sqrt(delta) * M) for M in kraus_jumps]
-
-    # Construct H_eff and the 0th Kraus operator
-    H_eff = 1im * H + 0.5 * R
-    M0 = Matrix{T}(I, dim, dim) - delta * H_eff
-
-    # Buffer for statevector
-    psi_temp = zeros(T, dim)
-
-    return KrausFramework(M0, M_jumps, R, psi_temp, delta)
-end
-
-
 function evolve_along_trajectory(psi0::Vector{ComplexF64}, fw::KrausFramework, total_time::Float64)::Vector{ComplexF64}
 
     num_steps = round(Int, total_time / fw.delta)  # Number of trajectory steps

@@ -241,3 +241,74 @@ end
     trotter::Union{TrottTrott,Nothing} = nothing
     config::LiouvConfig{D}
 end
+
+struct LindbladWorkspace{T}
+    temp_buffers::Vector{Matrix{T}} 
+    accumulators::Vector{Matrix{T}} 
+    
+    function LindbladWorkspace(dim::Int, T=ComplexF64)
+        temp = [Matrix{T}(undef, dim, dim) for _ in 1:nthreads()]
+        acc  = [Matrix{T}(undef, dim, dim) for _ in 1:nthreads()]
+        new{T}(temp, acc)
+    end
+end
+
+struct KrausFramework{T}
+    kraus_H_eff::Matrix{T}                   # non-Hermitian no jump evolution
+    kraus_jumps::Vector{Matrix{T}}      # jump Kraus
+    R::Matrix{T}                    # sum(M^\dagger M) (without delta)
+    psi_temp::Vector{T}             # buffer for less allocations
+    delta::Float64                  # delta steps for trajectory
+end
+
+function krausframework(
+    H::AbstractMatrix{T}, 
+    kraus_jumps::Vector{Tuple{Float64, <:AbstractMatrix{T}}}, 
+    R::AbstractMatrix{T},
+    delta::Float64) where T
+
+    dim = size(H, 1)
+    
+    kraus_jumps = [Matrix{T}(sqrt(delta) * rate * op) for (rate, op) in kraus_jumps]
+
+    # Construct H_eff and the 0th Kraus operator
+    H_eff = 1im * H + 0.5 * R
+    kraus_H_eff = Matrix{T}(I, dim, dim) - delta * H_eff
+
+    # Buffer for statevector
+    psi_temp = zeros(T, dim)
+
+    return KrausFramework(kraus_H_eff, kraus_jumps, R, psi_temp, delta)
+end
+
+struct LSIFramework{T}
+    dim::Int
+
+    A::Matrix{T}            # Parameter matrix
+    AdagA::Matrix{T}            # B = A'A
+    Gamma2_AdagA::Matrix{T}  # Γ_2(A'A) = sig^1/4 A'A sig^1/4
+    gradient::Matrix{T}     # Gradient accumulator
+
+    temp1::Matrix{T}       
+    temp2::Matrix{T}        
+    temp3::Matrix{T}        
+
+    sigma_quarter::Matrix{T}   # Sigma^1/4
+    sigma_half::Matrix{T}      # Sigma^1/2
+    sigma_log::Matrix{T}       # log(Sigma)
+
+    AdagA_vec::Vector{T}    # vec(A'A)
+    L_AdagA_vec::Vector{T}  # vec(L(A'A))
+end
+
+function LSIFramework(dim::Int)
+    T = ComplexF64
+    dim2 = dim^2
+    return LSIFramework{T}(
+        dim,
+        Matrix{T}(undef, dim, dim), Matrix{T}(undef, dim, dim), Matrix{T}(undef, dim, dim), Matrix{T}(undef, dim, dim),
+        Matrix{T}(undef, dim, dim), Matrix{T}(undef, dim, dim), Matrix{T}(undef, dim, dim),
+        Matrix{T}(undef, dim, dim), Matrix{T}(undef, dim, dim), Matrix{T}(undef, dim, dim),
+        Vector{T}(undef, dim2), Vector{T}(undef, dim2)
+    )
+end

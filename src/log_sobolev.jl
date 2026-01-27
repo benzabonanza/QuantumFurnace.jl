@@ -2,38 +2,6 @@ using LinearAlgebra
 using Optim
 using Printf
 
-struct LSIFramework{T}
-    dim::Int
-
-    A::Matrix{T}            # Parameter matrix
-    AdagA::Matrix{T}            # B = A'A
-    Gamma2_AdagA::Matrix{T}  # Γ_2(A'A) = sig^1/4 A'A sig^1/4
-    gradient::Matrix{T}     # Gradient accumulator
-
-    temp1::Matrix{T}       
-    temp2::Matrix{T}        
-    temp3::Matrix{T}        
-
-    sigma_quarter::Matrix{T}   # Sigma^1/4
-    sigma_half::Matrix{T}      # Sigma^1/2
-    sigma_log::Matrix{T}       # log(Sigma)
-
-    AdagA_vec::Vector{T}    # vec(A'A)
-    L_AdagA_vec::Vector{T}  # vec(L(A'A))
-end
-
-function LSIFramework(dim::Int)
-    T = ComplexF64
-    dim2 = dim^2
-    return LSIFramework{T}(
-        dim,
-        Matrix{T}(undef, dim, dim), Matrix{T}(undef, dim, dim), Matrix{T}(undef, dim, dim), Matrix{T}(undef, dim, dim),
-        Matrix{T}(undef, dim, dim), Matrix{T}(undef, dim, dim), Matrix{T}(undef, dim, dim),
-        Matrix{T}(undef, dim, dim), Matrix{T}(undef, dim, dim), Matrix{T}(undef, dim, dim),
-        Vector{T}(undef, dim2), Vector{T}(undef, dim2)
-    )
-end
-
 """
     sandwich!(target, middle, bread, cache)
 

@@ -25,7 +25,7 @@ eta = 0.0  # eta = 0.2
 
 with_coherent = true
 with_linear_combination = true
-domain = EnergyDomain()
+domain = TimeDomain()
 num_energy_bits = 12  # 11
 w0 = 0.05
 max_E = w0 * 2^num_energy_bits / 2
@@ -73,7 +73,7 @@ jump_normalization = sqrt(num_of_jumps)
 jumps::Vector{JumpOp} = []
 for pauli in jump_paulis
         for site in 1:num_qubits
-                jump_op = pad_term(pauli, num_qubits, site) / jump_normalization
+                jump_op = pad_term(pauli, num_qubits, site) ./ jump_normalization
                 
                 basis_unitary = (domain isa TrotterDomain) ? trotter.eigvecs : hamiltonian.eigvecs
                 jump_op_in_eigenbasis = basis_unitary' * jump_op * basis_unitary
@@ -89,7 +89,18 @@ for pauli in jump_paulis
 end
 
 kraus_jumps = @time precompute_kraus_jumps(config.domain, jumps, hamiltonian, config, precomputed_data, time_oft_caches)
-# verify_completeness(kraus_jumps)
+# Base.summarysize(kraus_jumps)  # Size
+
+if with_coherent
+        B = @time B_time(jumps, hamiltonian, precomputed_data.b_minus, precomputed_data.b_plus, t0, beta)
+        # B = B_trotter(jumps, trotter, precomputed_data.b_minus, precomputed_data.b_plus, beta)
+else
+        B = zeros(ComplexF64, dim, dim)
+end
+B
+R = @time precompute_R(kraus_jumps)
+
+fw = krausframework(B, kraus_jumps, R, delta)
 
 # num_sparse_jumps = 0
 # for kraus_jump in kraus_jumps
@@ -100,19 +111,6 @@ kraus_jumps = @time precompute_kraus_jumps(config.domain, jumps, hamiltonian, co
 #         end
 # end
 # num_sparse_jumps
-
-# kraus_jumps = precompute_kraus_jumps(config.domain, jumps, trotter, config, precomputed_data, time_oft_caches)
-R = @time precompute_R(kraus_jumps)
-
-if with_coherent
-        B = @time B_time(jumps, hamiltonian, precomputed_data.b_minus, precomputed_data.b_plus, t0, beta)
-        # B = B_trotter(jumps, trotter, precomputed_data.b_minus, precomputed_data.b_plus, beta)
-else
-        B = zeros(ComplexF64, dim, dim)
-end
-
-fw = build_krausframework(B, kraus_jumps, R, delta)
-# Base.summarysize(kraus_jumps)  # Size
 
 psi0 = ones(ComplexF64, dim)
 psi0 ./= norm(psi0)

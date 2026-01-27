@@ -1,5 +1,9 @@
 #* Liouvillian (vectorized) jump contributions
 #TODO: use thread caches
+#TODO: For threads we use 1 lindbladian only and thus jump_contributions!()
+
+"""
+"""
 function jump_contribution(::BohrDomain, 
     jump::JumpOp, 
     hamiltonian::HamHam, 
@@ -477,14 +481,14 @@ function precompute_kraus_jumps(
     return kraus_jumps  # in Trotter basis
 end
 
-function verify_completeness(kraus_jumps)
-    n = size(kraus_jumps[1], 1)
-    total = zeros(ComplexF64, n, n)
-    for K in kraus_jumps
-        total .+= K' * K
+function verify_completeness(fw::KrausFramework)
+    dim = size(fw.kraus_H_eff, 1)
+    total = fw.kraus_H_eff
+    for (rate, op) in fw.kraus_jumps
+        total .+= rate^2 * op' * op
     end
     # Completeness check
-    return norm(total - I(n)) / n
+    return norm(total - I(dim)) / dim
 end
 
 """
@@ -504,17 +508,6 @@ end
 # Should match up but obviously, not "faithful" since the QC have to go from the time domain with a Fourier transform.
 function precompute_B(R::Matrix{ComplexF64}, hamiltonian::HamHam, beta::Float64)
     return @. R * 1im * tanh(beta * hamiltonian.bohr_freqs / 4) / 2
-end
-
-struct LindbladWorkspace{T}
-    temp_buffers::Vector{Matrix{T}} 
-    accumulators::Vector{Matrix{T}} 
-    
-    function LindbladWorkspace(dim::Int, T=ComplexF64)
-        temp = [Matrix{T}(undef, dim, dim) for _ in 1:nthreads()]
-        acc  = [Matrix{T}(undef, dim, dim) for _ in 1:nthreads()]
-        new{T}(temp, acc)
-    end
 end
 
 #TODO: test it; set BLAS threads to 1, let julia threads be more. 
