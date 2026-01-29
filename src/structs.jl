@@ -69,6 +69,8 @@ end
     with_linear_combination::Bool
     domain::D
     beta::Float64
+    sigma::Float64
+    gaussian_parameters::Tuple{Union{Float64, Nothing}, Union{Float64, Nothing}} = (nothing, nothing)  # (ω_γ, σ_γ)
     a::Union{Float64, Nothing} = nothing
     b::Union{Float64, Nothing} = nothing
     num_energy_bits::Int64 = -1
@@ -96,6 +98,8 @@ end
     with_linear_combination::Bool
     domain::D
     beta::Float64
+    sigma::Float64
+    gaussian_parameters::Tuple{Union{Float64, Nothing}, Union{Float64, Nothing}} = (nothing, nothing)  # (ω_γ, σ_γ)
     a::Union{Float64, Nothing} = nothing
     b::Union{Float64, Nothing} = nothing
     num_energy_bits::Int64 = -1

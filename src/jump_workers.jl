@@ -57,11 +57,11 @@ function jump_contribution(::EnergyDomain,
     end
 
     jump_oft = zeros(ComplexF64, dim, dim)
-    prefactor = (config.w0 * config.beta / sqrt(2 * pi)) * gamma_norm_factor # w0, OFT norm^2, Fourier, norm factor
+    prefactor = (config.w0 / (config.sigma * sqrt(2 * pi))) * gamma_norm_factor # w0, OFT norm^2, Fourier, norm factor
 
     energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
     for w in energies
-        oft!(jump_oft, jump, w, hamiltonian, config.beta) # subnorm = t0 * sqrt((sqrt(2 / pi)/beta) / (2 * pi))
+        oft!(jump_oft, jump, w, hamiltonian, config.sigma) # subnorm = t0 * sqrt(sigma (sqrt(2 / pi)) / (2 * pi))
         scalar_w = prefactor * transition(w)
 
         vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft, scalar_w)
@@ -92,11 +92,11 @@ function jump_contribution(::TimeDomain,
 
     jump_oft = zeros(ComplexF64, dim, dim)
     time_oft_caches = OFTCaches(dim)
-    prefactor = config.w0 * config.t0^2 * (sqrt(2 / pi) / config.beta) / (2 * pi) * gamma_norm_factor
+    prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
 
     energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
     for w in energies
-        time_oft_fast!(jump_oft, time_oft_caches, jump, w, hamiltonian, oft_time_labels, config.beta) # subnorm = t0 * sqrt((sqrt(2 / pi)/beta) / (2 * pi))
+        time_oft_fast!(jump_oft, time_oft_caches, jump, w, hamiltonian, oft_time_labels, config.sigma) # subnorm = t0 * sqrt((sqrt(2 / pi)/sigma) / (2 * pi))
         scalar_w = prefactor * transition(w)
 
         vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft, scalar_w)
@@ -127,11 +127,11 @@ function jump_contribution(::TrotterDomain,
 
     jump_oft = zeros(ComplexF64, dim, dim)
     time_oft_caches = OFTCaches(dim)
-    prefactor = config.w0 * config.t0^2 * (sqrt(2 / pi) / config.beta) / (2 * pi) * gamma_norm_factor # time ints t0^2, energy int w0, OFT time norm^2, Fourier
+    prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor # time ints t0^2, energy int w0, OFT time norm^2, Fourier
     
     energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
     for w in energies
-        trotter_oft_fast!(jump_oft, time_oft_caches, jump, w, trotter, oft_time_labels, config.beta) # subnorm = t0 * sqrt((sqrt(2 / pi)/beta) / (2 * pi))
+        trotter_oft_fast!(jump_oft, time_oft_caches, jump, w, trotter, oft_time_labels, config.sigma) # subnorm = t0 * sqrt((sqrt(2 / pi)/sigma) / (2 * pi))
         scalar_w = prefactor * transition(w)
 
         vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft, scalar_w)
@@ -220,7 +220,7 @@ function jump_contribution(::EnergyDomain,
     end
 
     # Dissipative part
-    prefactor = scaled_delta * config.w0 * config.beta / sqrt(2 * pi)
+    prefactor = scaled_delta * config.w0 / (config.sigma * sqrt(2 * pi))
     jump_oft = zeros(ComplexF64, dim, dim)
     jump_dag_jump = similar(jump_oft)
     temp1 = similar(jump_oft)
@@ -228,7 +228,7 @@ function jump_contribution(::EnergyDomain,
 
     energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
     for w in energies
-        oft!(jump_oft, jump, w, hamiltonian, config.beta)
+        oft!(jump_oft, jump, w, hamiltonian, config.sigma)
         mul!(jump_dag_jump, jump_oft', jump_oft)
 
         scalar_w = transition(w) * prefactor
@@ -285,11 +285,11 @@ function jump_contribution(
 
     # Pre-allocate caches for the time_oft function as well
     oft_caches = OFTCaches(dim)
-    prefactor = scaled_delta * config.w0 * config.t0^2 * (sqrt(2 / pi) / config.beta) / (2 * pi)
+    prefactor = scaled_delta * config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi)
 
     energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
     for w in energies
-        time_oft_fast!(jump_oft, oft_caches, jump, w, hamiltonian, oft_time_labels, config.beta)
+        time_oft_fast!(jump_oft, oft_caches, jump, w, hamiltonian, oft_time_labels, config.sigma)
         
         # jump_dag_jump = jump_oft' * jump_oft
         mul!(jump_dag_jump, jump_oft', jump_oft)
@@ -346,11 +346,11 @@ function jump_contribution(::TrotterDomain,
     temp1 = similar(jump_oft)
 
     oft_caches = OFTCaches(dim)
-    prefactor = scaled_delta * config.w0 * config.t0^2 * (sqrt(2 / pi) / config.beta) / (2 * pi)
+    prefactor = scaled_delta * config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi)
 
     energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
     for w in energies
-        trotter_oft_fast!(jump_oft, oft_caches, jump, w, trotter, oft_time_labels, config.beta)
+        trotter_oft_fast!(jump_oft, oft_caches, jump, w, trotter, oft_time_labels, config.sigma)
         
         # jump_dag_jump = jump_oft' * jump_oft
         mul!(jump_dag_jump, jump_oft', jump_oft)
@@ -398,7 +398,7 @@ function precompute_kraus_jumps(
     dim = size(hamiltonian.data, 1)
     (; transition, gamma_norm_factor, energy_labels) = precomputed_data
 
-    base_prefactor = config.w0 * config.beta / sqrt(2 * pi) * gamma_norm_factor
+    base_prefactor = config.w0 / (sigma * sqrt(2 * pi)) * gamma_norm_factor
 
     kraus_jumps = Vector{Tuple{Float64, AbstractMatrix{ComplexF64}}}()
 
@@ -406,7 +406,7 @@ function precompute_kraus_jumps(
         energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
         for w in energies
             kraus_jump = Matrix{ComplexF64}(undef, dim, dim)
-            oft!(kraus_jump, jump, w, hamiltonian, config.beta)
+            oft!(kraus_jump, jump, w, hamiltonian, config.sigma)
             rate_positive = sqrt(base_prefactor * transition(w))
             push!(kraus_jumps, (rate_positive, kraus_jump))
 
@@ -431,13 +431,13 @@ function precompute_kraus_jumps(
     dim = size(hamiltonian.data, 1)
     (; transition, gamma_norm_factor, b_minus, b_plus, energy_labels, oft_time_labels) = precomputed_data
 
-    base_prefactor = config.w0 * config.t0^2 * (sqrt(2 / pi) / config.beta) / (2 * pi) * gamma_norm_factor
+    base_prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
     kraus_jumps = Vector{Tuple{Float64, AbstractMatrix{ComplexF64}}}()
     for jump in jumps
         energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
         for w in energies
             kraus_jump = Matrix{ComplexF64}(undef, dim, dim)
-            time_oft_fast!(kraus_jump, oft_caches, jump, w, hamiltonian, oft_time_labels, config.beta)
+            time_oft_fast!(kraus_jump, oft_caches, jump, w, hamiltonian, oft_time_labels, config.sigma)
             rate_positive = sqrt(base_prefactor * transition(w))
             push!(kraus_jumps, (rate_positive, kraus_jump))
 
@@ -462,13 +462,13 @@ function precompute_kraus_jumps(
     dim = size(trotter.eigvecs, 1)
     (; transition, gamma_norm_factor, b_minus, b_plus, energy_labels, oft_time_labels) = precomputed_data
 
-    base_prefactor = config.w0 * config.t0^2 * (sqrt(2 / pi) / config.beta) / (2 * pi) * gamma_norm_factor
+    base_prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
     kraus_jumps = Vector{Tuple{Float64, AbstractMatrix{ComplexF64}}}()
     for jump in jumps
         energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
         for w in energies
             kraus_jump = Matrix{ComplexF64}(undef, dim, dim)
-            trotter_oft_fast!(kraus_jump, oft_caches, jump, w, trotter, oft_time_labels, config.beta)
+            trotter_oft_fast!(kraus_jump, oft_caches, jump, w, trotter, oft_time_labels, config.sigma)
             rate_positive = sqrt(base_prefactor * transition(w))
             push!(kraus_jumps, (rate_positive, kraus_jump))
 
@@ -676,10 +676,10 @@ function jump_contribution!(
     end
 
     # Dissipative part
-    prefactor = w0 * config.beta / sqrt(2 * pi)
+    prefactor = w0 / (config.sigma * sqrt(2 * pi))
     # mul!(C, A, B, α, β) computes C = α*A*B + β*C
     for w in energy_labels
-        oft!(jump_caches.jump_1, jump, w, hamiltonian, config.beta)
+        oft!(jump_caches.jump_1, jump, w, hamiltonian, config.sigma)
         mul!(jump_caches.jump_2_dag_jump_1, jump_caches.jump_1', jump_caches.jump_1)
 
         loop_factor = transition(w) * prefactor
@@ -718,9 +718,9 @@ function jump_contribution!(
         mul!(target, input, coherent_term, 1im, 1.0)
     end
 
-    prefactor = w0 * t0^2 * (sqrt(2 / pi) / config.beta) / (2 * pi)
+    prefactor = w0 * t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi)
     for w in energy_labels
-        time_oft_fast!(jump_caches.jump_1, oft_caches, jump, w, hamiltonian, oft_time_labels, config.beta)
+        time_oft_fast!(jump_caches.jump_1, oft_caches, jump, w, hamiltonian, oft_time_labels, config.sigma)
         
         # jump_dag_jump = jump_oft' * jump_oft
         mul!(jump_caches.jump_2_dag_jump_1, jump_caches.jump_1', jump_caches.jump_1)
@@ -760,9 +760,9 @@ function jump_contribution!(
         mul!(target, input, coherent_term, 1im, 1.0)
     end
 
-    prefactor = w0 * t0^2 * (sqrt(2 / pi) / config.beta) / (2 * pi)
+    prefactor = w0 * t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi)
     for w in energy_labels
-        trotter_oft_fast!(jump_caches.jump_1, oft_caches, jump, w, trotter, oft_time_labels, config.beta)
+        trotter_oft_fast!(jump_caches.jump_1, oft_caches, jump, w, trotter, oft_time_labels, config.sigma)
         
         # jump_dag_jump = jump_oft' * jump_oft
         mul!(jump_caches.jump_2_dag_jump_1, jump_caches.jump_1', jump_caches.jump_1)

@@ -5,7 +5,7 @@ function construct_liouvillian_energy(jumps::Vector{JumpOp}, hamiltonian::HamHam
     dim = size(hamiltonian.data, 1)
     w0 = energy_labels[2] - energy_labels[1]
 
-    transition = pick_transition(config.beta, config.a, config.b, config.with_linear_combination)
+    transition = pick_transition(config)
 
     total_liouv_coherent_part = zeros(ComplexF64, dim^2, dim^2)
     total_liouv_diss_part = zeros(ComplexF64, dim^2, dim^2)
@@ -286,16 +286,18 @@ function create_alpha_from_gaussians_integrated(nu_1::Float64, nu_2::Float64, nu
 end
 
 #* TOOLS --------------------------------------------------------------------------------------------------------------------
-function pick_transition(beta::Float64, a::Float64, b::Float64, with_linear_combination::Bool)
+#FIXME: Tha arguments should maybe not be of config, but only the necessary elements there.
+function pick_transition(config::Union{LiouvConfig, ThermalizeConfig})
 
     if !(with_linear_combination)  # Gaussian case
         @printf("Gaussian\n")
         return w -> begin
-            return exp(-beta^2 * (w + 1/beta)^2 /2)
+            return exp(-(w + config.gaussian_parameters[1])^2 /(2 * config.gaussian_parameters[2]^2))
         end
     end
 
-    sqrtA = sqrt((4 * a / beta + 1) / 8)
+    #FIXME: Havent corrected for lin combs with sigmas. Maybe we can skip the prefactors, since we normalize later anyways
+    sqrtA = sqrt((4 * a / config.beta + 1) / 8)
     if (b == 0 && a != 0)  # No time singularity but kinky Metro in energy
         return w -> begin
             sqrtB = beta * abs(w + 1 / (2 * beta)) / sqrt(2)
@@ -313,7 +315,7 @@ function pick_transition(beta::Float64, a::Float64, b::Float64, with_linear_comb
     elseif a == 0  # Time singularity and kinky Metro
         @printf("Kinky Metro\n")
         return w -> begin
-            return exp(-beta * max(w + 1/(2 * beta), 0.0))
+            return exp(-config.beta * max(w + config.beta * config.sigma^2 / 2, 0.0))
         end
     end
 end

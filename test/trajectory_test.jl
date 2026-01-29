@@ -12,6 +12,7 @@ using LinearAlgebra, Random
 num_qubits = 4
 dim = 2^num_qubits
 beta = 10.
+sigma = 1 / beta
 
 # Smooth Metro
 a = beta / 30. # a = beta / 50.
@@ -40,6 +41,7 @@ config = LiouvConfig(
                 with_linear_combination = with_linear_combination, 
                 domain = domain,
                 beta = beta,
+                sigma = sigma, 
                 a = a,
                 b = b,
                 num_energy_bits = num_energy_bits,

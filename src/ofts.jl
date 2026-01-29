@@ -6,22 +6,22 @@ using Plots
 using QuadGK
 using Pkg
 
-function oft(jump::JumpOp, energy::Float64, hamiltonian::HamHam, beta::Float64)
-    """sigma_E = 1 / beta. Subnormalized, multiply by sqrt(beta / sqrt(2 * pi))"""
-    return @. jump.in_eigenbasis * exp(-beta^2 * (energy - hamiltonian.bohr_freqs)^2 / 4) 
+function oft(jump::JumpOp, energy::Float64, hamiltonian::HamHam, sigma::Float64)
+    """Subnormalized, multiply by sqrt(1 / sigma sqrt(2 * pi))"""
+    return @. jump.in_eigenbasis * exp(-(energy - hamiltonian.bohr_freqs)^2 / (4 * sigma^2))
 end
 
-function oft!(out_matrix::Matrix{ComplexF64}, jump::JumpOp, energy::Float64, hamiltonian::HamHam, beta::Float64)
-    """sigma_E = 1 / beta. Subnormalized, multiply by sqrt(beta / sqrt(2 * pi))"""
-    @. out_matrix = jump.in_eigenbasis * exp(-beta^2 * (energy - hamiltonian.bohr_freqs)^2 / 4) 
+function oft!(out_matrix::Matrix{ComplexF64}, jump::JumpOp, energy::Float64, hamiltonian::HamHam, sigma::Float64)
+    """Subnormalized, multiply by sqrt(1 / sigma sqrt(2 * pi))"""
+    @. out_matrix = jump.in_eigenbasis * exp(-(energy - hamiltonian.bohr_freqs)^2 / (4 * sigma^2)) 
     return out_matrix
 end
 
 
-function time_oft(jump::JumpOp, energy::Float64, hamiltonian::HamHam, time_labels::Vector{Float64}, beta::Float64)
-    """sigma_E = 1 / beta, subnormalized OFT: multiply by: t0 * sqrt(sqrt(2 / pi)/beta) / sqrt(2 * pi)"""
+function time_oft(jump::JumpOp, energy::Float64, hamiltonian::HamHam, time_labels::Vector{Float64}, sigma::Float64)
+    """Subnormalized OFT: multiply by: t0 * sqrt(sigma sqrt(2 / pi)) / sqrt(2 * pi)"""
 
-    prefactors = @fastmath exp.(- time_labels.^2 / beta^2 .- 1im * energy * time_labels) # Gauss and Fourier factors
+    prefactors = @fastmath @. exp(- time_labels^2 * sigma^2 - 1im * energy * time_labels) # Gauss and Fourier factors
     mid_point = findlast(t -> t >= 0, time_labels) # Up to positive times
 
     time_evolve(t) = Diagonal(exp.(1im * hamiltonian.eigvals * t))
@@ -47,9 +47,9 @@ function time_oft(jump::JumpOp, energy::Float64, hamiltonian::HamHam, time_label
     return jump_oft
 end
 
-function trotter_oft(jump::JumpOp, energy::Float64, trotter::TrottTrott, time_labels::Vector{Float64}, beta::Float64)
+function trotter_oft(jump::JumpOp, energy::Float64, trotter::TrottTrott, time_labels::Vector{Float64}, sigma::Float64)
 
-    prefactors = @fastmath exp.(- time_labels.^2 / beta^2 .- 1im * energy * time_labels) # Gauss and Fourier factors
+    prefactors = @fastmath @. exp(- time_labels.^2 * sigma^2 - 1im * energy * time_labels) # Gauss and Fourier factors
     mid_point = findlast(t -> t >= 0, time_labels) # Up to positive times
     trotter_time_evolution(n::Int64) = Diagonal(trotter.eigvals_t0 .^ n)  # n - number of t0 time chunks
     dim = size(jump.data)
@@ -83,7 +83,7 @@ end
 
 function time_oft_fast!(out_matrix::Matrix{ComplexF64}, caches::OFTCaches,
                    jump::JumpOp, energy::Float64, hamiltonian::HamHam, 
-                   time_labels::Vector{Float64}, beta::Float64)
+                   time_labels::Vector{Float64}, sigma::Float64)
     
     # Ensure the prefactor cache is the right size
     if length(caches.prefactors) != length(time_labels)
@@ -91,7 +91,7 @@ function time_oft_fast!(out_matrix::Matrix{ComplexF64}, caches::OFTCaches,
     end
     
     # In-place calculation of prefactors
-    @fastmath caches.prefactors .= exp.(-time_labels.^2 / beta^2 .- 1im * energy .* time_labels)
+    @fastmath @. caches.prefactors = exp(-time_labels^2 * sigma^2 - 1im * energy * time_labels)
     
     mid_point = findlast(t -> t >= 0, time_labels)
     
@@ -139,13 +139,13 @@ end
 
 function trotter_oft_fast!(out_matrix::Matrix{ComplexF64}, caches::OFTCaches,
                       jump::JumpOp, energy::Float64, trotter::TrottTrott, 
-                      time_labels::Vector{Float64}, beta::Float64)
+                      time_labels::Vector{Float64}, sigma::Float64)
 
     if length(caches.prefactors) != length(time_labels)
         resize!(caches.prefactors, length(time_labels))
     end
     
-    @fastmath caches.prefactors .= exp.(-time_labels.^2 / beta^2 .- 1im * energy .* time_labels)
+    @fastmath @. caches.prefactors = exp(-time_labels^2 * sigma^2 - 1im * energy * time_labels)
     
     mid_point = findlast(t -> t >= 0, time_labels)
     
@@ -162,10 +162,6 @@ function trotter_oft_fast!(out_matrix::Matrix{ComplexF64}, caches::OFTCaches,
             copyto!(caches.temp_op, jump.in_eigenbasis)
             # temp_op = U*jump*U', for diagonal U's:
             caches.temp_op .*= (caches.U.diag * caches.U.diag')  
-            
-            # unsafe:
-            # mul!(caches.temp_op, caches.U, jump.in_eigenbasis)
-            # mul!(caches.temp_op, caches.temp_op, caches.U')
             
             # Accumulate both terms in-place
             LinearAlgebra.axpby!(caches.prefactors[i], caches.temp_op, 1.0, out_matrix)

@@ -140,50 +140,88 @@ function coherent_bohr(hamiltonian::HamHam, jumps::Vector{JumpOp}, config::Union
     return B
 end
 
+#TODO: Debug these for new general sigma.
 function pick_f(config::Union{LiouvConfig, ThermalizeConfig})
     if config.with_linear_combination
-        return (nu_1, nu_2, beta, a, b) -> create_f(nu_1, nu_2, config.beta, config.a, config.b)
+        return (nu_1, nu_2, beta, sigma, a, b, gaussian_parameters=nothing) -> create_f(nu_1, nu_2, config.beta, config.sigma, config.a, config.b)
     else
-        return (nu_1, nu_2, beta, a=nothing, b=nothing) -> create_f_gauss(nu_1, nu_2, config.beta)
+        return (nu_1, nu_2, beta, sigma, a=nothing, b=nothing) -> create_f_gauss(nu_1, nu_2, config.beta, config.sigma,
+        config.gaussian_parameters)
     end 
 end
 
-function create_f(nu_1::Float64, nu_2::Float64, beta::Float64, a::Float64, b::Float64)
-    alpha = create_alpha(nu_1, nu_2, beta, a, b)
+function create_f(nu_1::Float64, nu_2::Float64, beta::Float64, sigma::Float64, a::Float64, b::Float64)
+    alpha = create_alpha(nu_1, nu_2, beta, sigma, a, b)
     return tanh(-beta * (nu_1 - nu_2) / 4) * alpha / (2im)
 end
 
-function create_f_gauss(nu_1::Float64, nu_2::Float64, beta::Float64)
-    """Tanh * alpha. Gaussian parameters = 1/β"""
-    alpha_nu1_nu2 = create_alpha_gauss(nu_1, nu_2, beta)
+# function create_f_gauss(nu_1::Float64, nu_2::Float64, beta::Float64)
+#     """Tanh * alpha. Gaussian parameters = 1/β"""
+#     alpha_nu1_nu2 = create_alpha_gauss(nu_1, nu_2, beta)
+#     return tanh(-beta * (nu_1 - nu_2) / 4) * alpha_nu1_nu2 / (2im)
+# end
+
+function create_f_gauss(nu_1::Float64, nu_2::Float64, beta::Float64, sigma::Float64, 
+    gaussian_parameters::Tuple{Union{Float64, Nothing}, Union{Float64, Nothing}})
+    """Tanh * alpha."""
+    alpha_nu1_nu2 = create_alpha_gauss(nu_1, nu_2, beta, sigma, gaussian_parameters)
     return tanh(-beta * (nu_1 - nu_2) / 4) * alpha_nu1_nu2 / (2im)
 end
 
 function pick_alpha(config::Union{LiouvConfig, ThermalizeConfig})
     if config.with_linear_combination
-        return (nu_1, nu_2, beta, a, b) -> create_alpha(nu_1, nu_2, config.beta, config.a, config.b)
+        return (nu_1, nu_2, beta, sigma, a, b, gaussian_parameters=nothing) -> create_alpha(nu_1, nu_2, config.beta, config.sigma, config.a, config.b)
     else
-        return (nu_1, nu_2, beta, a=nothing, b=nothing) -> create_alpha_gauss(nu_1, nu_2, config.beta)
+        return (nu_1, nu_2, beta, sigma, a=nothing, b=nothing) -> create_alpha_gauss(nu_1, nu_2, config.beta, config.sigma, 
+        gaussian_parameters)
     end 
 end
 
-function create_alpha(nu_1::Float64, nu_2::Float64, beta::Float64, a::Float64, b::Float64)
-    
-    eh = sqrt(4 * a / beta + 1)
-    nu = nu_1 + nu_2
+function create_alpha(nu_1::Float64, nu_2::Float64, beta::Float64, sigma::Float64, a::Float64, b::Float64)
 
-    alpha_nu_1 = (exp(-beta^2 * (nu_1 - nu_2)^2 / 8) 
-        * exp(a / (2 * beta)) * exp(-beta * nu * (1 + eh) / 4) * (
-        erfc((eh * (1 + b) - beta * nu) / sqrt(8 * (1 + b))) 
-        + exp(beta * nu * eh / 2) * erfc((eh * (1 + b) + beta * nu) / sqrt(8 * (1 + b)))) / 2)
+    sqrtA = sqrt(a + beta / 4)
+    sqrtB = sqrt(beta / 16) * abs(nu_1 + nu_2)
+    C = beta * (nu_1 + nu_2) / 4
+    prefactor = exp(a * beta * sigma^2 / 2) / 2
+    u_min = sqrt(beta * sigma^2 * (1 + b) / 2)
+    z_plus = sqrtA * u_min + sqrtB / u_min
+    z_minus = sqrtA * u_min - sqrtB / u_min
+
+    alpha_nu_1 = (prefactor * exp(-C) * exp(-(nu_1 - nu_2)^2 / (8 * sigma^2)) * exp(- 2 * sqrtA * sqrtB) *
+                    (erfc(z_minus) + exp(4 * sqrtA * sqrtB) * erfc(z_plus)))
+
     return alpha_nu_1
 end
 
-function create_alpha_gauss(nu_1::Float64, nu_2::Float64, beta::Float64)
-    """Gaussian parameters = 1/β"""
-    alpha_fn(nu_1) = exp(-beta^2 * (nu_1 + nu_2 + 2/beta)^2/16) * exp(-beta^2 * (nu_1 - nu_2)^2/8) / sqrt(2) #! sqrt(8)->sqrt(2)
+# sigma = 1 / beta version: 
+# function create_alpha_old(nu_1::Float64, nu_2::Float64, beta::Float64, a::Float64, b::Float64)
+    
+#     eh = sqrt(4 * a / beta + 1)
+#     nu = nu_1 + nu_2
+
+#     alpha_nu_1 = (exp(-beta^2 * (nu_1 - nu_2)^2 / 8) 
+#         * exp(a / (2 * beta)) * exp(-beta * nu * (1 + eh) / 4) * (
+#         erfc((eh * (1 + b) - beta * nu) / sqrt(8 * (1 + b))) 
+#         + exp(beta * nu * eh / 2) * erfc((eh * (1 + b) + beta * nu) / sqrt(8 * (1 + b)))) / 2)
+#     return alpha_nu_1
+# end
+
+function create_alpha_gauss(nu_1::Float64, nu_2::Float64, sigma::Float64, 
+    gaussian_parameters::Tuple{Union{Float64, Nothing}, Union{Float64, Nothing}})
+    (w_gamma, sigma_gamma) = gaussian_parameters
+    combined_sigma = sigma^2 + sigma_gamma^2
+    prefactor = sigma_gamma / sqrt(combined_sigma)
+    alpha_fn(nu_1) = prefactor * (exp(-(nu_1 + nu_2 + 2 * w_gamma)^2 / (8 * combined_sigma)) 
+                                    * exp(-(nu_1 - nu_2)^2 / (8 * sigma^2)))
     return alpha_fn(nu_1)
 end
+
+# sigma = 1 / beta version: 
+# function create_alpha_gauss(nu_1::Float64, nu_2::Float64, beta::Float64)
+#     """Gaussian parameters = 1/β"""
+#     alpha_fn(nu_1) = exp(-beta^2 * (nu_1 + nu_2 + 2/beta)^2/16) * exp(-beta^2 * (nu_1 - nu_2)^2/8) / sqrt(2)
+#     return alpha_fn(nu_1)
+# end
 
 #* GAUSS --------------------------------------------------------------------------------------------------------------------
 function construct_liouvillian_bohr_gauss(jumps::Vector{JumpOp}, hamiltonian::HamHam, config::LiouvConfig)

@@ -149,6 +149,18 @@ function validate_config!(config::Union{LiouvConfig, ThermalizeConfig})
     _collect_config_errors!(errors, config.domain, config)
 
     # --- Common Validation Logic ---
+    if !(config.with_linear_combination) && config.gaussian_parameters == (nothing, nothing)
+        push!(errors, "If with_linear_combination is false, gaussian_parameters must be set.")
+    end
+
+    if !(config.with_linear_combination)
+        parameter_relation_holds = isapprox(config.beta,
+                                    2 * config.gaussian_parameters[1] / (config.sigma^2 + config.gaussian_parameters[2]^2))
+        if !(parameter_relation_holds)
+            push!(errors, "For Gaussian transitions the parameters have to relate as beta = 2 w_gamma / (sigma^2 + sigma_gamma^2)")
+        end
+    end
+
     if config.with_linear_combination && config.a == 0.0
         if config.b != 0.0
             push!(errors, "For linear combinations with b != 0, a must also be non-zero.")
@@ -220,6 +232,8 @@ function print_press(config::LiouvConfig)
         ("num_qubits", config.num_qubits),
         ("num_energy_bits", config.num_energy_bits),
         ("beta", config.beta),
+        ("sigma", config.sigma),
+        ("gaussian_parameters", config.gaussian_parameters),
         ("a", config.a),
         ("b", config.b),
         ("eta", config.eta),
@@ -247,6 +261,8 @@ function print_press(config::ThermalizeConfig)
         ("num_qubits", config.num_qubits),
         ("num_energy_bits", config.num_energy_bits),
         ("beta", config.beta),
+        ("sigma", config.sigma),
+        ("gaussian_parameters", config.gaussian_parameters),
         ("a", config.a),
         ("b", config.b),
         ("eta", config.eta),
