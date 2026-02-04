@@ -111,7 +111,7 @@ function coherent_bohr(hamiltonian::HamHam, jump::JumpOp, config::Union{LiouvCon
         A_nu_2::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
         indices = hamiltonian.bohr_dict[nu_2]
         A_nu_2[indices] .= jump.in_eigenbasis[indices]
-        @. f_A_nu_1 = f(hamiltonian.bohr_freqs, nu_2, config.beta, config.a, config.b) * jump.in_eigenbasis
+        @. f_A_nu_1 = f(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
 
         B .+= A_nu_2' * f_A_nu_1
     end
@@ -132,7 +132,7 @@ function coherent_bohr(hamiltonian::HamHam, jumps::Vector{JumpOp}, config::Union
             A_nu_2::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
             indices = hamiltonian.bohr_dict[nu_2]
             A_nu_2[indices] .= jump.in_eigenbasis[indices]
-            @. f_A_nu_1 = f(hamiltonian.bohr_freqs, nu_2, config.beta, config.a, config.b) * jump.in_eigenbasis
+            @. f_A_nu_1 = f(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
 
             B .+= A_nu_2' * f_A_nu_1
         end
@@ -142,11 +142,16 @@ end
 
 #TODO: Debug these for new general sigma.
 function pick_f(config::Union{LiouvConfig, ThermalizeConfig})
+
+    beta = config.beta
+    sigma = config.sigma
     if config.with_linear_combination
-        return (nu_1, nu_2, beta, sigma, a, b, gaussian_parameters=nothing) -> create_f(nu_1, nu_2, config.beta, config.sigma, config.a, config.b)
+        a = config.a
+        b = config.b
+        return (nu_1, nu_2) -> create_f(nu_1, nu_2, beta, sigma, a, b)
     else
-        return (nu_1, nu_2, beta, sigma, a=nothing, b=nothing) -> create_f_gauss(nu_1, nu_2, config.beta, config.sigma,
-        config.gaussian_parameters)
+        gaussian_parameters = config.gaussian_parameters
+        return (nu_1, nu_2) -> create_f_gauss(nu_1, nu_2, beta, sigma, gaussian_parameters)
     end 
 end
 
@@ -162,18 +167,23 @@ end
 # end
 
 function create_f_gauss(nu_1::Float64, nu_2::Float64, beta::Float64, sigma::Float64, 
-    gaussian_parameters::Tuple{Union{Float64, Nothing}, Union{Float64, Nothing}})
+    gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}})
     """Tanh * alpha."""
-    alpha_nu1_nu2 = create_alpha_gauss(nu_1, nu_2, beta, sigma, gaussian_parameters)
+    alpha_nu1_nu2 = create_alpha_gauss(nu_1, nu_2, sigma, gaussian_parameters)
     return tanh(-beta * (nu_1 - nu_2) / 4) * alpha_nu1_nu2 / (2im)
 end
 
 function pick_alpha(config::Union{LiouvConfig, ThermalizeConfig})
+
+    sigma = config.sigma
     if config.with_linear_combination
-        return (nu_1, nu_2, beta, sigma, a, b, gaussian_parameters=nothing) -> create_alpha(nu_1, nu_2, config.beta, config.sigma, config.a, config.b)
+        beta = config.beta
+        a = config.a
+        b = config.b
+        return (nu_1, nu_2) -> create_alpha(nu_1, nu_2, beta, sigma, a, b)
     else
-        return (nu_1, nu_2, beta, sigma, a=nothing, b=nothing) -> create_alpha_gauss(nu_1, nu_2, config.beta, config.sigma, 
-        gaussian_parameters)
+        gaussian_parameters = config.gaussian_parameters
+        return (nu_1, nu_2) -> create_alpha_gauss(nu_1, nu_2, sigma, gaussian_parameters)
     end 
 end
 
@@ -193,6 +203,21 @@ function create_alpha(nu_1::Float64, nu_2::Float64, beta::Float64, sigma::Float6
     return alpha_nu_1
 end
 
+function create_alpha_gauss(
+    nu_1::Float64, 
+    nu_2::Float64, 
+    sigma::Float64, 
+    gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}})
+    
+    (w_gamma, sigma_gamma) = gaussian_parameters
+    combined_sigma = sigma^2 + sigma_gamma^2
+    prefactor = sigma_gamma / sqrt(combined_sigma)
+    alpha_fn(nu_1) = prefactor * (exp(-(nu_1 + nu_2 + 2 * w_gamma)^2 / (8 * combined_sigma)) 
+                                    * exp(-(nu_1 - nu_2)^2 / (8 * sigma^2)))
+    return alpha_fn(nu_1)
+end
+
+
 # sigma = 1 / beta version: 
 # function create_alpha_old(nu_1::Float64, nu_2::Float64, beta::Float64, a::Float64, b::Float64)
     
@@ -206,15 +231,6 @@ end
 #     return alpha_nu_1
 # end
 
-function create_alpha_gauss(nu_1::Float64, nu_2::Float64, sigma::Float64, 
-    gaussian_parameters::Tuple{Union{Float64, Nothing}, Union{Float64, Nothing}})
-    (w_gamma, sigma_gamma) = gaussian_parameters
-    combined_sigma = sigma^2 + sigma_gamma^2
-    prefactor = sigma_gamma / sqrt(combined_sigma)
-    alpha_fn(nu_1) = prefactor * (exp(-(nu_1 + nu_2 + 2 * w_gamma)^2 / (8 * combined_sigma)) 
-                                    * exp(-(nu_1 - nu_2)^2 / (8 * sigma^2)))
-    return alpha_fn(nu_1)
-end
 
 # sigma = 1 / beta version: 
 # function create_alpha_gauss(nu_1::Float64, nu_2::Float64, beta::Float64)

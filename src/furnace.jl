@@ -59,15 +59,16 @@ function construct_liouvillian(jumps::Vector{JumpOp}, config::LiouvConfig, hamil
 
     precomputed_data = precompute_data(config.domain, config)
 
-    total_liouv = @distributed (+) for jump in jumps
-        jump_contribution(config.domain, jump, ham_or_trott, config, precomputed_data)
-    end
-
-    # dim = size(hamiltonian.data, 1)
-    # total_liouv = zeros(ComplexF64, dim^2, dim^2)
-    # for jump in jumps
-    #     total_liouv .+= jump_contribution(config.domain, jump, ham_or_trott, config, precomputed_data)
+    #! uncomment for multi-threads
+    # total_liouv = @distributed (+) for jump in jumps
+    #     jump_contribution(config.domain, jump, ham_or_trott, config, precomputed_data)
     # end
+
+    dim = size(hamiltonian.data, 1)
+    total_liouv = zeros(ComplexF64, dim^2, dim^2)
+    for jump in jumps
+        total_liouv .+= jump_contribution(config.domain, jump, ham_or_trott, config, precomputed_data)
+    end
 
     return total_liouv
 end

@@ -49,7 +49,7 @@ function main()
 
         # Smooth Metro
         a = beta / 30. # a = beta / 50.
-        b = 0.4  # b = 0.5
+        b = 0.5  # b = 0.5
         eta = 0.0  # eta = 0.2
 
         # Kinky Metro 
@@ -58,9 +58,9 @@ function main()
         # eta = 0.002
 
         with_coherent = true
-        with_linear_combination = false
+        with_linear_combination = true
         # energy_domain = EnergyDomain()
-        domain = BohrDomain()
+        domain = EnergyDomain()
         num_energy_bits = 12  # 11
         w0 = 0.05
         max_E = w0 * 2^num_energy_bits / 2

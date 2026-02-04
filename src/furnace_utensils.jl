@@ -1,14 +1,12 @@
 function precompute_labels(::Union{BohrDomain, EnergyDomain}, config::Union{LiouvConfig, ThermalizeConfig})
     energy_labels = create_energy_labels(config.num_energy_bits, config.w0)
-    truncated_energy_labels = truncate_energy_labels(energy_labels, config.beta, config.a, config.b, 
-    config.with_linear_combination)
+    truncated_energy_labels = truncate_energy_labels(energy_labels, config)
     return (truncated_energy_labels,)  # Energy labels
 end
 
 function precompute_labels(::Union{TimeDomain, TrotterDomain}, config::Union{LiouvConfig, ThermalizeConfig})
     energy_labels = create_energy_labels(config.num_energy_bits, config.w0)
-    truncated_energy_labels = truncate_energy_labels(energy_labels, config.beta, config.a, config.b, 
-    config.with_linear_combination)
+    truncated_energy_labels = truncate_energy_labels(energy_labels, config)
     time_labels = energy_labels .* (config.t0 / config.w0)
     return (truncated_energy_labels, time_labels) # Energy and time labels
 end  
@@ -18,7 +16,7 @@ function precompute_data(::BohrDomain, config::Union{LiouvConfig, ThermalizeConf
     alpha = pick_alpha(config)
     # Was the only way to bring in the normalizing factor 1 / ||γ||_∞
     energy_labels, = precompute_labels(config.domain, config)
-    transition = pick_transition(config.beta, config.a, config.b, config.with_linear_combination)
+    transition = pick_transition(config)
     gamma_norm_factor =  1.0 / maximum(transition.(energy_labels))
     return (
         alpha = alpha,
@@ -28,7 +26,7 @@ end
 
 function precompute_data(::EnergyDomain, config::Union{LiouvConfig, ThermalizeConfig})
     energy_labels, = precompute_labels(config.domain, config)
-    transition = pick_transition(config.beta, config.a, config.b, config.with_linear_combination)
+    transition = pick_transition(config)
     gamma_norm_factor =  1.0 / maximum(transition.(energy_labels))
     
     return (
@@ -41,7 +39,7 @@ end
 function precompute_data(::Union{TimeDomain, TrotterDomain}, config::Union{LiouvConfig, ThermalizeConfig})
     energy_labels, time_labels = precompute_labels(config.domain, config)
     oft_time_labels = truncate_time_labels_for_oft(time_labels, config.beta)
-    transition = pick_transition(config.beta, config.a, config.b, config.with_linear_combination)
+    transition = pick_transition(config)
     gamma_norm_factor =  1.0 / maximum(transition.(energy_labels))
 
     # f_minus, f_plus = if config.with_coherent

@@ -283,38 +283,40 @@ end
 
 #* B1 AND B2 ---------------------------------------------------------------------------------------------------------------
 # Corollary III.1, every parameter = 1 / beta
-function compute_f_minus(t::Float64, beta::Float64)
-    """For all cases the same"""
-    f1(t) = 1 / cosh(2 * pi * t / beta)
-    f2(t) = sin(-t / beta) * exp(-2 * t^2 / beta^2)
-    return (1 / (pi * beta^2)) * exp(1/8) * convolute(f1, f2, t)
-end
+# function compute_f_minus(t::Float64, beta::Float64)
+#     """For all cases the same"""
+#     f1(t) = 1 / cosh(2 * pi * t / beta)
+#     f2(t) = sin(-t / beta) * exp(-2 * t^2 / beta^2)
+#     return (1 / (pi * beta^2)) * exp(1/8) * convolute(f1, f2, t)
+# end
 
-function compute_f_plus(t::Float64, beta::Float64)
-    """Gaussian case"""
-    return 2 * exp(-4 * t^2 / beta^2 - 2im * t / beta) / beta
-end
+# function compute_f_plus(t::Float64, beta::Float64)
+#     """Gaussian case"""
+#     return 2 * exp(-4 * t^2 / beta^2 - 2im * t / beta) / beta
+# end
 
-function compute_f_plus_eh(t::Float64, beta::Float64, a::Float64, b::Float64)
-    """b = 0: Metro, b = 2: Glauber"""
-    fvals = exp(-t * (2t + 1im * beta) * (1 + b) / beta^2 - a * b / (2 * beta)) / (4 * t^2 + a * beta + 2im * t * beta)
-    return 2 * beta * sqrt(4 * a / beta + 1) * fvals / sqrt(2pi)
-end
+# function compute_f_plus_eh(t::Float64, beta::Float64, a::Float64, b::Float64)
+#     """b = 0: Metro, b = 2: Glauber"""
+#     fvals = exp(-t * (2t + 1im * beta) * (1 + b) / beta^2 - a * b / (2 * beta)) / (4 * t^2 + a * beta + 2im * t * beta)
+#     return 2 * beta * sqrt(4 * a / beta + 1) * fvals / sqrt(2pi)
+# end
 
-# Actually faster broadcasting the whole function than taking in a vector argument
-function compute_f_plus_metro(t::Float64, beta::Float64, eta::Float64)
+# # Actually faster broadcasting the whole function than taking in a vector argument
+# function compute_f_plus_metro(t::Float64, beta::Float64, eta::Float64)
 
-    if abs(t) < 1e-12  # Handle t=0
-        return complex(sqrt(1 / 2pi) / beta) 
-    elseif abs(t) ≤ eta
-        numerator = exp(-2 * t^2 / beta^2 - 1im * t / beta) + 1im * (2 * t / beta + 1im)
-    else
-        numerator = exp(-2 * t^2 / beta^2 - 1im * t / beta)
-    end
-    denominator = t * (2 * t / beta + 1im) / beta
-    return (sqrt(1 / 2pi) / beta) * numerator / denominator
-end
+#     if abs(t) < 1e-12  # Handle t=0
+#         return complex(sqrt(1 / 2pi) / beta) 
+#     elseif abs(t) ≤ eta
+#         numerator = exp(-2 * t^2 / beta^2 - 1im * t / beta) + 1im * (2 * t / beta + 1im)
+#     else
+#         numerator = exp(-2 * t^2 / beta^2 - 1im * t / beta)
+#     end
+#     denominator = t * (2 * t / beta + 1im) / beta
+#     return (sqrt(1 / 2pi) / beta) * numerator / denominator
+# end
 
+
+#TODO: Reintroduce sigmas here
 function compute_b_minus(t::Float64)  # 2pi sqrt(pi) * f_minus(t / sigma_E)
     f1(t) = 1 / cosh(2 * pi * t)
     f2(t) = sin(-t) * exp(-2 * t^2)

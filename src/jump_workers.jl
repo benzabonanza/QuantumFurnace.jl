@@ -23,7 +23,7 @@ function jump_contribution(::BohrDomain,
 
     alpha_A_nu1 = zeros(ComplexF64, dim, dim)
     for nu_2 in unique_freqs
-        @. alpha_A_nu1 = alpha(hamiltonian.bohr_freqs, nu_2, config.beta, config.a, config.b) * jump.in_eigenbasis
+        @. alpha_A_nu1 = alpha(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
 
         indices = hamiltonian.bohr_dict[nu_2]
         A_nu_2_vals = view(jump.in_eigenbasis, indices)
@@ -172,7 +172,7 @@ function jump_contribution(::BohrDomain,
     A_nu_2_dag_A_nu1 = similar(alpha_A_nu1)
     # mul!(C, A, B, α, β) computes C = α*A*B + β*C
     for nu_2 in unique_freqs
-        @. alpha_A_nu1 = alpha(hamiltonian.bohr_freqs, nu_2, config.beta, config.a, config.b) * jump.in_eigenbasis
+        @. alpha_A_nu1 = alpha(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
         
         indices = hamiltonian.bohr_dict[nu_2]
         A_nu_2_vals = view(jump.in_eigenbasis, indices)
@@ -632,7 +632,7 @@ function jump_contribution!(
     # Dissipative part
     # mul!(C, A, B, α, β) computes C = α*A*B + β*C
     for nu_2 in unique_freqs
-        @. jump_caches.jump_1 = alpha(hamiltonian.bohr_freqs, nu_2, config.beta, config.a, config.b) * jump.in_eigenbasis
+        @. jump_caches.jump_1 = alpha(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
 
         A_nu_2::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
         indices = hamiltonian.bohr_dict[nu_2]
