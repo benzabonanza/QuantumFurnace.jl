@@ -48,7 +48,7 @@ function main()
         sigma_gamma = 1 / beta
 
         # Smooth Metro
-        a = beta / 30. # a = beta / 50.
+        a = 1 / 30 # a = beta / 50.
         b = 0.5  # b = 0.5
         eta = 0.0  # eta = 0.2
 
@@ -58,9 +58,9 @@ function main()
         # eta = 0.002
 
         with_coherent = true
-        with_linear_combination = true
+        with_linear_combination = false
         # energy_domain = EnergyDomain()
-        domain = EnergyDomain()
+        domain = BohrDomain()
         num_energy_bits = 12  # 11
         w0 = 0.05
         max_E = w0 * 2^num_energy_bits / 2

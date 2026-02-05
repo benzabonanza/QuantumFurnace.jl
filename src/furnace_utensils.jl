@@ -87,7 +87,7 @@ function select_b_plus_calculator(config::Union{LiouvConfig, ThermalizeConfig})
     else
         if config.a != 0.0
             # Improved Metro / Glauber
-            return (compute_b_plus_eh, (config.a / config.beta, config.b))
+            return (compute_b_plus_smooth, (config.a / config.beta, config.b))
         else
             # Metro
             return (compute_b_plus_metro, (config.eta,))

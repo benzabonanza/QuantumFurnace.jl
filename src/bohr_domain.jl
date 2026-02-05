@@ -189,10 +189,10 @@ end
 
 function create_alpha(nu_1::Float64, nu_2::Float64, beta::Float64, sigma::Float64, a::Float64, b::Float64)
 
-    sqrtA = sqrt(a + beta / 4)
+    sqrtA = sqrt(beta * (4 * a + 1) / 4)
     sqrtB = sqrt(beta / 16) * abs(nu_1 + nu_2)
     C = beta * (nu_1 + nu_2) / 4
-    prefactor = exp(a * beta * sigma^2 / 2) / 2
+    prefactor = exp(a * beta^2 * sigma^2 / 2) / 2
     u_min = sqrt(beta * sigma^2 * (1 + b) / 2)
     z_plus = sqrtA * u_min + sqrtB / u_min
     z_minus = sqrtA * u_min - sqrtB / u_min

@@ -266,7 +266,7 @@ function coherent_term_time_integrated_eh_b(jump::JumpOp, hamiltonian::HamHam, b
     diag_time_evolve(t) = Diagonal(exp.(1im * hamiltonian.eigvals * t * beta))
 
     # Inner b2 integral
-    b_plus_integrand(s) = (compute_b_plus_eh(s, a, b) * diag_time_evolve(s) * 
+    b_plus_integrand(s) = (compute_b_plus_smooth(s, a, b) * diag_time_evolve(s) * 
                            (jump.in_eigenbasis' * diag_time_evolve(- 2 * s) * jump.in_eigenbasis) *
                            diag_time_evolve(s))
     # b2 function has singularity in t = 0
@@ -339,7 +339,7 @@ function compute_b_plus_metro(t::Float64, eta::Float64)
     return (1 / (2 * sqrt(2) * pi^2)) * numerator / denominator
 end
 
-function compute_b_plus_eh(t::Float64, a::Float64, b::Float64)
+function compute_b_plus_smooth(t::Float64, a::Float64, b::Float64)
     b_vals = exp(- a * b / 2) * exp(-t * (2 * t + 1im) * (1 + b)) / (4 * t^2 + a + 2im * t)
     return sqrt(4 * a + 1) * b_vals / (sqrt(2) * pi^2)
 end

@@ -8,8 +8,8 @@ function pick_transition(config::Union{LiouvConfig, ThermalizeConfig})
         end
     end
 
-    # sqrtA = sqrt((4 * a / config.beta + 1) / 8)
-    sqrtA = sqrt(config.beta / 4) * sqrt(4 * config.a / config.beta + 1)
+    # sqrtA = sqrt((4 * a + 1) / 8)
+    sqrtA = sqrt(config.beta / 4) * sqrt(4 * config.a + 1)
     if (config.b == 0 && config.a != 0)  # No time singularity but kinky Metro in energy
         return w -> begin
             # sqrtB = beta * abs(w + 1 / (2 * beta)) / sqrt(2)
