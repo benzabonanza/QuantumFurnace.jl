@@ -167,9 +167,24 @@ function trotterize(hamiltonian::HamHam, T::Float64, num_trotter_steps::Int64)
     return U
 end
 
-function truncate_time_labels_for_oft(time_labels::Vector{Float64}, beta::Float64; cutoff::Float64 = 1e-12)
-    filter_gauss_t(t, beta) = exp(-t^2 / beta^2) * sqrt((sqrt(2 / pi)/beta) / (2 * pi))
-    return time_labels[abs.(filter_gauss_t.(time_labels, beta)) .>= cutoff]
+function truncate_time_labels_for_oft(time_labels::Vector{Float64}, sigma::Float64; tolerance::Float64 = 1e-12)
+    
+    time_oft_prefactor = sqrt(sigma * sqrt(2 / pi) / (2 * pi))
+    cutoff = sqrt(-log(tolerance / time_oft_prefactor)) / sigma
+
+    truncated_labels = filter(t -> t <= cutoff, time_labels)
+    t_max = maximum(time_labels)
+    if !isempty(truncated_labels) && (maximum(truncated_labels) == t_max)
+        t_max = maximum(time_labels)
+        residual = exp(-t_max^2 * sigma^2) * time_oft_prefactor
+
+        @warn """
+        OFT Integration Warning: Time array was not truncated.
+        Gaussian at the ends should be small but it is: $(residual)
+        """
+    end
+
+    return truncated_labels
 end
 
 function trotter_diag(hamiltonian::HamHam, T::Float64, num_trotter_steps::Int64)

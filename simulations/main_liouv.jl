@@ -47,10 +47,16 @@ function main()
         w_gamma = 1 / beta
         sigma_gamma = 1 / beta
 
+        #! change from 1 / beta
+        sigma = 0.1 / beta  # w0 = 0.005, for broad enough time integrals in OFTs
+        w_gamma = 1 / beta
+        # sigma_gamma = 1 / beta
+        sigma_gamma = sqrt(2 * w_gamma / beta - sigma^2)
+
         # Smooth Metro
-        a = 1 / 30 # a = beta / 50.
-        b = 0.5  # b = 0.5
-        eta = 0.0  # eta = 0.2
+        a = 1 / 10
+        b = 0.4
+        eta = 0.0 
 
         # Kinky Metro 
         # a = 0.0
@@ -61,11 +67,11 @@ function main()
         with_linear_combination = false
         # energy_domain = EnergyDomain()
         domain = BohrDomain()
-        num_energy_bits = 12  # 11
-        w0 = 0.05
+        num_energy_bits = 12 # 11
+        w0 = 0.0005
         max_E = w0 * 2^num_energy_bits / 2
         t0 = 2pi / (2^num_energy_bits * w0)  # Max time evolution pi / w0
-        num_trotter_steps_per_t0 = 10
+        num_trotter_steps_per_t0 = 100
 
         config = LiouvConfig(
                 num_qubits = num_qubits, 

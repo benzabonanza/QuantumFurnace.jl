@@ -53,12 +53,12 @@ function truncate_energy_labels(
     )
 
     transition = pick_transition(config) # we normalize with max(gamma) later
-    gaussfilter(w, nu, beta) = exp(-config.beta^2 * (w - nu)^2 / 4) * sqrt(config.beta / sqrt(2 * pi))
-    integrand_lb(w, nu1, nu2) = transition(w) * gaussfilter(w, nu1, config.beta) * gaussfilter(w, nu2, config.beta)
-    integrand_ub(w, nu1, nu2) = transition(w) * gaussfilter(w, nu1, config.beta) * gaussfilter(w, nu2, config.beta)
+    gaussfilter(w, nu) = exp(- (w - nu)^2 / (4 * config.sigma^2)) * sqrt(1 / (config.sigma * sqrt(2 * pi)))
+    integrand_lb(w, nu1, nu2) = transition(w) * gaussfilter(w, nu1) * gaussfilter(w, nu2)
+    integrand_ub(w, nu1, nu2) = transition(w) * gaussfilter(w, nu1) * gaussfilter(w, nu2)
 
     sorted_energies = sort(energy_labels)
-    candidate_nus = filter(w -> -0.45 <= w <= (-1/(2*config.beta)), [-0.45:0.05:0.0;])
+    candidate_nus = filter(w -> -0.45 <= w <= (-config.beta * config.sigma^2 / 2), [-0.45:0.05:0.0;])
 
     start_index = length(sorted_energies) + 1
     for (nu1_candidate, nu2_candidate) in Iterators.product(candidate_nus, candidate_nus)
@@ -73,7 +73,7 @@ function truncate_energy_labels(
         return sorted_energies[abs.(sorted_energies) .<= 2.0]
     end
 
-    candidate_nus = Iterators.reverse(filter(w -> (-1/(2*config.beta)) <= w <= 0.45, [-0.1:0.05:0.45;]))
+    candidate_nus = Iterators.reverse(filter(w -> (-config.beta * config.sigma^2 / 2) <= w <= 0.45, [-0.1:0.05:0.45;]))
     end_index = 0
     for (nu1_candidate, nu2_candidate) in Iterators.product(candidate_nus, candidate_nus)
         found_index = findlast(w -> abs(integrand_ub(w, nu1_candidate, nu2_candidate)) >= cutoff, sorted_energies)

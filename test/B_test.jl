@@ -29,16 +29,13 @@ eta = 0.0  # eta = 0.2
 # b = 0.0
 # eta = 0.002
 
-with_coherent = true
 with_linear_combination = true
 domain = TimeDomain()
-num_energy_bits = 12  # 11
-w0 = 0.0005
+num_energy_bits = 18  # 11
+w0 = 0.005
 max_E = w0 * 2^num_energy_bits / 2
 t0 = 2pi / (2^num_energy_bits * w0)  # Max time evolution pi / w0
 num_trotter_steps_per_t0 = 10
-
-delta = 0.1
 
 config = LiouvConfig(
                 num_qubits = num_qubits, 
@@ -90,18 +87,14 @@ for pauli in jump_paulis
         end
 end
 
-energy_oft_prefactor = 1 / sqrt(config.sigma * sqrt(2 * pi))
-time_oft_prefactor = config.t0 * sqrt(config.sigma * sqrt(2 / pi) / (2 * pi))
+jump = jumps[1]
+B_bohr = coherent_bohr(hamiltonian, jump, config) 
+rmul!(B_bohr, precomputed_data.gamma_norm_factor)
 
-dim = 2^num_qubits
-A = jumps[2]
-w = -3 * w0
-A_oft = oft(A, w, hamiltonian, sigma) * energy_oft_prefactor
-A_oft_time = time_oft(A, w, hamiltonian, precomputed_data.oft_time_labels, sigma) * time_oft_prefactor
-norm(A_oft - A_oft_time)
+B_t = B_time(jump, hamiltonian, precomputed_data.b_minus, precomputed_data.b_plus, config.t0, config.beta)
+rmul!(B_t, precomputed_data.gamma_norm_factor)
 
-A_oft_time_fast = zeros(ComplexF64, dim, dim)
-time_oft_caches = OFTCaches(dim)
-time_oft_fast!(A_oft_time_fast, time_oft_caches, A, w, hamiltonian, precomputed_data.oft_time_labels, sigma)
-A_oft_time_fast *= time_oft_prefactor
-norm(A_oft - A_oft_time_fast)
+norm(B_bohr - B_t)
+
+
+

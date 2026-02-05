@@ -317,30 +317,30 @@ end
 
 
 #TODO: Reintroduce sigmas here
-function compute_b_minus(t::Float64)  # 2pi sqrt(pi) * f_minus(t / sigma_E)
-    f1(t) = 1 / cosh(2 * pi * t)
-    f2(t) = sin(-t) * exp(-2 * t^2)
-    return 2 * sqrt(pi) * exp(1/8) * convolute(f1, f2, t)
+function compute_b_minus(t::Float64, beta::Float64, sigma::Float64)  # 2pi sqrt(pi) * f_minus(t / sigma_E)
+    f1(t) = 1 / cosh(2 * pi * t / (beta * sigma))
+    f2(t) = sin(-t * beta * sigma) * exp(-2 * t^2)
+    return 2 * sqrt(pi) * exp(beta^2 * sigma^2 / 8) * convolute(f1, f2, t) / (beta * sigma)
 end
 
-function compute_b_plus(t::Float64)  # f_plus(t * beta) / (2pi sqrt(pi))
-    return exp(- 4 * t^2 - 2 * im * t) / sqrt(pi^3)  # Corrected
+function compute_b_plus(t::Float64, beta::Float64, w_gamma::Float64, sigma_gamma::Float64)  # f_plus(t * beta) / (2pi sqrt(pi))
+    return beta * sigma_gamma * exp(- 2 * beta * w_gamma * (2 * t^2 + im * t)) / sqrt(pi^3)
 end
 
-function compute_b_plus_metro(t::Float64, eta::Float64)
+function compute_b_plus_metro(t::Float64, beta::Float64, sigma::Float64, eta::Float64)
     if abs(t) < 1e-12  # Handle t=0
         return complex(1 / (2 * sqrt(2) * pi^2)) 
     elseif abs(t) ≤ eta
-        numerator = exp(-2 * t^2 - 1im * t) + 1im * (2 * t + 1im)
+        numerator = exp(- sigma^2 * beta^2 * (2 * t^2 + 1im * t)) + 1im * (2 * t + 1im)
     else
-        numerator = exp(-2 * t^2 - 1im * t)
+        numerator = exp(- sigma^2 * beta^2 * (2 * t^2 + 1im * t))
     end
     denominator = t * (2 * t + 1im)
     return (1 / (2 * sqrt(2) * pi^2)) * numerator / denominator
 end
 
-function compute_b_plus_smooth(t::Float64, a::Float64, b::Float64)
-    b_vals = exp(- a * b / 2) * exp(-t * (2 * t + 1im) * (1 + b)) / (4 * t^2 + a + 2im * t)
+function compute_b_plus_smooth(t::Float64, beta::Float64, sigma::Float64, a::Float64, b::Float64)
+    b_vals = exp(- a * b / 2) * exp(- sigma^2 * beta^2 * t * (2 * t + 1im) * (1 + b)) / (4 * t^2 + a + 2im * t)
     return sqrt(4 * a + 1) * b_vals / (sqrt(2) * pi^2)
 end
 
