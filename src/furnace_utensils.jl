@@ -51,6 +51,7 @@ function precompute_data(::Union{TimeDomain, TrotterDomain}, config::Union{Liouv
     else
         (nothing, nothing)
     end
+    
     return (
         transition = transition,
         gamma_norm_factor,

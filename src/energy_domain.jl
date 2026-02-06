@@ -40,7 +40,8 @@ end
 
 function create_energy_labels(num_energy_bits::Int64, w0::Float64)
     N = 2^(num_energy_bits)
-    N_labels = [0:1:Int(N/2)-1; -Int(N/2):1:-1]
+    # N_labels = [0:1:Int(N/2)-1; -Int(N/2):1:-1]  twos complement order
+    N_labels = [-Int(N/2):1:Int(N/2)-1;]
     energy_labels = w0 * N_labels
     # @assert maximum(energy_labels) >= 2.0  # For good results
     return energy_labels
@@ -57,26 +58,25 @@ function truncate_energy_labels(
     integrand_lb(w, nu1, nu2) = transition(w) * gaussfilter(w, nu1) * gaussfilter(w, nu2)
     integrand_ub(w, nu1, nu2) = transition(w) * gaussfilter(w, nu1) * gaussfilter(w, nu2)
 
-    sorted_energies = sort(energy_labels)
     candidate_nus = filter(w -> -0.45 <= w <= (-config.beta * config.sigma^2 / 2), [-0.45:0.05:0.0;])
 
-    start_index = length(sorted_energies) + 1
+    start_index = length(energy_labels) + 1
     for (nu1_candidate, nu2_candidate) in Iterators.product(candidate_nus, candidate_nus)
-        found_index = findfirst(w -> abs(integrand_lb(w, nu1_candidate, nu2_candidate)) >= cutoff, sorted_energies)
+        found_index = findfirst(w -> abs(integrand_lb(w, nu1_candidate, nu2_candidate)) >= cutoff, energy_labels)
         if found_index !== nothing
             start_index = min(start_index, found_index)
         end
     end
     
-    if start_index  > length(sorted_energies)
+    if start_index  > length(energy_labels)
         @warn "Lower bound cutoff not found for energies, using default range."
-        return sorted_energies[abs.(sorted_energies) .<= 2.0]
+        return energy_labels[abs.(energy_labels) .<= 2.0]
     end
 
     candidate_nus = Iterators.reverse(filter(w -> (-config.beta * config.sigma^2 / 2) <= w <= 0.45, [-0.1:0.05:0.45;]))
     end_index = 0
     for (nu1_candidate, nu2_candidate) in Iterators.product(candidate_nus, candidate_nus)
-        found_index = findlast(w -> abs(integrand_ub(w, nu1_candidate, nu2_candidate)) >= cutoff, sorted_energies)
+        found_index = findlast(w -> abs(integrand_ub(w, nu1_candidate, nu2_candidate)) >= cutoff, energy_labels)
         if found_index !== nothing
             end_index = max(end_index, found_index)
         end
@@ -84,14 +84,18 @@ function truncate_energy_labels(
 
     if end_index === 0
         @warn "Upper bound cutoff not found for energies, using default range."
-        return sorted_energies[abs.(sorted_energies) .<= 2.0]
+        return energy_labels[abs.(energy_labels) .<= 2.0]
     end
 
-    if start_index == 1 || end_index == length(sorted_energies)
+    if start_index == 1 || end_index == length(energy_labels)
         @warn "No truncation was done, might want more estimating energy range."
     end
 
-    return sorted_energies[start_index:end_index]
+    # Symmetrize energy labels around 0.
+    sym_limit = max(abs(energy_labels[start_index]), abs(energy_labels[end_index]))
+    return energy_labels[abs.(energy_labels) .<= sym_limit]
+
+    return energy_labels[start_index:end_index]
 end
 #* --------------------------------------------------------------------------------------------------------------------------
 #* --------------------------------------------------------------------------------------------------------------------------

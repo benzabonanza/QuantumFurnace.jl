@@ -8,16 +8,16 @@ using .QuantumFurnace
 using LinearAlgebra, Random
 
 #* Config
-num_qubits = 4
+num_qubits = 8
 dim = 2^num_qubits
 beta = 10.
 sigma = 0.1 / beta
 w_gamma = 1 / beta
 sigma_gamma = sqrt(2 * w_gamma / beta - sigma^2)
 
-# sigma = 1 / beta
-# w_gamma = 1 / beta
-# sigma_gamma = sqrt(2 * w_gamma / beta - sigma^2)
+sigma = 1 / beta
+w_gamma = 1 / beta
+sigma_gamma = sqrt(2 * w_gamma / beta - sigma^2)
 
 # Smooth Metro
 a = 1 / 30. # a = beta / 50.
@@ -32,7 +32,7 @@ eta = 0.0  # eta = 0.2
 with_coherent = true
 with_linear_combination = true
 domain = TimeDomain()
-num_energy_bits = 12  # 11
+num_energy_bits = 16  # 11
 w0 = 0.0005
 max_E = w0 * 2^num_energy_bits / 2
 t0 = 2pi / (2^num_energy_bits * w0)  # Max time evolution pi / w0
@@ -94,14 +94,26 @@ energy_oft_prefactor = 1 / sqrt(config.sigma * sqrt(2 * pi))
 time_oft_prefactor = config.t0 * sqrt(config.sigma * sqrt(2 / pi) / (2 * pi))
 
 dim = 2^num_qubits
-A = jumps[2]
+A = jumps[5]
 w = -3 * w0
-A_oft = oft(A, w, hamiltonian, sigma) * energy_oft_prefactor
-A_oft_time = time_oft(A, w, hamiltonian, precomputed_data.oft_time_labels, sigma) * time_oft_prefactor
+A_oft = Matrix{ComplexF64}(undef, dim, dim)
+oft!(A_oft, A, w, hamiltonian, sigma)
+A_oft .*= energy_oft_prefactor
+A_oft_time = Matrix{ComplexF64}(undef, dim, dim)
+@time begin
+        time_oft_caches = OFTCaches(dim)
+        time_oft!(A_oft_time, time_oft_caches, A, w, hamiltonian, precomputed_data.oft_time_labels, sigma)
+end
+A_oft_time *= time_oft_prefactor
 norm(A_oft - A_oft_time)
 
-A_oft_time_fast = zeros(ComplexF64, dim, dim)
-time_oft_caches = OFTCaches(dim)
-time_oft_fast!(A_oft_time_fast, time_oft_caches, A, w, hamiltonian, precomputed_data.oft_time_labels, sigma)
-A_oft_time_fast *= time_oft_prefactor
-norm(A_oft - A_oft_time_fast)
+A_nufft = Matrix{ComplexF64}(undef, dim, dim)
+@time begin
+        nufft_caches = NUFFTCaches(hamiltonian, precomputed_data.oft_time_labels, sigma)  #!
+        nufft_prefactor_matrix!(nufft_caches, w, precomputed_data.oft_time_labels)  #!
+        time_oft_nufft!(A_nufft, A, w, hamiltonian, precomputed_data.oft_time_labels, nufft_caches)  #!
+end
+A_nufft *= time_oft_prefactor
+
+norm(A_oft - A_nufft)
+norm(A_oft_time - A_nufft)

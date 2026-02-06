@@ -94,9 +94,13 @@ function jump_contribution(::TimeDomain,
     time_oft_caches = OFTCaches(dim)
     prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
 
+    nufft_caches = NUFFTCaches(hamiltonian, oft_time_labels, config.sigma)  #!
+
     energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
     for w in energies
-        time_oft_fast!(jump_oft, time_oft_caches, jump, w, hamiltonian, oft_time_labels, config.sigma) # subnorm = t0 * sqrt((sqrt(2 / pi)/sigma) / (2 * pi))
+        nufft_prefactor_matrix!(nufft_caches, w, oft_time_labels)  #!
+        time_oft_nufft!(jump_oft, jump, w, oft_time_labels, nufft_caches)  #!
+        # time_oft!(jump_oft, time_oft_caches, jump, w, hamiltonian, oft_time_labels, config.sigma) # subnorm = t0 * sqrt((sqrt(2 / pi)/sigma) / (2 * pi))
         scalar_w = prefactor * transition(w)
 
         vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft, scalar_w)
@@ -131,7 +135,7 @@ function jump_contribution(::TrotterDomain,
     
     energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
     for w in energies
-        trotter_oft_fast!(jump_oft, time_oft_caches, jump, w, trotter, oft_time_labels, config.sigma) # subnorm = t0 * sqrt((sqrt(2 / pi)/sigma) / (2 * pi))
+        trotter_oft!(jump_oft, time_oft_caches, jump, w, trotter, oft_time_labels, config.sigma) # subnorm = t0 * sqrt((sqrt(2 / pi)/sigma) / (2 * pi))
         scalar_w = prefactor * transition(w)
 
         vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft, scalar_w)
@@ -289,7 +293,7 @@ function jump_contribution(
 
     energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
     for w in energies
-        time_oft_fast!(jump_oft, oft_caches, jump, w, hamiltonian, oft_time_labels, config.sigma)
+        time_oft!(jump_oft, oft_caches, jump, w, hamiltonian, oft_time_labels, config.sigma)
         
         # jump_dag_jump = jump_oft' * jump_oft
         mul!(jump_dag_jump, jump_oft', jump_oft)
@@ -350,7 +354,7 @@ function jump_contribution(::TrotterDomain,
 
     energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
     for w in energies
-        trotter_oft_fast!(jump_oft, oft_caches, jump, w, trotter, oft_time_labels, config.sigma)
+        trotter_oft!(jump_oft, oft_caches, jump, w, trotter, oft_time_labels, config.sigma)
         
         # jump_dag_jump = jump_oft' * jump_oft
         mul!(jump_dag_jump, jump_oft', jump_oft)
@@ -437,7 +441,7 @@ function precompute_kraus_jumps(
         energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
         for w in energies
             kraus_jump = Matrix{ComplexF64}(undef, dim, dim)
-            time_oft_fast!(kraus_jump, oft_caches, jump, w, hamiltonian, oft_time_labels, config.sigma)
+            time_oft!(kraus_jump, oft_caches, jump, w, hamiltonian, oft_time_labels, config.sigma)
             rate_positive = sqrt(base_prefactor * transition(w))
             push!(kraus_jumps, (rate_positive, kraus_jump))
 
@@ -468,7 +472,7 @@ function precompute_kraus_jumps(
         energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
         for w in energies
             kraus_jump = Matrix{ComplexF64}(undef, dim, dim)
-            trotter_oft_fast!(kraus_jump, oft_caches, jump, w, trotter, oft_time_labels, config.sigma)
+            trotter_oft!(kraus_jump, oft_caches, jump, w, trotter, oft_time_labels, config.sigma)
             rate_positive = sqrt(base_prefactor * transition(w))
             push!(kraus_jumps, (rate_positive, kraus_jump))
 
@@ -720,7 +724,7 @@ function jump_contribution!(
 
     prefactor = w0 * t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi)
     for w in energy_labels
-        time_oft_fast!(jump_caches.jump_1, oft_caches, jump, w, hamiltonian, oft_time_labels, config.sigma)
+        time_oft!(jump_caches.jump_1, oft_caches, jump, w, hamiltonian, oft_time_labels, config.sigma)
         
         # jump_dag_jump = jump_oft' * jump_oft
         mul!(jump_caches.jump_2_dag_jump_1, jump_caches.jump_1', jump_caches.jump_1)
@@ -762,7 +766,7 @@ function jump_contribution!(
 
     prefactor = w0 * t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi)
     for w in energy_labels
-        trotter_oft_fast!(jump_caches.jump_1, oft_caches, jump, w, trotter, oft_time_labels, config.sigma)
+        trotter_oft!(jump_caches.jump_1, oft_caches, jump, w, trotter, oft_time_labels, config.sigma)
         
         # jump_dag_jump = jump_oft' * jump_oft
         mul!(jump_caches.jump_2_dag_jump_1, jump_caches.jump_1', jump_caches.jump_1)

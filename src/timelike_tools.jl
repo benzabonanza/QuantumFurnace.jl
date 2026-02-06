@@ -170,9 +170,9 @@ end
 function truncate_time_labels_for_oft(time_labels::Vector{Float64}, sigma::Float64; tolerance::Float64 = 1e-12)
     
     time_oft_prefactor = sqrt(sigma * sqrt(2 / pi) / (2 * pi))
-    cutoff = sqrt(-log(tolerance / time_oft_prefactor)) / sigma
+    cutoff = sqrt(log(time_oft_prefactor / tolerance)) / sigma
 
-    truncated_labels = filter(t -> t <= cutoff, time_labels)
+    truncated_labels = filter(t -> abs(t) <= cutoff, time_labels)
     t_max = maximum(time_labels)
     if !isempty(truncated_labels) && (maximum(truncated_labels) == t_max)
         t_max = maximum(time_labels)

@@ -40,7 +40,7 @@ end
 
 function main()
         #* Config
-        num_qubits = 4
+        num_qubits = 6
         dim = 2^num_qubits
         beta = 10.  # 5, 10, 30
         sigma = 1 / beta
@@ -65,8 +65,7 @@ function main()
 
         with_coherent = true
         with_linear_combination = true
-        # energy_domain = EnergyDomain()
-        domain = BohrDomain()
+        domain = TimeDomain()
         num_energy_bits = 12 # 11
         w0 = 0.05
         max_E = w0 * 2^num_energy_bits / 2

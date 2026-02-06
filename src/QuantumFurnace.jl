@@ -17,15 +17,16 @@ using Base
 using Optim
 using Base.Threads 
 using LinearMaps
+using FINUFFT
 
 # --- Public API ---
 export LiouvConfig, ThermalizeConfig, HamHam, TrottTrott, HotAlgorithmResults, HotSpectralResults, JumpOp,
        BohrDomain, EnergyDomain, TimeDomain, TrotterDomain, LindbladWorkspace, KrausFramework, LSIFramework,
-       OFTCaches
+       OFTCaches, NUFFTCaches
 export run_liouvillian, run_thermalization, construct_liouvillian, B_time, B_trotter, coherent_bohr
 export generate_filename, validate_config!, create_trotter, compute_trotter_error, gibbs_state, gibbs_state_in_eigen,
        create_bohr_dict, pad_term, pick_transition, create_hamham, find_ideal_heisenberg, create_alpha, expm_pauli_padded, 
-       finalize_hamham, load_hamiltonian, time_oft_fast!, time_oft, oft!, oft, create_alpha_old
+       finalize_hamham, load_hamiltonian, time_oft!, time_oft, oft!, time_oft_nufft!, nufft_prefactor_matrix!
 # Quantum Trajectory
 export krausframework, step_along_the_trajectory!, evolve_along_trajectory, construct_gksl_lindbladian,
        apply_jump_contribution!, apply_lindbladian_dagger!, apply_lindbladian!, precompute_B, precompute_R, 
