@@ -81,6 +81,22 @@ function trotter_oft(jump::JumpOp, energy::Float64, trotter::TrottTrott, time_la
     return jump_oft
 end
 
+function build_time_oft_nufft!(
+    out_matrix::Matrix{ComplexF64},
+    jump::JumpOp, 
+    energy::Float64, 
+    hamiltonian::HamHam, 
+    time_labels::Vector{Float64}, 
+    sigma::Float64;
+    tol = 1e-12
+    )
+
+    gauss_filter = @. exp(- sigma^2 * time_labels^2)
+    quadrature_weights .= time_labels
+    
+
+end
+
 function time_oft_fast!(out_matrix::Matrix{ComplexF64}, caches::OFTCaches,
                    jump::JumpOp, energy::Float64, hamiltonian::HamHam, 
                    time_labels::Vector{Float64}, sigma::Float64)
