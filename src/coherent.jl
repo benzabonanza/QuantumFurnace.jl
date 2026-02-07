@@ -412,7 +412,7 @@ end
 
 # #* Trotter
 # num_trotter_steps_per_t0 = 100
-# trotter = create_trotter(hamiltonian, t0, num_trotter_steps_per_t0)
+# trotter = TrottTrott(hamiltonian, t0, num_trotter_steps_per_t0)
 # trotter_error_T = compute_trotter_error(hamiltonian, trotter, 2^num_energy_bits * t0)
 # @printf("Num trotter steps / t0: %d\n", num_trotter_steps_per_t0)
 # @printf("Max order Trotter error on an OFT: %s\n", trotter_error_T)

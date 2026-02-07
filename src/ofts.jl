@@ -1,11 +1,3 @@
-using LinearAlgebra
-using SparseArrays
-using Random
-using Printf
-using Plots
-using QuadGK
-using Pkg
-
 function oft(jump::JumpOp, energy::Float64, hamiltonian::HamHam, sigma::Float64)
     """Subnormalized, multiply by sqrt(1 / sigma sqrt(2 * pi))"""
     return @. jump.in_eigenbasis * exp(-(energy - hamiltonian.bohr_freqs)^2 / (4 * sigma^2))
@@ -14,6 +6,24 @@ end
 function oft!(out_matrix::Matrix{ComplexF64}, jump::JumpOp, energy::Float64, hamiltonian::HamHam, sigma::Float64)
     """Subnormalized, multiply by sqrt(1 / sigma sqrt(2 * pi))"""
     @. out_matrix = jump.in_eigenbasis * exp(-(energy - hamiltonian.bohr_freqs)^2 / (4 * sigma^2)) 
+    return out_matrix
+end
+
+"""
+Computes OFT in Time or Trotter cases by a precomputed NUFFT prefactor matrix, to eliminate the costly time label sums.
+Trotterization manifests only in the fact that `cache.bohr_freqs` are quasi Bohr frequencies.
+Returns subnormalized OFT A(w): without (t0 * sqrt((sqrt(2 / pi)/sigma) / (2 * pi))). Normalized at once in the Lindbladian.
+"""
+function oft_nufft!(
+    out_matrix::Matrix{ComplexF64},
+    jump::JumpOp,
+    energy::Float64, 
+    time_labels::Vector{Float64},
+    cache::NUFFTCaches
+    )
+
+    nufft_prefactor_matrix!(cache, energy, time_labels)
+    @. out_matrix = jump.in_eigenbasis * cache.nufft_prefactor_temp
     return out_matrix
 end
 
@@ -122,65 +132,6 @@ function trotter_oft!(
     return out_matrix
 end
 
-# TODO: Do NUFFT for trotter too.
-
-mutable struct NUFFTCaches{T<:AbstractVector{Float64}}
-    nufft_prefactor_temp::Matrix{ComplexF64}
-    gaussian_weights::Vector{ComplexF64}
-    bohr_freqs_flat::T
-    combined_freqs::Vector{Float64}  # omega - nu 
-    out_vector::Vector{ComplexF64}
-    eps::Float64
-end
-
-function NUFFTCaches(hamiltonian::HamHam, time_labels::Vector{Float64}, sigma::Float64; eps=1e-12)
-
-    dim = size(hamiltonian.data, 1)
-    nufft_prefactor_temp = Matrix{ComplexF64}(undef, dim, dim)
-    gaussian_weights = ComplexF64.(exp.(-(sigma^2) .* (time_labels .^ 2)))
-    bohr_freqs_flat = vec(hamiltonian.bohr_freqs)
-    combined_freqs = Vector{Float64}(undef, length(bohr_freqs_flat))
-    out_vector = Vector{ComplexF64}(undef, length(bohr_freqs_flat))
-    return NUFFTCaches{typeof(bohr_freqs_flat)}(
-        nufft_prefactor_temp, gaussian_weights, bohr_freqs_flat, combined_freqs, out_vector, eps
-        )
-end
-
-function time_oft_nufft!(
-    out_matrix::Matrix{ComplexF64},
-    jump::JumpOp,
-    energy::Float64, 
-    time_labels::Vector{Float64},
-    cache::NUFFTCaches
-    )
-
-    nufft_prefactor_matrix!(cache, energy, time_labels)
-    @. out_matrix = jump.in_eigenbasis * cache.nufft_prefactor_temp
-    return out_matrix
-end
-
-function nufft_prefactor_matrix!(
-    cache::NUFFTCaches,
-    energy::Float64,
-    time_labels::Vector{Float64},
-    )
-
-    # Combine freqs
-    @fastmath @. cache.combined_freqs = energy - cache.bohr_freqs_flat
-
-    # Type-3 NUFFT: out_vector[k] = Σ_j gaussian_weights[j] * exp(-i * combined_freqs[k] * time_labels[j])
-    FINUFFT.nufft1d3!(
-        time_labels,
-        cache.gaussian_weights,
-        -1,
-        cache.eps,
-        cache.combined_freqs,
-        cache.out_vector
-    )
-
-    copyto!(cache.nufft_prefactor_temp, reshape(cache.out_vector, size(cache.nufft_prefactor_temp)))
-    return cache.nufft_prefactor_temp
-end
 
 # function time_oft_integrated(energy::Float64, jump::JumpOp, hamiltonian::HamHam, beta::Float64)
 

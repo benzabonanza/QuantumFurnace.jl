@@ -55,7 +55,7 @@ function main()
 
     with_coherent = true
     with_linear_combination = true
-    domain = EnergyDomain()
+    domain = TrotterDomain()
     num_energy_bits = 12
     w0 = 0.05
     max_E = w0 * 2^num_energy_bits / 2
@@ -63,8 +63,8 @@ function main()
     num_trotter_steps_per_t0 = 10
 
     # Thermalizing configs:
-    mixing_time = 20.0
-    delta = 0.1
+    mixing_time = 30.0
+    delta = 0.01
 
     config = ThermalizeConfig(
         num_qubits = num_qubits, 
@@ -100,7 +100,7 @@ function main()
 
     #* Trotter
     if domain == TrotterDomain()
-        trotter = create_trotter(hamiltonian, t0, num_trotter_steps_per_t0)
+        trotter = TrottTrott(hamiltonian, t0, num_trotter_steps_per_t0)
         trotter_error_T = compute_trotter_error(hamiltonian, trotter, 2^num_energy_bits * t0 / 2)
         gibbs_in_trotter = Hermitian(trotter.eigvecs' * gibbs_state(hamiltonian, beta) * trotter.eigvecs)
         @printf("Trotter is created.\n")

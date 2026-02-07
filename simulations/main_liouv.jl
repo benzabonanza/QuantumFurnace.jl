@@ -40,7 +40,7 @@ end
 
 function main()
         #* Config
-        num_qubits = 6
+        num_qubits = 4
         dim = 2^num_qubits
         beta = 10.  # 5, 10, 30
         sigma = 1 / beta
@@ -65,7 +65,7 @@ function main()
 
         with_coherent = true
         with_linear_combination = true
-        domain = TimeDomain()
+        domain = TrotterDomain()
         num_energy_bits = 12 # 11
         w0 = 0.05
         max_E = w0 * 2^num_energy_bits / 2
@@ -104,7 +104,7 @@ function main()
         @assert norm(initial_dm - initial_dm') < 1e-15 "Not Hermitian"
 
         #* Trotter
-        trotter = create_trotter(hamiltonian, t0, num_trotter_steps_per_t0)
+        trotter = TrottTrott(hamiltonian, t0, num_trotter_steps_per_t0)
         trotter_error_T = compute_trotter_error(hamiltonian, trotter, 2^num_energy_bits * t0 / 2)
         gibbs_in_trotter = Hermitian(trotter.eigvecs' * gibbs_state(hamiltonian, beta) * trotter.eigvecs)
         @printf("Trotter is created.\n")

@@ -1,30 +1,43 @@
-function create_trotter(hamiltonian::HamHam, T::Float64, num_trotter_steps::Int64)
+function TrottTrott(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
 
-    trottU = trotterize2(hamiltonian, T, num_trotter_steps)
+    trottU = trotterize2(hamiltonian, t, num_trotter_steps)
     trottU_eigvals, trottU_eigvecs = eigen(trottU)
     unitary_from_eigen_to_trotter = trottU_eigvecs' * hamiltonian.eigvecs
-    return TrottTrott(T, num_trotter_steps, trottU_eigvals, trottU_eigvecs, unitary_from_eigen_to_trotter)
+    quasi_bohr_freqs = trotter_bohr_freqs(trottU_eigvals, t)
+    return TrottTrott(
+        t,
+        num_trotter_steps, 
+        trottU_eigvals, 
+        trottU_eigvecs, 
+        unitary_from_eigen_to_trotter, 
+        quasi_bohr_freqs
+        )
 end
 
-function compute_trotter_error(hamiltonian::HamHam, trotter::TrottTrott, T::Float64)
+function trotter_bohr_freqs(trottU_T_eigvals::Vector{ComplexF64}, t::Float64)
+    quasi_bohr_freqs = angle.(trottU_T_eigvals) ./ t  # quasi Bohr frequencies due to Trotterization.
+    return quasi_bohr_freqs .- quasi_bohr_freqs'  # dim×dim
+end
+
+function compute_trotter_error(hamiltonian::HamHam, trotter::TrottTrott, t::Float64)
     
-    num_t0_steps = Int(T / trotter.t0)
-    exact_time_evolution = Diagonal(exp.(1im * hamiltonian.eigvals * T))  # In energy eigenbasis
+    num_t0_steps = Int(t / trotter.t0)
+    exact_time_evolution = Diagonal(exp.(1im * hamiltonian.eigvals * t))  # In energy eigenbasis
     trotter_time_evolution = Diagonal(trotter.eigvals_t0.^num_t0_steps)
     trotter_time_evolution = (hamiltonian.eigvecs' * trotter.eigvecs 
                                 * trotter_time_evolution * trotter.eigvecs' * hamiltonian.eigvecs)
     return norm(exact_time_evolution - trotter_time_evolution)
 end
 
-function trotterize2(hamiltonian::HamHam, T::Float64, num_trotter_steps::Int64)
+function trotterize2(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
     """For 1 and 2 site Hamiltonians"""
-    timestep::Float64 = T / num_trotter_steps
+    timestep::Float64 = t / num_trotter_steps
     num_qubits::Int64 = Int(log2(size(hamiltonian.data)[1]))
     dim = 2^num_qubits
     odd_system::Bool = (num_qubits % 2 == 1)
     is_bdr_strange::Bool = (odd_system && hamiltonian.periodic)
 
-    U::Matrix{ComplexF64} = exp(im * T * hamiltonian.shift) * I(2^num_qubits)  # Shift
+    U::Matrix{ComplexF64} = exp(im * t * hamiltonian.shift) * I(2^num_qubits)  # Shift
 
     groups = group_hamiltonian_terms(hamiltonian)
 
@@ -341,8 +354,8 @@ end
 
 # # num_trotter_steps = int_multiple * num_trotter_steps_per_t0
 
-# # @time trotter_plus = create_trotter(hamiltonian, t0, num_trotter_steps_per_t0)
-# # @time trotter_minus = create_trotter(hamiltonian, -t0, num_trotter_steps_per_t0)
+# # @time trotter_plus = TrottTrott(hamiltonian, t0, num_trotter_steps_per_t0)
+# # @time trotter_minus = TrottTrott(hamiltonian, -t0, num_trotter_steps_per_t0)
 
 # # # How are negative and positive trotter eigvals related
 # # conj_dist = norm(trotter_plus.eigvals_t0 - conj.(trotter_minus.eigvals_t0))

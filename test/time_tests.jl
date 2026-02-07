@@ -111,7 +111,7 @@ A_nufft = Matrix{ComplexF64}(undef, dim, dim)
 @time begin
         nufft_caches = NUFFTCaches(hamiltonian, precomputed_data.oft_time_labels, sigma)  #!
         nufft_prefactor_matrix!(nufft_caches, w, precomputed_data.oft_time_labels)  #!
-        time_oft_nufft!(A_nufft, A, w, hamiltonian, precomputed_data.oft_time_labels, nufft_caches)  #!
+        oft_nufft!(A_nufft, A, w, hamiltonian, precomputed_data.oft_time_labels, nufft_caches)  #!
 end
 A_nufft *= time_oft_prefactor
 

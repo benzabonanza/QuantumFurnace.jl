@@ -28,7 +28,7 @@ disordering_term = [Z]
 disordering_coeffs = rand(num_qubits)
 hamiltonian = create_hamham(hamiltonian_terms, hamiltonian_coeffs, disordering_term, disordering_coeffs, num_qubits)
 
-trotter = create_trotter(hamiltonian, t0, num_trotter_steps_per_t0)
+trotter = TrottTrott(hamiltonian, t0, num_trotter_steps_per_t0)
 
 trotter_error_T = compute_trotter_error(hamiltonian, trotter, 2^num_energy_bits * t0 / 2)
 # gibbs_in_trotter = Hermitian(trotter.eigvecs' * gibbs_state(hamiltonian, beta) * trotter.eigvecs)

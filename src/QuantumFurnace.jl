@@ -26,7 +26,7 @@ export LiouvConfig, ThermalizeConfig, HamHam, TrottTrott, HotAlgorithmResults, H
 export run_liouvillian, run_thermalization, construct_liouvillian, B_time, B_trotter, coherent_bohr
 export generate_filename, validate_config!, create_trotter, compute_trotter_error, gibbs_state, gibbs_state_in_eigen,
        create_bohr_dict, pad_term, pick_transition, create_hamham, find_ideal_heisenberg, create_alpha, expm_pauli_padded, 
-       finalize_hamham, load_hamiltonian, time_oft!, time_oft, oft!, time_oft_nufft!, nufft_prefactor_matrix!
+       finalize_hamham, load_hamiltonian, oft!, oft_nufft!, nufft_prefactor_matrix!
 # Quantum Trajectory
 export krausframework, step_along_the_trajectory!, evolve_along_trajectory, construct_gksl_lindbladian,
        apply_jump_contribution!, apply_lindbladian_dagger!, apply_lindbladian!, precompute_B, precompute_R, 
@@ -41,6 +41,7 @@ include("structs.jl")
 include("hamiltonian.jl")
 include("qi_tools.jl")
 include("misc_tools.jl")
+include("nufft.jl")
 include("ofts.jl")
 include("errors.jl")
 include("jump_workers.jl")
