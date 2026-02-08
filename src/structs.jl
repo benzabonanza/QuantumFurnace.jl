@@ -6,7 +6,7 @@ struct EnergyDomain <: AbstractDomain end
 struct TimeDomain <: AbstractDomain end
 struct TrotterDomain <: AbstractDomain end
 
-# TODO: Depricate, became obsolete with NUFFTCaches.
+# Became obsolete with NUFFTCaches. But used for debugging.
 struct OFTCaches
     prefactors::Vector{ComplexF64}
     U::Diagonal{ComplexF64, Vector{ComplexF64}}
@@ -18,24 +18,6 @@ struct OFTCaches
         temp_op = zeros(ComplexF64, dim, dim)
         new(prefactors, U, temp_op)
     end
-end
-
-mutable struct JumpScratch
-    nufft::NUFFTCaches
-    jump_oft::Matrix{ComplexF64}
-    temp::Matrix{ComplexF64}
-    K1::Matrix{ComplexF64}   # A†A (stored as full, but used as Hermitian)
-    K2::Matrix{ComplexF64}   # AA† (needed for hermitian jump, negative-w part)
-end
-
-function JumpScratch(dim::Int, hamiltonian::HamHam, oft_time_labels, sigma)
-    JumpScratch(
-        NUFFTCaches(hamiltonian.bohr_freqs, oft_time_labels, sigma),
-        Matrix{ComplexF64}(undef, dim, dim),
-        Matrix{ComplexF64}(undef, dim, dim),
-        Matrix{ComplexF64}(undef, dim, dim),
-        Matrix{ComplexF64}(undef, dim, dim),
-    )
 end
 
 struct LindbladianJumpCaches
@@ -217,7 +199,7 @@ mutable struct TrottTrott
     eigvals_t0::Vector{ComplexF64}
     eigvecs::Matrix{ComplexF64}
     trafo_from_eigen_to_trotter::Matrix{ComplexF64}  # U' X_trott U = X_eigenbasis in H
-    quasi_bohr_freqs::Matrix{Float64}
+    bohr_freqs::Matrix{Float64}
 end
 
 """

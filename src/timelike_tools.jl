@@ -3,20 +3,20 @@ function TrottTrott(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
     trottU = trotterize2(hamiltonian, t, num_trotter_steps)
     trottU_eigvals, trottU_eigvecs = eigen(trottU)
     unitary_from_eigen_to_trotter = trottU_eigvecs' * hamiltonian.eigvecs
-    quasi_bohr_freqs = trotter_bohr_freqs(trottU_eigvals, t)
+    bohr_freqs = trotter_bohr_freqs(trottU_eigvals, t)  # quasi Bohr frequencies due to Trotterization.
     return TrottTrott(
         t,
         num_trotter_steps, 
         trottU_eigvals, 
         trottU_eigvecs, 
         unitary_from_eigen_to_trotter, 
-        quasi_bohr_freqs
+        bohr_freqs
         )
 end
 
 function trotter_bohr_freqs(trottU_T_eigvals::Vector{ComplexF64}, t::Float64)
-    quasi_bohr_freqs = angle.(trottU_T_eigvals) ./ t  # quasi Bohr frequencies due to Trotterization.
-    return quasi_bohr_freqs .- quasi_bohr_freqs'  # dim×dim
+    bohr_freqs = angle.(trottU_T_eigvals) ./ t  # quasi Bohr frequencies due to Trotterization.
+    return bohr_freqs .- bohr_freqs'  # dim×dim
 end
 
 function compute_trotter_error(hamiltonian::HamHam, trotter::TrottTrott, t::Float64)

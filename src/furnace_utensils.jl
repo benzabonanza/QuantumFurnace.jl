@@ -11,7 +11,10 @@ function precompute_labels(::Union{TimeDomain, TrotterDomain}, config::Union{Lio
     return (truncated_energy_labels, time_labels) # Energy and time labels
 end  
 
-function precompute_data(::BohrDomain, config::Union{LiouvConfig, ThermalizeConfig})
+function precompute_data(::BohrDomain,
+    config::Union{LiouvConfig, ThermalizeConfig},
+    ham_or_trott::Union{HamHam, TrottTrott}
+)
 
     alpha = pick_alpha(config)
     # Was the only way to bring in the normalizing factor 1 / ||γ||_∞
@@ -20,29 +23,36 @@ function precompute_data(::BohrDomain, config::Union{LiouvConfig, ThermalizeConf
     gamma_norm_factor =  1.0 / maximum(transition.(energy_labels))
     return (
         alpha = alpha,
-        gamma_norm_factor
+        gamma_norm_factor = gamma_norm_factor
     )
 end
 
-function precompute_data(::EnergyDomain, config::Union{LiouvConfig, ThermalizeConfig})
+function precompute_data(::EnergyDomain, 
+    config::Union{LiouvConfig, ThermalizeConfig}, 
+    ham_or_trott::Union{HamHam, TrottTrott}
+)
     energy_labels, = precompute_labels(config.domain, config)
     transition = pick_transition(config)
     gamma_norm_factor =  1.0 / maximum(transition.(energy_labels))
     
     return (
         transition = transition,
-        gamma_norm_factor,
+        gamma_norm_factor = gamma_norm_factor,
         energy_labels = energy_labels
     )
 end
 
-function precompute_data(::Union{TimeDomain, TrotterDomain}, config::Union{LiouvConfig, ThermalizeConfig})
+function precompute_data(::Union{TimeDomain, TrotterDomain},
+    config::Union{LiouvConfig, ThermalizeConfig},
+    ham_or_trott::Union{HamHam, TrottTrott}
+)
     energy_labels, time_labels = precompute_labels(config.domain, config)
     oft_time_labels = truncate_time_labels_for_oft(time_labels, config.sigma)
 
     transition = pick_transition(config)
     gamma_norm_factor =  1.0 / maximum(transition.(energy_labels))
 
+    # Coherent term B
     b_minus, b_plus = if config.with_coherent
         _b_minus = compute_truncated_func(compute_b_minus, time_labels, config.beta, config.sigma)
         chosen_b_plus, b_plus_args = select_b_plus_calculator(config)
@@ -51,12 +61,35 @@ function precompute_data(::Union{TimeDomain, TrotterDomain}, config::Union{Liouv
     else
         (nothing, nothing)
     end
+
+    # OFT NUFFT prefactors
+    if config.domain isa TimeDomain
+        oft_nufft_prefactors = prepare_oft_nufft_prefactors(
+            ham_or_trott.bohr_freqs,
+            oft_time_labels,
+            energy_labels,
+            config.sigma;
+            eps=1e-12,
+            nthreads=1,
+            use_shared_array=(nprocs() > 1),
+        )
+    elseif config.domain isa TrotterDomain
+        oft_nufft_prefactors = prepare_oft_nufft_prefactors(
+            ham_or_trott.bohr_freqs,
+            oft_time_labels,
+            energy_labels,
+            config.sigma;
+            eps=1e-12,
+            nthreads=1,
+            use_shared_array=(nprocs() > 1),
+        )
+    end
     
     return (
         transition = transition,
-        gamma_norm_factor,
+        gamma_norm_factor = gamma_norm_factor,
         energy_labels = energy_labels,
-        oft_time_labels = oft_time_labels,
+        oft_nufft_prefactors = oft_nufft_prefactors,
         b_minus = b_minus,
         b_plus = b_plus,
     )

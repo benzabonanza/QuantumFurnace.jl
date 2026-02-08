@@ -2,7 +2,7 @@
 
 julia_version = "1.12.4"
 manifest_format = "2.0"
-project_hash = "8b30d1c4f5f8abb844009a951f25d9829e459d8f"
+project_hash = "104096730e681d5dc19246f00ffdb331abf3c6bf"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "8b2b045b22740e4be20654175cc38291d48539db"
@@ -1160,7 +1160,7 @@ version = "2.11.2"
     Enzyme = "7da242da-08ed-463a-9acd-ee780be4f1d9"
 
 [[deps.QuantumFurnace]]
-deps = ["Arpack", "BSON", "BenchmarkTools", "ClusterManagers", "DataStructures", "Debugger", "Distributed", "DocumenterTools", "LinearAlgebra", "LinearMaps", "Optim", "Pkg", "Plots", "Printf", "ProgressMeter", "QuadGK", "Random", "Revise", "Roots", "SparseArrays", "SpecialFunctions"]
+deps = ["Arpack", "BSON", "BenchmarkTools", "ClusterManagers", "DataStructures", "Debugger", "Distributed", "DocumenterTools", "FINUFFT", "LinearAlgebra", "LinearMaps", "Optim", "Pkg", "Plots", "Printf", "ProgressMeter", "QuadGK", "Random", "Revise", "Roots", "SparseArrays", "SpecialFunctions"]
 path = "."
 uuid = "572f92bd-4202-48dc-8017-a9da11cbf84d"
 version = "0.1.0"
@@ -1267,6 +1267,11 @@ deps = ["ConstructionBase", "Future", "MacroTools", "StaticArraysCore"]
 git-tree-sha1 = "c5391c6ace3bc430ca630251d02ea9687169ca68"
 uuid = "efcf1570-3423-57d1-acb7-fd33fddbac46"
 version = "1.1.2"
+
+[[deps.SharedArrays]]
+deps = ["Distributed", "Mmap", "Random", "Serialization"]
+uuid = "1a1011a3-84de-559e-8e89-a11a2f7dc383"
+version = "1.11.0"
 
 [[deps.Showoff]]
 deps = ["Dates", "Grisu"]

@@ -57,7 +57,7 @@ function construct_liouvillian(jumps::Vector{JumpOp}, config::LiouvConfig, hamil
         hamiltonian
     end
 
-    precomputed_data = precompute_data(config.domain, config)
+    precomputed_data = precompute_data(config.domain, config, ham_or_trott)
 
     #! uncomment for multi-threads
     # total_liouv = @distributed (+) for jump in jumps
@@ -95,7 +95,7 @@ function run_thermalization(jumps::Vector{JumpOp}, config::ThermalizeConfig, evo
     num_liouv_steps = Int(ceil(config.mixing_time / config.delta))
 
     # Energy, Time labels; B functions; transition
-    precomputed_data = precompute_data(config.domain, config)
+    precomputed_data = precompute_data(config.domain, config, ham_or_trott)
 
     convergence_cutoff = 1e-5
     distances_to_gibbs = [trace_distance_h(Hermitian(evolving_dm), gibbs)]

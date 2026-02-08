@@ -9,23 +9,23 @@ function oft!(out_matrix::Matrix{ComplexF64}, jump::JumpOp, energy::Float64, ham
     return out_matrix
 end
 
-"""
-Computes OFT in Time or Trotter cases by a precomputed NUFFT prefactor matrix, to eliminate the costly time label sums.
-Trotterization manifests only in the fact that `cache.bohr_freqs` are quasi Bohr frequencies.
-Returns subnormalized OFT A(w): without (t0 * sqrt((sqrt(2 / pi)/sigma) / (2 * pi))). Normalized at once in the Lindbladian.
-"""
-function oft_nufft!(
-    out_matrix::Matrix{ComplexF64},
-    jump::JumpOp,
-    energy::Float64, 
-    time_labels::Vector{Float64},
-    cache::NUFFTCaches
-    )
+# """
+# Computes OFT in Time or Trotter cases by a precomputed NUFFT prefactor matrix, to eliminate the costly time label sums.
+# Trotterization manifests only in the fact that `cache.bohr_freqs` are quasi Bohr frequencies.
+# Returns subnormalized OFT A(w): without (t0 * sqrt((sqrt(2 / pi)/sigma) / (2 * pi))). Normalized at once in the Lindbladian.
+# """
+# function oft_nufft!(
+#     out_matrix::Matrix{ComplexF64},
+#     jump::JumpOp,
+#     energy::Float64, 
+#     time_labels::Vector{Float64},
+#     cache::NUFFTCaches
+#     )
 
-    nufft_prefactor_matrix!(cache, energy, time_labels)
-    @. out_matrix = jump.in_eigenbasis * cache.nufft_prefactor_temp
-    return out_matrix
-end
+#     nufft_prefactor_matrix!(cache, energy, time_labels)
+#     @. out_matrix = jump.in_eigenbasis * cache.nufft_prefactor_temp
+#     return out_matrix
+# end
 
 
 function time_oft!(

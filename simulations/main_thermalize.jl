@@ -1,45 +1,17 @@
-# using Distributed
-# using Revise
-
-# if "SLURM_JOB_ID" in keys(ENV)
-#     # For HPC environments
-#     using ClusterManagers
-#     num_tasks = parse(Int, ENV["SLURM_NTASKS"])
-#     addprocs(SlurmManager(num_tasks))
-#     println("Slurm environment detected. Added $(nworkers()) workers.")
-# else
-#     # For local testing
-#     if nprocs() == 1
-#         println("No external workers detected. Adding 4 local workers for testing...")
-#         addprocs(4)
-#         println("Workers available: ", workers())
-#     end
-# end
-
-# println("Loading QuantumFurnace on all $(nworkers()) workers...")
-
-# @everywhere using QuantumFurnace
-# @everywhere using Pkg, LinearAlgebra, Random, Printf, SparseArrays, BSON, Arpack
-
 using Distributed
+addprocs(4, exeflags="--project=@.")
+
 using Revise
-
-if nprocs() == 1
-    addprocs(4, exeflags="--project")  # Add workers
-end
-
-if !isdefined(Main, :QuantumFurnace)
-    includet("../src/QuantumFurnace.jl")
-end
+includet("../src/QuantumFurnace.jl")
 using .QuantumFurnace
-using Pkg, LinearAlgebra, Random, Printf, SparseArrays, BSON, Arpack
 
 @everywhere begin
-    if !isdefined(Main, :QuantumFurnace)
-        using QuantumFurnace
-    end
-    using Pkg, LinearAlgebra, Random, Printf, SparseArrays, BSON, Arpack
+    using Revise
+    includet("../src/QuantumFurnace.jl")
+    using .QuantumFurnace
 end
+
+using Pkg, LinearAlgebra, Random, Printf, SparseArrays, BSON, Arpack
 
 function main()
     #* Config
@@ -63,8 +35,8 @@ function main()
     num_trotter_steps_per_t0 = 10
 
     # Thermalizing configs:
-    mixing_time = 30.0
-    delta = 0.01
+    mixing_time = 50.0
+    delta = 0.1
 
     config = ThermalizeConfig(
         num_qubits = num_qubits, 
