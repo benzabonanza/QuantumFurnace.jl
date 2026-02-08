@@ -90,7 +90,7 @@ disordering_coeffs = rand(num_qubits);
 
 # Generate a 4-qubit chain antiferromagnetic Heisenberg Hamiltonian with a disordering field
 
-hamiltonian = create_hamham(hamiltonian_terms, hamiltonian_coeffs, disordering_term, disordering_coeffs, num_qubits)
+hamiltonian = HamHam(hamiltonian_terms, hamiltonian_coeffs, disordering_term, disordering_coeffs, num_qubits)
 hamiltonian.gibbs = Hermitian(gibbs_state_in_eigen(hamiltonian, beta));
 
 # Note that we added here a disordering field to the Hamiltonian in order to make its spectrum unique. A priori the algorithm

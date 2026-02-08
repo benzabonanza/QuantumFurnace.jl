@@ -20,7 +20,7 @@ hamiltonian_terms = [[X, X], [Y, Y], [Z, Z]]
 hamiltonian_coeffs = fill(1.0, length(hamiltonian_terms))
 disordering_term = [Z]
 disordering_coeffs = rand(num_qubits)
-hamiltonian = create_hamham(hamiltonian_terms, hamiltonian_coeffs, disordering_term, disordering_coeffs, num_qubits)
+hamiltonian = HamHam(hamiltonian_terms, hamiltonian_coeffs, disordering_term, disordering_coeffs, num_qubits)
 
 h1 = @time find_ideal_heisenberg(num_qubits, hamiltonian_coeffs)
 h2 = @time find_ideal_heisenberg_new(num_qubits, hamiltonian_coeffs)

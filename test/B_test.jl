@@ -60,7 +60,7 @@ time_oft_caches = OFTCaches(dim)
 #* Hamiltonian
 # hamiltonian_terms = [[X, X], [Y, Y], [Z, Z]]
 # hamiltonian_coeffs = fill(1.0, length(hamiltonian_terms))
-# hamiltonian = create_hamham(hamiltonian_terms, hamiltonian_coeffs, num_qubits)
+# hamiltonian = HamHam(hamiltonian_terms, hamiltonian_coeffs, num_qubits)
 hamiltonian = load_hamiltonian("heis", num_qubits)
 hamiltonian = finalize_hamham(hamiltonian, beta)
 

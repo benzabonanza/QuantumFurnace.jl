@@ -1,4 +1,37 @@
-function create_hamham(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64}, num_qubits::Int64; 
+"""
+    HamHam
+
+    Container for Hamiltonian data, spectral decompositions, and Bohr frequencies.
+
+    # Fields
+    - `data`: The full Hamiltonian matrix in the computational basis.
+    - `bohr_freqs`, `bohr_dict`: Precomputed Bohr frequencies and their mapping to indices.
+    - `base_terms`, `base_coeffs`: The 1, 2 or more site terms that constitute the Hamiltonians, and their uniform coefficients.
+    - `disordering_term`, `disordering_coeffs`: Some external field term, that can have different coeffs. on each site.
+    - `eigvals`, `eigvecs`: Spectral decomposition of the Hamiltonian.
+    - `nu_min`: Smallest Bohr frequency in the spectrum, which has to be resolved by all approximations in the algorithm.
+    - `shift`, `rescaling_factor`: Values to rescale the spectrum to [0; 0.45].
+    - `periodic`: Sets the boundary conditions periodic if `true`.
+    - `gibbs`: The theoretical Gibbs state with respect to the Hamiltonian``\\rho \\propto e^{-\\beta H}``.
+"""
+struct HamHam
+    data::Matrix{ComplexF64}
+    bohr_freqs::Union{Matrix{Float64}, Nothing}
+    bohr_dict::Union{Dict{Float64, Vector{CartesianIndex{2}}}, Nothing}
+    base_terms::Vector{Vector{Matrix{ComplexF64}}}
+    base_coeffs::Vector{Float64}
+    disordering_term::Union{Vector{Matrix{ComplexF64}}, Nothing}
+    disordering_coeffs::Union{Vector{Float64}, Nothing}
+    eigvals::Vector{Float64}
+    eigvecs::Matrix{ComplexF64}
+    nu_min::Float64  # Smallest bohr frequency
+    shift::Float64
+    rescaling_factor::Float64
+    periodic::Bool
+    gibbs::Union{Hermitian{ComplexF64, Matrix{ComplexF64}}, Nothing}
+end
+
+function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64}, num_qubits::Int64; 
     periodic::Bool = true, hermitian_check = false)
     """Creates a HamHam object from terms and coefficients."""
 
@@ -36,7 +69,7 @@ function create_hamham(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector
     return hamiltonian
 end
 
-function create_hamham(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64}, 
+function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64}, 
     disordering_terms::Vector{Matrix{ComplexF64}}, disordering_coeffs::Vector{Float64}, 
     num_qubits::Int64; periodic::Bool = true, hermitian_check = false)
     """Creates a HamHam object from terms and coefficients."""

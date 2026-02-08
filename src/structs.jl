@@ -115,39 +115,6 @@ end
 end
 
 """
-    HamHam
-
-    Container for Hamiltonian data, spectral decompositions, and Bohr frequencies.
-
-    # Fields
-    - `data`: The full Hamiltonian matrix in the computational basis.
-    - `bohr_freqs`, `bohr_dict`: Precomputed Bohr frequencies and their mapping to indices.
-    - `base_terms`, `base_coeffs`: The 1, 2 or more site terms that constitute the Hamiltonians, and their uniform coefficients.
-    - `disordering_term`, `disordering_coeffs`: Some external field term, that can have different coeffs. on each site.
-    - `eigvals`, `eigvecs`: Spectral decomposition of the Hamiltonian.
-    - `nu_min`: Smallest Bohr frequency in the spectrum, which has to be resolved by all approximations in the algorithm.
-    - `shift`, `rescaling_factor`: Values to rescale the spectrum to [0; 0.45].
-    - `periodic`: Sets the boundary conditions periodic if `true`.
-    - `gibbs`: The theoretical Gibbs state with respect to the Hamiltonian``\\rho \\propto e^{-\\beta H}``.
-"""
-struct HamHam
-    data::Matrix{ComplexF64}
-    bohr_freqs::Union{Matrix{Float64}, Nothing}
-    bohr_dict::Union{Dict{Float64, Vector{CartesianIndex{2}}}, Nothing}
-    base_terms::Vector{Vector{Matrix{ComplexF64}}}
-    base_coeffs::Vector{Float64}
-    disordering_term::Union{Vector{Matrix{ComplexF64}}, Nothing}
-    disordering_coeffs::Union{Vector{Float64}, Nothing}
-    eigvals::Vector{Float64}
-    eigvecs::Matrix{ComplexF64}
-    nu_min::Float64  # Smallest bohr frequency
-    shift::Float64
-    rescaling_factor::Float64
-    periodic::Bool
-    gibbs::Union{Hermitian{ComplexF64, Matrix{ComplexF64}}, Nothing}
-end
-
-"""
     JumpOp
 
     Represents an operator from which we can build the Lindbladian jump operators later.
@@ -180,26 +147,6 @@ mutable struct LiouvLiouv
     steady_state::Matrix{ComplexF64}
     spectral_gap::Float64
     mixing_time_bound::Float64
-end
-
-"""
-    TrottTrott
-
-    Stores precomputed data for Trotterized time evolution.
-
-    # Fields
-    - `t0`: The time unit for the Trotter step.
-    - `num_trotter_steps_per_t0`: Self-explanatory. Usually `t0` is small enough to just use 1 Trotter step for it. 
-    - `eigvals_t0`, `eigvecs`: Eigenvalues of the evolution operator for one time unit `t0`, and corresponding eigenvectors.
-    - `trafo_from_eigen_to_trotter`: Basis transformation matrix from Hamiltonian eigenspace to Trotter eigenspace.
-"""
-mutable struct TrottTrott
-    t0::Float64
-    num_trotter_steps_per_t0::Float64
-    eigvals_t0::Vector{ComplexF64}
-    eigvecs::Matrix{ComplexF64}
-    trafo_from_eigen_to_trotter::Matrix{ComplexF64}  # U' X_trott U = X_eigenbasis in H
-    bohr_freqs::Matrix{Float64}
 end
 
 """

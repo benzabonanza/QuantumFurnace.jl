@@ -68,7 +68,7 @@ function main()
         # hamiltonian = find_ideal_heisenberg(num_qubits, fill(1.0, 3); batch_size=100)
         # hamiltonian_terms = [["X", "X"], ["Y", "Y"], ["Z", "Z"]]
         # hamiltonian_coeffs = fill(1.0, length(hamiltonian_terms))
-        # hamiltonian = create_hamham(hamiltonian_terms, hamiltonian_coeffs, num_qubits)
+        # hamiltonian = HamHam(hamiltonian_terms, hamiltonian_coeffs, num_qubits)
 
         # Load Hamiltonian
         hamiltonian = load_hamiltonian("heis", num_qubits)

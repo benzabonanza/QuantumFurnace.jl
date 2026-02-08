@@ -26,7 +26,7 @@ hamiltonian_terms = [[X, X], [Y, Y], [Z, Z]]
 hamiltonian_coeffs = fill(1.0, length(hamiltonian_terms))
 disordering_term = [Z]
 disordering_coeffs = rand(num_qubits)
-hamiltonian = create_hamham(hamiltonian_terms, hamiltonian_coeffs, disordering_term, disordering_coeffs, num_qubits)
+hamiltonian = HamHam(hamiltonian_terms, hamiltonian_coeffs, disordering_term, disordering_coeffs, num_qubits)
 
 trotter = TrottTrott(hamiltonian, t0, num_trotter_steps_per_t0)
 
