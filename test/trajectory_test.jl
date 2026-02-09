@@ -90,12 +90,12 @@ for pauli in jump_paulis
         end
 end
 
-kraus_jumps = @time precompute_kraus_jumps(config.domain, jumps, hamiltonian, config, precomputed_data, time_oft_caches)
+kraus_jumps = @time precompute_kraus_jumps(config.domain, jumps, hamiltonian, config, precomputed_data)
 # Base.summarysize(kraus_jumps)  # Size
 
 if with_coherent
-        B = @time B_time(jumps, hamiltonian, precomputed_data.b_minus, precomputed_data.b_plus, t0, beta)
-        # B = B_trotter(jumps, trotter, precomputed_data.b_minus, precomputed_data.b_plus, beta)
+        B = @time B_time(jumps, hamiltonian, precomputed_data.b_minus, precomputed_data.b_plus, t0, beta, sigma)
+        # B = B_trotter(jumps, trotter, precomputed_data.b_minus, precomputed_data.b_plus, beta, sigma)
 else
         B = zeros(ComplexF64, dim, dim)
 end

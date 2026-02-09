@@ -91,10 +91,10 @@ jump = jumps[1]
 B_bohr = coherent_bohr(hamiltonian, jump, config) 
 rmul!(B_bohr, precomputed_data.gamma_norm_factor)
 
-B_t = B_time(jump, hamiltonian, precomputed_data.b_minus, precomputed_data.b_plus, config.t0, config.beta)
+B_t = B_time(jump, hamiltonian, precomputed_data.b_minus, precomputed_data.b_plus, config.t0, config.beta, config.sigma)
 rmul!(B_t, precomputed_data.gamma_norm_factor)
 
-norm(B_bohr - B_t)  #FIXME: for sigma != 1 / beta
+norm(B_bohr - B_t)
 
 
 

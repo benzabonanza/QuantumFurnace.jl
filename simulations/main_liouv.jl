@@ -25,7 +25,6 @@ function main()
         #! change from 1 / beta
         # sigma = 0.1 / beta  # w0 = 0.005, for broad enough time integrals in OFTs
         # w_gamma = 1 / beta
-        # sigma_gamma = 1 / beta
         # sigma_gamma = sqrt(2 * w_gamma / beta - sigma^2)
 
         # Smooth Metro
@@ -41,8 +40,8 @@ function main()
         with_coherent = true
         with_linear_combination = true
         domain = TrotterDomain()
-        num_energy_bits = 12 # 11
-        w0 = 0.05
+        num_energy_bits = 15 # 11
+        w0 = 0.01
         max_E = w0 * 2^num_energy_bits / 2
         t0 = 2pi / (2^num_energy_bits * w0)  # Max time evolution pi / w0
         num_trotter_steps_per_t0 = 10

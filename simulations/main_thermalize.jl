@@ -1,5 +1,5 @@
 using Distributed
-addprocs(4, exeflags="--project=@.")
+# addprocs(4, exeflags="--project=@.")
 
 using Revise
 includet("../src/QuantumFurnace.jl")
@@ -35,8 +35,8 @@ function main()
     num_trotter_steps_per_t0 = 10
 
     # Thermalizing configs:
-    mixing_time = 50.0
-    delta = 0.1
+    mixing_time = 500.0 * 3 * num_qubits
+    delta = 0.3
 
     config = ThermalizeConfig(
         num_qubits = num_qubits, 
@@ -104,7 +104,9 @@ function main()
     end
 
     #* Thermalization
-    alg_results = @time run_thermalization(jumps, config, initial_dm, hamiltonian; trotter=trotter)
+    # alg_results = @time run_thermalization(jumps, config, initial_dm, hamiltonian; trotter=trotter)
+    alg_results = @time run_thermalization_kraus(jumps, config, initial_dm, hamiltonian; trotter=trotter)
+
     @printf("\n Last distance to Gibbs: %s\n", alg_results.distances_to_gibbs[end])
     @printf("Number of steps taken: %s\n", length(alg_results.time_steps))
     # plot(alg_results.time_steps, alg_results.distances_to_gibbs, label="Distance to Gibbs", xlabel="Time", ylabel="Distance", title="Distance to Gibbs over time")

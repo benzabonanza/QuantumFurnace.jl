@@ -2,18 +2,18 @@
 # (3.1) and Proposition III.1
 # Has to be on a symmetric time domain, otherwise it can't be Hermitian.
 function B_time(jump::JumpOp, hamiltonian::HamHam, b_minus::Dict{Float64, ComplexF64}, 
-    b_plus::Dict{Float64, ComplexF64}, t0::Float64, beta::Float64)
+    b_plus::Dict{Float64, ComplexF64}, t0::Float64, beta::Float64, sigma::Float64)
     
     dim = size(hamiltonian.data)
-    diag_time_evolve(t) = Diagonal(exp.(1im * hamiltonian.eigvals * t * beta))  # beta factor comes in for b_1,2
+    diag_time_evolve(t) = Diagonal(exp.(1im * hamiltonian.eigvals * t))  # beta factor comes in for b_1,2
 
     # Inner summand b_plus
     b_plus_summand = zeros(ComplexF64, dim)
     U = zeros(ComplexF64, dim)
     U_minus_2 = zeros(ComplexF64, dim)
     for s in keys(b_plus)
-        U .= diag_time_evolve(s)
-        U_minus_2 .= diag_time_evolve(-2.0 * s)
+        U .= diag_time_evolve(s * beta)
+        U_minus_2 .= diag_time_evolve(-2.0 * s * beta)
         b_plus_summand .+= b_plus[s] * U * jump.in_eigenbasis' * U_minus_2 * jump.in_eigenbasis * U
     end
 
@@ -21,7 +21,7 @@ function B_time(jump::JumpOp, hamiltonian::HamHam, b_minus::Dict{Float64, Comple
     # A is Hermitian
     B = zeros(ComplexF64, dim)
     for t in keys(b_minus)
-        U .= diag_time_evolve(t)
+        U .= diag_time_evolve(t / sigma)
         B .+= b_minus[t] * U' * b_plus_summand * U
     end
 
@@ -29,18 +29,18 @@ function B_time(jump::JumpOp, hamiltonian::HamHam, b_minus::Dict{Float64, Comple
 end
 
 function B_time(jumps::Vector{JumpOp}, hamiltonian::HamHam, b_minus::Dict{Float64, ComplexF64}, 
-    b_plus::Dict{Float64, ComplexF64}, t0::Float64, beta::Float64)
+    b_plus::Dict{Float64, ComplexF64}, t0::Float64, beta::Float64, sigma::Float64)
     
     dim = size(hamiltonian.data)
-    diag_time_evolve(t) = Diagonal(exp.(1im * hamiltonian.eigvals * t * beta))  # beta factor comes in for b_1,2
+    diag_time_evolve(t) = Diagonal(exp.(1im * hamiltonian.eigvals * t))  # beta factor comes in for b_1,2
 
     # Inner summand b_plus
     b_plus_summand = zeros(ComplexF64, dim)  # For all jumps A^a
     U = zeros(ComplexF64, dim)
     U_minus_2 = zeros(ComplexF64, dim)
     for s in keys(b_plus)
-        U .= diag_time_evolve(s)
-        U_minus_2 .= diag_time_evolve(-2.0 * s)
+        U .= diag_time_evolve(s * beta)
+        U_minus_2 .= diag_time_evolve(-2.0 * s * beta)
         for jump_a in jumps
             b_plus_summand .+= b_plus[s] * U * jump_a.in_eigenbasis' * U_minus_2 * jump_a.in_eigenbasis * U
         end
@@ -50,7 +50,7 @@ function B_time(jumps::Vector{JumpOp}, hamiltonian::HamHam, b_minus::Dict{Float6
     # A is Hermitian
     B = zeros(ComplexF64, dim)
     for t in keys(b_minus)
-        U .= diag_time_evolve(t)
+        U .= diag_time_evolve(t / sigma)
         B .+= b_minus[t] * U' * b_plus_summand * U
     end
 
@@ -58,7 +58,7 @@ function B_time(jumps::Vector{JumpOp}, hamiltonian::HamHam, b_minus::Dict{Float6
 end
 
 function B_trotter(jump::JumpOp, trotter::TrottTrott, b_minus::Dict{Float64, ComplexF64}, 
-    b_plus::Dict{Float64, ComplexF64}, beta::Float64)
+    b_plus::Dict{Float64, ComplexF64}, beta::Float64, sigma::Float64)
 
     dim = size(trotter.eigvecs)
     trotter_time_evolution(n::Int64) = Diagonal(trotter.eigvals_t0 .^ n)  # n - number of t0 time chunks
@@ -77,7 +77,7 @@ function B_trotter(jump::JumpOp, trotter::TrottTrott, b_minus::Dict{Float64, Com
     end
     B = zeros(ComplexF64, dim)
     for (t, b_t) in b_minus
-        num_t0_steps = Int(round(t * beta  / trotter.t0))
+        num_t0_steps = Int(round(t / (sigma * trotter.t0)))
         trott_U .= trotter_time_evolution(num_t0_steps)
 
         B .+= b_t * trott_U' * b_plus_summand * trott_U
@@ -87,7 +87,7 @@ function B_trotter(jump::JumpOp, trotter::TrottTrott, b_minus::Dict{Float64, Com
 end
 
 function B_trotter(jumps::Vector{JumpOp}, trotter::TrottTrott, b_minus::Dict{Float64, ComplexF64}, 
-    b_plus::Dict{Float64, ComplexF64}, beta::Float64)
+    b_plus::Dict{Float64, ComplexF64}, beta::Float64, sigma::Float64)
 
     dim = size(trotter.eigvecs)
     trotter_time_evolution(n::Int64) = Diagonal(trotter.eigvals_t0 .^ n)  # n - number of t0 time chunks
@@ -107,7 +107,7 @@ function B_trotter(jumps::Vector{JumpOp}, trotter::TrottTrott, b_minus::Dict{Flo
     end
     B = zeros(ComplexF64, dim)
     for (t, b_t) in b_minus
-        num_t0_steps = Int(round(t * beta  / trotter.t0))
+        num_t0_steps = Int(round(t / (sigma * trotter.t0)))
         trott_U .= trotter_time_evolution(num_t0_steps)
 
         B .+= b_t * trott_U' * b_plus_summand * trott_U

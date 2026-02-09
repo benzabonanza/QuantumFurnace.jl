@@ -85,7 +85,7 @@ function jump_contribution(::TimeDomain,
 
     liouv_for_jump = zeros(ComplexF64, dim^2, dim^2)
     if config.with_coherent 
-        coherent_term = B_time(jump, hamiltonian, b_minus, b_plus, config.t0, config.beta)
+        coherent_term = B_time(jump, hamiltonian, b_minus, b_plus, config.t0, config.beta, config.sigma)
         rmul!(coherent_term, gamma_norm_factor) 
         vectorize_liouvillian_coherent!(liouv_for_jump, coherent_term)
     end
@@ -121,7 +121,7 @@ function jump_contribution(::TrotterDomain,
 
     liouv_for_jump = zeros(ComplexF64, dim^2, dim^2)
     if config.with_coherent 
-        coherent_term = B_trotter(jump, trotter, b_minus, b_plus, config.beta)
+        coherent_term = B_trotter(jump, trotter, b_minus, b_plus, config.beta, config.sigma)
         rmul!(coherent_term, gamma_norm_factor) 
         vectorize_liouvillian_coherent!(liouv_for_jump, coherent_term)
     end
@@ -276,7 +276,7 @@ function jump_contribution(
     # Coherent part
     if config.with_coherent
         # coherent_term_f = coherent_term_time(jump, hamiltonian, f_minus, f_plus, t0)
-        coherent_term = B_time(jump, hamiltonian, b_minus, b_plus, config.t0, config.beta)
+        coherent_term = B_time(jump, hamiltonian, b_minus, b_plus, config.t0, config.beta, config.sigma)
         mul!(jump_dm_contribution, coherent_term, evolving_dm, -1im * scaled_delta, 1.0)
         mul!(jump_dm_contribution, evolving_dm, coherent_term, 1im * scaled_delta, 1.0)
     end
@@ -337,7 +337,7 @@ function jump_contribution(::TrotterDomain,
     jump_dm_contribution = zeros(ComplexF64, dim, dim)
     # Coherent part
     if config.with_coherent
-        coherent_term = B_trotter(jump, trotter, b_minus, b_plus, config.beta)
+        coherent_term = B_trotter(jump, trotter, b_minus, b_plus, config.beta, config.sigma)
         mul!(jump_dm_contribution, coherent_term, evolving_dm, -1im * scaled_delta, 1.0)
         mul!(jump_dm_contribution, evolving_dm, coherent_term, 1im * scaled_delta, 1.0)
     end
@@ -424,7 +424,6 @@ function precompute_kraus_jumps(
     return kraus_jumps
 end
 
-#FIXME: deleted oft_caches argument
 function precompute_kraus_jumps(
     ::TimeDomain,
     jumps::Vector{JumpOp}, 
@@ -434,19 +433,17 @@ function precompute_kraus_jumps(
     )
 
     dim = size(hamiltonian.data, 1)
-    (; transition, gamma_norm_factor, b_minus, b_plus, energy_labels, oft_time_labels) = precomputed_data
+    (; transition, gamma_norm_factor, b_minus, b_plus, energy_labels, oft_nufft_prefactors) = precomputed_data
 
     base_prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
-    nufft_caches = NUFFTCaches(hamiltonian.bohr_freqs, oft_time_labels, config.sigma)
 
     kraus_jumps = Vector{Tuple{Float64, AbstractMatrix{ComplexF64}}}()
     for jump in jumps
         energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
         for w in energies
             kraus_jump = Matrix{ComplexF64}(undef, dim, dim)  #FIXME: Shouldnt this be out of the loop.
-
-            nufft_prefactor_matrix!(nufft_caches, w, oft_time_labels)
-            oft_nufft!(kraus_jump, jump, w, oft_time_labels, nufft_caches)
+            nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
+            @. kraus_jump = jump.in_eigenbasis * nufft_prefactor_matrix
 
             rate_positive = sqrt(base_prefactor * transition(w))
             push!(kraus_jumps, (rate_positive, kraus_jump))
@@ -460,7 +457,6 @@ function precompute_kraus_jumps(
     return kraus_jumps
 end
 
-#FIXME: deleted oft_caches argument
 function precompute_kraus_jumps(
     ::TrotterDomain,
     jumps::Vector{JumpOp}, 
@@ -470,19 +466,17 @@ function precompute_kraus_jumps(
     )
 
     dim = size(trotter.eigvecs, 1)
-    (; transition, gamma_norm_factor, b_minus, b_plus, energy_labels, oft_time_labels) = precomputed_data
+    (; transition, gamma_norm_factor, b_minus, b_plus, energy_labels, oft_nufft_prefactors) = precomputed_data
 
     base_prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
-    nufft_caches = NUFFTCaches(trotter.bohr_freqs, oft_time_labels, config.sigma)
 
     kraus_jumps = Vector{Tuple{Float64, AbstractMatrix{ComplexF64}}}()
     for jump in jumps
         energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
         for w in energies
             kraus_jump = Matrix{ComplexF64}(undef, dim, dim)
-
-            nufft_prefactor_matrix!(nufft_caches, w, oft_time_labels)
-            oft_nufft!(kraus_jump, jump, w, oft_time_labels, nufft_caches)
+            nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
+            @. kraus_jump = jump.in_eigenbasis * nufft_prefactor_matrix
 
             rate_positive = sqrt(base_prefactor * transition(w))
             push!(kraus_jumps, (rate_positive, kraus_jump))
