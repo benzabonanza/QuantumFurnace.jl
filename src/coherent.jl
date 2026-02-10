@@ -1,4 +1,159 @@
 #* COHERENT TERMS -----------------------------------------------------------------------------------------------------------
+"""
+    precompute_coherent_total_B(
+        jumps,
+        hamiltonian,
+        config,
+        precomputed_data;
+        trotter=nothing,
+    ) -> Union{Nothing, Matrix{ComplexF64}}
+
+    Returns the total coherent operator B = sum_k B_k, already scaled by gamma_norm_factor.
+    Returns nothing if config.with_coherent == false.
+"""
+function precompute_coherent_total_B(
+    jumps::AbstractVector{<:JumpOp},
+    hamiltonian::HamHam,
+    config::Union{LiouvConfig, ThermalizeConfig},
+    precomputed_data;
+    trotter::Union{Nothing, TrottTrott}=nothing,
+    )::Union{Nothing, Matrix{ComplexF64}}
+
+    config.with_coherent || return nothing
+
+    if config.domain isa TimeDomain
+        (; b_minus, b_plus, gamma_norm_factor) = precomputed_data
+        B = B_time(jumps, hamiltonian, b_minus, b_plus, config.t0, config.beta, config.sigma)
+
+    elseif config.domain isa TrotterDomain
+        (; b_minus, b_plus, gamma_norm_factor) = precomputed_data
+        @assert trotter !== nothing
+        B = B_trotter(jumps, trotter, b_minus, b_plus, config.beta, config.sigma)
+
+    else
+        # BohrDomain / EnergyDomain
+        (; gamma_norm_factor) = precomputed_data
+        B = coherent_bohr(hamiltonian, jumps, config)
+    end
+
+    rmul!(B, gamma_norm_factor)
+    return B
+end
+
+
+"""
+    precompute_coherent_terms(
+        jumps::AbstractVector{<:JumpOp},
+        hamiltonian::AbstractMatrix{ComplexF64},
+        config::LiouvConfig,
+        precomputed_data;
+        trotter::Union{Nothing, TrottTrott}=nothing,
+    ) -> Union{Nothing, Vector{Matrix{ComplexF64}}}
+
+    Precompute and cache the coherent B term for each `JumpOp`, already scaled by `gamma_norm_factor`.
+    Returns `nothing` if `config.with_coherent == false`.
+"""
+function precompute_coherent_terms(
+    jumps::AbstractVector{<:JumpOp},
+    hamiltonian::HamHam,
+    config::LiouvConfig,
+    precomputed_data;
+    trotter::Union{Nothing, TrottTrott}=nothing,
+    )::Union{Nothing, Vector{Matrix{ComplexF64}}}
+
+    config.with_coherent || return nothing
+
+    coherent_terms = Vector{Matrix{ComplexF64}}(undef, length(jumps))
+
+    if config.domain isa TimeDomain
+        (; b_minus, b_plus, gamma_norm_factor) = precomputed_data
+        @inbounds for (k, jump) in pairs(jumps)
+            B = B_time(jump, hamiltonian, b_minus, b_plus, config.t0, config.beta, config.sigma)
+            rmul!(B, gamma_norm_factor)
+            coherent_terms[k] = B
+        end
+
+    elseif config.domain isa TrotterDomain
+        (; b_minus, b_plus, gamma_norm_factor) = precomputed_data
+        @assert trotter !== nothing
+        @inbounds for (k, jump) in pairs(jumps)
+            B = B_trotter(jump, trotter, b_minus, b_plus, config.beta, config.sigma)
+            rmul!(B, gamma_norm_factor)
+            coherent_terms[k] = B
+        end
+
+    else
+        # BohrDomain / EnergyDomain: coherent term is the BohrDomain B operator.
+        (; gamma_norm_factor) = precomputed_data
+        @inbounds for (k, jump) in pairs(jumps)
+            B = coherent_bohr(hamiltonian, jump, config)
+            rmul!(B, gamma_norm_factor)
+            coherent_terms[k] = B
+        end
+    end
+
+    return coherent_terms
+end
+
+"""
+    precompute_coherent_unitary_terms(
+        jumps::AbstractVector{<:JumpOp},
+        hamiltonian::AbstractMatrix{ComplexF64},
+        config::ThermalizeConfig,
+        precomputed_data;
+        trotter::Union{Nothing, TrottTrott}=nothing,
+    ) -> Union{Nothing, Vector{Matrix{ComplexF64}}}
+
+    Precompute per-jump coherent unitaries for Kraus thermalization:
+        U_k = exp(-1im * config.delta * B_k)
+
+    Each B_k is constructed exactly as in the coherent-term definitions (domain-dependent),
+    scaled by `gamma_norm_factor` (same convention as Liouvillian construction).
+    Returns `nothing` if `config.with_coherent == false`.
+"""
+function precompute_coherent_unitary_terms(
+    jumps::AbstractVector{<:JumpOp},
+    hamiltonian::HamHam,
+    config::ThermalizeConfig,
+    precomputed_data;
+    trotter::Union{Nothing, TrottTrott}=nothing,
+    delta_scale::Float64 = 1.0  # for randomized channels
+    )::Union{Nothing, Vector{Matrix{ComplexF64}}}
+
+    config.with_coherent || return nothing
+
+    delta = delta_scale * config.delta
+    U_terms = Vector{Matrix{ComplexF64}}(undef, length(jumps))
+
+    if config.domain isa TimeDomain
+        (; b_minus, b_plus, gamma_norm_factor) = precomputed_data
+        @inbounds for (k, jump) in pairs(jumps)
+            B = B_time(jump, hamiltonian, b_minus, b_plus, config.t0, config.beta, config.sigma)
+            rmul!(B, gamma_norm_factor)
+            U_terms[k] = exp(-1im * delta * Hermitian(B))
+        end
+
+    elseif config.domain isa TrotterDomain
+        (; b_minus, b_plus, gamma_norm_factor) = precomputed_data
+        @assert trotter !== nothing
+        @inbounds for (k, jump) in pairs(jumps)
+            B = B_trotter(jump, trotter, b_minus, b_plus, config.beta, config.sigma)
+            rmul!(B, gamma_norm_factor)
+            U_terms[k] = exp(-1im * delta * Hermitian(B))
+        end
+
+    else
+        # BohrDomain / EnergyDomain
+        (; gamma_norm_factor) = precomputed_data
+        @inbounds for (k, jump) in pairs(jumps)
+            B = coherent_bohr(hamiltonian, jump, config)
+            rmul!(B, gamma_norm_factor)
+            U_terms[k] = exp(-1im * delta * Hermitian(B))
+        end
+    end
+    return U_terms
+end
+
 # (3.1) and Proposition III.1
 # Has to be on a symmetric time domain, otherwise it can't be Hermitian.
 function B_time(jump::JumpOp, hamiltonian::HamHam, b_minus::Dict{Float64, ComplexF64}, 

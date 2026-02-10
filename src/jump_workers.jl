@@ -1,27 +1,34 @@
 #* Liouvillian (vectorized) jump contributions
 #TODO: use thread caches
-#TODO: For threads we use 1 lindbladian only and thus jump_contributions!()
 
+"""Accumulate the Liouvillian contribution of a single jump operator in-place.
+
+This avoids allocating a full `dim^2 × dim^2` matrix per jump. Call with a
+preallocated `L_target` (dense) and a `LindbladianWorkspace`.
+
+If `config.with_coherent==true`, pass `coherent_term` already scaled by
+`gamma_norm_factor` to avoid modifying cached matrices.
 """
-"""
-function jump_contribution(::BohrDomain, 
-    jump::JumpOp, 
-    hamiltonian::HamHam, 
+function jump_contribution!(
+    L_target::AbstractMatrix{ComplexF64},
+    ::BohrDomain,
+    jump::JumpOp,
+    hamiltonian::HamHam,
     config::LiouvConfig,
-    precomputed_data)
-
+    precomputed_data,
+    ws::LindbladianWorkspace;
+    coherent_term::Union{Nothing, AbstractMatrix{ComplexF64}} = nothing,
+    )
     dim = size(hamiltonian.data, 1)
     unique_freqs = keys(hamiltonian.bohr_dict)
     (; alpha, gamma_norm_factor) = precomputed_data
 
-    liouv_for_jump = zeros(ComplexF64, dim^2, dim^2)
-    if config.with_coherent 
-        coherent_term = coherent_bohr(hamiltonian, jump, config)
-        rmul!(coherent_term, gamma_norm_factor) 
-        vectorize_liouvillian_coherent!(liouv_for_jump, coherent_term)
+    B = coherent_term
+    if B !== nothing
+        vectorize_liouvillian_coherent!(L_target, B, ws)
     end
 
-    alpha_A_nu1 = zeros(ComplexF64, dim, dim)
+    alpha_A_nu1 = ws.jump_tmp
     for nu_2 in unique_freqs
         @. alpha_A_nu1 = alpha(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
 
@@ -29,122 +36,297 @@ function jump_contribution(::BohrDomain,
         A_nu_2_vals = view(jump.in_eigenbasis, indices)
 
         # swapped for dagger
-        rows_dag = getindex.(indices, 2) 
+        rows_dag = getindex.(indices, 2)
         cols_dag = getindex.(indices, 1)
 
         A_nu_2_dag = sparse(rows_dag, cols_dag, conj.(A_nu_2_vals), dim, dim)
 
-        vectorize_liouv_diss_and_add!(liouv_for_jump, alpha_A_nu1, A_nu_2_dag, gamma_norm_factor)
+        vectorize_liouv_diss_and_add!(L_target, alpha_A_nu1, A_nu_2_dag, gamma_norm_factor, ws)
     end
-
-    return liouv_for_jump
+    return L_target
 end
 
-function jump_contribution(::EnergyDomain, 
-    jump::JumpOp, 
-    hamiltonian::HamHam, 
-    config::LiouvConfig, 
-    precomputed_data)
+function jump_contribution!(
+    L_target::AbstractMatrix{ComplexF64},
+    ::EnergyDomain,
+    jump::JumpOp,
+    hamiltonian::HamHam,
+    config::LiouvConfig,
+    precomputed_data,
+    ws::LindbladianWorkspace;
+    coherent_term::Union{Nothing, AbstractMatrix{ComplexF64}} = nothing,
+    )
 
-    dim = size(hamiltonian.data, 1)
-    (;transition, gamma_norm_factor, energy_labels) = precomputed_data
+    (; transition, gamma_norm_factor, energy_labels) = precomputed_data
 
-    liouv_for_jump = zeros(ComplexF64, dim^2, dim^2)
-    if config.with_coherent 
-        coherent_term = coherent_bohr(hamiltonian, jump, config) 
-        rmul!(coherent_term, gamma_norm_factor)
-        vectorize_liouvillian_coherent!(liouv_for_jump, coherent_term)
+    B = coherent_term
+    if B !== nothing
+        vectorize_liouvillian_coherent!(L_target, B, ws)
     end
 
-    jump_oft = zeros(ComplexF64, dim, dim)
-    prefactor = (config.w0 / (config.sigma * sqrt(2 * pi))) * gamma_norm_factor # w0, OFT norm^2, Fourier, norm factor
+    jump_oft = ws.jump_tmp
+    prefactor = (config.w0 / (config.sigma * sqrt(2 * pi))) * gamma_norm_factor
 
-    energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
-    for w in energies
-        oft!(jump_oft, jump, w, hamiltonian, config.sigma) # subnorm = t0 * sqrt(sigma (sqrt(2 / pi)) / (2 * pi))
-        scalar_w = prefactor * transition(w)
-
-        vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft, scalar_w)
-        
-        if jump.hermitian && w > 1e-12
-            scalar_negative_w = prefactor * transition(-w)
-            vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft', scalar_negative_w)
+    if jump.hermitian
+        for w_raw in energy_labels
+            # iterate only half-grid (w<=0) and mirror manually
+            w_raw > 1e-12 && continue
+            w = abs(w_raw)
+            oft!(jump_oft, jump, w, hamiltonian, config.sigma)
+            scalar_w = prefactor * transition(w)
+            vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
+            if w > 1e-12
+                scalar_negative_w = prefactor * transition(-w)
+                vectorize_liouv_diss_and_add!(L_target, jump_oft', scalar_negative_w, ws)
+            end
+        end
+    else
+        for w in energy_labels
+            oft!(jump_oft, jump, w, hamiltonian, config.sigma)
+            scalar_w = prefactor * transition(w)
+            vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
         end
     end
-    return liouv_for_jump
+
+    return L_target
 end
 
-function jump_contribution(::TimeDomain, 
-    jump::JumpOp, 
-    hamiltonian::HamHam, 
-    config::LiouvConfig, 
-    precomputed_data)
+function jump_contribution!(
+    L_target::AbstractMatrix{ComplexF64},
+    ::TimeDomain,
+    jump::JumpOp,
+    hamiltonian::HamHam,
+    config::LiouvConfig,
+    precomputed_data,
+    ws::LindbladianWorkspace;
+    coherent_term::Union{Nothing, AbstractMatrix{ComplexF64}} = nothing,
+    )
 
-    dim = size(hamiltonian.data, 1)
     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors, b_minus, b_plus) = precomputed_data
 
-    liouv_for_jump = zeros(ComplexF64, dim^2, dim^2)
-    if config.with_coherent 
-        coherent_term = B_time(jump, hamiltonian, b_minus, b_plus, config.t0, config.beta, config.sigma)
-        rmul!(coherent_term, gamma_norm_factor) 
-        vectorize_liouvillian_coherent!(liouv_for_jump, coherent_term)
+    B = coherent_term
+    if B !== nothing
+        vectorize_liouvillian_coherent!(L_target, B, ws)
     end
 
-    jump_oft = zeros(ComplexF64, dim, dim)
+    jump_oft = ws.jump_tmp
     prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
 
-    energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
-    for w in energies
-        nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
-        @. jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
+    if jump.hermitian
+        for w_raw in energy_labels
+            w_raw > 1e-12 && continue
+            w = abs(w_raw)
+            nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
+            @. jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
 
-        scalar_w = prefactor * transition(w)
-
-        vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft, scalar_w)
-
-        if jump.hermitian && w > 1e-12
-            scalar_negative_w = prefactor * transition(-w)
-            vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft', scalar_negative_w)
+            scalar_w = prefactor * transition(w)
+            vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
+            if w > 1e-12
+                scalar_negative_w = prefactor * transition(-w)
+                vectorize_liouv_diss_and_add!(L_target, jump_oft', scalar_negative_w, ws)
+            end
+        end
+    else
+        for w in energy_labels
+            nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
+            @. jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
+            scalar_w = prefactor * transition(w)
+            vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
         end
     end
-    return liouv_for_jump
+
+    return L_target
 end
 
-function jump_contribution(::TrotterDomain, 
-    jump::JumpOp, 
-    trotter::TrottTrott, 
-    config::LiouvConfig, 
-    precomputed_data)
-
-    dim = size(trotter.eigvecs, 1)
+function jump_contribution!(
+    L_target::AbstractMatrix{ComplexF64},
+    ::TrotterDomain,
+    jump::JumpOp,
+    trotter::TrottTrott,
+    config::LiouvConfig,
+    precomputed_data,
+    ws::LindbladianWorkspace;
+    coherent_term::Union{Nothing, AbstractMatrix{ComplexF64}} = nothing,
+)
     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors, b_minus, b_plus) = precomputed_data
 
-    liouv_for_jump = zeros(ComplexF64, dim^2, dim^2)
-    if config.with_coherent 
-        coherent_term = B_trotter(jump, trotter, b_minus, b_plus, config.beta, config.sigma)
-        rmul!(coherent_term, gamma_norm_factor) 
-        vectorize_liouvillian_coherent!(liouv_for_jump, coherent_term)
+    B = coherent_term
+    if B !== nothing
+        vectorize_liouvillian_coherent!(L_target, B, ws)
     end
 
-    jump_oft = zeros(ComplexF64, dim, dim)
-    prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor # time ints t0^2, energy int w0, OFT time norm^2, Fourier
-    
-    energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
-    for w in energies
-        nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
-        @. jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
+    jump_oft = ws.jump_tmp
+    prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
 
-        scalar_w = prefactor * transition(w)
+    if jump.hermitian
+        for w_raw in energy_labels
+            w_raw > 1e-12 && continue
+            w = abs(w_raw)
+            nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
+            @. jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
 
-        vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft, scalar_w)
-
-        if jump.hermitian && w > 1e-12
-            scalar_negative_w = prefactor * transition(-w)
-            vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft', scalar_negative_w)
+            scalar_w = prefactor * transition(w)
+            vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
+            if w > 1e-12
+                scalar_negative_w = prefactor * transition(-w)
+                vectorize_liouv_diss_and_add!(L_target, jump_oft', scalar_negative_w, ws)
+            end
+        end
+    else
+        for w in energy_labels
+            nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
+            @. jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
+            scalar_w = prefactor * transition(w)
+            vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
         end
     end
-    return liouv_for_jump
+
+    return L_target
 end
+
+"""
+"""
+# function jump_contribution(::BohrDomain, 
+#     jump::JumpOp, 
+#     hamiltonian::HamHam, 
+#     config::LiouvConfig,
+#     precomputed_data)
+
+#     dim = size(hamiltonian.data, 1)
+#     unique_freqs = keys(hamiltonian.bohr_dict)
+#     (; alpha, gamma_norm_factor) = precomputed_data
+
+#     liouv_for_jump = zeros(ComplexF64, dim^2, dim^2)
+#     if config.with_coherent 
+#         coherent_term = coherent_bohr(hamiltonian, jump, config)
+#         rmul!(coherent_term, gamma_norm_factor) 
+#         vectorize_liouvillian_coherent!(liouv_for_jump, coherent_term)
+#     end
+
+#     alpha_A_nu1 = zeros(ComplexF64, dim, dim)
+#     for nu_2 in unique_freqs
+#         @. alpha_A_nu1 = alpha(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
+
+#         indices = hamiltonian.bohr_dict[nu_2]
+#         A_nu_2_vals = view(jump.in_eigenbasis, indices)
+
+#         # swapped for dagger
+#         rows_dag = getindex.(indices, 2) 
+#         cols_dag = getindex.(indices, 1)
+
+#         A_nu_2_dag = sparse(rows_dag, cols_dag, conj.(A_nu_2_vals), dim, dim)
+
+#         vectorize_liouv_diss_and_add!(liouv_for_jump, alpha_A_nu1, A_nu_2_dag, gamma_norm_factor)
+#     end
+
+#     return liouv_for_jump
+# end
+
+# function jump_contribution(::EnergyDomain, 
+#     jump::JumpOp, 
+#     hamiltonian::HamHam, 
+#     config::LiouvConfig, 
+#     precomputed_data)
+
+#     dim = size(hamiltonian.data, 1)
+#     (;transition, gamma_norm_factor, energy_labels) = precomputed_data
+
+#     liouv_for_jump = zeros(ComplexF64, dim^2, dim^2)
+#     if config.with_coherent 
+#         coherent_term = coherent_bohr(hamiltonian, jump, config) 
+#         rmul!(coherent_term, gamma_norm_factor)
+#         vectorize_liouvillian_coherent!(liouv_for_jump, coherent_term)
+#     end
+
+#     jump_oft = zeros(ComplexF64, dim, dim)
+#     prefactor = (config.w0 / (config.sigma * sqrt(2 * pi))) * gamma_norm_factor # w0, OFT norm^2, Fourier, norm factor
+
+#     energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
+#     for w in energies
+#         oft!(jump_oft, jump, w, hamiltonian, config.sigma) # subnorm = t0 * sqrt(sigma (sqrt(2 / pi)) / (2 * pi))
+#         scalar_w = prefactor * transition(w)
+
+#         vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft, scalar_w)
+        
+#         if jump.hermitian && w > 1e-12
+#             scalar_negative_w = prefactor * transition(-w)
+#             vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft', scalar_negative_w)
+#         end
+#     end
+#     return liouv_for_jump
+# end
+
+# function jump_contribution(::TimeDomain, 
+#     jump::JumpOp, 
+#     hamiltonian::HamHam, 
+#     config::LiouvConfig, 
+#     precomputed_data)
+
+#     dim = size(hamiltonian.data, 1)
+#     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors, b_minus, b_plus) = precomputed_data
+
+#     liouv_for_jump = zeros(ComplexF64, dim^2, dim^2)
+#     if config.with_coherent 
+#         coherent_term = B_time(jump, hamiltonian, b_minus, b_plus, config.t0, config.beta, config.sigma)
+#         rmul!(coherent_term, gamma_norm_factor) 
+#         vectorize_liouvillian_coherent!(liouv_for_jump, coherent_term)
+#     end
+
+#     jump_oft = zeros(ComplexF64, dim, dim)
+#     prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
+
+#     energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
+#     for w in energies
+#         nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
+#         @. jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
+
+#         scalar_w = prefactor * transition(w)
+
+#         vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft, scalar_w)
+
+#         if jump.hermitian && w > 1e-12
+#             scalar_negative_w = prefactor * transition(-w)
+#             vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft', scalar_negative_w)
+#         end
+#     end
+#     return liouv_for_jump
+# end
+
+# function jump_contribution(::TrotterDomain, 
+#     jump::JumpOp, 
+#     trotter::TrottTrott, 
+#     config::LiouvConfig, 
+#     precomputed_data)
+
+#     dim = size(trotter.eigvecs, 1)
+#     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors, b_minus, b_plus) = precomputed_data
+
+#     liouv_for_jump = zeros(ComplexF64, dim^2, dim^2)
+#     if config.with_coherent 
+#         coherent_term = B_trotter(jump, trotter, b_minus, b_plus, config.beta, config.sigma)
+#         rmul!(coherent_term, gamma_norm_factor) 
+#         vectorize_liouvillian_coherent!(liouv_for_jump, coherent_term)
+#     end
+
+#     jump_oft = zeros(ComplexF64, dim, dim)
+#     prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor # time ints t0^2, energy int w0, OFT time norm^2, Fourier
+    
+#     energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
+#     for w in energies
+#         nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
+#         @. jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
+
+#         scalar_w = prefactor * transition(w)
+
+#         vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft, scalar_w)
+
+#         if jump.hermitian && w > 1e-12
+#             scalar_negative_w = prefactor * transition(-w)
+#             vectorize_liouv_diss_and_add!(liouv_for_jump, jump_oft', scalar_negative_w)
+#         end
+#     end
+#     return liouv_for_jump
+# end
 
 #* Algorithmic jump contributions -----
 function jump_contribution(::BohrDomain, 
@@ -612,186 +794,6 @@ function apply_lindbladian_dagger!(
     
     return target
 end
-
-#TODO: Modernize these, but only after thread caches implementation above
-#* In-place Lindbladian action jump-by-jump
-function jump_contribution!(
-    target::AbstractMatrix{ComplexF64}, 
-    ::BohrDomain, 
-    rho::AbstractMatrix{ComplexF64}, 
-    jump::JumpOp, 
-    hamiltonian::HamHam,
-    config::LiouvConfig,
-    precomputed_data,
-    caches  # (jump_caches, oft_caches)
-    )
-
-    (; jump_caches, oft_caches) = caches
-
-    alpha = pick_alpha(config)
-    unique_freqs = keys(hamiltonian.bohr_dict)
-
-    # Coherent part
-    if config.with_coherent
-        coherent_term = coherent_bohr(hamiltonian, jump, config)
-        mul!(target, coherent_term, rho, -1im, 1.0)
-        mul!(target, rho, coherent_term, 1im, 1.0)
-    end
-
-    # Dissipative part
-    # mul!(C, A, B, α, β) computes C = α*A*B + β*C
-    for nu_2 in unique_freqs
-        @. jump_caches.jump_1 = alpha(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
-
-        A_nu_2::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
-        indices = hamiltonian.bohr_dict[nu_2]
-        A_nu_2[indices] .= jump.in_eigenbasis[indices]
-
-        mul!(jump_caches.jump_2_dag_jump_1, A_nu_2', jump_caches.jump_1)
-
-        # Term 1
-        mul!(jump_caches.temp1, rho, A_nu_2')
-        mul!(target, jump_caches.jump_1, jump_caches.temp1, 1.0, 1.0)
-
-        # Term 2
-        mul!(target, jump_caches.jump_2_dag_jump_1, rho, -0.5, 1.0)
-
-        # Term 3
-        mul!(target, rho, jump_caches.jump_2_dag_jump_1, -0.5, 1.0)
-    end
-        
-    return target
-end
-
-function jump_contribution!(
-    target::AbstractMatrix{ComplexF64}, 
-    ::EnergyDomain, 
-    input::AbstractMatrix{ComplexF64}, 
-    jump::JumpOp, 
-    hamiltonian::HamHam,
-    config::LiouvConfig,
-    precomputed_data,
-    caches
-    )
-
-    (; w0, t0, transition, f_minus, f_plus, energy_labels, oft_time_labels) = precomputed_data
-    (; jump_caches, oft_caches) = caches
-
-    # Coherent part
-    if config.with_coherent
-        coherent_term = coherent_bohr(hamiltonian, jump, config)
-        mul!(target, coherent_term, input, -1im, 1.0)
-        mul!(target, input, coherent_term, 1im, 1.0)
-    end
-
-    # Dissipative part
-    prefactor = w0 / (config.sigma * sqrt(2 * pi))
-    # mul!(C, A, B, α, β) computes C = α*A*B + β*C
-    for w in energy_labels
-        oft!(jump_caches.jump_1, jump, w, hamiltonian, config.sigma)
-        mul!(jump_caches.jump_2_dag_jump_1, jump_caches.jump_1', jump_caches.jump_1)
-
-        loop_factor = transition(w) * prefactor
-        # Term 1
-        mul!(jump.temp1, input, jump_caches.jump_1')  # rho * A'
-        mul!(target, jump_caches.jump_1, jump.temp1, loop_factor, 1.0)  # L += prefactor * A * rho * A'
-
-        # Term 2
-        mul!(target, jump_caches.jump_2_dag_jump_1, input, -0.5 * loop_factor, 1.0)
-        
-        # Term 3
-        mul!(target, input, jump_caches.jump_2_dag_jump_1, -0.5 * loop_factor, 1.0)
-    end
-    
-    return target
-end
-
-function jump_contribution!(
-    target::AbstractMatrix{ComplexF64}, 
-    ::TimeDomain, 
-    input::AbstractMatrix{ComplexF64}, 
-    jump::JumpOp, 
-    hamiltonian::HamHam,
-    config::LiouvConfig,
-    precomputed_data,
-    caches
-    )
-
-    (; w0, t0, transition, f_minus, f_plus, energy_labels, oft_time_labels) = precomputed_data
-    (; jump_caches, oft_caches) = caches
-
-    # Coherent part
-    if config.with_coherent
-        coherent_term = coherent_term_time(jump, hamiltonian, f_minus, f_plus, t0)
-        mul!(target, coherent_term, input, -1im, 1.0)
-        mul!(target, input, coherent_term, 1im, 1.0)
-    end
-
-    prefactor = w0 * t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi)
-    for w in energy_labels
-        time_oft!(jump_caches.jump_1, oft_caches, jump, w, hamiltonian, oft_time_labels, config.sigma)
-        
-        # jump_dag_jump = jump_oft' * jump_oft
-        mul!(jump_caches.jump_2_dag_jump_1, jump_caches.jump_1', jump_caches.jump_1)
-
-        loop_factor = transition(w) * prefactor
-        # Term 1
-        mul!(jump_caches.temp1, input, jump_caches.jump_1')  # rho * A'
-        mul!(target, jump_caches.jump_1, jump_caches.temp1, loop_factor, 1.0)  # L += prefactor * A * rho * A'
-
-        # Term 2
-        mul!(target, jump_caches.jump_2_dag_jump_1, input, -0.5 * loop_factor, 1.0)
-
-        # Term 3
-        mul!(target, input, jump_caches.jump_2_dag_jump_1, -0.5 * loop_factor, 1.0)
-    end
-    return target
-end
-
-function jump_contribution!(
-    target::AbstractMatrix{ComplexF64}, 
-    ::TrotterDomain, 
-    input::AbstractMatrix{ComplexF64}, 
-    jump::JumpOp, 
-    trotter::TrottTrott,
-    config::LiouvConfig,
-    precomputed_data,
-    caches
-    )
-
-    (; w0, t0, transition, f_minus, f_plus, energy_labels, oft_time_labels) = precomputed_data
-    (; jump_caches, oft_caches) = caches
-
-    # Coherent part
-    if config.with_coherent
-        coherent_term = coherent_term_trotter(jump, trotter, f_minus, f_plus)
-        mul!(target, coherent_term, input, -1im, 1.0)
-        mul!(target, input, coherent_term, 1im, 1.0)
-    end
-
-    prefactor = w0 * t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi)
-    for w in energy_labels
-        trotter_oft!(jump_caches.jump_1, oft_caches, jump, w, trotter, oft_time_labels, config.sigma)
-        
-        # jump_dag_jump = jump_oft' * jump_oft
-        mul!(jump_caches.jump_2_dag_jump_1, jump_caches.jump_1', jump_caches.jump_1)
-
-        loop_factor = transition(w) * prefactor
-        # Term 1
-        mul!(jump_caches.temp1, input, jump_caches.jump_1')  # rho * A'
-        mul!(target, jump_caches.jump_1, jump_caches.temp1, loop_factor, 1.0)  # L += prefactor * A * rho * A'
-
-        # Term 2
-        mul!(target, jump_caches.jump_2_dag_jump_1, input, -0.5 * loop_factor, 1.0)
-
-        # Term 3
-        mul!(target, input, jump_caches.jump_2_dag_jump_1, -0.5 * loop_factor, 1.0)
-    end
-
-    return target
-end
-
-
 
 #* Slow and old
 # function jump_contribution_slow(::TrotterDomain, jump::JumpOp, trotter::TrottTrott, config::LiouvConfig, 

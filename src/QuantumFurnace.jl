@@ -25,10 +25,13 @@ using FINUFFT
 export LiouvConfig, ThermalizeConfig, HamHam, TrottTrott, HotAlgorithmResults, HotSpectralResults, JumpOp,
        BohrDomain, EnergyDomain, TimeDomain, TrotterDomain, LindbladWorkspace, KrausFramework, LSIFramework,
        OFTCaches, NUFFTPrefactors
-export run_liouvillian, run_thermalization, construct_liouvillian, B_time, B_trotter, coherent_bohr
+export run_lindbladian, run_thermalization, construct_lindbladian, B_time, B_trotter, coherent_bohr
 export generate_filename, validate_config!, create_trotter, compute_trotter_error, gibbs_state, gibbs_state_in_eigen,
-       create_bohr_dict, pad_term, pick_transition, create_hamham, find_ideal_heisenberg, create_alpha, expm_pauli_padded, 
-       finalize_hamham, load_hamiltonian, oft!, prepare_oft_nufft_prefactors, prefactor_view
+       create_bohr_dict, pad_term, pick_transition, create_hamham, find_ideal_heisenberg, create_alpha, 
+       expm_pauli_padded, finalize_hamham, load_hamiltonian, oft!, prepare_oft_nufft_prefactors, prefactor_view,
+       precompute_coherent_terms, precompute_coherent_total_B
+# Approx GNS
+export pick_transition_gns, pick_alpha_gns, create_alpha_gns
 # Quantum Trajectory
 export krausframework, step_along_the_trajectory!, evolve_along_trajectory, construct_gksl_lindbladian,
        apply_jump_contribution!, apply_lindbladian_dagger!, apply_lindbladian!, precompute_B, precompute_R, 

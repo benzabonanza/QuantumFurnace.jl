@@ -19,24 +19,36 @@ function main()
     dim = 2^num_qubits
     beta = 10.  # 5, 10, 30
     sigma = 1 / beta
+    w_gamma = 1 / beta
+    sigma_gamma = 1 / beta
+
+    #! change from 1 / beta
+    # sigma = 0.1 / beta  # w0 = 0.005, for broad enough time integrals in OFTs
+    # w_gamma = 1 / beta
+    # sigma_gamma = sqrt(2 * w_gamma / beta - sigma^2)
 
     # Smooth Metro
-    a = beta / 30. # a = beta / 50.
-    b = 0.4  # b = 0.5
-    eta = 0.0  # eta = 0.2
+    a = 1 / 10
+    b = 0.4
+    eta = 0.0 
+
+    # Kinky Metro 
+    # a = 0.0
+    # b = 0.0
+    # eta = 0.002
 
     with_coherent = true
     with_linear_combination = true
-    domain = TrotterDomain()
-    num_energy_bits = 12
+    domain = EnergyDomain()
+    num_energy_bits = 12 # 11
     w0 = 0.05
     max_E = w0 * 2^num_energy_bits / 2
-    t0 = 2pi / (2^num_energy_bits * w0)
+    t0 = 2pi / (2^num_energy_bits * w0)  # Max time evolution pi / w0
     num_trotter_steps_per_t0 = 10
 
     # Thermalizing configs:
-    mixing_time = 500.0 * 3 * num_qubits
-    delta = 0.3
+    mixing_time = 100.0 * 3 * num_qubits
+    delta = 0.005
 
     config = ThermalizeConfig(
         num_qubits = num_qubits, 
@@ -104,8 +116,7 @@ function main()
     end
 
     #* Thermalization
-    # alg_results = @time run_thermalization(jumps, config, initial_dm, hamiltonian; trotter=trotter)
-    alg_results = @time run_thermalization_kraus(jumps, config, initial_dm, hamiltonian; trotter=trotter)
+    alg_results = @time run_thermalization(jumps, config, initial_dm, hamiltonian; trotter=trotter)
 
     @printf("\n Last distance to Gibbs: %s\n", alg_results.distances_to_gibbs[end])
     @printf("Number of steps taken: %s\n", length(alg_results.time_steps))

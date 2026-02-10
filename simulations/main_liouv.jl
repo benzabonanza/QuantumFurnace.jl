@@ -22,8 +22,8 @@ function main()
         w_gamma = 1 / beta
         sigma_gamma = 1 / beta
 
-        #! change from 1 / beta
-        # sigma = 0.1 / beta  # w0 = 0.005, for broad enough time integrals in OFTs
+        # change from 1 / beta:
+        # sigma = 0.6 / beta  # w0 = 0.005, for broad enough time integrals in OFTs
         # w_gamma = 1 / beta
         # sigma_gamma = sqrt(2 * w_gamma / beta - sigma^2)
 
@@ -40,8 +40,8 @@ function main()
         with_coherent = true
         with_linear_combination = true
         domain = TrotterDomain()
-        num_energy_bits = 15 # 11
-        w0 = 0.01
+        num_energy_bits = 12 # 11
+        w0 = 0.05
         max_E = w0 * 2^num_energy_bits / 2
         t0 = 2pi / (2^num_energy_bits * w0)  # Max time evolution pi / w0
         num_trotter_steps_per_t0 = 10
@@ -110,7 +110,7 @@ function main()
         @printf("Jumps are created.\n")
 
         #* Liouvillian
-        liouv_result = @time run_liouvillian(jumps, config, hamiltonian; trotter = trotter)
+        liouv_result = @time run_lindbladian(jumps, config, hamiltonian; trotter = trotter)
         @printf("Distance to Gibbs: %s\n", norm(liouv_result.fixed_point - hamiltonian.gibbs))
         @printf("Distance to Gibbs (TROTTER): %s\n", norm(liouv_result.fixed_point - gibbs_in_trotter))
         @printf("Spectral gap: %s\n", abs(real(liouv_result.spectral_gap)))
@@ -119,7 +119,7 @@ function main()
         # opt_delta =  2 / (abs(liouv_eigvals[2]) + abs(liouv_eigvals[end]))
         # stability_barrier = 2 / (abs(liouv_eigvals[end]))
 
-        # liouv_result_energy = run_liouvillian(jumps, energy_config, hamiltonian; trotter = trotter)
+        # liouv_result_energy = run_lindbladian(jumps, energy_config, hamiltonian; trotter = trotter)
         # @printf("Distance to Gibbs (ENERGY): %s\n", norm(liouv_result_energy.fixed_point - hamiltonian.gibbs))
         # norm(liouv_result_energy.data - liouv_result.data)
 
@@ -149,9 +149,9 @@ end
 # jld_data = JLD2.load(full_path)
 # loaded_results = jld_data["results"]
 
-# liouv_energy = construct_liouvillian(jumps, configs[2]; hamiltonian=hamiltonian)
-# liouv_time = construct_liouvillian(jumps, configs[3]; hamiltonian=hamiltonian)
-# liouv_trotter = construct_liouvillian(jumps, configs[1]; trotter=trotter)
+# liouv_energy = construct_lindbladian(jumps, configs[2]; hamiltonian=hamiltonian)
+# liouv_time = construct_lindbladian(jumps, configs[3]; hamiltonian=hamiltonian)
+# liouv_trotter = construct_lindbladian(jumps, configs[1]; trotter=trotter)
 
 # norm(liouv_bohr - liouv_time)
 # norm(liouv_trotter - liouv_time)

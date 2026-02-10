@@ -1,10 +1,10 @@
-function run_liouvillian(jumps::Vector{JumpOp}, config::LiouvConfig, hamiltonian::HamHam; 
+function run_lindbladian(jumps::Vector{JumpOp}, config::LiouvConfig, hamiltonian::HamHam; 
     trotter::Union{TrottTrott, Nothing}=nothing)
 
     validate_config!(config)
     print_press(config)
 
-    liouv = construct_liouvillian(jumps, config, hamiltonian, trotter=trotter)
+    liouv = construct_lindbladian(jumps, config, hamiltonian, trotter=trotter)
     @printf("Done.\n")
 
     # Full eigen
@@ -44,7 +44,7 @@ function run_liouvillian(jumps::Vector{JumpOp}, config::LiouvConfig, hamiltonian
     return result
 end
 
-function construct_liouvillian(jumps::Vector{JumpOp}, config::LiouvConfig, hamiltonian::HamHam;
+function construct_lindbladian(jumps::Vector{JumpOp}, config::LiouvConfig, hamiltonian::HamHam;
     trotter::Union{TrottTrott, Nothing}=nothing)
     
     domain_name = replace(string(typeof(config.domain)), "Domain" => "")
@@ -60,70 +60,148 @@ function construct_liouvillian(jumps::Vector{JumpOp}, config::LiouvConfig, hamil
     precomputed_data = precompute_data(config.domain, config, ham_or_trott)
 
     #! uncomment for multi-threads
-    # total_liouv = @distributed (+) for jump in jumps
+    # total_lindbladian = @distributed (+) for jump in jumps
     #     jump_contribution(config.domain, jump, ham_or_trott, config, precomputed_data)
     # end
 
     dim = size(hamiltonian.data, 1)
-    total_liouv = zeros(ComplexF64, dim^2, dim^2)
-    for jump in jumps
-        total_liouv .+= jump_contribution(config.domain, jump, ham_or_trott, config, precomputed_data)
+    total_lindbladian = zeros(ComplexF64, dim^2, dim^2)
+    ws = LindbladianWorkspace(dim)
+
+    # Precompute all B's for the A's.
+    Btot = precompute_coherent_total_B(jumps, hamiltonian, config, precomputed_data; trotter=trotter)
+    if Btot !== nothing
+        vectorize_liouvillian_coherent!(total_lindbladian, Btot, ws)
     end
 
-    return total_liouv
+    # Accumulate Liouvillian in-place (no per-jump dim^2×dim^2 allocations).
+    for (k, jump) in pairs(jumps)
+        jump_contribution!(total_lindbladian, config.domain, jump, ham_or_trott, config, precomputed_data, ws; 
+            coherent_term=nothing)
+    end
+
+    return total_lindbladian
 end
 
-function run_thermalization(jumps::Vector{JumpOp}, config::ThermalizeConfig, evolving_dm::Matrix{ComplexF64},
+function run_thermalization(
+    jumps::Vector{JumpOp},
+    config::ThermalizeConfig,
+    evolving_dm::Matrix{ComplexF64},
     hamiltonian::HamHam;
-    trotter::Union{TrottTrott, Nothing}=nothing)
+    trotter::Union{TrottTrott, Nothing}=nothing,
+    rng::AbstractRNG = Random.default_rng(),
+    rescale_by_inv_prob::Bool = false,
+    )
 
     dim = size(hamiltonian.data, 1)
     validate_config!(config)
     print_press(config)
-    domain_name = replace(string(typeof(config.domain)), "Domain" => "")
-    println("Thermalizing ($(domain_name))")
 
     if config.domain isa TrotterDomain
-        @assert trotter !== nothing "A Trotter object must be provided for the TrotterDomain"
+        @assert trotter !== nothing
         ham_or_trott = trotter
-        gibbs = Hermitian(trotter.eigvecs' * hamiltonian.eigvecs * hamiltonian.gibbs * hamiltonian.eigvecs' * trotter.eigvecs)
+        gibbs = Hermitian(trotter.eigvecs' * hamiltonian.eigvecs * hamiltonian.gibbs *
+                          hamiltonian.eigvecs' * trotter.eigvecs)
     else
         ham_or_trott = hamiltonian
         gibbs = hamiltonian.gibbs
     end
 
-    num_liouv_steps = Int(ceil(config.mixing_time / config.delta))
-
-    # Energy, Time labels; B functions; transition
     precomputed_data = precompute_data(config.domain, config, ham_or_trott)
+
+    # precompute coherent U_B = exp(-i delta B(jump)) per jump to avoid allocations
+    p_jump = 1.0 / length(jumps)
+    coherent_unitaries = precompute_coherent_unitary_terms(jumps, hamiltonian, config, precomputed_data; 
+        trotter=trotter, delta_scale = rescale_by_inv_prob ? (1.0 / p_jump) : 1.0)
+
+    scratch = KrausScratch(ComplexF64, dim)
+
+    num_steps = Int(ceil(config.mixing_time / config.delta))
 
     convergence_cutoff = 1e-5
     distances_to_gibbs = [trace_distance_h(Hermitian(evolving_dm), gibbs)]
-    for step in 1:num_liouv_steps
-        update_dm = zeros(ComplexF64, dim, dim)
 
-        update_dm = @distributed (+) for jump in jumps  # Does this wait until its done and then continue?
-            jump_contribution(config.domain, evolving_dm, jump, ham_or_trott, config, precomputed_data)
-        end
+    for step in 1:num_steps
+        idx = rand(rng, 1:length(jumps))
+        jump = jumps[idx]
 
-        # for jump in jumps  # Does this wait until its done and then continue?
-        #     update_dm .+= jump_contribution(config.domain, evolving_dm, jump, ham_or_trott, config, precomputed_data)
-        # end
-
-        evolving_dm .+= update_dm
+        apply_kraus_step!(config.domain,
+            evolving_dm,
+            jump,
+            ham_or_trott,
+            config,
+            precomputed_data,
+            scratch;
+            coherent_unitary_cache = (coherent_unitaries === nothing ? nothing : coherent_unitaries[idx]),
+            jump_prob = p_jump,
+            rescale_by_inv_prob = rescale_by_inv_prob,
+            )
 
         dist = trace_distance_h(Hermitian(evolving_dm), gibbs)
         push!(distances_to_gibbs, dist)
         @printf("Dist to Gibbs: %s\n", dist)
         if dist < convergence_cutoff
-            num_liouv_steps = step  # Save the actual number of taken steps
+            num_steps = step
             break
         end
     end
-    
-    time_steps = [0.0:config.delta:(num_liouv_steps * config.delta);]
+
+    time_steps = [0.0:config.delta:(num_steps * config.delta);]
     return HotAlgorithmResults(evolving_dm, distances_to_gibbs, time_steps, hamiltonian, trotter, config)
 end
+
+
+# function run_thermalization(jumps::Vector{JumpOp}, config::ThermalizeConfig, evolving_dm::Matrix{ComplexF64},
+#     hamiltonian::HamHam;
+#     trotter::Union{TrottTrott, Nothing}=nothing)
+
+#     dim = size(hamiltonian.data, 1)
+#     validate_config!(config)
+#     print_press(config)
+#     domain_name = replace(string(typeof(config.domain)), "Domain" => "")
+#     println("Thermalizing ($(domain_name))")
+
+#     if config.domain isa TrotterDomain
+#         @assert trotter !== nothing "A Trotter object must be provided for the TrotterDomain"
+#         ham_or_trott = trotter
+#         gibbs = Hermitian(trotter.eigvecs' * hamiltonian.eigvecs * hamiltonian.gibbs * hamiltonian.eigvecs' * trotter.eigvecs)
+#     else
+#         ham_or_trott = hamiltonian
+#         gibbs = hamiltonian.gibbs
+#     end
+
+#     num_liouv_steps = Int(ceil(config.mixing_time / config.delta))
+
+#     # Energy, Time labels; B functions; transition
+#     precomputed_data = precompute_data(config.domain, config, ham_or_trott)
+
+#     convergence_cutoff = 1e-5
+#     distances_to_gibbs = [trace_distance_h(Hermitian(evolving_dm), gibbs)]
+#     for step in 1:num_liouv_steps
+#         update_dm = zeros(ComplexF64, dim, dim)
+
+#         update_dm = @distributed (+) for jump in jumps  # Does this wait until its done and then continue?
+#             jump_contribution(config.domain, evolving_dm, jump, ham_or_trott, config, precomputed_data)
+#         end
+
+#         # for jump in jumps  # Does this wait until its done and then continue?
+#         #     update_dm .+= jump_contribution(config.domain, evolving_dm, jump, ham_or_trott, config, precomputed_data)
+#         # end
+
+#         evolving_dm .+= update_dm
+
+#         dist = trace_distance_h(Hermitian(evolving_dm), gibbs)
+#         push!(distances_to_gibbs, dist)
+#         @printf("Dist to Gibbs: %s\n", dist)
+#         if dist < convergence_cutoff
+#             num_liouv_steps = step  # Save the actual number of taken steps
+#             break
+#         end
+#     end
+    
+#     time_steps = [0.0:config.delta:(num_liouv_steps * config.delta);]
+#     return HotAlgorithmResults(evolving_dm, distances_to_gibbs, time_steps, hamiltonian, trotter, config)
+# end
 
 # function run_thermalization_slow(jumps::Vector{JumpOp}, config::ThermalizeConfig, evolving_dm::Matrix{ComplexF64},
 #     hamiltonian::HamHam;

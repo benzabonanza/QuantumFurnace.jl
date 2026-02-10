@@ -104,6 +104,40 @@ function create_alpha(nu_1::Float64, nu_2::Float64, beta::Float64, sigma::Float6
     return alpha_nu_1
 end
 
+function pick_alpha_gns(config::Union{LiouvConfig, ThermalizeConfig})
+
+    sigma = config.sigma
+    if config.with_linear_combination
+        beta = config.beta
+        a = config.a
+        b = config.b
+        return (nu_1, nu_2) -> create_alpha_gns(nu_1, nu_2, beta, sigma, a, b)
+    else
+        gaussian_parameters = config.gaussian_parameters  # but now β = 2ω_γ / σ_γ^2
+        return (nu_1, nu_2) -> create_alpha_gauss(nu_1, nu_2, sigma, gaussian_parameters)
+    end
+end
+
+"""
+Coming from unshifted γ(ω) in the energy domain, leads to a partially shifted Kossakowski matrix α.
+Difference vs the KMS DB case: |ν1 + ν2| → |ν1 + ν2 + β σ^2 / 2| (and thus not skew symmetric due to the Gaussian filters)
+Also: No f and no b-funcs will be constructed because in this setup there is no fine-tuned B in the Lindbladian.
+"""
+function create_alpha_gns(nu_1::Float64, nu_2::Float64, beta::Float64, sigma::Float64, a::Float64, b::Float64)
+    sqrtA = sqrt(beta * (4 * a + 1) / 4)
+    sqrtB = sqrt(beta / 16) * abs(nu_1 + nu_2 + beta * sigma^2 / 2)
+    C = beta * (nu_1 + nu_2) / 4
+    prefactor = exp(a * beta^2 * sigma^2 / 2) / 2
+    u_min = sqrt(beta * sigma^2 * (1 + b) / 2)
+    z_plus = sqrtA * u_min + sqrtB / u_min
+    z_minus = sqrtA * u_min - sqrtB / u_min
+
+    alpha_nu_1 = (prefactor * exp(-C) * exp(-(nu_1 - nu_2)^2 / (8 * sigma^2)) * exp(- 2 * sqrtA * sqrtB) *
+                    (erfc(z_minus) + exp(4 * sqrtA * sqrtB) * erfc(z_plus)))
+
+    return alpha_nu_1
+end
+
 function create_alpha_gauss(
     nu_1::Float64, 
     nu_2::Float64, 

@@ -33,6 +33,35 @@ struct LindbladianJumpCaches
     end
 end
 
+"""Workspace for building a dense Liouvillian matrix with minimal allocations.
+
+Used by `construct_liouvillian` when accumulating the full vectorized Lindbladian
+(`dim^2 × dim^2`).
+
+Buffers:
+  - `Id`: identity on the system Hilbert space.
+  - `jump_tmp`: generic scratch (e.g. OFT output, alpha-weighted jump).
+  - `jump_conj`: scratch for elementwise conjugate of `jump_tmp`.
+  - `jump_dag_jump`: scratch for `jump_tmp' * jump_tmp`.
+  - `jump2_jump1`: scratch for `jump_2 * jump_1` in mixed (Bohr) note.
+"""
+struct LindbladianWorkspace
+    Id::Matrix{ComplexF64}
+    jump_tmp::Matrix{ComplexF64}
+    jump_conj::Matrix{ComplexF64}
+    jump_dag_jump::Matrix{ComplexF64}
+    jump2_jump1::Matrix{ComplexF64}
+
+    function LindbladianWorkspace(dim::Int)
+        Id = Matrix{ComplexF64}(I, dim, dim)
+        jump_tmp = zeros(ComplexF64, dim, dim)
+        jump_conj = zeros(ComplexF64, dim, dim)
+        jump_dag_jump = zeros(ComplexF64, dim, dim)
+        jump2_jump1 = zeros(ComplexF64, dim, dim)
+        new(Id, jump_tmp, jump_conj, jump_dag_jump, jump2_jump1)
+    end
+end
+
 # Let's keep this structure, and have the "give w0 for desired energy integral error" type of config optimization
 # before the construct_liouvillian function
 """

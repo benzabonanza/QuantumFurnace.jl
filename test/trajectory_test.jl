@@ -134,7 +134,7 @@ psi = @btime evolve_along_trajectory(psi0, fw, total_time)
 
 
 # lindbladian_from_kraus = construct_gksl_lindbladian(B, kraus_jumps)
-# result = run_liouvillian(jumps, config, hamiltonian; trotter=trotter)
+# result = run_lindbladian(jumps, config, hamiltonian; trotter=trotter)
 # norm(lindbladian_from_kraus - result.data)
 # norm(result.fixed_point - hamiltonian.gibbs)
 

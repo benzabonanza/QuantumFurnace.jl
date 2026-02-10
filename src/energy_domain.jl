@@ -38,6 +38,65 @@ function pick_transition(config::Union{LiouvConfig, ThermalizeConfig})
     end
 end
 
+"""
+    pick_transition_gns(config) -> (ω::Real -> Real)
+
+Return the (approx.) GNS-detailed-balance transition weight (\tilde{γ}(ω)).
+
+KMS-conditioned rates (CKBG23, Eq. (1.12)):
+
+    \tilde{γ}(ω) = \tilde{γ}(-ω) e^{- β ω).
+
+In contrast, in the exact KMS-DB (CKG) construction the weight used in the ω-integral is a
+βσ_E²/2-shifted version of such a (\tilde{ω}) (Ramkumar–Soleimanifar Lemma 7.1):
+
+    γ(ω) = \tilde{γ}(ω + βσ_E^2/2).
+
+This helper returns the unshifted (\tilde{γ}) (i.e., the version that itself satisfies KMS condition).
+"""
+function pick_transition_gns(config::Union{LiouvConfig, ThermalizeConfig})
+
+    # Gaussian case
+    # KMS condition satisfied at inverse temperature β requires β = 2\omega_\gamma/\sigma_\gamma^2.
+    if !(config.with_linear_combination)
+        @printf("Gaussian approx GNS gamma\n")
+        return w -> begin
+            # gaussian_parameters = [ωγ, σγ]
+            w_gamma = config.gaussian_parameters[1]
+            sigma_gamma = config.gaussian_parameters[2]
+            return exp(-(w + w_gamma)^2 / (2 * sigma_gamma^2))
+        end
+    end
+
+    sqrtA = sqrt(config.beta / 4) * sqrt(4 * config.a + 1)
+    if (config.b == 0 && config.a != 0)
+        # Smooth Metropolis (no time singularity) — UN-SHIFTED.
+        return w -> begin
+            sqrtB = sqrt(config.beta / 4) * abs(w)
+            return exp((-2 * sqrtA * sqrtB - config.beta * w / 2))
+        end
+    elseif (config.b != 0 && config.a != 0)
+        # Smooth Metropolis (Glauber-like smoothing) — UN-SHIFTED.
+        @printf("Smooth Metro approx GNS gamma \n")
+        return w -> begin
+            sqrtB = sqrt(config.beta / 4) * abs(w)
+            u_min = sqrt(config.beta * config.sigma^2 * config.b / 2)  # integral lower limit
+
+            transition_b0 = exp((-2 * sqrtA * sqrtB - config.beta * w / 2))
+
+            return (transition_b0 * (erfc(sqrtA * u_min - sqrtB / u_min)
+                + exp(4 * sqrtA * sqrtB) * erfc(sqrtA * u_min + sqrtB / u_min)) / 2)
+        end
+    elseif config.a == 0
+        # Kinky Metropolis — UN-SHIFTED.
+        @printf("Kinky Metro approx GNS gamma\n")
+        return w -> begin
+            return exp(-config.beta * max(w, 0.0))
+        end
+    end
+end
+
+
 function create_energy_labels(num_energy_bits::Int64, w0::Float64)
     N = 2^(num_energy_bits)
     # N_labels = [0:1:Int(N/2)-1; -Int(N/2):1:-1]  twos complement order
