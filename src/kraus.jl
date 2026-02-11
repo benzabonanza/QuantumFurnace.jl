@@ -14,7 +14,7 @@ function KrausScratch(T::Type{ComplexF64}, dim::Int)
     return KrausScratch(Zm(), Zm(), Zm(), Zm(), Zm(), Zm(), Zm(), Zm())
 end
 
-function apply_kraus_step!(::BohrDomain,
+function jump_contribution!(::BohrDomain,
     evolving_dm::Matrix{ComplexF64},
     jump::JumpOp,
     hamiltonian::HamHam,
@@ -147,7 +147,7 @@ function apply_kraus_step!(::BohrDomain,
     return evolving_dm
 end
 
-function apply_kraus_step!(::EnergyDomain,
+function jump_contribution!(::EnergyDomain,
     evolving_dm::Matrix{ComplexF64},
     jump::JumpOp,
     hamiltonian::HamHam,
@@ -263,7 +263,7 @@ function apply_kraus_step!(::EnergyDomain,
     return evolving_dm
 end
 
-function apply_kraus_step!(::Union{TimeDomain, TrotterDomain},
+function jump_contribution!(::Union{TimeDomain, TrotterDomain},
     evolving_dm::Matrix{ComplexF64},
     jump::JumpOp,
     ham_or_trott,              # HamHam or TrottTrott depending on domain

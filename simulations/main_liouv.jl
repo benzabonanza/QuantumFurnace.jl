@@ -1,5 +1,5 @@
 using Distributed
-addprocs(4, exeflags="--project=@.")
+# addprocs(4, exeflags="--project=@.")
 
 using Revise
 includet("../src/QuantumFurnace.jl")
@@ -23,7 +23,7 @@ function main()
         sigma_gamma = 1 / beta
 
         # change from 1 / beta:
-        sigma = 0.7 / beta  # w0 = 0.005, for broad enough time integrals in OFTs
+        sigma = 1.0 / beta  # w0 = 0.005, for broad enough time integrals in OFTs
         w_gamma = 1 / beta
         sigma_gamma = sqrt(2 * w_gamma / beta - sigma^2)
 
@@ -39,35 +39,17 @@ function main()
 
         with_coherent = true
         with_linear_combination = true
-        domain = BohrDomain()
+        domain = TimeDomain()
         num_energy_bits = 12 # 11
         w0 = 0.05
         max_E = w0 * 2^num_energy_bits / 2
         t0 = 2pi / (2^num_energy_bits * w0)  # Max time evolution pi / w0
         num_trotter_steps_per_t0 = 10
 
-        # config = LiouvConfig(
-        #         num_qubits = num_qubits, 
-        #         with_coherent = with_coherent,
-        #         with_linear_combination = with_linear_combination, 
-        #         domain = domain,
-        #         beta = beta,
-        #         sigma = sigma,
-        #         gaussian_parameters = (w_gamma, sigma_gamma),
-        #         a = a,
-        #         b = b,
-        #         num_energy_bits = num_energy_bits,
-        #         w0 = w0,
-        #         t0 = t0,
-        #         eta = eta,
-        #         num_trotter_steps_per_t0 = num_trotter_steps_per_t0
-        # )
-
-        #* Approx GNS Config
-        sigma_gamma = sqrt(2 * w_gamma / beta)
-        config = LiouvConfigGNS(
-                num_qubits = num_qubits,
-                with_linear_combination = with_linear_combination,
+        config = LiouvConfig(
+                num_qubits = num_qubits, 
+                with_coherent = with_coherent,
+                with_linear_combination = with_linear_combination, 
                 domain = domain,
                 beta = beta,
                 sigma = sigma,
@@ -77,8 +59,26 @@ function main()
                 num_energy_bits = num_energy_bits,
                 w0 = w0,
                 t0 = t0,
+                eta = eta,
                 num_trotter_steps_per_t0 = num_trotter_steps_per_t0
         )
+
+        #* Approx GNS Config
+        # sigma_gamma = sqrt(2 * w_gamma / beta)
+        # config = LiouvConfigGNS(
+        #         num_qubits = num_qubits,
+        #         with_linear_combination = with_linear_combination,
+        #         domain = domain,
+        #         beta = beta,
+        #         sigma = sigma,
+        #         gaussian_parameters = (w_gamma, sigma_gamma),
+        #         a = a,
+        #         b = b,
+        #         num_energy_bits = num_energy_bits,
+        #         w0 = w0,
+        #         t0 = t0,
+        #         num_trotter_steps_per_t0 = num_trotter_steps_per_t0
+        # )
 
         #* Hamiltonian
         # hamiltonian = find_ideal_heisenberg(num_qubits, fill(1.0, 3); batch_size=100)

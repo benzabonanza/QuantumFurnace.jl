@@ -119,7 +119,7 @@ function run_thermalization(
         idx = rand(rng, 1:length(jumps))
         jump = jumps[idx]
 
-        apply_kraus_step!(config.domain,
+        jump_contribution!(config.domain,
             evolving_dm,
             jump,
             ham_or_trott,

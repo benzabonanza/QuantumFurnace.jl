@@ -36,7 +36,7 @@ export create_alpha_gns
 export krausframework, step_along_the_trajectory!, evolve_along_trajectory, construct_gksl_lindbladian,
        apply_jump_contribution!, apply_lindbladian_dagger!, apply_lindbladian!, precompute_B, precompute_R, 
        precompute_kraus_jumps, precompute_data, verify_completeness
-export KrausScratch, run_thermalization_kraus, apply_kraus_step!
+export KrausScratch, run_thermalization_kraus, jump_contribution!
 # Log Sobolev bound
 export compute_LSI_alpha2
 export X, Y, Z, Had
@@ -52,12 +52,12 @@ include("time_domain.jl")
 include("nufft.jl")
 include("ofts.jl")
 include("errors.jl")
-include("jump_workers.jl")
-include("coherent.jl")
-include("bohr_domain.jl")
-include("energy_domain.jl")
-include("trajectories.jl")
 include("kraus.jl")
+include("energy_domain.jl")
+include("bohr_domain.jl")
+include("coherent.jl")
+include("jump_workers.jl")
+include("trajectories.jl")
 include("furnace_utensils.jl")
 include("furnace.jl")
 include("log_sobolev.jl")

@@ -38,7 +38,7 @@ function precompute_data(::BohrDomain,
     gamma_norm_factor = 1.0 / maximum(transition.(energy_labels))
     
     # Cache the Bohr buckets as plain Int index pairs to avoid CartesianIndex overhead
-    # and avoid rebuilding any per-frequency index lists inside apply_kraus_step!.
+    # and avoid rebuilding any per-frequency index lists inside jump_contribution!.
     bohr_keys = collect(keys(hamiltonian.bohr_dict))
     bohr_is = Vector{Vector{Int}}(undef, length(bohr_keys))
     bohr_js = Vector{Vector{Int}}(undef, length(bohr_keys))
