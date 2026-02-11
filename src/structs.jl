@@ -295,34 +295,6 @@ struct LindbladWorkspace{T}
     end
 end
 
-struct KrausFramework{T}
-    kraus_H_eff::Matrix{T}                   # non-Hermitian no jump evolution
-    kraus_jumps::Vector{Matrix{T}}      # jump Kraus
-    R::Matrix{T}                    # sum(M^\dagger M) (without delta)
-    psi_temp::Vector{T}             # buffer for less allocations
-    delta::Float64                  # delta steps for trajectory
-end
-
-function krausframework(
-    H::AbstractMatrix{T}, 
-    kraus_jumps::Vector{Tuple{Float64, <:AbstractMatrix{T}}}, 
-    R::AbstractMatrix{T},
-    delta::Float64) where T
-
-    dim = size(H, 1)
-    
-    kraus_jumps = [Matrix{T}(sqrt(delta) * rate * op) for (rate, op) in kraus_jumps]
-
-    # Construct H_eff and the 0th Kraus operator
-    H_eff = 1im * H + 0.5 * R
-    kraus_H_eff = Matrix{T}(I, dim, dim) - delta * H_eff
-
-    # Buffer for statevector
-    psi_temp = zeros(T, dim)
-
-    return KrausFramework(kraus_H_eff, kraus_jumps, R, psi_temp, delta)
-end
-
 struct LSIFramework{T}
     dim::Int
 

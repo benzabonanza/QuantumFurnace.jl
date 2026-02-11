@@ -1,3 +1,78 @@
+# struct KrausFramework{T}
+#     kraus_H_eff::Matrix{T}                   # non-Hermitian no jump evolution
+#     kraus_jumps::Vector{Matrix{T}}      # jump Kraus
+#     R::Matrix{T}                    # sum(M^\dagger M) (without delta)
+#     psi_temp::Vector{T}             # buffer for less allocations
+#     delta::Float64                  # delta steps for trajectory
+# end
+
+# function krausframework(
+#     H::AbstractMatrix{T}, 
+#     kraus_jumps::Vector{Tuple{Float64, <:AbstractMatrix{T}}}, 
+#     R::AbstractMatrix{T},
+#     delta::Float64) where T
+
+#     dim = size(H, 1)
+    
+#     kraus_jumps = [Matrix{T}(sqrt(delta) * rate * op) for (rate, op) in kraus_jumps]
+
+#     # Construct H_eff and the 0th Kraus operator
+#     H_eff = 1im * H + 0.5 * R
+#     kraus_H_eff = Matrix{T}(I, dim, dim) - delta * H_eff
+
+#     # Buffer for statevector
+#     psi_temp = zeros(T, dim)
+
+#     return KrausFramework(kraus_H_eff, kraus_jumps, R, psi_temp, delta)
+# end
+
+struct TrajectoryScratch{T}
+    K0::Matrix{T}                   # non-Hermitian no jump evolution 
+    kraus_jumps::Vector{Matrix{T}}  # jump Kraus
+    R::Matrix{T}                    # sum(K^\dagger K) (without delta)
+    S::Matrix{T}                    # Residual delta^2 error Kraus jump  I - K0†K0 - δ R = (2α - δ)R - \alpha^2 R^2
+    psi_temp::Vector{T}             # buffer for less allocations
+    delta::Float64                  # delta steps for trajectory
+end
+
+function build_trajectoryscratch(
+    jumps::AbstractVector{<:JumpOp},
+    delta::Float64) where T
+
+    dim = size(H, 1)
+    
+
+    #TODO: Build total B here. 
+
+    #TODO: Here we collect K_{j>0} into scratch.kraus_jumps, sum all to total R
+    for jump in jumps  
+        precompute_kraus_jump!()
+    end
+
+    #TODO: Build K0 from total R ; I - (1 - sqrt(1-delta))R
+    #TODO: Build S from total R ; 2α-δ)R - α² R²
+
+    #TODO: preallocate psi_temp
+
+    return TrajectoryScratch(K0, kraus_jumps, R, S, psi_temp, delta)
+end
+
+function precompute_kraus_jump!(::EnergyDomain,
+    scratch::TrajectoryScratch,
+    jump::JumpOp,
+    hamiltonian::HamHam,
+    config::AbstractThermalizeConfig,
+    precomputed_data,
+    scratch::KrausScratch{ComplexF64}
+    )
+
+    dim = size(evolving_dm, 1)
+    (; transition, gamma_norm_factor, energy_labels) = precomputed_data
+    base_prefactor = config.w0 / (config.sigma * sqrt(2 * pi)) * jump_weight_scaling
+
+end
+
+
 function evolve_along_trajectory(psi0::Vector{ComplexF64}, fw::KrausFramework, total_time::Float64)::Vector{ComplexF64}
 
     num_steps = round(Int, total_time / fw.delta)  # Number of trajectory steps
