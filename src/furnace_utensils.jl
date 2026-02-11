@@ -12,7 +12,7 @@ function precompute_labels(::Union{TimeDomain, TrotterDomain}, config::AbstractC
 end  
 
 function precompute_data(::BohrDomain,
-    config::AbstractConfig,
+    config::AbstractLiouvConfig,
     ham_or_trott::Union{HamHam, TrottTrott}
 )
 
@@ -25,6 +25,43 @@ function precompute_data(::BohrDomain,
         alpha = alpha,
         gamma_norm_factor = gamma_norm_factor
     )
+end
+
+function precompute_data(::BohrDomain,
+    config::AbstractThermalizeConfig,
+    hamiltonian::HamHam
+)
+    alpha = pick_alpha(config)
+
+    energy_labels, = precompute_labels(config.domain, config)
+    transition = pick_transition(config)
+    gamma_norm_factor = 1.0 / maximum(transition.(energy_labels))
+    
+    # Cache the Bohr buckets as plain Int index pairs to avoid CartesianIndex overhead
+    # and avoid rebuilding any per-frequency index lists inside apply_kraus_step!.
+    bohr_keys = collect(keys(hamiltonian.bohr_dict))
+    bohr_is = Vector{Vector{Int}}(undef, length(bohr_keys))
+    bohr_js = Vector{Vector{Int}}(undef, length(bohr_keys))
+    @inbounds for (k, nu) in pairs(bohr_keys)
+        idxs = hamiltonian.bohr_dict[nu]
+        is = Vector{Int}(undef, length(idxs))
+        js = Vector{Int}(undef, length(idxs))
+        @inbounds for t in eachindex(idxs)
+            is[t] = idxs[t][1]
+            js[t] = idxs[t][2]
+        end
+        bohr_is[k] = is
+        bohr_js[k] = js
+    end
+
+    return (
+        alpha = alpha,
+        gamma_norm_factor = gamma_norm_factor,
+        bohr_keys = bohr_keys,
+        bohr_is = bohr_is,
+        bohr_js = bohr_js,
+    )
+
 end
 
 function precompute_data(::EnergyDomain, 
