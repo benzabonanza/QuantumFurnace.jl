@@ -621,21 +621,21 @@ end
 """
 R = \\sum_k L_k^\\dagger L_k, in eigenbasis of H.
 """
-function precompute_R(kraus_jumps::Vector{Tuple{Float64, AbstractMatrix{ComplexF64}}})
+# function precompute_R(kraus_jumps::Vector{Tuple{Float64, AbstractMatrix{ComplexF64}}})
 
-    dim = size(kraus_jumps[1][2], 1)
-    R = zeros(ComplexF64, dim, dim)
-    for (rate, op) in kraus_jumps  
-        R .+= rate^2 .* (op' * op)
-    end
+#     dim = size(kraus_jumps[1][2], 1)
+#     R = zeros(ComplexF64, dim, dim)
+#     for (rate, op) in kraus_jumps  
+#         R .+= rate^2 .* (op' * op)
+#     end
 
-    return R
-end
+#     return R
+# end
 
 # Should match up but obviously, not "faithful" since the QC have to go from the time domain with a Fourier transform.
-function precompute_B(R::Matrix{ComplexF64}, hamiltonian::HamHam, beta::Float64)
-    return @. R * 1im * tanh(beta * hamiltonian.bohr_freqs / 4) / 2
-end
+# function precompute_B(R::Matrix{ComplexF64}, hamiltonian::HamHam, beta::Float64)
+#     return @. R * 1im * tanh(beta * hamiltonian.bohr_freqs / 4) / 2
+# end
 
 #TODO: test it; set BLAS threads to 1, let julia threads be more. 
 #* In-place Lindbladian action at once

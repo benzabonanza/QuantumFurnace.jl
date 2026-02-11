@@ -26,50 +26,233 @@
 #     return KrausFramework(kraus_H_eff, kraus_jumps, R, psi_temp, delta)
 # end
 
-struct TrajectoryScratch{T}
-    K0::Matrix{T}                   # non-Hermitian no jump evolution 
-    kraus_jumps::Vector{Matrix{T}}  # jump Kraus
-    R::Matrix{T}                    # sum(K^\dagger K) (without delta)
-    S::Matrix{T}                    # Residual delta^2 error Kraus jump  I - K0†K0 - δ R = (2α - δ)R - \alpha^2 R^2
-    psi_temp::Vector{T}             # buffer for less allocations
-    delta::Float64                  # delta steps for trajectory
+"""
+Run-time cache for trajectory simulations
+"""
+struct TrajectoryWorkspace{T}
+    jump_oft::Matrix{T}   # buffer for A_ω (or its dagger-partner is handled by swapping mul order)
+    psi_tmp::Vector{T}    # generic tmp for matvec results (K0ψ, Aωψ, Uresψ, etc.)
+    Rpsi::Vector{T}       # cache Rψ so K0ψ can be formed as ψ - α(Rψ) without a second matvec
 end
 
-function build_trajectoryscratch(
+struct TrajectoryFramework{T,C,H,PD,D<:AbstractDomain}
+    domain::D
+    jumps::Vector{JumpOp}
+    ham_or_trott::H
+    config::C
+    precomputed_data::PD
+
+    # Coherent term (optional)
+    B::Union{Nothing, Matrix{T}}
+    U_B::Union{Nothing, Matrix{T}}
+
+    # Dissipative Kraus skeleton
+    R::Matrix{T}
+    K0::Matrix{T}
+    U_residual::Matrix{T}   # Cholesky factor U with S ≈ U' U (used as residual Kraus)
+
+    # Step parameters
+    delta::Float64
+    alpha::Float64           # α = 1 - sqrt(1-δ)
+
+    # Runtime workspace (mutated during stepping)
+    ws::TrajectoryWorkspace{T}
+end
+
+function build_trajectoryframework(
     jumps::AbstractVector{<:JumpOp},
+    ham_or_trott::Union{HamHam, TrottTrott},
+    config::AbstractThermalizeConfig,
+    precomputed_data,
+    scratch::KrausScratch{ComplexF64},
     delta::Float64) where T
 
     dim = size(H, 1)
     
+    B_total = precompute_coherent_total_B(jumps, hamiltonian, config, precomputed_data; trotter=trotter)
+    B_total .= 0.5 .* (B_total .+ B_total')
+    U_B = exp(-1im * delta * Hermitian(B_total))
 
-    #TODO: Build total B here. 
+    R = precompute_R(config.domain, jumps, ham_or_trott, config, precomputed_data, scratch)
+    R = copy(scratch.R)
 
-    #TODO: Here we collect K_{j>0} into scratch.kraus_jumps, sum all to total R
-    for jump in jumps  
-        precompute_kraus_jump!()
+    alpha = 1 - sqrt(1 - delta)
+    K0 = copy(R)
+    K0 .*= (-alpha)
+    @inbounds for i in 1:dim
+        K0[i,i] += 1
     end
 
-    #TODO: Build K0 from total R ; I - (1 - sqrt(1-delta))R
-    #TODO: Build S from total R ; 2α-δ)R - α² R²
+    mul!(scratch.tmp1, R, R)  # tmp1 := R²
+    s1 = 2 * alpha - delta
+    s2 = alpha * alpha
+    @. scratch.tmp2 = s1 * R - s2 * scratch.tmp1   # tmp2 := S (up to roundoff)
 
-    #TODO: preallocate psi_temp
+    # Numerical symmetrization and tiny diagonal shift (matches thermalization code logic)
+    scratch.tmp2 .= 0.5 .* (scratch.tmp2 .+ scratch.tmp2')
+    eps_shift = 10 * eps(Float64)
+    @inbounds for i in 1:dim
+        scratch.tmp2[i,i] += eps_shift
+    end
 
-    return TrajectoryScratch(K0, kraus_jumps, R, S, psi_temp, delta)
+    S = copy(scratch.tmp2)  # store S explicitly (post-shift)
+
+    # Factor for applying the residual Kraus to state vectors (K_res ≈ U where S ≈ U' U)
+    cholesky_S = cholesky!(Hermitian(scratch.tmp2), check=false)
+    U_residual = Matrix{ComplexF64}(cholesky_S.U)  # detach from scratch.tmp2
+
+    ws = TrajectoryWorkspace(ComplexF64, dim)
+
+    return TrajectoryFramework(
+        config.domain,
+        collect(jumps),
+        ham_or_trott,
+        config,
+        precomputed_data,
+        B_total,
+        U_B,
+        R,
+        K0,
+        U_residual,
+        delta,
+        alpha,
+        ws,
+    )
+    return
 end
 
+"""
+    precompute_R(domain, jumps, ham_or_trott, config, precomputed_data, scratch) -> Matrix{ComplexF64}
+
+    Compute
+        R = ∑_{k>0} L_k† L_k
+    in the same basis as `jump.in_eigenbasis` (Hamiltonian eigenbasis for `HamHam`, Trotter basis for `TrottTrott`).
+
+    Conventions are matched to `jump_contribution!(domain, ::AbstractThermalizeConfig, ...)`:
+    - the weights are `rate2(ω) = base_prefactor * transition(ω)` (no extra `δ` factor),
+    - for Hermitian jumps we iterate half-grid and add the mirrored negative-frequency partner explicitly.
+
+    This returns `scratch.R` (Hermitianized).
+"""
+function precompute_R(
+    ::EnergyDomain,
+    jumps::AbstractVector{<:JumpOp},
+    hamiltonian::HamHam,
+    config::AbstractThermalizeConfig,
+    precomputed_data,
+    scratch::KrausScratch{ComplexF64},
+)
+    dim = size(hamiltonian.data, 1)
+    (; transition, gamma_norm_factor, energy_labels) = precomputed_data
+
+
+    base_prefactor = config.w0 / (config.sigma * sqrt(2 * pi)) * gamma_norm_factor
+
+    fill!(scratch.R, 0)
+
+    @inbounds for jump in jumps
+        if jump.hermitian
+            # Half-grid (w_raw <= 0) and mirror partner at -w using Aω† as the Lindblad operator.
+            for w_raw in energy_labels
+                w_raw > 1e-12 && continue
+                w = abs(w_raw)
+
+                # Aω := A ∘ exp(-(w-ν)^2/(4σ^2))   (elementwise in eigenbasis)
+                oft!(scratch.jump_oft, jump, w, hamiltonian, config.sigma)
+
+                # Positive-frequency contribution: rate2(w) * (Aω† Aω)
+                rate2_pos = base_prefactor * transition(w)
+                mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)
+                @. scratch.R += rate2_pos * scratch.LdagL
+
+                if w > 1e-12
+                    # Negative-frequency partner uses Lindblad op = Aω†:
+                    # contribution is rate2(-w) * (Aω Aω†)
+                    rate2_neg = base_prefactor * transition(-w)
+                    mul!(scratch.LdagL, scratch.jump_oft, scratch.jump_oft')
+                    @. scratch.R += rate2_neg * scratch.LdagL
+                end
+            end
+        else
+            # Non-Hermitian jump: full grid, no mirroring shortcut.
+            for w in energy_labels
+                oft!(scratch.jump_oft, jump, w, hamiltonian, config.sigma)
+
+                rate2 = base_prefactor * transition(w)
+                mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)
+                @. scratch.R += rate2 * scratch.LdagL
+            end
+        end
+    end
+
+    # Numerical Hermitianization (R should be Hermitian PSD by construction).
+    scratch.R .= 0.5 .* (scratch.R .+ scratch.R')
+    return scratch.R
+end
+
+
+function precompute_R(
+    ::Union{TimeDomain, TrotterDomain},
+    jumps::AbstractVector{<:JumpOp},
+    ham_or_trott::Union{HamHam, TrottTrott},
+    config::AbstractThermalizeConfig,
+    precomputed_data,
+    scratch::KrausScratch{ComplexF64},
+)
+    dim = size(jumps[1].in_eigenbasis, 1)
+    (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = precomputed_data
+
+    # Same weight as in jump_contribution!(::Union{TimeDomain,TrotterDomain}, ...), but without δ.
+    base_prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
+
+    fill!(scratch.R, 0)
+
+    @inbounds for jump in jumps
+        if jump.hermitian
+            # Half-grid and explicit mirror, allocation-free (no filter/abs vector creation).
+            for w_raw in energy_labels
+                w_raw > 1e-12 && continue
+                w = abs(w_raw)
+
+                nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
+
+                # Aω := A ∘ prefactor_matrix(ω)  (elementwise)
+                @. scratch.jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
+
+                rate2_pos = base_prefactor * transition(w)
+                mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)
+                @. scratch.R += rate2_pos * scratch.LdagL
+
+                if w > 1e-12
+                    rate2_neg = base_prefactor * transition(-w)
+                    mul!(scratch.LdagL, scratch.jump_oft, scratch.jump_oft')
+                    @. scratch.R += rate2_neg * scratch.LdagL
+                end
+            end
+        else
+            for w in energy_labels
+                nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
+                @. scratch.jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
+
+                rate2 = base_prefactor * transition(w)
+                mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)
+                @. scratch.R += rate2 * scratch.LdagL
+            end
+        end
+    end
+
+    scratch.R .= 0.5 .* (scratch.R .+ scratch.R')
+    return scratch.R
+end
+
+
 function precompute_kraus_jump!(::EnergyDomain,
-    scratch::TrajectoryScratch,
+    fw::TrajectoryScratch,
     jump::JumpOp,
     hamiltonian::HamHam,
     config::AbstractThermalizeConfig,
     precomputed_data,
-    scratch::KrausScratch{ComplexF64}
     )
-
-    dim = size(evolving_dm, 1)
-    (; transition, gamma_norm_factor, energy_labels) = precomputed_data
-    base_prefactor = config.w0 / (config.sigma * sqrt(2 * pi)) * jump_weight_scaling
-
 end
 
 
