@@ -1,5 +1,12 @@
 #* TOOLS --------------------------------------------------------------------------------------------------------------------
-function pick_transition(config::Union{LiouvConfig, ThermalizeConfig})
+
+pick_transition(config::LiouvConfig) = _pick_transition_kms(config)
+pick_transition(config::ThermalizeConfig) = _pick_transition_kms(config)
+pick_transition(config::LiouvConfigGNS) = _pick_transition_gns(config)
+pick_transition(config::ThermalizeConfigGNS) = _pick_transition_gns(config)
+
+
+function _pick_transition_kms(config::Union{LiouvConfig, ThermalizeConfig})
 
     if !(config.with_linear_combination)  # Gaussian case
         @printf("Gaussian\n")
@@ -39,22 +46,22 @@ function pick_transition(config::Union{LiouvConfig, ThermalizeConfig})
 end
 
 """
-    pick_transition_gns(config) -> (ω::Real -> Real)
+    _pick_transition_gns(config) -> (ω::Real -> Real)
 
-Return the (approx.) GNS-detailed-balance transition weight (\tilde{γ}(ω)).
+    Return the (approx.) GNS-detailed-balance transition weight (\tilde{γ}(ω)).
 
-KMS-conditioned rates (CKBG23, Eq. (1.12)):
+    KMS-conditioned rates (CKBG23, Eq. (1.12)):
 
-    \tilde{γ}(ω) = \tilde{γ}(-ω) e^{- β ω).
+        \tilde{γ}(ω) = \tilde{γ}(-ω) e^{- β ω).
 
-In contrast, in the exact KMS-DB (CKG) construction the weight used in the ω-integral is a
-βσ_E²/2-shifted version of such a (\tilde{ω}) (Ramkumar–Soleimanifar Lemma 7.1):
+    In contrast, in the exact KMS-DB (CKG) construction the weight used in the ω-integral is a
+    βσ_E²/2-shifted version of such a (\tilde{ω}) (Ramkumar–Soleimanifar Lemma 7.1):
 
-    γ(ω) = \tilde{γ}(ω + βσ_E^2/2).
+        γ(ω) = \tilde{γ}(ω + βσ_E^2/2).
 
-This helper returns the unshifted (\tilde{γ}) (i.e., the version that itself satisfies KMS condition).
+    This helper returns the unshifted (\tilde{γ}) (i.e., the version that itself satisfies KMS condition).
 """
-function pick_transition_gns(config::Union{LiouvConfig, ThermalizeConfig})
+function _pick_transition_gns(config::Union{LiouvConfigGNS, ThermalizeConfigGNS})
 
     # Gaussian case
     # KMS condition satisfied at inverse temperature β requires β = 2\omega_\gamma/\sigma_\gamma^2.
@@ -108,7 +115,7 @@ end
 
 function truncate_energy_labels(
     energy_labels::Vector{Float64}, 
-    config::Union{LiouvConfig, ThermalizeConfig}; 
+    config::AbstractConfig; 
     cutoff::Float64=1e-12
     )
 

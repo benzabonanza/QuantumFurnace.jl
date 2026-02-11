@@ -14,13 +14,11 @@ function KrausScratch(T::Type{ComplexF64}, dim::Int)
     return KrausScratch(Zm(), Zm(), Zm(), Zm(), Zm(), Zm(), Zm(), Zm())
 end
 
-using LinearAlgebra
-
 function apply_kraus_step!(::EnergyDomain,
     evolving_dm::Matrix{ComplexF64},
     jump::JumpOp,
     hamiltonian::HamHam,
-    config::ThermalizeConfig,
+    config::AbstractThermalizeConfig,
     precomputed_data,
     scratch::KrausScratch{ComplexF64};
     coherent_unitary_cache::Union{Nothing,Matrix{ComplexF64}} = nothing,
@@ -132,12 +130,11 @@ function apply_kraus_step!(::EnergyDomain,
     return evolving_dm
 end
 
-
 function apply_kraus_step!(::Union{TimeDomain, TrotterDomain},
     evolving_dm::Matrix{ComplexF64},
     jump::JumpOp,
     ham_or_trott,              # HamHam or TrottTrott depending on domain
-    config::ThermalizeConfig,
+    config::AbstractThermalizeConfig,
     precomputed_data,
     scratch::KrausScratch{ComplexF64};
     coherent_unitary_cache::Union{Nothing,Matrix{ComplexF64}} = nothing,
@@ -195,7 +192,7 @@ function apply_kraus_step!(::Union{TimeDomain, TrotterDomain},
     end
 
     # Hermitianize R
-    scratch.R .= 0.5 .* (scratch.R .+ scratch.R)
+    scratch.R .= 0.5 .* (scratch.R .+ scratch.R')
 
     # Build K0 = I - (1 - sqrt(1 - delta)) R
     delta_factor_for_K0 = 1 - sqrt(1 - config.delta)  # Chen: Eq. 3.2

@@ -23,9 +23,9 @@ function main()
     sigma_gamma = 1 / beta
 
     #! change from 1 / beta
-    # sigma = 0.1 / beta  # w0 = 0.005, for broad enough time integrals in OFTs
-    # w_gamma = 1 / beta
-    # sigma_gamma = sqrt(2 * w_gamma / beta - sigma^2)
+    sigma = 0.2 / beta  # w0 = 0.005, for broad enough time integrals in OFTs
+    w_gamma = 1 / beta
+    sigma_gamma = sqrt(2 * w_gamma / beta - sigma^2)
 
     # Smooth Metro
     a = 1 / 10
@@ -33,13 +33,13 @@ function main()
     eta = 0.0 
 
     # Kinky Metro 
-    # a = 0.0
-    # b = 0.0
+    a = 0.0
+    b = 0.0
     # eta = 0.002
 
     with_coherent = true
-    with_linear_combination = true
-    domain = EnergyDomain()
+    with_linear_combination = false
+    domain = TrotterDomain()
     num_energy_bits = 12 # 11
     w0 = 0.05
     max_E = w0 * 2^num_energy_bits / 2
@@ -50,20 +50,40 @@ function main()
     mixing_time = 100.0 * 3 * num_qubits
     delta = 0.005
 
-    config = ThermalizeConfig(
-        num_qubits = num_qubits, 
-        with_coherent = with_coherent,
-        with_linear_combination = with_linear_combination, 
+    # config = ThermalizeConfig(
+    #     num_qubits = num_qubits, 
+    #     with_coherent = with_coherent,
+    #     with_linear_combination = with_linear_combination, 
+    #     domain = domain,
+    #     beta = beta,
+    #     sigma = sigma,
+    #     gaussian_parameters = (w_gamma, sigma_gamma),
+    #     a = a,
+    #     b = b,
+    #     num_energy_bits = num_energy_bits,
+    #     w0 = w0,
+    #     t0 = t0,
+    #     eta = eta,
+    #     num_trotter_steps_per_t0 = num_trotter_steps_per_t0, 
+    #     mixing_time = mixing_time,
+    #     delta = delta,
+    # )
+
+    #* Approx GNS Config
+    sigma_gamma = sqrt(2 * w_gamma / beta)
+    config = ThermalizeConfigGNS(
+        num_qubits = num_qubits,
+        with_linear_combination = with_linear_combination,
         domain = domain,
         beta = beta,
         sigma = sigma,
+        gaussian_parameters = (w_gamma, sigma_gamma),
         a = a,
         b = b,
         num_energy_bits = num_energy_bits,
         w0 = w0,
         t0 = t0,
-        eta = eta,
-        num_trotter_steps_per_t0 = num_trotter_steps_per_t0, 
+        num_trotter_steps_per_t0 = num_trotter_steps_per_t0,
         mixing_time = mixing_time,
         delta = delta,
     )

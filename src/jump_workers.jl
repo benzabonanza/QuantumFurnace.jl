@@ -1,20 +1,19 @@
 #* Liouvillian (vectorized) jump contributions
-#TODO: use thread caches
+"""
+    Accumulate the Liouvillian contribution of a single jump operator in-place.
 
-"""Accumulate the Liouvillian contribution of a single jump operator in-place.
+    This avoids allocating a full `dim^2 × dim^2` matrix per jump. Call with a
+    preallocated `L_target` (dense) and a `LindbladianWorkspace`.
 
-This avoids allocating a full `dim^2 × dim^2` matrix per jump. Call with a
-preallocated `L_target` (dense) and a `LindbladianWorkspace`.
-
-If `config.with_coherent==true`, pass `coherent_term` already scaled by
-`gamma_norm_factor` to avoid modifying cached matrices.
+    If `config.with_coherent==true`, pass `coherent_term` already scaled by
+    `gamma_norm_factor` to avoid modifying cached matrices.
 """
 function jump_contribution!(
     L_target::AbstractMatrix{ComplexF64},
     ::BohrDomain,
     jump::JumpOp,
     hamiltonian::HamHam,
-    config::LiouvConfig,
+    config::AbstractLiouvConfig,
     precomputed_data,
     ws::LindbladianWorkspace;
     coherent_term::Union{Nothing, AbstractMatrix{ComplexF64}} = nothing,
@@ -51,7 +50,7 @@ function jump_contribution!(
     ::EnergyDomain,
     jump::JumpOp,
     hamiltonian::HamHam,
-    config::LiouvConfig,
+    config::AbstractLiouvConfig,
     precomputed_data,
     ws::LindbladianWorkspace;
     coherent_term::Union{Nothing, AbstractMatrix{ComplexF64}} = nothing,
@@ -96,7 +95,7 @@ function jump_contribution!(
     ::TimeDomain,
     jump::JumpOp,
     hamiltonian::HamHam,
-    config::LiouvConfig,
+    config::AbstractLiouvConfig,
     precomputed_data,
     ws::LindbladianWorkspace;
     coherent_term::Union{Nothing, AbstractMatrix{ComplexF64}} = nothing,
@@ -143,11 +142,11 @@ function jump_contribution!(
     ::TrotterDomain,
     jump::JumpOp,
     trotter::TrottTrott,
-    config::LiouvConfig,
+    config::AbstractLiouvConfig,
     precomputed_data,
     ws::LindbladianWorkspace;
     coherent_term::Union{Nothing, AbstractMatrix{ComplexF64}} = nothing,
-)
+    )
     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors, b_minus, b_plus) = precomputed_data
 
     B = coherent_term
@@ -184,8 +183,6 @@ function jump_contribution!(
     return L_target
 end
 
-"""
-"""
 # function jump_contribution(::BohrDomain, 
 #     jump::JumpOp, 
 #     hamiltonian::HamHam, 

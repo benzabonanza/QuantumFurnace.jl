@@ -1,10 +1,10 @@
-function precompute_labels(::Union{BohrDomain, EnergyDomain}, config::Union{LiouvConfig, ThermalizeConfig})
+function precompute_labels(::Union{BohrDomain, EnergyDomain}, config::AbstractConfig)
     energy_labels = create_energy_labels(config.num_energy_bits, config.w0)
     truncated_energy_labels = truncate_energy_labels(energy_labels, config)
     return (truncated_energy_labels,)  # Energy labels
 end
 
-function precompute_labels(::Union{TimeDomain, TrotterDomain}, config::Union{LiouvConfig, ThermalizeConfig})
+function precompute_labels(::Union{TimeDomain, TrotterDomain}, config::AbstractConfig)
     energy_labels = create_energy_labels(config.num_energy_bits, config.w0)
     truncated_energy_labels = truncate_energy_labels(energy_labels, config)
     time_labels = energy_labels .* (config.t0 / config.w0)
@@ -12,7 +12,7 @@ function precompute_labels(::Union{TimeDomain, TrotterDomain}, config::Union{Lio
 end  
 
 function precompute_data(::BohrDomain,
-    config::Union{LiouvConfig, ThermalizeConfig},
+    config::AbstractConfig,
     ham_or_trott::Union{HamHam, TrottTrott}
 )
 
@@ -28,7 +28,7 @@ function precompute_data(::BohrDomain,
 end
 
 function precompute_data(::EnergyDomain, 
-    config::Union{LiouvConfig, ThermalizeConfig}, 
+    config::AbstractConfig, 
     ham_or_trott::Union{HamHam, TrottTrott}
 )
     energy_labels, = precompute_labels(config.domain, config)
@@ -43,7 +43,7 @@ function precompute_data(::EnergyDomain,
 end
 
 function precompute_data(::Union{TimeDomain, TrotterDomain},
-    config::Union{LiouvConfig, ThermalizeConfig},
+    config::AbstractConfig,
     ham_or_trott::Union{HamHam, TrottTrott}
 )
     energy_labels, time_labels = precompute_labels(config.domain, config)

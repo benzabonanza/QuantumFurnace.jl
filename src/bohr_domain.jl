@@ -41,7 +41,6 @@ function coherent_bohr(hamiltonian::HamHam, jumps::Vector{JumpOp}, config::Union
     return B
 end
 
-#TODO: Debug these for new general sigma.
 function pick_f(config::Union{LiouvConfig, ThermalizeConfig})
 
     beta = config.beta
@@ -61,12 +60,6 @@ function create_f(nu_1::Float64, nu_2::Float64, beta::Float64, sigma::Float64, a
     return tanh(-beta * (nu_1 - nu_2) / 4) * alpha / (2im)
 end
 
-# function create_f_gauss(nu_1::Float64, nu_2::Float64, beta::Float64)
-#     """Tanh * alpha. Gaussian parameters = 1/β"""
-#     alpha_nu1_nu2 = create_alpha_gauss(nu_1, nu_2, beta)
-#     return tanh(-beta * (nu_1 - nu_2) / 4) * alpha_nu1_nu2 / (2im)
-# end
-
 function create_f_gauss(nu_1::Float64, nu_2::Float64, beta::Float64, sigma::Float64, 
     gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}})
     """Tanh * alpha."""
@@ -74,7 +67,12 @@ function create_f_gauss(nu_1::Float64, nu_2::Float64, beta::Float64, sigma::Floa
     return tanh(-beta * (nu_1 - nu_2) / 4) * alpha_nu1_nu2 / (2im)
 end
 
-function pick_alpha(config::Union{LiouvConfig, ThermalizeConfig})
+pick_alpha(config::LiouvConfig) = _pick_alpha_kms(config)
+pick_alpha(config::ThermalizeConfig) = _pick_alpha_kms(config)
+pick_alpha(config::LiouvConfigGNS) = _pick_alpha_gns(config)
+pick_alpha(config::ThermalizeConfigGNS) = _pick_alpha_gns(config)
+
+function _pick_alpha_kms(config::Union{LiouvConfig, ThermalizeConfig})
 
     sigma = config.sigma
     if config.with_linear_combination
@@ -104,7 +102,7 @@ function create_alpha(nu_1::Float64, nu_2::Float64, beta::Float64, sigma::Float6
     return alpha_nu_1
 end
 
-function pick_alpha_gns(config::Union{LiouvConfig, ThermalizeConfig})
+function _pick_alpha_gns(config::Union{LiouvConfigGNS, ThermalizeConfigGNS})
 
     sigma = config.sigma
     if config.with_linear_combination
@@ -151,28 +149,6 @@ function create_alpha_gauss(
                                     * exp(-(nu_1 - nu_2)^2 / (8 * sigma^2)))
     return alpha_fn(nu_1)
 end
-
-
-# sigma = 1 / beta version: 
-# function create_alpha_old(nu_1::Float64, nu_2::Float64, beta::Float64, a::Float64, b::Float64)
-    
-#     eh = sqrt(4 * a / beta + 1)
-#     nu = nu_1 + nu_2
-
-#     alpha_nu_1 = (exp(-beta^2 * (nu_1 - nu_2)^2 / 8) 
-#         * exp(a / (2 * beta)) * exp(-beta * nu * (1 + eh) / 4) * (
-#         erfc((eh * (1 + b) - beta * nu) / sqrt(8 * (1 + b))) 
-#         + exp(beta * nu * eh / 2) * erfc((eh * (1 + b) + beta * nu) / sqrt(8 * (1 + b)))) / 2)
-#     return alpha_nu_1
-# end
-
-
-# sigma = 1 / beta version: 
-# function create_alpha_gauss(nu_1::Float64, nu_2::Float64, beta::Float64)
-#     """Gaussian parameters = 1/β"""
-#     alpha_fn(nu_1) = exp(-beta^2 * (nu_1 + nu_2 + 2/beta)^2/16) * exp(-beta^2 * (nu_1 - nu_2)^2/8) / sqrt(2)
-#     return alpha_fn(nu_1)
-# end
 
 function coherent_bohr_gauss(hamiltonian::HamHam, jump::JumpOp, beta::Float64)
 
@@ -361,69 +337,6 @@ end
 #     eps = 1e-14
 #     nu1s_minus_nu_2 = bohr_freqs .- nu_2
 #     return map(x -> any(abs.(unique_freqs .- x) .< eps), nu1s_minus_nu_2) .+ 0
-# end
-
-# function B_nu_metro(nu::Float64, nu_2::Float64, hamiltonian::HamHam, bohr_dict::Dict{Float64, Vector{CartesianIndex{2}}}, 
-#     jump::JumpOp, beta::Float64)
-
-#     dim = size(hamiltonian.data, 1)
-
-#     B_nu = zeros(ComplexF64, dim, dim)
-#     nu_1 = nu + nu_2
-    
-#     A_nu_2::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
-#     A_nu_1::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
-#     A_nu_2[bohr_dict[nu_2]] .= jump.in_eigenbasis[bohr_dict[nu_2]]
-#     A_nu_1[bohr_dict[nu_1]] .= jump.in_eigenbasis[bohr_dict[nu_1]]
-#     f_nu1_nu2 = create_f_metro(nu_1, nu_2, beta)
-
-#     B_nu .= f_nu1_nu2 * A_nu_2' * (A_nu_1)
-
-#     return B_nu
-# end
-
-# function R_nu_metro(nu::Float64, nu_2::Float64, hamiltonian::HamHam, bohr_dict::Dict{Float64, Vector{CartesianIndex{2}}}, 
-#     jump::JumpOp, beta::Float64)
-
-#     dim = size(hamiltonian.data, 1)
-
-#     R_nu = zeros(ComplexF64, dim, dim)
-#     nu_1 = nu + nu_2
-    
-#     A_nu_2::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
-#     A_nu_1::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
-#     A_nu_2[bohr_dict[nu_2]] .= jump.in_eigenbasis[bohr_dict[nu_2]]
-#     A_nu_1[bohr_dict[nu_1]] .= jump.in_eigenbasis[bohr_dict[nu_1]]
-#     f_nu1_nu2 = create_alpha_metro(nu_1, nu_2, beta)
-
-#     R_nu .= f_nu1_nu2 * A_nu_2' * (A_nu_1)
-
-#     return R_nu
-# end
-
-# function transition_bohr_metro(jumps::Vector{JumpOp}, hamiltonian::HamHam, beta::Float64; do_adjoint::Bool=false)
-
-#     dim = size(hamiltonian.data, 1)
-#     bohr_dict::Dict{Float64, Vector{CartesianIndex{2}}} = create_bohr_dict(hamiltonian)
-#     unique_freqs = keys(bohr_dict)
-
-#     T = zeros(ComplexF64, dim^2, dim^2)
-#     for jump in jumps
-#         for nu_2 in unique_freqs
-#             alpha_nu1_matrix = create_alpha_nu1_matrix_metro(hamiltonian.bohr_freqs, nu_2, beta)
-
-#             A_nu_2::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
-#             A_nu_2[bohr_dict[nu_2]] .= jump.in_eigenbasis[bohr_dict[nu_2]]
-#             A_nu_2_dagger::SparseMatrixCSC{ComplexF64} = A_nu_2'
-
-#             if !(do_adjoint)
-#                 T .+= kron(alpha_nu1_matrix .* jump.in_eigenbasis, transpose(A_nu_2_dagger))
-#             else
-#                 T .+= kron(adjoint(alpha_nu1_matrix .* jump.in_eigenbasis), transpose(A_nu_2))
-#             end
-#         end
-#     end
-#     return T
 # end
 
 # function transition_bohr_metro_gibbsed(jumps::Vector{JumpOp}, hamiltonian::HamHam, beta::Float64)

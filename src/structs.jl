@@ -62,6 +62,10 @@ struct LindbladianWorkspace
     end
 end
 
+abstract type AbstractConfig{D<:AbstractDomain} end
+abstract type AbstractLiouvConfig{D<:AbstractDomain} <: AbstractConfig{D} end
+abstract type AbstractThermalizeConfig{D<:AbstractDomain} <: AbstractConfig{D} end
+
 # Let's keep this structure, and have the "give w0 for desired energy integral error" type of config optimization
 # before the construct_liouvillian function
 """
@@ -93,9 +97,35 @@ end
     - **`TimeDomain()`**: Another level lower, in which the energy approximates are written up as Fourier's of the temporal equals.
     - **`TrotterDomain()`**: The lowest level, thus also the only one implementable on a quantum computer, in which all time evolutions are replaced via their Trotter series.
 """
-@kwdef struct LiouvConfig{D <: AbstractDomain}
+@kwdef struct LiouvConfig{D <: AbstractDomain} <: AbstractLiouvConfig{D}
     num_qubits::Int64 
     with_coherent::Bool
+    with_linear_combination::Bool
+    domain::D
+    beta::Float64
+    sigma::Float64
+    gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}} = (nothing, nothing)  # (ω_γ, σ_γ)
+    a::Union{Float64, Nothing} = nothing
+    b::Union{Float64, Nothing} = nothing
+    num_energy_bits::Int64 = -1
+    t0::Float64 = -1.
+    w0::Float64 = -1.
+    eta::Float64 = -1.
+    num_trotter_steps_per_t0::Int64 = -1
+end
+"""
+    LiouvConfigGNS
+
+    Configuration for Liouvillian construction for Chen's **approx. GNS-detailed-balance** Lindbladian.
+
+    This is the "GNS-DB" line: it uses the **unshifted** transition weight \tilde{γ}(ω) (KMS-conditioned),
+    and (by design) **omits** the coherent correction term `B`.
+
+    Fields are shared with `LiouvConfig`.
+"""
+@kwdef struct LiouvConfigGNS{D <: AbstractDomain} <: AbstractLiouvConfig{D}
+    num_qubits::Int64
+    with_coherent::Bool = false  # No coherent term in approx GNS case.
     with_linear_combination::Bool
     domain::D
     beta::Float64
@@ -122,7 +152,7 @@ end
     - `mixing_time`: Total duration of the time evolution.
     - `delta`: Time step size for the weak-measurement emulation.
     """
-@kwdef struct ThermalizeConfig{D <: AbstractDomain}
+@kwdef struct ThermalizeConfig{D <: AbstractDomain}  <: AbstractThermalizeConfig{D}
     num_qubits::Int64 
     with_coherent::Bool
     with_linear_combination::Bool
@@ -139,6 +169,36 @@ end
     num_trotter_steps_per_t0::Int64 = -1
 
     # For thermalization the configs:
+    mixing_time::Float64
+    delta::Float64
+end
+
+"""
+    ThermalizeConfigGNS
+
+    Configuration for the step-by-step weak-measurement thermalization emulation for
+    Chen's **approx. GNS-detailed-balance** Lindbladian.
+
+    This line uses the unshifted transition weight and (by design) omits the coherent term `B`.
+
+    Fields are shared with `ThermalizeConfig`.
+"""
+@kwdef struct ThermalizeConfigGNS{D <: AbstractDomain} <: AbstractThermalizeConfig{D}
+    num_qubits::Int64
+    with_coherent::Bool = false
+    with_linear_combination::Bool
+    domain::D
+    beta::Float64
+    sigma::Float64
+    gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}} = (nothing, nothing)  # (ω_γ, σ_γ)
+    a::Union{Float64, Nothing} = nothing
+    b::Union{Float64, Nothing} = nothing
+    num_energy_bits::Int64 = -1
+    t0::Float64 = -1.
+    w0::Float64 = -1.
+    eta::Float64 = -1.
+    num_trotter_steps_per_t0::Int64 = -1
+
     mixing_time::Float64
     delta::Float64
 end
@@ -197,7 +257,7 @@ end
     time_steps::Vector{Float64}
     hamiltonian::HamHam
     trotter::Union{TrottTrott,Nothing} = nothing
-    config::ThermalizeConfig{D}
+    config::AbstractThermalizeConfig{D}
 end
 
 """
@@ -221,7 +281,7 @@ end
     spectral_gap::ComplexF64
     hamiltonian::HamHam
     trotter::Union{TrottTrott,Nothing} = nothing
-    config::LiouvConfig{D}
+    config::AbstractLiouvConfig{D}
 end
 
 struct LindbladWorkspace{T}
