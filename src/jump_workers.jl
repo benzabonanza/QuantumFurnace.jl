@@ -92,9 +92,9 @@ end
 
 function jump_contribution!(
     L_target::AbstractMatrix{ComplexF64},
-    ::TimeDomain,
+    ::Union{TimeDomain, TrotterDomain},
     jump::JumpOp,
-    hamiltonian::HamHam,
+    ham_or_trott::Union{HamHam, TrottTrott},
     config::AbstractLiouvConfig,
     precomputed_data,
     ws::LindbladianWorkspace;
@@ -137,51 +137,51 @@ function jump_contribution!(
     return L_target
 end
 
-function jump_contribution!(
-    L_target::AbstractMatrix{ComplexF64},
-    ::TrotterDomain,
-    jump::JumpOp,
-    trotter::TrottTrott,
-    config::AbstractLiouvConfig,
-    precomputed_data,
-    ws::LindbladianWorkspace;
-    coherent_term::Union{Nothing, AbstractMatrix{ComplexF64}} = nothing,
-    )
-    (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors, b_minus, b_plus) = precomputed_data
+# function jump_contribution!(
+#     L_target::AbstractMatrix{ComplexF64},
+#     ::TrotterDomain,
+#     jump::JumpOp,
+#     trotter::TrottTrott,
+#     config::AbstractLiouvConfig,
+#     precomputed_data,
+#     ws::LindbladianWorkspace;
+#     coherent_term::Union{Nothing, AbstractMatrix{ComplexF64}} = nothing,
+#     )
+#     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors, b_minus, b_plus) = precomputed_data
 
-    B = coherent_term
-    if B !== nothing
-        vectorize_liouvillian_coherent!(L_target, B, ws)
-    end
+#     B = coherent_term
+#     if B !== nothing
+#         vectorize_liouvillian_coherent!(L_target, B, ws)
+#     end
 
-    jump_oft = ws.jump_tmp
-    prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
+#     jump_oft = ws.jump_tmp
+#     prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
 
-    if jump.hermitian
-        for w_raw in energy_labels
-            w_raw > 1e-12 && continue
-            w = abs(w_raw)
-            nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
-            @. jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
+#     if jump.hermitian
+#         for w_raw in energy_labels
+#             w_raw > 1e-12 && continue
+#             w = abs(w_raw)
+#             nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
+#             @. jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
 
-            scalar_w = prefactor * transition(w)
-            vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
-            if w > 1e-12
-                scalar_negative_w = prefactor * transition(-w)
-                vectorize_liouv_diss_and_add!(L_target, jump_oft', scalar_negative_w, ws)
-            end
-        end
-    else
-        for w in energy_labels
-            nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
-            @. jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
-            scalar_w = prefactor * transition(w)
-            vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
-        end
-    end
+#             scalar_w = prefactor * transition(w)
+#             vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
+#             if w > 1e-12
+#                 scalar_negative_w = prefactor * transition(-w)
+#                 vectorize_liouv_diss_and_add!(L_target, jump_oft', scalar_negative_w, ws)
+#             end
+#         end
+#     else
+#         for w in energy_labels
+#             nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
+#             @. jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
+#             scalar_w = prefactor * transition(w)
+#             vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
+#         end
+#     end
 
-    return L_target
-end
+#     return L_target
+# end
 
 #* Algorithmic jump contributions -------------------------------------------------------------------------------------------
 function jump_contribution!(::BohrDomain,
