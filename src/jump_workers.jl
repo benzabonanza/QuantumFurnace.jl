@@ -503,120 +503,120 @@ end
 #* Precompute B, R for Quantum Trajector & efficient action of L(X) -----
 # No Bohr version, because we can only diagonalize the Kossakowski matrix up to very low number of qubits.
 
-function precompute_kraus_jumps(::EnergyDomain,
-    jump::JumpOp,
-    hamiltonian::HamHam,
-    config::AbstractThermalizeConfig,
-    precomputed_data,
-    scratch::KrausScratch{ComplexF64}
-    )
+# function precompute_kraus_jumps(::EnergyDomain,
+#     jump::JumpOp,
+#     hamiltonian::HamHam,
+#     config::AbstractThermalizeConfig,
+#     precomputed_data,
+#     scratch::KrausScratch{ComplexF64}
+#     )
 
-    dim = size(hamiltonian.data, 1)
-    (; transition, gamma_norm_factor, energy_labels) = precomputed_data
+#     dim = size(hamiltonian.data, 1)
+#     (; transition, gamma_norm_factor, energy_labels) = precomputed_data
 
-    base_prefactor = config.w0 / (sigma * sqrt(2 * pi)) * gamma_norm_factor
+#     base_prefactor = config.w0 / (sigma * sqrt(2 * pi)) * gamma_norm_factor
 
-    kraus_jumps = Vector{Tuple{Float64, AbstractMatrix{ComplexF64}}}()
+#     kraus_jumps = Vector{Tuple{Float64, AbstractMatrix{ComplexF64}}}()
 
-    for jump in jumps
+#     for jump in jumps
 
-        fill!(scratch.R, 0)
-        fill!(scratch.rho_jump, 0)
+#         fill!(scratch.R, 0)
+#         fill!(scratch.rho_jump, 0)
 
-        if jump.hermitian
-            @inbounds for w_raw in energy_labels
-                w_raw > 1e-12 && continue
-                w = abs(w_raw)
+#         if jump.hermitian
+#             @inbounds for w_raw in energy_labels
+#                 w_raw > 1e-12 && continue
+#                 w = abs(w_raw)
 
-                # Aω
-                oft!(scratch.jump_oft, jump, w, hamiltonian, config.sigma)
+#                 # Aω
+#                 oft!(scratch.jump_oft, jump, w, hamiltonian, config.sigma)
 
-                rate2_pos = base_prefactor * transition(w)
+#                 rate2_pos = base_prefactor * transition(w)
 
-                # R += rate^2 * (Aω† Aω)
-                mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)
-                @. scratch.R += rate2_pos * scratch.LdagL
-            end
-        end
-    end
-    return kraus_jumps
-end
+#                 # R += rate^2 * (Aω† Aω)
+#                 mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)
+#                 @. scratch.R += rate2_pos * scratch.LdagL
+#             end
+#         end
+#     end
+#     return kraus_jumps
+# end
 
-function precompute_kraus_jumps(
-    ::TimeDomain,
-    jumps::Vector{JumpOp}, 
-    hamiltonian::HamHam,
-    config::LiouvConfig,
-    precomputed_data,
-    )
+# function precompute_kraus_jumps(
+#     ::TimeDomain,
+#     jumps::Vector{JumpOp}, 
+#     hamiltonian::HamHam,
+#     config::LiouvConfig,
+#     precomputed_data,
+#     )
 
-    dim = size(hamiltonian.data, 1)
-    (; transition, gamma_norm_factor, b_minus, b_plus, energy_labels, oft_nufft_prefactors) = precomputed_data
+#     dim = size(hamiltonian.data, 1)
+#     (; transition, gamma_norm_factor, b_minus, b_plus, energy_labels, oft_nufft_prefactors) = precomputed_data
 
-    base_prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
+#     base_prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
 
-    kraus_jumps = Vector{Tuple{Float64, AbstractMatrix{ComplexF64}}}()
-    for jump in jumps
-        energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
-        for w in energies
-            kraus_jump = Matrix{ComplexF64}(undef, dim, dim)  #FIXME: Shouldnt this be out of the loop.
-            nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
-            @. kraus_jump = jump.in_eigenbasis * nufft_prefactor_matrix
+#     kraus_jumps = Vector{Tuple{Float64, AbstractMatrix{ComplexF64}}}()
+#     for jump in jumps
+#         energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
+#         for w in energies
+#             kraus_jump = Matrix{ComplexF64}(undef, dim, dim)  #FIXME: Shouldnt this be out of the loop.
+#             nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
+#             @. kraus_jump = jump.in_eigenbasis * nufft_prefactor_matrix
 
-            rate_positive = sqrt(base_prefactor * transition(w))
-            push!(kraus_jumps, (rate_positive, kraus_jump))
+#             rate_positive = sqrt(base_prefactor * transition(w))
+#             push!(kraus_jumps, (rate_positive, kraus_jump))
 
-            if jump.hermitian && w > 1e-12
-                rate_negative = sqrt(base_prefactor * transition(-w))
-                push!(kraus_jumps, (rate_negative, kraus_jump'))  # ()' doesn't create a new matrix
-            end
-        end
-    end
-    return kraus_jumps
-end
+#             if jump.hermitian && w > 1e-12
+#                 rate_negative = sqrt(base_prefactor * transition(-w))
+#                 push!(kraus_jumps, (rate_negative, kraus_jump'))  # ()' doesn't create a new matrix
+#             end
+#         end
+#     end
+#     return kraus_jumps
+# end
 
-function precompute_kraus_jumps(
-    ::TrotterDomain,
-    jumps::Vector{JumpOp}, 
-    trotter::TrottTrott,
-    config::LiouvConfig,
-    precomputed_data,
-    )
+# function precompute_kraus_jumps(
+#     ::TrotterDomain,
+#     jumps::Vector{JumpOp}, 
+#     trotter::TrottTrott,
+#     config::LiouvConfig,
+#     precomputed_data,
+#     )
 
-    dim = size(trotter.eigvecs, 1)
-    (; transition, gamma_norm_factor, b_minus, b_plus, energy_labels, oft_nufft_prefactors) = precomputed_data
+#     dim = size(trotter.eigvecs, 1)
+#     (; transition, gamma_norm_factor, b_minus, b_plus, energy_labels, oft_nufft_prefactors) = precomputed_data
 
-    base_prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
+#     base_prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
 
-    kraus_jumps = Vector{Tuple{Float64, AbstractMatrix{ComplexF64}}}()
-    for jump in jumps
-        energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
-        for w in energies
-            kraus_jump = Matrix{ComplexF64}(undef, dim, dim)
-            nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
-            @. kraus_jump = jump.in_eigenbasis * nufft_prefactor_matrix
+#     kraus_jumps = Vector{Tuple{Float64, AbstractMatrix{ComplexF64}}}()
+#     for jump in jumps
+#         energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
+#         for w in energies
+#             kraus_jump = Matrix{ComplexF64}(undef, dim, dim)
+#             nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
+#             @. kraus_jump = jump.in_eigenbasis * nufft_prefactor_matrix
 
-            rate_positive = sqrt(base_prefactor * transition(w))
-            push!(kraus_jumps, (rate_positive, kraus_jump))
+#             rate_positive = sqrt(base_prefactor * transition(w))
+#             push!(kraus_jumps, (rate_positive, kraus_jump))
 
-            if jump.hermitian && w > 1e-12
-                rate_negative = sqrt(base_prefactor * transition(-w))
-                push!(kraus_jumps, (rate_negative, kraus_jump'))  # ()' doesn't create a new matrix
-            end
-        end
-    end
-    return kraus_jumps  # in Trotter basis
-end
+#             if jump.hermitian && w > 1e-12
+#                 rate_negative = sqrt(base_prefactor * transition(-w))
+#                 push!(kraus_jumps, (rate_negative, kraus_jump'))  # ()' doesn't create a new matrix
+#             end
+#         end
+#     end
+#     return kraus_jumps  # in Trotter basis
+# end
 
-function verify_completeness(fw::KrausFramework)
-    dim = size(fw.kraus_H_eff, 1)
-    total = fw.kraus_H_eff
-    for (rate, op) in fw.kraus_jumps
-        total .+= rate^2 * op' * op
-    end
-    # Completeness check
-    return norm(total - I(dim)) / dim
-end
+# function verify_completeness(fw::KrausFramework)
+#     dim = size(fw.kraus_H_eff, 1)
+#     total = fw.kraus_H_eff
+#     for (rate, op) in fw.kraus_jumps
+#         total .+= rate^2 * op' * op
+#     end
+#     # Completeness check
+#     return norm(total - I(dim)) / dim
+# end
 
 """
 R = \\sum_k L_k^\\dagger L_k, in eigenbasis of H.
@@ -639,97 +639,97 @@ R = \\sum_k L_k^\\dagger L_k, in eigenbasis of H.
 
 #TODO: test it; set BLAS threads to 1, let julia threads be more. 
 #* In-place Lindbladian action at once
-"""
-Applies L(X) = -i[B, X] - 0.5{R, X} + sum(L X L')
-"""
-function apply_lindbladian!(
-    target::Matrix{ComplexF64},
-    rho::Matrix{ComplexF64},
-    kraus_jumps::Vector{Matrix{ComplexF64}}, 
-    B::Matrix{ComplexF64},
-    R::Matrix{ComplexF64},
-    ws::LindbladWorkspace{ComplexF64})
+# """
+# Applies L(X) = -i[B, X] - 0.5{R, X} + sum(L X L')
+# """
+# function apply_lindbladian!(
+#     target::Matrix{ComplexF64},
+#     rho::Matrix{ComplexF64},
+#     kraus_jumps::Vector{Matrix{ComplexF64}}, 
+#     B::Matrix{ComplexF64},
+#     R::Matrix{ComplexF64},
+#     ws::LindbladWorkspace{ComplexF64})
     
-    #  mul!(C, A, B, alpha, beta) = alpha A B + beta C
-    # Coherent: -i [B, rho]
-    mul!(target, B, rho, -1im, 0.0) # target <- -i * B * rho
-    mul!(target, rho, B, 1im, 1.0)  # target += i * rho * B
+#     #  mul!(C, A, B, alpha, beta) = alpha A B + beta C
+#     # Coherent: -i [B, rho]
+#     mul!(target, B, rho, -1im, 0.0) # target <- -i * B * rho
+#     mul!(target, rho, B, 1im, 1.0)  # target += i * rho * B
     
-    # Reflection: -0.5 {R, rho}
-    mul!(target, R, rho, -0.5, 1.0)  # target -= 0.5 * R * rho
-    mul!(target, rho, R, -0.5, 1.0)  # target -= 0.5 * rho * R
+#     # Reflection: -0.5 {R, rho}
+#     mul!(target, R, rho, -0.5, 1.0)  # target -= 0.5 * R * rho
+#     mul!(target, rho, R, -0.5, 1.0)  # target -= 0.5 * rho * R
 
-    # Reset thread accumulators to zero
-    @threads for i in 1:nthreads()
-        fill!(ws.accumulators[i], 0.0)
-    end
+#     # Reset thread accumulators to zero
+#     @threads for i in 1:nthreads()
+#         fill!(ws.accumulators[i], 0.0)
+#     end
 
-    # Translation: sum(L rho L') (Multi-threaded)
-    @threads for k in 1:length(kraus_jumps)
-        id = threadid()
-        L = kraus_jumps[k]
+#     # Translation: sum(L rho L') (Multi-threaded)
+#     @threads for k in 1:length(kraus_jumps)
+#         id = threadid()
+#         L = kraus_jumps[k]
         
-        buf = ws.temp_buffers[id]
-        acc = ws.accumulators[id]
+#         buf = ws.temp_buffers[id]
+#         acc = ws.accumulators[id]
         
-        # Compute L * rho * L' 
-        mul!(buf, rho, L')  # buf = rho * L'
-        mul!(acc, L, buf, 1.0, 1.0)  # acc += L * rho * L'
-    end
+#         # Compute L * rho * L' 
+#         mul!(buf, rho, L')  # buf = rho * L'
+#         mul!(acc, L, buf, 1.0, 1.0)  # acc += L * rho * L'
+#     end
 
-    # Sum all thread accumulators
-    for i in 1:nthreads()
-        @. target += ws.accumulators[i]
-    end
+#     # Sum all thread accumulators
+#     for i in 1:nthreads()
+#         @. target += ws.accumulators[i]
+#     end
     
-    return target
-end
+#     return target
+# end
 
-"""
-Applies L^dagger(X) = +i[B, X] - 0.5{R, X} + sum(L' X L),
-i.e. the Hilbert-Schmidt adjoint.
-"""
-function apply_lindbladian_dagger!(
-    target::Matrix{ComplexF64},
-    rho::Matrix{ComplexF64},
-    kraus_jumps::Vector{Matrix{ComplexF64}}, 
-    B::Matrix{ComplexF64},
-    R::Matrix{ComplexF64},
-    ws::LindbladWorkspace{ComplexF64})
+# """
+# Applies L^dagger(X) = +i[B, X] - 0.5{R, X} + sum(L' X L),
+# i.e. the Hilbert-Schmidt adjoint.
+# """
+# function apply_lindbladian_dagger!(
+#     target::Matrix{ComplexF64},
+#     rho::Matrix{ComplexF64},
+#     kraus_jumps::Vector{Matrix{ComplexF64}}, 
+#     B::Matrix{ComplexF64},
+#     R::Matrix{ComplexF64},
+#     ws::LindbladWorkspace{ComplexF64})
     
-    # Coherent: -i [B, rho]
-    mul!(target, B, rho, 1im, 0.0)  # target <- i * B * rho
-    mul!(target, rho, B, -1im, 1.0)  # target += -i * rho * B
+#     # Coherent: -i [B, rho]
+#     mul!(target, B, rho, 1im, 0.0)  # target <- i * B * rho
+#     mul!(target, rho, B, -1im, 1.0)  # target += -i * rho * B
     
-    # Reflection: -0.5 {R, rho}
-    mul!(target, R, rho, -0.5, 1.0)  # target -= 0.5 * R * rho
-    mul!(target, rho, R, -0.5, 1.0)  # target -= 0.5 * rho * R
+#     # Reflection: -0.5 {R, rho}
+#     mul!(target, R, rho, -0.5, 1.0)  # target -= 0.5 * R * rho
+#     mul!(target, rho, R, -0.5, 1.0)  # target -= 0.5 * rho * R
 
-    # Reset thread accumulators to zero
-    @threads for i in 1:nthreads()
-        fill!(ws.accumulators[i], 0.0)
-    end
+#     # Reset thread accumulators to zero
+#     @threads for i in 1:nthreads()
+#         fill!(ws.accumulators[i], 0.0)
+#     end
 
-    # Translation: sum(L rho L') (Multi-threaded)
-    @threads for k in 1:length(kraus_jumps)
-        id = threadid()
-        L = kraus_jumps[k]
+#     # Translation: sum(L rho L') (Multi-threaded)
+#     @threads for k in 1:length(kraus_jumps)
+#         id = threadid()
+#         L = kraus_jumps[k]
         
-        buf = ws.temp_buffers[id]
-        acc = ws.accumulators[id]
+#         buf = ws.temp_buffers[id]
+#         acc = ws.accumulators[id]
         
-        # Compute L * rho * L' 
-        mul!(buf, rho, L)  # buf = rho * L
-        mul!(acc, L', buf, 1.0, 1.0)  # acc += L' * rho * L
-    end
+#         # Compute L * rho * L' 
+#         mul!(buf, rho, L)  # buf = rho * L
+#         mul!(acc, L', buf, 1.0, 1.0)  # acc += L' * rho * L
+#     end
 
-    # Sum all thread accumulators
-    for i in 1:nthreads()
-        @. target += ws.accumulators[i]
-    end
+#     # Sum all thread accumulators
+#     for i in 1:nthreads()
+#         @. target += ws.accumulators[i]
+#     end
     
-    return target
-end
+#     return target
+# end
 
 #* Slow and old
 # function jump_contribution_slow(::TrotterDomain, jump::JumpOp, trotter::TrottTrott, config::LiouvConfig, 

@@ -24,7 +24,7 @@ using FINUFFT
 # --- Public API ---
 export AbstractConfig, AbstractLiouvConfig, AbstractThermalizeConfig,
        LiouvConfig, LiouvConfigGNS, ThermalizeConfig, ThermalizeConfigGNS, HamHam, TrottTrott, HotAlgorithmResults, HotSpectralResults, JumpOp,
-       BohrDomain, EnergyDomain, TimeDomain, TrotterDomain, LindbladWorkspace, KrausFramework, LSIFramework,
+       BohrDomain, EnergyDomain, TimeDomain, TrotterDomain, LindbladWorkspace, LSIFramework,
        OFTCaches, NUFFTPrefactors
 export run_lindbladian, run_thermalization, construct_lindbladian, B_time, B_trotter, coherent_bohr
 export generate_filename, validate_config!, create_trotter, compute_trotter_error, gibbs_state, gibbs_state_in_eigen,
@@ -33,9 +33,9 @@ export generate_filename, validate_config!, create_trotter, compute_trotter_erro
        precompute_coherent_terms, precompute_coherent_total_B
 export create_alpha_gns
 # Quantum Trajectory
-export krausframework, step_along_the_trajectory!, evolve_along_trajectory, construct_gksl_lindbladian,
-       apply_jump_contribution!, apply_lindbladian_dagger!, apply_lindbladian!, precompute_B, precompute_R, 
-       precompute_kraus_jumps, precompute_data, verify_completeness
+export step_along_the_trajectory!, evolve_along_trajectory, evolve_and_measure_along_trajectory, construct_gksl_lindbladian,
+       precompute_B, precompute_R, build_trajectoryframework, TrajectoryFramework, TrajectoryWorkspace
+       precompute_data, verify_completeness
 export KrausScratch, run_thermalization_kraus, jump_contribution!
 # Log Sobolev bound
 export compute_LSI_alpha2
