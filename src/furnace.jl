@@ -63,7 +63,7 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::AbstractLiouvConfi
     ws = LindbladianWorkspace(dim)
 
     # Precompute all B's for the A's if for KMS DB and with_coherent.
-    Btot = precompute_coherent_total_B(jumps, hamiltonian, config, precomputed_data; trotter=trotter)
+    Btot = precompute_coherent_total_B(jumps, ham_or_trott, config, precomputed_data; trotter=trotter)
     if Btot !== nothing
         vectorize_liouvillian_coherent!(total_lindbladian, Btot, ws)
     end
@@ -84,7 +84,7 @@ function run_thermalization(
     hamiltonian::HamHam;
     trotter::Union{TrottTrott, Nothing}=nothing,
     rng::AbstractRNG = Random.default_rng(),
-    rescale_by_inv_prob::Bool = false,
+    rescale_by_inv_prob::Bool = true,  # to retain the physical meaning of the input mixing time the same
     )
 
     dim = size(hamiltonian.data, 1)

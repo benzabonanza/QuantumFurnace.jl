@@ -13,27 +13,26 @@
 """
 function precompute_coherent_total_B(
     jumps::AbstractVector{<:JumpOp},
-    hamiltonian::HamHam,
+    ham_or_trott::Union{HamHam, TrottTrott},
     config::AbstractConfig,
     precomputed_data;
-    trotter::Union{Nothing, TrottTrott}=nothing,
     )::Union{Nothing, Matrix{ComplexF64}}
 
     config.with_coherent || return nothing
 
     if config.domain isa TimeDomain
         (; b_minus, b_plus, gamma_norm_factor) = precomputed_data
-        B = B_time(jumps, hamiltonian, b_minus, b_plus, config.t0, config.beta, config.sigma)
+        B = B_time(jumps, ham_or_trott, b_minus, b_plus, config.t0, config.beta, config.sigma)
 
     elseif config.domain isa TrotterDomain
         (; b_minus, b_plus, gamma_norm_factor) = precomputed_data
-        @assert trotter !== nothing
-        B = B_trotter(jumps, trotter, b_minus, b_plus, config.beta, config.sigma)
+        @assert ham_or_trott !== nothing
+        B = B_trotter(jumps, ham_or_trott, b_minus, b_plus, config.beta, config.sigma)
 
     else
         # BohrDomain / EnergyDomain
         (; gamma_norm_factor) = precomputed_data
-        B = coherent_bohr(hamiltonian, jumps, config)
+        B = coherent_bohr(ham_or_trott, jumps, config)
     end
 
     rmul!(B, gamma_norm_factor)

@@ -7,6 +7,14 @@ struct TrajectoryWorkspace{T}
     Rpsi::Vector{T}       # cache Rψ so K0ψ can be formed as ψ - α(Rψ) without a second matvec
 end
 
+function TrajectoryWorkspace(::Type{T}, dim::Int) where {T}
+    return TrajectoryWorkspace{T}(
+        zeros(T, dim, dim),  # jump_oft
+        zeros(T, dim),       # psi_tmp
+        zeros(T, dim),       # Rpsi
+    )
+end
+
 struct TrajectoryFramework{T,C,H,PD,D<:AbstractDomain}
     domain::D
     jumps::Vector{JumpOp}
@@ -39,12 +47,16 @@ function build_trajectoryframework(
     scratch::KrausScratch{ComplexF64},
     delta::Float64) where T
 
-    dim = size(H, 1)
-    
-    B_total = precompute_coherent_total_B(jumps, hamiltonian, config, precomputed_data; trotter=trotter)
-    B_total .= 0.5 .* (B_total .+ B_total')
-    U_B = exp(-1im * delta * Hermitian(B_total))
+    dim = size(jumps[1].data, 1)
 
+    if config.with_coherent
+        B_total = precompute_coherent_total_B(jumps, ham_or_trott, config, precomputed_data; trotter=trotter)
+        B_total .= 0.5 .* (B_total .+ B_total')
+        U_B = exp(-1im * delta * Hermitian(B_total))
+    else
+        U_B = nothing
+    end
+    
     R = precompute_R(config.domain, jumps, ham_or_trott, config, precomputed_data, scratch)
     R = copy(scratch.R)
 
@@ -90,7 +102,6 @@ function build_trajectoryframework(
         alpha,
         ws,
     )
-    return
 end
 
 """
@@ -232,7 +243,7 @@ end
 """
     evolve_along_trajectory(psi0, fw::TrajectoryFramework, total_time) -> Vector{ComplexF64}
 
-    Runs `num_steps = floor(total_time/δ)` full δ-steps using `step_along_trajectory!`.
+    Runs `num_steps = ceil(total_time/δ)` full δ-steps using `step_along_trajectory!`.
     Does not allocate inside the loop (beyond RNG internals); all workspace is in `fw.ws`.
 
     Normalization: each step normalizes in the branch logic (and after U_B if present).
@@ -247,7 +258,7 @@ function _evolve_along_trajectory!(
     @assert delta > 0
     @assert total_time ≥ 0
 
-    num_steps = floor(Int, total_time / delta)
+    num_steps = ceil(Int, total_time / delta)
     # ensure normalized input (optional, but makes probabilities consistent)
     psi_norm2 = _norm2(psi)
     rmul!(psi, 1.0 / sqrt(max(psi_norm2, eps(Float64))))
@@ -354,7 +365,7 @@ function run_trajectories(
     # With measurements: average ⟨O⟩ over trajectories, saved every `save_every`
     # ------------------------------------------------------------------
     delta = fw.delta
-    num_steps = floor(Int, total_time / delta)
+    num_steps = ceil(Int, total_time / delta)
     num_saves = div(num_steps, save_every) + 1
     num_obs   = length(observables)
 
@@ -430,7 +441,7 @@ function step_along_trajectory!(
     base_prefactor = cfg.w0 * cfg.t0^2 * (cfg.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
 
     # ------------------------------------------------------------------
-    # 1) Compute p_nojump and p_jump_total cheaply from one Rψ
+    # Compute p_nojump and p_jump_total cheaply from one Rψ
     # ------------------------------------------------------------------
     mul!(ws.Rpsi, R, psi)                          # ws.Rpsi := Rψ
     expR = real(dot(psi, ws.Rpsi))                 # <ψ|R|ψ>, should be ≥ 0
@@ -445,7 +456,7 @@ function step_along_trajectory!(
     p_jump_total = delta * expR
 
     # ------------------------------------------------------------------
-    # 2) Residual probability p_res = ||U_residual ψ||^2
+    # Residual probability p_res = ||U_residual ψ||^2
     #    Reuse ws.Rpsi buffer (Rψ no longer needed beyond expR + K0ψ)
     # ------------------------------------------------------------------
     mul!(ws.Rpsi, fw.U_residual, psi)              # ws.Rpsi := U_res ψ
@@ -457,7 +468,16 @@ function step_along_trajectory!(
     r = rand() * total_weight
 
     # ------------------------------------------------------------------
-    # 3) Branch: no-jump / residual / dissipative jump
+    # Deterministic coherent update (if enabled): ψ ← U_B ψ
+    # ------------------------------------------------------------------
+    if fw.U_B !== nothing
+        mul!(ws.psi_tmp, fw.U_B, psi)
+        copyto!(psi, ws.psi_tmp)
+        rmul!(psi, 1.0 / sqrt(max(_norm2(psi), eps(Float64))))  # guard drift from expm / roundoff
+    end
+
+    # ------------------------------------------------------------------
+    # Branch: no-jump / residual / dissipative jump
     # ------------------------------------------------------------------
 
     if r < p_nojump
@@ -547,16 +567,6 @@ function step_along_trajectory!(
             rmul!(psi, 1.0 / sqrt(max(last_norm2, eps(Float64))))
         end
     end
-
-    # ------------------------------------------------------------------
-    # 4) Deterministic coherent update (if enabled): ψ ← U_B ψ
-    # ------------------------------------------------------------------
-    if fw.U_B !== nothing
-        mul!(ws.psi_tmp, fw.U_B, psi)
-        copyto!(psi, ws.psi_tmp)
-        rmul!(psi, 1.0 / sqrt(max(_norm2(psi), eps(Float64))))  # guard drift from expm / roundoff
-    end
-
     return nothing
 end
 
@@ -594,7 +604,7 @@ function step_along_trajectory!(
     base_prefactor = cfg.w0 / (cfg.sigma * sqrt(2 * pi)) * gamma_norm_factor
 
     # ------------------------------------------------------------------
-    # 1) Compute p_nojump and p_jump_total cheaply from one Rψ
+    # Compute p_nojump and p_jump_total cheaply from one Rψ
     # ------------------------------------------------------------------
     mul!(ws.Rpsi, R, psi)                          # Rψ
     expR = real(dot(psi, ws.Rpsi))
@@ -608,7 +618,7 @@ function step_along_trajectory!(
     p_jump_total = δ * expR
 
     # ------------------------------------------------------------------
-    # 2) Residual probability
+    # Residual probability
     # ------------------------------------------------------------------
     mul!(ws.Rpsi, fw.U_residual, psi)              # U_res ψ
     p_res = _norm2(ws.Rpsi)
@@ -619,7 +629,16 @@ function step_along_trajectory!(
     r = rand() * total_weight
 
     # ------------------------------------------------------------------
-    # 3) Branch
+    # Coherent unitary (if enabled)
+    # ------------------------------------------------------------------
+    if fw.U_B !== nothing
+        mul!(ws.psi_tmp, fw.U_B, psi)
+        copyto!(psi, ws.psi_tmp)
+        rmul!(psi, 1.0 / sqrt(max(_norm2(psi), eps(Float64))))
+    end
+
+    # ------------------------------------------------------------------
+    # Branch
     # ------------------------------------------------------------------
     if r < p_nojump
         copyto!(psi, ws.psi_tmp)
@@ -705,16 +724,6 @@ function step_along_trajectory!(
             rmul!(psi, 1.0 / sqrt(max(last_norm2, eps(Float64))))
         end
     end
-
-    # ------------------------------------------------------------------
-    # 4) Coherent unitary (if enabled)
-    # ------------------------------------------------------------------
-    if fw.U_B !== nothing
-        mul!(ws.psi_tmp, fw.U_B, psi)
-        copyto!(psi, ws.psi_tmp)
-        rmul!(psi, 1.0 / sqrt(max(_norm2(psi), eps(Float64))))
-    end
-
     return nothing
 end
 
@@ -740,7 +749,7 @@ end
 #     @assert T ≥ 0
 #     @assert save_every ≥ 1
 
-#     num_steps = floor(Int, T / δ)
+#     num_steps = ceil(Int, T / δ)
 #     num_saves = div(num_steps, save_every) + 1
 #     num_obs   = length(observables)
 
