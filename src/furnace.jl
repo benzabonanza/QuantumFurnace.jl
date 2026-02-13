@@ -63,7 +63,7 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::AbstractLiouvConfi
     ws = LindbladianWorkspace(dim)
 
     # Precompute all B's for the A's if for KMS DB and with_coherent.
-    Btot = precompute_coherent_total_B(jumps, ham_or_trott, config, precomputed_data; trotter=trotter)
+    Btot = precompute_coherent_total_B(jumps, ham_or_trott, config, precomputed_data)
     if Btot !== nothing
         vectorize_liouvillian_coherent!(total_lindbladian, Btot, ws)
     end

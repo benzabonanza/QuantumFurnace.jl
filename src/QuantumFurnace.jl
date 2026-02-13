@@ -10,7 +10,6 @@ using SparseArrays
 using Random
 using ProgressMeter
 using Distributed
-using ClusterManagers
 using Roots
 using DataStructures
 using SpecialFunctions: erfc
@@ -33,9 +32,9 @@ export generate_filename, validate_config!, create_trotter, compute_trotter_erro
        precompute_coherent_terms, precompute_coherent_total_B
 export create_alpha_gns
 # Quantum Trajectory
-export TrajectoryFramework, TrajectoryWorkspace, build_trajectoryframework, step_along_trajectory!, evolve_along_trajectory, 
-       evolve_and_measure_along_trajectory, run_trajectories, precompute_R
-       precompute_data, verify_completeness
+export TrajectoryFramework, TrajectoryWorkspace, build_trajectoryframework, step_along_trajectory!, evolve_along_trajectory,
+       evolve_and_measure_along_trajectory, run_trajectories, precompute_R,
+       precompute_data
 export KrausScratch, jump_contribution!
 # Log Sobolev bound
 export compute_LSI_alpha2

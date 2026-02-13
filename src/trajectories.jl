@@ -45,15 +45,16 @@ function build_trajectoryframework(
     config::AbstractThermalizeConfig,
     precomputed_data,
     scratch::KrausScratch{ComplexF64},
-    delta::Float64) where T
+    delta::Float64)
 
     dim = size(jumps[1].data, 1)
 
     if config.with_coherent
-        B_total = precompute_coherent_total_B(jumps, ham_or_trott, config, precomputed_data; trotter=trotter)
+        B_total = precompute_coherent_total_B(jumps, ham_or_trott, config, precomputed_data)
         B_total .= 0.5 .* (B_total .+ B_total')
         U_B = exp(-1im * delta * Hermitian(B_total))
     else
+        B_total = nothing
         U_B = nothing
     end
     
