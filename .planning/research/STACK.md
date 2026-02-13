@@ -1,230 +1,275 @@
-# Stack Research
+# Stack Research: v1.0 Trajectories Milestone
 
-**Domain:** Julia quantum Lindbladian simulation package (open quantum systems, Gibbs sampling)
+**Domain:** Trajectory simulation validation, statistical comparison, and correctness testing for quantum Lindbladian evolution
 **Researched:** 2026-02-13
-**Confidence:** MEDIUM-HIGH (most recommendations verified via official docs/repos; some version numbers from training data marked accordingly)
+**Confidence:** HIGH (most recommendations use Julia stdlib or verified JuliaStats packages; one MEDIUM item noted)
 
-## Current State of QuantumFurnace.jl
+## Scope
 
-Before recommending the stack, here is what the project already uses (from `Project.toml`):
+This stack research covers ONLY the additions needed for the v1.0 Trajectories milestone:
+1. Fixing two-stage jump sampling
+2. Validating trajectory-averaged rho against DM simulation
+3. Building a comprehensive correctness test suite
+4. Statistical comparison tools for stochastic results
 
-| Dependency | Role | Status |
-|------------|------|--------|
-| LinearAlgebra (stdlib) | Dense matrix ops, eigen decomposition | Keep |
-| SparseArrays (stdlib) | Sparse Hamiltonians, Liouvillians | Keep |
-| Arpack | Sparse eigensolve for Liouvillian steady state | **Replace** |
-| FINUFFT | Non-uniform FFT for time/energy domain | Keep |
-| Distributed / SharedArrays / ClusterManagers | Parallel jump operator construction | Keep (with caveats) |
-| LinearMaps | Matrix-free Liouvillian representation | Keep |
-| QuadGK | Numerical integration | Keep |
-| Roots | Root finding | Keep |
-| Optim | Optimization (log-Sobolev bounds) | Keep |
-| SpecialFunctions | erfc for filter functions | Keep |
-| DataStructures | OrderedDict for Bohr frequencies | Keep |
-| BSON | Serialization | Keep |
-| ProgressMeter | Progress bars | Keep |
-| Plots | Visualization | **Reconsider** |
-| Revise / Debugger / BenchmarkTools | Dev tooling | Keep (dev-only) |
-| Documenter / Literate / DocumenterTools | Documentation | Keep, upgrade |
+It does NOT re-research the existing stack (Arpack, FINUFFT, LinearAlgebra, etc.) or future features (Qiskit, multi-threading, >12 qubits). See the project-level STACK.md in git history for those.
 
-Julia version: **1.12.4** (Manifest confirms; 1.12.5 available as of Feb 2026).
+## Current Stack (Relevant Subset)
 
-## Recommended Stack
+These existing dependencies are directly used by trajectory code and need no changes:
 
-### Core Technologies (Keep / Already Present)
+| Dependency | Role in Trajectories | Status |
+|------------|---------------------|--------|
+| LinearAlgebra (stdlib) | BLAS.gerc! for rho accumulation, mul!, dot, cholesky, Hermitian | Keep as-is |
+| Random (stdlib) | rand() for branch selection in step_along_trajectory! | Keep as-is |
+| Test (stdlib) | @test, @testset macros | Keep -- extend usage |
+| Statistics (stdlib) | mean, var, std for trajectory averaging | Keep -- already available but underutilized |
+
+## New Dependencies to Add
+
+### For Testing Infrastructure
 
 | Technology | Version | Purpose | Why Recommended |
 |------------|---------|---------|-----------------|
-| Julia | >= 1.12 | Language runtime | Already in use. Julia 1.12 brings redefinable types (better dev workflow) and code trimming. LTS is 1.10 but 1.12 is fine for a research package. |
-| LinearAlgebra (stdlib) | 1.12.x | Dense linear algebra, eigen, matrix exp | Standard, zero-dep. Handles all dense ops for <= 12 qubits (4096x4096 matrices). No reason to change. |
-| SparseArrays (stdlib) | 1.12.x | Sparse matrix storage and ops | CSC format. Standard for quantum Hamiltonians. Keep. |
-| FINUFFT.jl | >= 3.4.2 | Non-uniform FFT | Core to the time-domain and energy-domain Lindbladian construction. No Julia-native competitor of comparable quality. Keep. |
-| LinearMaps.jl | latest | Matrix-free linear operators | Used for Liouvillian-as-linear-map (avoids materializing d^4 superoperator). Essential for scaling. Keep. |
-| QuadGK.jl | latest | Adaptive Gauss-Kronrod quadrature | Used for numerical integrals in filter functions. Lightweight, standard. Keep. |
-| Roots.jl | latest | Root finding | Lightweight. Keep. |
-| Optim.jl | >= 1.13 | Optimization | Used for log-Sobolev bound computation. Mature, well-maintained. Keep. |
-| SpecialFunctions.jl | latest | erfc and related | Only importing erfc. Lightweight dep. Keep. |
-| DataStructures.jl | latest | OrderedDict for Bohr frequency bookkeeping | Lightweight. Keep. |
-| BSON.jl | latest | Data serialization | Used for saving/loading results. Keep. |
+| StableRNGs.jl | >= 1.0.1 | Reproducible RNG for deterministic trajectory tests | Julia's default RNG streams are NOT stable across versions. For regression tests that depend on specific random sequences (e.g., verifying a particular jump selection path), you need `StableRNG(seed)` to get identical results on Julia 1.12, 1.13, etc. Passed Big Crush statistical tests. Used by QuantEcon.jl, Flux.jl, and many JuliaStats packages for exactly this purpose. Add to `[extras]` test target. |
+| HypothesisTests.jl | >= 0.11 | Statistical significance tests for trajectory vs DM comparison | Provides `OneSampleTTest`, `UnequalVarianceTTest`, and `ChisqTest`. When comparing trajectory-averaged expectation values against DM-computed values, you need a principled way to assess whether discrepancies are within statistical noise or indicate a bug. A one-sample t-test of trajectory means against the DM value, with a chosen significance level, is the correct tool. Part of JuliaStats org, well-maintained. Add to `[extras]` test target. |
+| Aqua.jl | >= 0.8 | Automated package quality checks | Catches method ambiguities (critical with QuantumFurnace's heavy multiple dispatch -- 4 domain types x 2 config types x multiple method signatures), stale dependencies, missing compat entries, undefined exports. A single `Aqua.test_all(QuantumFurnace)` call in CI prevents entire classes of subtle bugs. Standard practice for Julia packages. Add to `[extras]` test target. |
 
-**Confidence: HIGH** -- These are all verified in the existing Project.toml and are standard Julia scientific computing choices.
+**Confidence: HIGH** -- StableRNGs verified via [GitHub repo](https://github.com/JuliaRandom/StableRNGs.jl) (v1.0.1, Jan 2024, stable API). HypothesisTests verified via [official docs](https://juliastats.org/HypothesisTests.jl/stable/parametric/) (OneSampleTTest, ChisqTest confirmed). Aqua verified via [official docs](https://juliatesting.github.io/Aqua.jl/dev/).
 
-### New Dependencies to Add
+### For Statistical Analysis in Tests
 
 | Technology | Version | Purpose | Why Recommended |
 |------------|---------|---------|-----------------|
-| KrylovKit.jl | >= 0.8 | Sparse eigensolve (replace Arpack) | **Replace Arpack.jl.** Arpack wraps Fortran ARPACK which is (a) not thread-safe (single-threaded only), (b) lacks specialized Hermitian routines, (c) less stable than KrylovKit for complex Hermitian problems. KrylovKit provides native Julia Krylov-Schur/Lanczos with Hermitian specialization, thread-safety, and works with any `AbstractMatrix` or callable. Used by ITensors, QuantumOptics ecosystem. |
-| ExponentialUtilities.jl | >= 1.27 | Matrix exponential, Krylov expmv | For trajectory simulation: `exp(t*A)*v` without forming full matrix exponential. Krylov-based `expv!` is O(m*n) vs O(n^3) for dense expm. At 12 qubits the Liouvillian is 16M entries dense -- Krylov expmv avoids this. Also useful for Trotterized time evolution validation. Part of SciML ecosystem. |
-| PythonCall.jl | >= 0.9.23 | Julia-Python interop for Qiskit | **Use PythonCall, not PyCall.** PythonCall is the modern replacement: type-stable returns, no lossy conversions, no numpy dependency, uses PATH Python by default (or CondaPkg). Needed for Qiskit circuit generation/resource estimation. PyCall is legacy. |
-| CondaPkg.jl | latest | Manage Python deps for PythonCall | Companion to PythonCall. Declares Python dependencies (qiskit, qiskit-aer) in a CondaPkg.toml so they install automatically. Reproducible Python env. |
-| OrdinaryDiffEqTsit5.jl | >= 1.x | Lightweight ODE solver | For trajectory validation: compare trajectory-averaged density matrix evolution against direct Lindblad master equation integration. Use the split sub-package (not full DifferentialEquations.jl which pulls 100+ deps). Tsit5 is the recommended default non-stiff solver. |
-| Aqua.jl | >= 0.8 | Automated package quality assurance | Test for method ambiguities, stale deps, missing compat entries, undefined exports. Standard for Julia packages aiming for registry. Add to test deps. |
-| JuliaFormatter.jl | >= 1.0 | Code formatting | Enforces consistent style. Use `.JuliaFormatter.toml` with SciML style (4-space indent, consistent with scientific Julia convention). Add as dev tool, optionally enforce in CI. |
+| Statistics (stdlib) | ships with Julia | mean(), var(), std() for trajectory ensemble statistics | Already available -- no install needed. Currently underutilized. Use `mean(samples)` and `std(samples) / sqrt(length(samples))` for standard error of trajectory-averaged observables. |
+| StatsBase.jl | >= 0.34 | sem() (standard error of mean), weighted statistics | Provides `sem(x)` = `std(x)/sqrt(length(x))` as a convenience, plus `L2dist`, `kldivergence` for comparing probability distributions element-wise. Useful for comparing diagonal elements of trajectory-averaged rho against Gibbs state. Lightweight (few deps). Add to `[extras]` test target. |
 
-**Confidence: HIGH** for KrylovKit (verified: widely used, official docs confirm Hermitian specialization), PythonCall (verified: official comparison page confirms advantages over PyCall), Aqua (verified: standard practice).
-**Confidence: MEDIUM** for ExponentialUtilities (version number from training data; functionality verified via SciML docs), OrdinaryDiffEqTsit5 (split package approach verified; exact version from training data).
+**Confidence: HIGH** -- Statistics stdlib verified via [Julia 1.12 docs](https://docs.julialang.org/en/v1/stdlib/Statistics/). StatsBase verified via [official docs](https://juliastats.org/StatsBase.jl/stable/).
 
-### Testing Stack
+## What NOT to Add for This Milestone
 
-| Tool | Purpose | When to Use |
-|------|---------|-------------|
-| Test (stdlib) | Core test macros (@test, @testset, @test_throws) | Always. Foundation of all testing. |
-| Aqua.jl | Package quality checks | Run in CI. Catches ambiguities, stale deps, missing compat before they become bugs. |
-| SafeTestsets.jl | Isolated test sets | Use for test files that might leak state. Each @safetestset runs in its own module. Prevents test interference. |
-| BenchmarkTools.jl | Performance regression testing | Already a dep. Use @btime/@benchmark in dedicated performance tests, not in CI (too noisy). |
+| Avoid | Why | What to Do Instead |
+|-------|-----|-------------------|
+| OrdinaryDiffEqTsit5 / DifferentialEquations.jl | Overkill for this milestone. You do NOT need an independent ODE reference solver -- you already HAVE the DM simulation (`run_thermalization`) as the reference. Trajectory vs DM comparison uses the DM stepper output directly. ODE solvers are for continuous-time master equation integration, which is a different problem. Adds ~30+ transitive deps for zero value here. | Compare trajectory rho_mean against `run_thermalization` output directly. Both use the same delta-stepping Kraus map -- the DM version applies it to the full density matrix, trajectories sample from it. Their agreement validates the sampling, not the Kraus map itself. |
+| ExponentialUtilities.jl | Not needed for trajectory validation. The trajectory code uses discrete Kraus-map steps (K0, jump operators, residual), not matrix exponentials. DM validation similarly uses discrete steps. expv/expm is irrelevant. | Keep using the existing discrete delta-step framework. |
+| KrylovKit.jl | Arpack replacement is a separate concern. Eigendecomposition is done once during setup (finalize_hamham), not during trajectory evolution or testing. Swapping eigensolvers during the validation milestone adds risk with zero benefit. | Defer to a future cleanup milestone. |
+| Distributions.jl | Full distribution library is heavyweight (~15 deps). For this milestone you need chi-squared p-values and normal quantiles -- HypothesisTests.jl already provides the tests you need without requiring you to manually construct distribution objects. | Use HypothesisTests.jl which handles the underlying distributions internally. |
+| SafeTestsets.jl | Adds module isolation per testset. QuantumFurnace tests are not large enough to have state leakage issues. The Julia 1.12 `@testset` with `rng` keyword already handles the main isolation concern (RNG state). Module isolation adds complexity without solving a real problem at this scale. | Use plain `@testset` with explicit RNG seeding. Group tests into separate files included from `runtests.jl`. |
+| MonteCarloMeasurements.jl | Propagates uncertainty through computations. Interesting but wrong abstraction -- you need to compare trajectory statistics against a known reference, not propagate uncertainty through a computation pipeline. | Direct statistical comparison via t-tests and confidence intervals. |
+| QuantumOptics.jl / QuantumToolbox.jl | Do NOT import these as validation references. They have their own type systems and would force conversion layers. Your DM simulation IS the reference. Cross-validation against a third-party framework is a separate optional future task. | Use your own `run_thermalization` as the ground truth for trajectory validation. |
 
-**Confidence: HIGH** -- Test stdlib is standard. SafeTestsets verified via JuliaTesting org. Aqua verified.
+## Recommended Stack for This Milestone
 
-### Documentation Stack
+### Production Dependencies (src/)
 
-| Tool | Version | Purpose | Notes |
-|------|---------|---------|-------|
-| Documenter.jl | >= 1.16 | Generate HTML docs from docstrings + markdown | Already in extras. v1.16.1 is latest (Nov 2025). Julia 1.12 workspace support simplifies docs/Project.toml setup. |
-| Literate.jl | >= 2.20 | Literate programming for tutorials | Already in extras. Generates Documenter pages AND Jupyter notebooks from same .jl source. Essential for physics packages -- users expect runnable examples. |
-| DocumenterTools.jl | >= 0.1.20 | Doc generation helpers | Already present. Keep. |
+**No new production dependencies needed.** The trajectory fix is a code correction in `step_along_trajectory!` and `build_trajectoryframework`, not a dependency addition. All required numerical tools (LinearAlgebra, Random, BLAS) are already present.
 
-**Confidence: HIGH** -- Already in use, versions verified from Project.toml compat entries and Documenter.jl releases page.
+### Test Dependencies (test/)
 
-### CI / Infrastructure
+Add to `Project.toml` under `[extras]` and `[targets]`:
 
-| Tool | Purpose | Notes |
-|------|---------|-------|
-| GitHub Actions | CI/CD | Standard for Julia packages. Use julia-actions/setup-julia, julia-actions/julia-runtest, julia-actions/julia-processcoverage. |
-| julia-actions/setup-julia | Install Julia in CI | Use version matrix: ['1.12', '1'] to test current and latest. |
-| julia-actions/julia-runtest | Run Pkg.test() in CI | Set annotate: true for PR annotations on test failures. |
-| julia-actions/julia-processcoverage | Generate coverage reports | Outputs lcov.info for Codecov. |
-| codecov/codecov-action | Upload coverage | Works without token for public repos. |
-| JuliaFormatter check | Formatting CI | Run `using JuliaFormatter; format("src", verbose=true, overwrite=false)` and fail if changes detected. |
+| Package | Purpose | Section |
+|---------|---------|---------|
+| StableRNGs | Reproducible trajectory seeds | [extras] + test target |
+| HypothesisTests | Statistical correctness assertions | [extras] + test target |
+| StatsBase | Standard error, distribution distances | [extras] + test target |
+| Aqua | Package quality | [extras] + test target |
 
-**Confidence: HIGH** -- julia-actions verified via GitHub repos. Standard Julia package CI pattern.
+These are TEST-ONLY dependencies. They do not increase the dependency burden for users of the package.
 
-### Development Tools
+## Installation
 
-| Tool | Purpose | Notes |
-|------|---------|-------|
-| Revise.jl | Hot-reload during development | Already a dep. Essential for Julia dev workflow. Keep as dev-only. |
-| Debugger.jl | Step debugging | Already a dep. Keep as dev-only. Not needed at runtime. |
-| BenchmarkTools.jl | Microbenchmarking | Already a dep. Keep. |
-| PrecompileTools.jl | Reduce TTFX | Add @compile_workload blocks for common entry points (run_lindbladian, run_thermalization). Julia 1.12 benefits from native code caching. Worth adding once API stabilizes. |
+```julia
+# From the package directory, add test-only dependencies:
+using Pkg
+Pkg.activate(".")
 
-**Confidence: HIGH** for existing tools. **MEDIUM** for PrecompileTools (defer until API is stable; premature optimization otherwise).
+# These go in [extras] section of Project.toml, not [deps]
+# Add UUIDs manually or via:
+# Pkg.add(["StableRNGs", "HypothesisTests", "StatsBase", "Aqua"])
+# then move entries from [deps] to [extras] and add to test target
+```
+
+Concrete `Project.toml` changes:
+
+```toml
+[extras]
+BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+Debugger = "31a5f54b-26ea-5ae9-a837-f05ce5417438"
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+Literate = "98b081ad-f1c9-55d3-8b20-4c87d4299306"
+Profile = "9abbd945-dff8-562f-b5e8-e1ebf5ef1b79"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+StableRNGs = "860ef19b-820b-49d6-a774-d7a799459cd3"
+HypothesisTests = "09f84164-cd44-5f33-b23f-e6b0d136a0d5"
+StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
+Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
+
+[targets]
+docs = ["Documenter", "Literate"]
+test = ["Test", "StableRNGs", "HypothesisTests", "StatsBase", "Aqua"]
+```
+
+## How Each Addition Integrates with Existing Code
+
+### StableRNGs Integration
+
+The existing `step_along_trajectory!` uses `rand()` (global RNG) for branch selection. For deterministic tests:
+
+```julia
+using StableRNGs
+using Random
+
+# Seed global RNG with StableRNG for reproducible trajectory
+rng = StableRNG(42)
+copy!(Random.default_rng(), rng)  # or use Julia 1.12 @testset rng= feature
+
+# Now run_trajectories will produce identical results every time
+result = run_trajectories(jumps, config, psi0, hamiltonian; ntraj=1)
+```
+
+Julia 1.12's `@testset` supports `rng` keyword directly:
+```julia
+@testset "trajectory regression" rng=StableRNG(12345) begin
+    # Global RNG is seeded deterministically within this testset
+    result = run_trajectories(...)
+    @test isapprox(result.rho_mean, expected_rho, atol=1e-10)
+end
+```
+
+**No changes to production code needed** -- the tests control the global RNG externally.
+
+### HypothesisTests Integration
+
+For trajectory vs DM statistical comparison:
+
+```julia
+using HypothesisTests
+
+# Run many trajectories, collect per-trajectory observable values
+observable_values = Float64[]
+for _ in 1:ntraj
+    psi = copy(psi0)
+    _evolve_along_trajectory!(psi, fw, total_time)
+    push!(observable_values, real(dot(psi, observable * psi)))
+end
+
+# DM gives the exact expected value
+dm_expected = real(tr(observable * rho_dm))
+
+# Statistical test: is the trajectory mean consistent with DM value?
+test_result = OneSampleTTest(observable_values, dm_expected)
+@test pvalue(test_result) > 0.001  # Fail only if extremely unlikely
+```
+
+For trace distance comparison with error bars:
+```julia
+# Collect per-trajectory rho contributions
+rho_samples = [outer_product(psi_i) for psi_i in trajectory_finals]
+trace_distances = [trace_distance_nh(rho_i, rho_dm) for rho_i in rho_samples]
+
+# The MEAN trace distance should decrease with more trajectories
+# Test that averaged rho is close to DM rho
+@test trace_distance_nh(mean(rho_samples), rho_dm) < tolerance
+```
+
+### StatsBase Integration
+
+```julia
+using StatsBase
+
+# Standard error of trajectory-averaged observable
+obs_values = [measure(psi_i, O) for psi_i in trajectories]
+stderr = sem(obs_values)  # std(obs_values) / sqrt(length(obs_values))
+
+# Convergence rate validation: stderr should scale as 1/sqrt(N)
+# Double trajectories -> stderr should halve (approximately)
+```
+
+### Aqua Integration
+
+Single test file:
+```julia
+# test/aqua_test.jl
+using Aqua
+Aqua.test_all(QuantumFurnace;
+    ambiguities=true,        # Critical with 4 domain types x multiple dispatch
+    stale_deps=true,         # Catch deps in [deps] no longer used
+    deps_compat=true,        # All deps need compat entries
+    project_extras=true,     # Test extras must be consistent
+    piracies=true,           # No type piracy
+)
+```
+
+## Statistical Validation Strategy (Informing Test Design)
+
+The stack choices above enable this validation hierarchy:
+
+1. **Deterministic regression tests** (StableRNGs): Fixed seed, verify exact trajectory output matches known-good values. Catches any code change that alters the sampling logic.
+
+2. **Single-trajectory property tests** (Test stdlib): For ANY trajectory, verify:
+   - State is normalized after every step: `|dot(psi, psi) - 1| < eps`
+   - Probabilities sum to ~1: `p_nojump + p_res + p_jump_total approx 1`
+   - No NaN/Inf in state vector
+
+3. **Statistical ensemble tests** (HypothesisTests + StatsBase): Run N trajectories, compare:
+   - Trajectory-averaged rho vs DM rho (trace distance < f(N, delta))
+   - Per-observable means vs DM values (t-test, p > threshold)
+   - Convergence rate: error ~ 1/sqrt(N) verified by doubling N
+
+4. **Cross-domain consistency tests** (Test stdlib): For small systems:
+   - Energy domain trajectory avg should match Energy domain DM
+   - Time domain trajectory avg should match Time domain DM
+   - Error nesting: |Bohr - Energy| < |Bohr - Time| < |Bohr - Trotter|
 
 ## Alternatives Considered
 
 | Recommended | Alternative | When to Use Alternative |
 |-------------|-------------|-------------------------|
-| KrylovKit.jl | Arpack.jl | Never for new code. Arpack is not thread-safe and lacks Hermitian specialization. Only keep if you need exact backward compatibility with existing saved eigendecompositions. |
-| PythonCall.jl | PyCall.jl | Only if you must interop with an existing Julia package that hard-depends on PyCall (e.g., older qiskit-alt). For new Qiskit interop, PythonCall is strictly better. |
-| OrdinaryDiffEqTsit5 | DifferentialEquations.jl | Use full DifferentialEquations.jl only if you need stiff solvers (Rosenbrock, BDF) or SDE solvers. For non-stiff trajectory validation ODEs, the split sub-package keeps deps minimal. |
-| OrdinaryDiffEqTsit5 | Hand-rolled RK4 | Only for pedagogical purposes or if the ODE is trivial. SciML solvers handle adaptive stepping, error control, and dense output -- don't reinvent this. |
-| ExponentialUtilities.jl | Manual dense expm (LinearAlgebra.exp) | At 12 qubits the Hilbert space is 4096, Liouvillian is 16M. Dense expm is fine for Hilbert-space ops but not for superoperators. For trajectory simulation (Hilbert-space-sized), dense expm from LinearAlgebra may suffice. ExponentialUtilities matters for larger problems or superoperator expm. |
-| Test + SafeTestsets | TestItemRunner.jl | TestItemRunner is VS Code-centric (run individual test items from editor). Good for DX but adds coupling to IDE. SafeTestsets is lighter and CI-friendly. Consider TestItemRunner only if heavy VS Code usage. |
-| Plots.jl | Makie.jl (CairoMakie) | Makie is faster, more modern, GPU-accelerated. But Plots.jl is already a dep and has simpler API for quick research plots. Switch to CairoMakie only if you need publication-quality figures or interactive 3D visualization. |
-| BSON.jl | JLD2.jl | JLD2 is HDF5-based, more robust for large arrays and Julia types. BSON can silently lose type information. Consider migrating to JLD2 for result serialization -- but not urgent. |
-
-## What NOT to Use
-
-| Avoid | Why | Use Instead |
-|-------|-----|-------------|
-| PyCall.jl (for new code) | Legacy package. Lossy type conversions, requires numpy, not type-stable. Single-threaded Python GIL interaction is poorly handled. | PythonCall.jl |
-| Arpack.jl (for new eigensolve code) | Fortran ARPACK is not re-entrant (single-thread only). No Hermitian specialization. Less stable for complex eigenvalue problems. | KrylovKit.jl |
-| Full DifferentialEquations.jl | Pulls ~100 transitive dependencies. Massive compilation overhead. You only need one ODE solver for validation. | OrdinaryDiffEqTsit5 (split sub-package) |
-| QuantumOptics.jl / QuantumToolbox.jl (as dependency) | These are full frameworks with their own type systems (Ket, Bra, Operator with basis tracking). QuantumFurnace has its own types (HamHam, TrottTrott, JumpOp, LiouvConfig). Importing a framework would force type conversion layers everywhere and add massive dep trees. | Keep custom types. Optionally implement conversion functions for interop. |
-| Yao.jl (as dependency) | Circuit-centric framework. QuantumFurnace does continuous-time Lindbladian evolution, not gate-based. Yao adds no value here. For circuit resource estimation, talk to Qiskit via PythonCall. | PythonCall + Qiskit |
-| CUDA.jl / GPU computing | At <= 12 qubits, Hilbert space dim is <= 4096. Dense matrices are 4096x4096 = 128 MB. GPU overhead (data transfer, kernel launch) dominates at this scale. GPU only helps at >= 16 qubits. | CPU with BLAS threading |
-| Distributed.jl for < 8 qubits | Interprocess communication overhead exceeds computation time for small systems. | Base.Threads (already using via Base.Threads) for < 8 qubits. Distributed for >= 8 qubits where jump operator construction is expensive. |
-
-## Stack Patterns by Variant
-
-**If adding Qiskit circuit generation:**
-- Add PythonCall.jl + CondaPkg.jl
-- Create `CondaPkg.toml` with `qiskit >= 1.0` and `qiskit-aer`
-- Wrap Qiskit calls in a dedicated `src/qiskit_interop.jl` behind an extension or optional import
-- Because: Not all users need Python. Use Julia package extensions (Julia 1.9+) to make PythonCall a weak dependency
-
-**If validating trajectories against master equation:**
-- Add OrdinaryDiffEqTsit5 for reference Lindblad integration
-- Use ExponentialUtilities.jl for matrix-exponential-based time stepping
-- Because: Trajectory simulation correctness needs an independent reference. ODE integration of the master equation provides this.
-
-**If targeting Julia General Registry:**
-- Add Aqua.jl tests, compat bounds for all deps, CI with julia-runtest
-- Remove dev-only deps from [deps] (Revise, Debugger, Plots, BenchmarkTools should be in [extras] only)
-- Because: Registry requires compat entries. Aqua catches missing ones. Dev tools in [deps] force all users to install them.
-
-**If supporting > 12 qubits in the future:**
-- Replace dense matrix operations with sparse-only paths
-- Consider KrylovKit + ExponentialUtilities for all eigensolve/expmv
-- Because: At 14 qubits, Hilbert dim = 16384, Liouvillian dim = 268M entries. Dense is infeasible.
+| StableRNGs for seed control | Julia 1.12 `@testset rng=MersenneTwister(seed)` | If you want zero extra deps and accept that streams may change between Julia patch versions. StableRNGs is safer for long-term regression tests. |
+| HypothesisTests for statistical comparison | Manual z-test computation (`(mean - expected) / (std/sqrt(n))` compared to quantile) | If you want zero deps and are comfortable implementing the test statistic correctly. HypothesisTests handles edge cases (small n, unequal variance) that manual implementations often get wrong. |
+| StatsBase for sem() | `std(x) / sqrt(length(x))` inline | Perfectly fine for this one function. StatsBase adds value if you also use `kldivergence` or `L2dist` for distribution comparison. If you only need sem, skip StatsBase. |
+| Aqua for quality checks | Manual ambiguity checks | Never. Aqua is trivial to add and catches bugs you would never find manually. |
+| No ODE solver | OrdinaryDiffEqTsit5 for independent reference | Only if you distrust the DM simulation AND the trajectory simulation simultaneously. In that case, solving drho/dt = L(rho) with an ODE solver gives a third independent reference. Not needed for this milestone -- the DM stepper is already validated. |
 
 ## Version Compatibility
 
-| Package A | Compatible With | Notes |
-|-----------|-----------------|-------|
-| Julia 1.12 | All recommended packages | 1.12 is recent; all active packages support it. FINUFFT.jl is tested up to 1.11 per docs -- verify 1.12 compat (likely works, flag for testing). |
-| PythonCall >= 0.9 | Julia >= 1.10, Python >= 3.10 | Requires Python in PATH or CondaPkg. Does NOT work with PyCall simultaneously -- they conflict on Python process ownership. |
-| OrdinaryDiffEqTsit5 | Julia >= 1.10 | Part of SciML ecosystem. Depends on SciMLBase, which may pull more deps than expected. Test actual dep tree. |
-| KrylovKit >= 0.8 | Julia >= 1.6 | Pure Julia, minimal deps. Drop-in replacement for Arpack eigs() calls. |
-| ExponentialUtilities >= 1.27 | Julia >= 1.10 | Part of SciML. Check transitive deps. |
-| Documenter >= 1.16 | Julia >= 1.12 workspace feature | Use docs/ workspace in Project.toml for clean separation. |
+| Package | Compatible With | Notes |
+|---------|-----------------|-------|
+| StableRNGs >= 1.0.1 | Julia >= 1.0 | Pure Julia, zero deps beyond Random stdlib. Trivially compatible. |
+| HypothesisTests >= 0.11 | Julia >= 1.6 | Depends on Distributions.jl, StatsBase.jl, Combinatorics.jl. These are test-only deps so the transitive tree does not affect users. |
+| StatsBase >= 0.34 | Julia >= 1.6 | Lightweight. Few transitive deps (SortingAlgorithms, Missings). |
+| Aqua >= 0.8 | Julia >= 1.6 | Pure Julia, minimal deps. |
+| All of the above | Julia 1.12.x | No known compatibility issues. All packages are actively maintained in the JuliaStats/JuliaTesting orgs. |
 
-## Cleanup: Dependencies to Move or Remove
+## Cleanup Needed in Current Project.toml
 
-The current `Project.toml` has dev-only tools in `[deps]` that should move:
+While adding test deps, also clean up the existing `[deps]` section. These packages are in `[deps]` but should NOT be (they are dev/doc tools, not runtime dependencies):
 
-| Package | Current Location | Should Be | Why |
-|---------|-----------------|-----------|-----|
-| Revise | [deps] | [extras] only | Dev tool. Users don't need it. |
-| Debugger | [deps] | [extras] only | Dev tool. |
-| BenchmarkTools | [deps] | [extras] only | Already in [extras], remove from [deps]. |
-| Plots | [deps] | [extras] or separate | Visualization. Heavy dep. Not needed by core simulation. |
-| Pkg | [deps] | Remove | stdlib, auto-available. No need to declare. |
-| BSON | [deps] | Keep, but consider JLD2 long-term | BSON can lose Julia type info on roundtrip. |
-| DocumenterTools | [deps] | [extras] with docs target | Only needed for doc generation. |
+| Package | Current | Should Be | Impact |
+|---------|---------|-----------|--------|
+| Revise | [deps] | Remove entirely (load manually in REPL) | Users won't be forced to install Revise |
+| Debugger | [deps] | Remove entirely (load manually) | Same |
+| BenchmarkTools | [deps] AND [extras] | [extras] only | Remove from [deps] |
+| Plots | [deps] | Remove from [deps]; use in scripts only | Heavy dep (50+ transitive). Not needed at runtime. |
+| Pkg | [deps] | Remove | stdlib, auto-available |
+| DocumenterTools | [deps] | [extras] with docs target | Only needed for doc generation |
+| ClusterManagers | [deps] | Keep for now | Used by Distributed workflows |
 
-## Installation
-
-```julia
-# In Project.toml [deps], add:
-# KrylovKit = "0f1e7b(...)  (use Pkg.add to get UUID)
-# ExponentialUtilities = "d4d017(...)"
-
-# From Julia REPL:
-using Pkg
-Pkg.add("KrylovKit")
-Pkg.add("ExponentialUtilities")
-
-# For Qiskit interop (when ready):
-Pkg.add("PythonCall")
-Pkg.add("CondaPkg")
-
-# For trajectory validation:
-Pkg.add("OrdinaryDiffEqTsit5")
-
-# For test quality:
-Pkg.add("Aqua")  # add to test deps
-
-# For formatting:
-Pkg.add("JuliaFormatter")  # dev tool only
-```
+This cleanup is not blocking but should happen during this milestone to get the package registry-ready.
 
 ## Sources
 
-- [QuantumToolbox.jl paper (Quantum journal, Sept 2025)](https://quantum-journal.org/papers/q-2025-09-29-1866/) -- MEDIUM confidence, benchmarks and architecture patterns
-- [KrylovKit.jl official docs (Oct 2025)](https://jutho.github.io/KrylovKit.jl/stable/) -- HIGH confidence, Hermitian Lanczos specialization verified
-- [PythonCall.jl vs PyCall comparison (official docs)](https://juliapy.github.io/PythonCall.jl/v0.2/pycall/) -- HIGH confidence, feature comparison verified
-- [ExponentialUtilities.jl (SciML docs)](https://docs.sciml.ai/ExponentialUtilities/stable/) -- HIGH confidence, Krylov expmv verified
-- [OrdinaryDiffEq.jl split packages (SciML GitHub)](https://github.com/SciML/OrdinaryDiffEq.jl) -- MEDIUM confidence, split approach verified but exact version from training data
-- [Aqua.jl (JuliaTesting, v0.8.14 Aug 2025)](https://github.com/JuliaTesting/Aqua.jl) -- HIGH confidence
-- [Documenter.jl v1.16.1 (Nov 2025)](https://documenter.juliadocs.org/stable/) -- HIGH confidence
-- [Julia 1.12 release blog (Oct 2025)](https://julialang.org/blog/2025/10/julia-1-12-highlights/) -- HIGH confidence
-- [julia-actions GitHub org](https://github.com/julia-actions) -- HIGH confidence, CI actions verified
-- [JuliaFormatter.jl](https://github.com/domluna/JuliaFormatter.jl) -- HIGH confidence
-- [Arpack.jl threading limitation (Julia Discourse)](https://discourse.julialang.org/t/suggestions-needed-diagonalizing-large-hermitian-sparse-matrix/96580) -- MEDIUM confidence, community reports
-- [FINUFFT.jl v3.x docs](https://ludvigak.github.io/FINUFFT.jl/latest/) -- HIGH confidence
-- [QuantumOptics.jl architecture](https://docs.qojulia.org/) -- HIGH confidence, type system patterns
-- [PrecompileTools.jl (JuliaLang)](https://github.com/JuliaLang/PrecompileTools.jl) -- HIGH confidence
+- [StableRNGs.jl GitHub](https://github.com/JuliaRandom/StableRNGs.jl) -- v1.0.1, LehmerRNG implementation, passed Big Crush. HIGH confidence.
+- [HypothesisTests.jl parametric tests docs](https://juliastats.org/HypothesisTests.jl/stable/parametric/) -- OneSampleTTest, ChisqTest signatures verified. HIGH confidence.
+- [StatsBase.jl scalar statistics docs](https://juliastats.org/StatsBase.jl/v0.20/scalarstats.html) -- sem() function verified. HIGH confidence.
+- [Aqua.jl official docs](https://juliatesting.github.io/Aqua.jl/dev/) -- test_all() API verified. HIGH confidence.
+- [Julia 1.12 Test stdlib docs](https://docs.julialang.org/en/v1/stdlib/Test/) -- @testset rng= keyword confirmed for Julia >= 1.12. HIGH confidence.
+- [Julia Statistics stdlib docs](https://docs.julialang.org/en/v1/stdlib/Statistics/) -- mean, var, std confirmed. HIGH confidence.
+- [QuantumOptics.jl MCWF docs](https://docs.qojulia.org/timeevolution/mcwf/) -- trajectory vs master equation validation pattern confirmed. HIGH confidence.
+- [QuantumToolbox.jl Monte Carlo solver](https://qutip.org/QuantumToolbox.jl/stable/users_guide/time_evolution/mcsolve) -- mcsolve validation approach. HIGH confidence.
+- [Monte Carlo wave-function convergence study (Daley, 2014)](https://arxiv.org/pdf/1803.08589) -- convergence rate analysis for MCWF. MEDIUM confidence (training data, not directly verified).
 
 ---
-*Stack research for: Julia quantum Lindbladian simulation (QuantumFurnace.jl)*
+*Stack research for: QuantumFurnace.jl v1.0 Trajectories milestone*
 *Researched: 2026-02-13*

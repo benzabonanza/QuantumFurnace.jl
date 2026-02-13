@@ -1,556 +1,836 @@
-# Architecture Research
+# Architecture Research: Trajectory Validation and Test Suite Integration
 
-**Domain:** Quantum Lindbladian simulation Julia package (QuantumFurnace.jl)
+**Domain:** Trajectory simulation validation + comprehensive test suite for QuantumFurnace.jl
 **Researched:** 2026-02-13
-**Confidence:** HIGH (direct codebase analysis + ecosystem comparison)
+**Confidence:** HIGH (direct codebase analysis -- every source file read in full)
 
-## Standard Architecture
-
-### System Overview
+## System Overview: How New Components Fit the Existing Architecture
 
 ```
-+-----------------------------------------------------------------------+
-|                      USER INTERFACE LAYER                             |
-|  run_lindbladian()   run_thermalization()   run_trajectories()        |
-|  construct_lindbladian()   build_trajectoryframework()                |
-+-------+------+--------+---------+--------+---+--------+--------------+
-        |      |        |         |        |   |        |
-+-------v------v--------v---------v--------+   |        |
-|           DOMAIN DISPATCH LAYER              |        |
-|  jump_contribution!(::BohrDomain, ...)       |        |
-|  jump_contribution!(::EnergyDomain, ...)     |        |
-|  jump_contribution!(::TimeDomain, ...)       |        |
-|  jump_contribution!(::TrotterDomain, ...)    |        |
-|  precompute_data(::Domain, ...)              |        |
-|  precompute_R(::Domain, ...)                 |        |
-+-------+-------+--------+--------+-----------+        |
-        |       |        |        |                     |
-+-------v-------v--------v--------v-----------+ +------v--------------+
-|         PRECOMPUTATION LAYER                | |  COHERENT TERMS     |
-|  furnace_utensils.jl:                       | |  coherent.jl:       |
-|    precompute_labels()                      | |    coherent_bohr()  |
-|    precompute_data()                        | |    B_time()         |
-|    pick_transition()                        | |    B_trotter()      |
-|    pick_alpha()                             | |    precompute_      |
-|  nufft.jl:                                  | |    coherent_total_B |
-|    prepare_oft_nufft_prefactors()           | |    precompute_      |
-|  ofts.jl:                                   | |    coherent_unitary |
-|    oft!(), time_oft!(), trotter_oft!()      | |    _terms()         |
-+---------+--------+--------+-----------------+ +---------+-----------+
-          |        |        |                             |
-+---------v--------v--------v-----------------------------v-----------+
-|                     DATA MODEL LAYER                                |
-|  structs.jl:                                                        |
-|    AbstractDomain -> BohrDomain, EnergyDomain, TimeDomain, Trotter  |
-|    AbstractConfig -> LiouvConfig, ThermalizeConfig, *GNS variants   |
-|    JumpOp, KrausScratch, LindbladWorkspace, TrajectoryWorkspace     |
-|  hamiltonian.jl:                                                    |
-|    HamHam (spectral decomposition + Bohr frequencies)               |
-|  trotter_domain.jl:                                                 |
-|    TrottTrott (Trotterized time evolution data)                     |
-|  Result types: HotSpectralResults, HotAlgorithmResults              |
-+-----+------+------+------+-----------------------------------------+
-      |      |      |      |
-+-----v------v------v------v-----------------------------------------+
-|                   UTILITY LAYER                                     |
-|  qi_tools.jl: kron!(), vectorize_liouv_diss_and_add!(),            |
-|               trace_distance_h(), gibbs_state()                     |
-|  misc_tools.jl: pad_term(), load_hamiltonian(), riemann_sum()       |
-|  constants.jl: X, Y, Z, Had                                        |
-|  errors.jl: validation logic                                        |
-|  log_sobolev.jl: LSI alpha2 computation                            |
-+--------------------------------------------------------------------+
+EXISTING (working)                          NEW / MODIFIED (this milestone)
+=================                          ================================
+
++-- furnace.jl --------------------------------+   +-- test/runtests.jl --------------------+
+|  run_lindbladian() [DM spectral, KNOWN GOOD] |   |  @testset "QuantumFurnace" begin       |
+|  run_thermalization() [DM stepping, KNOWN G.] |   |    include("test_helpers.jl")           |
+|  construct_lindbladian()                      |   |    include("test_detailed_balance.jl")  |
++-------+--------------------------+-----------+   |    include("test_coherent_term.jl")     |
+        |                          |               |    include("test_oft_consistency.jl")   |
+        v                          v               |    include("test_dm_step_errors.jl")    |
++-- jump_workers.jl ---+  +-- trajectories.jl -+   |    include("test_trajectory.jl")        |
+|  jump_contribution!  |  |  TrajectoryFW      |   |    include("test_traj_vs_dm.jl")        |
+|  (Liouv + Kraus DM)  |  |  step_along_traj!  |   |  end                                   |
+|  precompute_R()      |  |  run_trajectories() |   +------------------------------------------+
+|  [KNOWN GOOD]        |  |  [NEEDS FIX+VALID.] |
++----------------------+  +----+----------------+   +-- test/test_helpers.jl -----------------+
+                               |                    |  make_test_system(nq, beta, domain)     |
+                               |                    |  Known-good parameter configs            |
+                       FIX: two-stage sampling      |  Tolerance constants per error tier      |
+                       in step_along_trajectory!     +------------------------------------------+
 ```
 
-### Component Responsibilities
+### What Exists vs What Needs to Change
 
-| Component | Responsibility | Communicates With |
-|-----------|----------------|-------------------|
-| **furnace.jl** (Entry Points) | Top-level API: `run_lindbladian`, `run_thermalization`, `construct_lindbladian`. Orchestrates validation, precomputation, loop accumulation, spectral analysis. | All components via orchestration |
-| **jump_workers.jl** (Domain Dispatch) | Per-domain `jump_contribution!` methods for both Liouvillian vectorization and density-matrix Kraus stepping. The central multiple-dispatch hub. | domains, precompute_data, qi_tools, coherent |
-| **trajectories.jl** (Trajectory Framework) | `TrajectoryFramework` construction, `step_along_trajectory!`, `evolve_along_trajectory`, `run_trajectories`. State-vector trajectory simulation. | jump_workers (precompute_R), coherent, furnace_utensils |
-| **furnace_utensils.jl** (Precomputation) | `precompute_data()` dispatcher, energy/time label creation, transition function selection (`pick_transition`, `pick_alpha`). | energy_domain, nufft, coherent, ofts |
-| **structs.jl** (Type Definitions) | All type definitions: domains, configs, workspaces, results. The shared vocabulary across all layers. | Imported by every other file |
-| **hamiltonian.jl** (Hamiltonian) | `HamHam` construction, spectral decomposition, Bohr frequency computation, disordering, `finalize_hamham()`. | structs, qi_tools, constants |
-| **trotter_domain.jl** (Trotter) | `TrottTrott` construction, Trotterization of time evolution, Trotter error computation. | hamiltonian |
-| **coherent.jl** (Coherent Terms) | B operator computation for exact KMS detailed balance. Per-domain methods: `coherent_bohr`, `B_time`, `B_trotter`. Unitary exponentiation for Kraus. | hamiltonian, bohr_domain, furnace_utensils |
-| **bohr_domain.jl** (Bohr Specifics) | `coherent_bohr()`, `pick_f()`, `create_f()`. Bohr-frequency-specific rate functions. | hamiltonian, structs |
-| **energy_domain.jl** (Energy Specifics) | `pick_transition()` variants (Gaussian, Metropolis, Glauber, GNS). Transition weight function factory. | structs |
-| **ofts.jl** (OFT Engine) | `oft!()`, `time_oft!()`, `trotter_oft!()`. In-place oscillatory Fourier transforms on jump operators. | hamiltonian, trotter_domain |
-| **nufft.jl** (NUFFT Acceleration) | `prepare_oft_nufft_prefactors()`. Precompute all OFT prefactors via FINUFFT for the full energy grid. | FINUFFT library |
-| **qi_tools.jl** (QI Utilities) | `kron!()`, `vectorize_liouv_diss_and_add!()`, `trace_distance_h()`, `gibbs_state()`, `fidelity()`. Zero-allocation Liouvillian assembly. | LinearAlgebra |
-| **log_sobolev.jl** (LSI Bounds) | `compute_LSI_alpha2()`. Optimization-based lower bound on log-Sobolev constant from Liouvillian spectrum. | furnace results, Optim |
-| **linearmaps_liouv.jl** (Sparse Liouvillian) | `construct_lindbladian_map()`. LinearMaps.jl interface for matrix-free Liouvillian-vector products. Currently incomplete. | LinearMaps, jump_workers |
+| Component | File | Status | Action |
+|-----------|------|--------|--------|
+| **HamHam + finalize** | `hamiltonian.jl` | WORKING | No changes. Used by tests as-is. |
+| **Domain types** | `structs.jl` | WORKING | No changes. |
+| **Config structs** | `structs.jl` | WORKING | No changes. |
+| **JumpOp construction** | `hamiltonian.jl` + scripts | WORKING | Extract into helper for tests. |
+| **precompute_data()** | `furnace_utensils.jl` | WORKING | No changes. |
+| **coherent_bohr()** | `bohr_domain.jl` | WORKING | Test target (reference for B comparisons). |
+| **B_time(), B_trotter()** | `coherent.jl` | WORKING | Test target (compare against coherent_bohr). |
+| **oft!()** | `ofts.jl` | WORKING | Test target (reference for OFT comparisons). |
+| **time_oft!(), trotter_oft!()** | `ofts.jl` | WORKING | Test target (compare against oft!). |
+| **jump_contribution!(Liouv)** | `jump_workers.jl` | WORKING | Test target (Liouvillian construction). |
+| **jump_contribution!(Kraus DM)** | `jump_workers.jl` | WORKING | Test target (DM stepping). |
+| **run_lindbladian()** | `furnace.jl` | WORKING | Used by tests as reference oracle. |
+| **run_thermalization()** | `furnace.jl` | WORKING | Used by tests as DM reference. |
+| **build_trajectoryframework()** | `trajectories.jl` | **BUG** | Fix: `trotter` var not in scope (line 53). |
+| **precompute_R()** | `trajectories.jl` | WORKING | No changes needed. |
+| **step_along_trajectory!()** | `trajectories.jl` | **NEEDS FIX** | Two-stage jump sampling restructure. |
+| **run_trajectories()** | `trajectories.jl` | WORKING (modulo step bug) | No structural changes. |
+| **test/*.jl** | `test/` | INTERACTIVE ONLY | Convert to @testset, add runtests.jl. |
+| **~200 lines commented code** | `jump_workers.jl`, `trajectories.jl` | DEAD CODE | Clean up after validation. |
 
-## Recommended Project Structure
+## The Two-Stage Jump Sampling Fix
+
+### Current Architecture (Flat Sampling -- Incorrect)
+
+The current `step_along_trajectory!` iterates over all `(jump, omega)` pairs in a flat scan:
 
 ```
-src/
-+-- QuantumFurnace.jl          # Module definition, imports, include order, exports
-+-- constants.jl               # Pauli matrices X, Y, Z, Had
-+-- structs.jl                 # ALL type definitions (domains, configs, workspaces, results)
-+-- hamiltonian.jl             # HamHam construction, spectral decomposition, Bohr freqs
-+-- trotter_domain.jl          # TrottTrott, trotterize2(), Trotter error
-+-- qi_tools.jl                # Quantum info: trace distance, Gibbs state, kron!, vectorize
-+-- misc_tools.jl              # Pauli padding, file I/O, Riemann sums, filename generation
-+-- errors.jl                  # Validation logic, custom error types
-+-- bohr_domain.jl             # Bohr-specific: coherent_bohr(), pick_f(), create_f()
-+-- energy_domain.jl           # Energy-specific: pick_transition() variants
-+-- time_domain.jl             # Time-domain label truncation
-+-- ofts.jl                    # Oscillatory Fourier transforms (oft!, time_oft!, trotter_oft!)
-+-- nufft.jl                   # NUFFT prefactors via FINUFFT
-+-- kraus.jl                   # KrausScratch workspace type
-+-- coherent.jl                # B-term computation, coherent unitaries
-+-- jump_workers.jl            # jump_contribution!() -- all domain methods
-+-- furnace_utensils.jl        # precompute_data(), label creation, transition selection
-+-- furnace.jl                 # Entry points: run_lindbladian, run_thermalization
-+-- trajectories.jl            # TrajectoryFramework, stepping, trajectory evolution
-+-- log_sobolev.jl             # LSI alpha2 optimization
-+-- log_sobolev_manopt.jl      # Manifold optimization (planned)
-+-- linearmaps_liouv.jl        # LinearMaps interface (incomplete)
-+-- kossakowski.jl             # Kossakowski matrix tools
+for jump in fw.jumps           # outer: iterate over Lindblad operators A^a
+    for w in energy_labels     # inner: iterate over frequencies omega
+        # Compute A_{a,omega} and its probability
+        p = delta * rate(omega) * ||A_{a,omega} psi||^2
+        csum += p
+        if csum >= target: pick this (a, omega)
+```
 
+This is a flat cumulative-probability scan over the Cartesian product `{A^a} x {omega}`. The probability of picking jump `a` at frequency `omega` is:
+
+```
+P(a, omega) = delta * rate(omega) * ||A_{a,omega} |psi>||^2 / p_jump_total
+```
+
+The problem: `p_jump_total = delta * <psi|R|psi>` where `R = sum_{a,omega} rate(omega) * A_{a,omega}^dag A_{a,omega}`. This means the probability of picking operator `a` depends on the *state-dependent* norms `||A_{a,omega} psi||^2` rather than on the mathematical structure of the Lindbladian. The theory (Chen et al.) requires a specific factorization.
+
+### Required Architecture (Two-Stage Sampling -- Correct)
+
+The Chen construction decomposes the CPTP map as a sum over Lindblad operator indices `a`. The quantum algorithm physically implements:
+
+**Stage 1:** Pick which Lindblad operator `A^a` to apply. In the implementation, this means uniformly sampling a jump index `a` (since all jump operators are weighted equally via `1/sqrt(num_jumps)` normalization).
+
+**Stage 2:** Given `a`, sample a frequency `omega` from the conditional distribution:
+
+```
+P(omega | a) proportional to rate(omega) * ||A_{a,omega} |psi>||^2
+```
+
+Then apply the corresponding Kraus operator `sqrt(rate(omega)) * A_{a,omega}` to `|psi>`.
+
+### Implementation Plan
+
+The fix modifies `step_along_trajectory!` in `trajectories.jl`. The key change is in the dissipative-jump branch (the `else` block after no-jump and residual):
+
+```julia
+# CURRENT: flat scan over all (a, omega) pairs
+# PROPOSED: two-stage
+
+# Stage 1: Pick jump operator index uniformly
+a_idx = rand(1:length(fw.jumps))
+jump = fw.jumps[a_idx]
+
+# Stage 2: Sample omega from conditional distribution for this a
+# (cumulative probability scan over energy_labels only, not over all jumps)
+target_omega = rand() * p_jump_a  # p_jump_a = sum_omega p(a, omega)
+csum = 0.0
+for w in energy_labels
+    # build A_{a,omega}, compute ||A_{a,omega} psi||^2
+    p = delta * rate(omega) * n2  # contribution from this omega
+    csum += p
+    if csum >= target_omega: apply A_{a,omega} and break
+end
+```
+
+**Critical subtlety:** The `p_jump_total` and `p_nojump` computations use the *total* `R = sum_a sum_omega ...`, which is already correct and does not change. What changes is only the *selection* of which jump operator to apply when a dissipative jump occurs.
+
+**What does NOT change:**
+- `precompute_R()` -- still computes the full R summed over all jumps and frequencies
+- `K0 = I - alpha*R` -- unchanged
+- `U_residual` -- unchanged
+- `p_nojump`, `p_res`, `p_jump_total` -- unchanged
+- The coherent unitary `U_B` -- unchanged
+
+**What changes:**
+- The dissipative-jump branch in `step_along_trajectory!` (both EnergyDomain and Time/TrotterDomain variants)
+- Need per-jump `R_a` or per-jump `p_jump_a = delta * <psi|R_a|psi>` for Stage 1 weighting (not uniform -- proportional to `<psi|R_a|psi>`)
+
+### Detailed Changes to `step_along_trajectory!`
+
+```julia
+# In the dissipative-jump branch:
+
+# Stage 1: Sample jump index a, weighted by <psi|R_a|psi>
+# Need: for each a, compute p_a = <psi| R_a |psi> where
+#   R_a = sum_omega rate(omega) * A_{a,omega}^dag A_{a,omega}
+# This can be done without precomputing per-jump R matrices by
+# computing A_{a,omega}|psi> on the fly (we already do this in the flat scan).
+
+# Option A (recommended): Precompute per-jump R_a matrices in TrajectoryFramework
+# Then p_a = dot(psi, R_a * psi) is cheap (one matvec per jump).
+# Total: num_jumps matvecs for Stage 1, then ~num_energies matvecs for Stage 2.
+# vs current: num_jumps * num_energies matvecs worst case (same or better).
+
+# Option B: Two-pass scan. First pass: scan all (a,omega) to compute cumulative
+# per-jump probabilities. Second pass: scan only the selected a's frequencies.
+# More complex, same cost.
+
+# Recommendation: Option A. Add R_a::Vector{Matrix{ComplexF64}} to TrajectoryFramework.
+```
+
+### TrajectoryFramework Modifications
+
+```julia
+struct TrajectoryFramework{T,C,H,PD,D<:AbstractDomain}
+    # ... existing fields ...
+
+    # NEW: Per-jump R_a matrices for two-stage sampling
+    R_per_jump::Vector{Matrix{T}}   # R_a = sum_omega rate(omega) A_{a,omega}^dag A_{a,omega}
+
+    # ... existing fields ...
+end
+```
+
+The `build_trajectoryframework` function needs a new loop that computes `R_a` for each jump, analogous to the existing `precompute_R` but without summing across jumps. This is straightforward -- extract the per-jump inner loop of `precompute_R` into a helper.
+
+### Memory and Performance Impact
+
+| Metric | Current | After Fix |
+|--------|---------|-----------|
+| TrajectoryFramework memory | R (dim x dim) + K0 + U_res + U_B | + num_jumps * (dim x dim) for R_per_jump |
+| Per-step cost (expected) | O(num_jumps * num_energies * dim^2) worst case | O(num_jumps * dim^2) for Stage 1 + O(num_energies * dim^2) for Stage 2 |
+| Per-step cost (3n Pauli jumps, 4 qubits) | ~12 * ~100 * 256 = 307K mul ops worst case | ~12 * 256 + ~100 * 256 = 28.7K mul ops |
+
+For 4 qubits with 12 Pauli jumps and ~100 energy labels, the two-stage approach is ~10x fewer matrix-vector multiplications per step, because Stage 1 is just `num_jumps` matvecs (using precomputed R_a), not `num_jumps * num_energies`.
+
+## Test Suite Architecture
+
+### Test File Organization
+
+```
 test/
-+-- runtests.jl                # MISSING: central test runner with @testset
-+-- ham_test.jl                # Interactive; needs @test conversion
-+-- B_test.jl                  # Interactive; needs @test conversion
-+-- trajectory_test.jl         # Interactive; needs @test conversion
-+-- trott_test.jl              # Interactive; needs @test conversion
-+-- time_tests.jl              # Interactive; needs @test conversion
-+-- kossakowski_test.jl        # Interactive; needs @test conversion
-+-- log_sobolev_test.jl        # Interactive; needs @test conversion
-
-docs/
-+-- make.jl                    # Documenter.jl + Literate.jl build script
-+-- src/
-    +-- index.md               # Landing page
-    +-- api.md                 # Auto-generated API reference
-    +-- literate/              # Source .jl files for tutorials/theory
-        +-- tutorial_*.jl      # Executable tutorial scripts
-        +-- theory_*.jl        # Executable theory explanation scripts
++-- runtests.jl                    # Central test runner
++-- test_helpers.jl                # Shared fixtures, reference system construction
++-- test_detailed_balance.jl       # Tier 1: Gibbs fixed point (BohrDomain + B)
++-- test_coherent_term.jl          # Tier 2: B operator consistency across domains
++-- test_oft_consistency.jl        # Tier 3: OFT consistency across domains
++-- test_dm_step_errors.jl         # Tier 4: DM step error scaling (delta)
++-- test_trajectory.jl             # Tier 5: Trajectory correctness (after fix)
++-- test_traj_vs_dm.jl             # Tier 6: Trajectory vs DM cross-validation
 ```
 
-### Structure Rationale
+### Test Helpers: The Shared Fixture Pattern
 
-- **Flat src/:** Julia convention. No subdirectories needed -- 23 files is manageable. QuantumOptics.jl (19 files) and QuantumToolbox.jl (15 files + 3 subdirs) follow similar patterns. Subdirectories only warranted when file count exceeds ~30 and clear groupings emerge (HIGH confidence: verified against both QuantumOptics.jl and QuantumToolbox.jl GitHub repos).
-
-- **Include order in QuantumFurnace.jl respects dependency DAG:** constants -> hamiltonian -> trotter_domain -> structs -> qi_tools -> misc_tools -> ... -> furnace. This is critical in Julia: each `include()` must see types it depends on.
-
-- **test/ currently lacks runtests.jl:** The standard Julia package test runner expects `test/runtests.jl` with `@testset` blocks. Current tests are interactive scripts using `Revise.includet()` -- they cannot be run by `Pkg.test()`. This is the most urgent structural gap.
-
-- **docs/ uses Documenter.jl + Literate.jl:** This is the gold-standard Julia documentation approach. Literate.jl source files in `docs/src/literate/` are executable Julia scripts whose comments become markdown. Documenter.jl builds HTML from these. CI deploys via GitHub Actions (HIGH confidence: verified Documentation.yml exists).
-
-## Architectural Patterns
-
-### Pattern 1: Domain Dispatch via Singleton Types
-
-**What:** Four empty structs (`BohrDomain`, `EnergyDomain`, `TimeDomain`, `TrotterDomain`) subtyping `AbstractDomain`. Functions dispatch on domain type as a positional argument rather than using `if-else` chains.
-
-**When to use:** Any time behavior varies by approximation level. This is the core extensibility mechanism.
-
-**Trade-offs:**
-- Pro: Adding a new domain means adding new method definitions, not modifying existing code (open/closed principle)
-- Pro: Julia's compiler specializes per-domain, eliminating runtime dispatch overhead
-- Con: All domain methods must have matching signatures; signature drift between domains becomes a bug source
-- Con: When two domains share logic (TimeDomain and TrotterDomain often do), code duplication is tempting -- use `::Union{TimeDomain, TrotterDomain}` dispatch carefully
-
-**Example:**
-```julia
-# Each domain gets its own method -- no if/else needed
-function jump_contribution!(L, ::BohrDomain, jump, ham, config, precomp, ws; kw...)
-    # Bohr-specific: iterate over Bohr frequency buckets
-end
-
-function jump_contribution!(L, ::EnergyDomain, jump, ham, config, precomp, ws; kw...)
-    # Energy-specific: iterate over energy labels with transition weights
-end
-
-function jump_contribution!(L, ::Union{TimeDomain, TrotterDomain}, jump, ham, config, precomp, ws; kw...)
-    # Shared Time/Trotter: iterate with NUFFT prefactors
-end
-```
-
-**Ecosystem precedent:** QuantumToolbox.jl uses the same pattern with quantum object types (Ket, Bra, Operator, SuperOperator) and solver dispatch. QuantumOptics.jl uses basis types for dispatch. This is idiomatic Julia. (MEDIUM confidence: verified from architecture papers and GitHub source listings.)
-
-### Pattern 2: Workspace/Precomputation Cache
-
-**What:** Expensive calculations (NUFFT prefactors, transition function evaluations, coherent term matrices) are computed once and stored in named tuples or structs. Hot loops consume these cached values without allocation.
-
-**When to use:** Any computation that is invariant across the inner loop (e.g., invariant across jumps or time steps).
-
-**Trade-offs:**
-- Pro: Eliminates allocation in tight loops -- critical for dim^2 x dim^2 Liouvillian assembly
-- Pro: Named tuples make the cached data self-documenting (`precomputed_data.gamma_norm_factor`)
-- Con: Memory footprint grows (NUFFT prefactors are dim x dim x num_energies arrays)
-- Con: Named tuples are not type-stable when their contents vary by domain -- QuantumFurnace.jl works around this by having `precompute_data()` return domain-specific tuples
-
-**Example:**
-```julia
-# Precompute once
-precomputed_data = precompute_data(config.domain, config, hamiltonian)
-ws = LindbladianWorkspace(dim)
-
-# Use many times, zero allocation per iteration
-for jump in jumps
-    jump_contribution!(L, config.domain, jump, hamiltonian, config, precomputed_data, ws)
-end
-```
-
-**Ecosystem precedent:** QuantumOptics.jl uses pre-allocated output arrays throughout. QuantumToolbox.jl caches quantum object metadata in the Qobj struct. This is standard Julia numerical computing practice. (HIGH confidence.)
-
-### Pattern 3: Dual Simulation Modes (Density Matrix + Trajectory)
-
-**What:** The same physical model (Lindbladian) is simulated two ways: (1) constructing the full dim^2 x dim^2 Liouvillian superoperator for spectral analysis (`run_lindbladian`), and (2) stochastic trajectory simulation of the corresponding quantum channel (`run_thermalization`, `run_trajectories`).
-
-**When to use:** When users need both exact spectral properties (steady state, spectral gap) and scalable stochastic sampling (convergence curves, statistics over many runs).
-
-**Trade-offs:**
-- Pro: Cross-validation: trajectory steady state should match Liouvillian fixed point
-- Pro: Liouvillian gives spectral gap directly; trajectories give sampling statistics
-- Con: The two modes require different `jump_contribution!` signatures (Liouvillian accumulates into dim^2 x dim^2 matrix; Kraus evolves dim x dim density matrix), leading to parallel method trees in `jump_workers.jl`
-- Con: Ensuring mathematical equivalence between the two modes is a significant validation burden
-
-**Ecosystem precedent:** QuantumOptics.jl provides `master()` (density matrix master equation) alongside `mcwf()` (Monte Carlo wave function / quantum trajectories). QuantumToolbox.jl similarly offers `mesolve()` and `mcsolve()`. This dual-mode pattern is universal in open quantum system packages. (HIGH confidence: verified from QuantumOptics.jl GitHub source listings showing both `master.jl` and `mcwf.jl`.)
-
-## Data Flow
-
-### Liouvillian Construction Flow
-
-```
-[Config + Hamiltonian]
-    |
-    v
-validate_config!(config)
-    |
-    v
-finalize_hamham(ham, beta) -----> HamHam with bohr_freqs, bohr_dict, gibbs
-    |
-    v
-precompute_data(domain, config, ham_or_trott) -----> NamedTuple(alpha, gamma_norm_factor, ...)
-    |                                                     |
-    v                                                     v
-precompute_coherent_total_B(jumps, ...) -----> B_total (or nothing)
-    |                                              |
-    v                                              v
-+-- for each jump in jumps: --+     vectorize_liouvillian_coherent!(L, B, ws)
-|   jump_contribution!(       |                    |
-|     L_target,               |                    v
-|     domain,                 |              L_target (accumulated)
-|     jump,                   |
-|     ham_or_trott,           |
-|     config,                 |
-|     precomputed_data,       |
-|     workspace               |
-|   )                         |
-+-----------------------------+
-    |
-    v
-L_target: Full Liouvillian (dim^2 x dim^2)
-    |
-    v
-eigs(L, nev=2, sigma=shift) -----> steady_state, spectral_gap
-    |
-    v
-HotSpectralResults{D}
-```
-
-### Thermalization (Density Matrix) Flow
-
-```
-[Config + Hamiltonian + initial_dm]
-    |
-    v
-precompute_data(domain, config, ham_or_trott)
-    |
-    v
-precompute_coherent_unitary_terms(jumps, ...) -----> [U_B_1, U_B_2, ...] per jump
-    |
-    v
-+-- for step = 1 to ceil(mixing_time/delta): --+
-|   idx = rand(1:num_jumps)                     |
-|   jump = jumps[idx]                           |
-|   jump_contribution!(domain,                  |
-|     evolving_dm,                              |
-|     jump,                                     |
-|     ham_or_trott,                             |
-|     config,                                   |
-|     precomputed_data,                         |
-|     scratch;                                  |
-|     coherent_unitary_cache=U_B[idx],          |
-|     jump_prob=1/num_jumps)                    |
-|                                               |
-|   Inside jump_contribution!:                  |
-|     1. Apply U_B: dm <- U_B dm U_B'          |
-|     2. Compute R = sum L_k' L_k              |
-|     3. Compute rho_jump = delta * sum_w ...   |
-|     4. K0 = I - alpha*R                       |
-|     5. S = (2alpha - delta)R - alpha^2 R^2    |
-|     6. U_res = cholesky(S).U                  |
-|     7. dm_next = K0 dm K0' + rho_jump         |
-|                  + U_res dm U_res'             |
-+-----------------------------------------------+
-    |
-    v
-HotAlgorithmResults{D} (distances_to_gibbs, time_steps)
-```
-
-### Trajectory (State Vector) Flow
-
-```
-[Config + Hamiltonian + psi0]
-    |
-    v
-build_trajectoryframework(jumps, ham, config, delta)
-    |
-    v  Precomputes once:
-    |    R = sum_jump,w L_w^dag L_w
-    |    K0 = I - alpha*R
-    |    S = (2alpha-delta)R - alpha^2 R^2
-    |    U_res = cholesky(S).U
-    |    U_B = exp(-i delta B_total)  [if coherent]
-    |
-    v
-TrajectoryFramework (immutable cache)
-    |
-    v
-+-- for step = 1 to num_steps: ----------+
-|   step_along_trajectory!(psi, fw, rng)  |
-|                                         |
-|   1. Apply U_B: psi <- U_B * psi       |
-|   2. Apply K0: psi_next = K0 * psi     |
-|   3. Sample jump k ~ probability       |
-|   4. Branch:                            |
-|      - no-jump: psi = K0*psi (norm)    |
-|      - jump k:  psi = L_k*psi (norm)   |
-|   5. Apply U_res: psi <- U_res * psi   |
-+-----------------------------------------+
-    |
-    v
-Final |psi> or accumulated rho = E[|psi><psi|]
-```
-
-### Key Data Flows
-
-1. **Config -> Precomputation -> Accumulation:** Configuration drives precomputation (which labels, which transition function, which domain), and precomputed data feeds the tight inner loops. This is a compile-once-run-many pattern.
-
-2. **Hamiltonian -> JumpOp Basis Transform:** Jump operators are created in the computational basis, then rotated into the Hamiltonian eigenbasis (or Trotter eigenbasis). This basis-transformed `in_eigenbasis` field is what all domain methods use.
-
-3. **Domain -> Method Selection:** The domain type flows through as a dispatch tag. It never carries data -- it only selects which code path runs. All domain-varying data is in `precomputed_data`.
-
-## Scaling Considerations
-
-| Scale | Architecture Adjustments |
-|-------|--------------------------|
-| 3-6 qubits (dim 8-64) | Current architecture works well. Dense Liouvillian fits in RAM. All domains fast. |
-| 7-10 qubits (dim 128-1024) | Liouvillian is dim^2 x dim^2 = 16K-1M entries. Still fits in memory. NUFFT prefactors (dim x dim x num_energies) become the dominant cost. |
-| 11-12 qubits (dim 2048-4096) | Liouvillian is 4M-16M entries = 128MB-1GB dense. Full spectral analysis via eigs becomes expensive. Trajectory mode becomes preferred. |
-| 13+ qubits (dim 8192+) | Dense Liouvillian infeasible (>64GB). Must use LinearMaps (matrix-free) + iterative eigensolvers, or trajectory-only mode. The incomplete `linearmaps_liouv.jl` would need to be completed. |
-
-### Scaling Priorities
-
-1. **First bottleneck: NUFFT prefactor memory.** The `NUFFTPrefactors` array is `dim x dim x num_energies`. For 12 qubits with `num_energy_bits=12`, this is `4096 x 4096 x 4096 = 64B ComplexF64 entries = ~512GB`. The current truncation (`truncate_energy_labels`) mitigates this, but it determines the practical qubit limit.
-
-2. **Second bottleneck: Dense Liouvillian assembly.** The dim^2 x dim^2 matrix grows as 2^(4n). Beyond 10 qubits, switching to LinearMaps (matrix-free) or sparse representation is necessary for `run_lindbladian`.
-
-3. **Third bottleneck: Trajectory parallelism.** For statistical convergence, thousands of trajectory samples are needed. The `@distributed` infrastructure is commented out but present. Multi-threaded trajectory sampling with shared `TrajectoryFramework` is the natural scaling path.
-
-## Anti-Patterns
-
-### Anti-Pattern 1: Interactive Tests Masquerading as Automated Tests
-
-**What people do:** Write test scripts that use `includet()` and `display(norm(...))` instead of `@test` assertions and `@testset` blocks.
-
-**Why it's wrong:** `Pkg.test()` cannot run these. CI cannot catch regressions. No `runtests.jl` entry point exists. This is the current state of QuantumFurnace.jl's test suite.
-
-**Do this instead:** Create `test/runtests.jl` with `@testset` blocks that `include()` individual test files. Convert manual `norm(expected - actual)` checks to `@test norm(expected - actual) < tolerance`. Keep the interactive scripts in `playground/` for development; `test/` should be automated. Standard Julia practice (HIGH confidence: see Julia documentation and all major packages).
-
-### Anti-Pattern 2: Duplicated Config Fields Across Struct Variants
-
-**What people do:** Define 4+ config structs (`LiouvConfig`, `LiouvConfigGNS`, `ThermalizeConfig`, `ThermalizeConfigGNS`) with nearly identical field lists, differing only in a few defaults or constraints.
-
-**Why it's wrong:** Adding a new field requires editing 4 structs. Forgetting one leads to silent bugs. The GNS variants differ only in `with_coherent = false` default and `pick_transition` dispatch.
-
-**Do this instead:** Use a single parametric config type with a `detailed_balance_type::Symbol` field (`:KMS` or `:GNS`), or use a shared inner struct with an outer wrapper. Julia's `@kwdef` with default overrides can handle the variation. Alternatively, keep the hierarchy but extract shared fields into a composition struct. (MEDIUM confidence: this is a design judgment call; the current approach works but scales poorly if more variants are added.)
-
-### Anti-Pattern 3: Named Tuples for Complex Precomputed Data
-
-**What people do:** Return `precompute_data()` as a `NamedTuple` whose fields vary by domain, making the return type unstable and hard to document.
-
-**Why it's wrong:** Different domains return tuples with different field names. Code that accesses `precomputed_data.oft_nufft_prefactors` will error silently if called with BohrDomain data. No static type checking is possible.
-
-**Do this instead:** Define per-domain `PrecomputedData` structs (e.g., `BohrPrecomputed`, `EnergyPrecomputed`, `TimePrecomputed`) inheriting from an abstract type. This enables both documentation and type-safe dispatch. (MEDIUM confidence: named tuples are idiomatic for quick prototyping in Julia, but structs are better for stable APIs.)
-
-## Integration Points
-
-### External Services
-
-| Service | Integration Pattern | Notes |
-|---------|---------------------|-------|
-| **FINUFFT** (NUFFT library) | Julia wrapper via `FINUFFT.jl`. Plan-based API: `finufft_makeplan -> finufft_setpts! -> finufft_exec! -> finufft_destroy!` | Most computationally critical external dependency. Used in `nufft.jl` for OFT acceleration. Version 3.4.2 in compat. |
-| **Arpack** (Eigenvalue solver) | Julia wrapper via `Arpack.jl`. Used for shift-invert eigenvalue computation of the Liouvillian. | `eigs(L, nev=2, sigma=shift)` in `furnace.jl`. Critical for extracting steady state and spectral gap. |
-| **BSON** (Serialization) | Julia package for binary serialization. Used for Hamiltonian caching and result persistence. | Simple load/save pattern. Files in `hamiltonians/` directory. |
-| **Qiskit** (planned) | Via PythonCall.jl (recommended over PyCall.jl). Would generate quantum circuits from Trotter domain gate sequences. | Not yet implemented. PythonCall.jl is actively maintained as of 2025 and supports bidirectional Julia-Python calls. (MEDIUM confidence: based on ecosystem research.) |
-
-### Internal Boundaries
-
-| Boundary | Communication | Notes |
-|----------|---------------|-------|
-| **Config -> Precomputation** | Config struct fields read directly by `precompute_data()`. No intermediate protocol. | Tightly coupled by field names. Changes to config fields propagate to all precomputation methods. |
-| **Precomputation -> Domain Methods** | `precomputed_data` named tuple destructured at method entry: `(; alpha, gamma_norm_factor) = precomputed_data`. | Each domain method expects specific fields. No shared interface type. |
-| **Domain Methods -> Workspace** | Workspace structs passed as mutable arguments. Methods write into workspace buffers, caller reads back. | Classic Fortran-style buffer passing. Efficient but requires disciplined buffer management. |
-| **Hamiltonian -> JumpOp** | JumpOps constructed externally using `hamiltonian.eigvecs` for basis rotation, then passed into domain methods. | JumpOps are immutable after creation. The `in_eigenbasis` field is the primary data consumed. |
-| **Liouvillian mode <-> Trajectory mode** | Share: `precompute_data()`, `HamHam`, `JumpOp`, `config`. Differ: `jump_contribution!` signatures (matrix vs density matrix target). | Two parallel method trees in `jump_workers.jl`. Cross-validation between modes is a key correctness check. |
-| **Julia <-> Python (planned)** | Via PythonCall.jl for Qiskit circuit generation. Julia exports gate sequences, Python constructs `QuantumCircuit` objects. | Boundary should be a simple data exchange: list of gates + parameters. Avoid passing Julia objects directly into Python. |
-
-## Build Order Implications
-
-The dependency structure of QuantumFurnace.jl components determines the optimal build (development) order for new features. Components higher in this graph must be stable before components below them can be developed or validated.
-
-### Dependency Graph
-
-```
-                    constants.jl
-                        |
-                    hamiltonian.jl
-                   /            \
-          trotter_domain.jl    structs.jl
-                   \          / |  \
-                    \        /  |   \
-                     \      /   |    \
-                  qi_tools.jl  misc_tools.jl  errors.jl
-                      |
-              +-------+-------+
-              |       |       |
-         bohr_    energy_   time_
-         domain   domain    domain
-              \       |       /
-               \      |      /
-            ofts.jl  nufft.jl
-                 \     |
-                  \    |
-               coherent.jl
-                    |
-               kraus.jl
-                    |
-            furnace_utensils.jl
-                    |
-            jump_workers.jl
-              /           \
-      furnace.jl     trajectories.jl
-          |                |
-    log_sobolev.jl   linearmaps_liouv.jl
-```
-
-### Suggested Build Order for New Features
-
-1. **Foundation (must be stable first):**
-   - `structs.jl` -- type definitions are consumed everywhere
-   - `hamiltonian.jl` -- HamHam is passed to every computation
-   - `constants.jl` -- trivial but must exist
-
-2. **Domain infrastructure (parallel development possible):**
-   - `trotter_domain.jl`, `bohr_domain.jl`, `energy_domain.jl`, `time_domain.jl`
-   - `ofts.jl`, `nufft.jl` -- numerical transforms
-   - These can be developed in parallel since each domain is independent
-
-3. **Core computation (depends on 1 + 2):**
-   - `furnace_utensils.jl` -- precomputation wiring
-   - `coherent.jl` -- B-term computation
-   - `jump_workers.jl` -- the central dispatcher
-
-4. **Entry points (depends on 1 + 2 + 3):**
-   - `furnace.jl` -- orchestration
-   - `trajectories.jl` -- trajectory simulation
-
-5. **Analysis tools (depends on 4):**
-   - `log_sobolev.jl` -- requires complete Liouvillian
-   - `linearmaps_liouv.jl` -- requires jump_workers interface
-
-6. **External integration (depends on 4):**
-   - Qiskit interop -- requires Trotter domain gate sequences
-   - Test infrastructure -- requires all of the above to be testable
-   - Documentation -- requires stable API
-
-### Feature-Specific Build Dependencies
-
-| Feature | Depends On | Can Start After |
-|---------|-----------|-----------------|
-| Trajectory validation | `trajectories.jl` + `furnace.jl` (for cross-validation DM reference) | Core computation layer complete |
-| Test infrastructure (`runtests.jl`) | All testable components + stable APIs | Foundation layer complete (can be built incrementally) |
-| Qiskit interop | `trotter_domain.jl` gate sequences + PythonCall.jl | Trotter domain validated |
-| Documentation generation | Stable public API + Documenter.jl + Literate.jl | Entry points layer stable |
-| Additional Hamiltonians (Ising, 2D) | `hamiltonian.jl` constructor extensions | Foundation layer complete |
-| LinearMaps sparse Liouvillian | `jump_workers.jl` interface | Core computation layer complete |
-| Multi-threaded trajectories | `trajectories.jl` + SharedArrays | Trajectory framework validated |
-
-## How Mature Julia Packages Handle Key Concerns
-
-### Testing
-
-Mature Julia quantum packages use `test/runtests.jl` as the central test runner with nested `@testset` blocks. QuantumOptics.jl and QuantumToolbox.jl both follow this pattern. The standard approach:
+All tests need the same setup: Hamiltonian, jumps, configs, precomputed data. Extract this into `test_helpers.jl`:
 
 ```julia
-# test/runtests.jl
+# test/test_helpers.jl
+
 using QuantumFurnace
-using Test
+using LinearAlgebra, Random, Test
 
-@testset "QuantumFurnace.jl" begin
-    @testset "Hamiltonian" begin include("test_hamiltonian.jl") end
-    @testset "Bohr Domain" begin include("test_bohr.jl") end
-    @testset "Energy Domain" begin include("test_energy.jl") end
-    @testset "Trajectories" begin include("test_trajectories.jl") end
+"""Standard 3-qubit Heisenberg test system with known parameters."""
+function make_test_system(;
+    num_qubits::Int = 3,
+    beta::Float64 = 10.0,
+    sigma_factor::Float64 = 0.8,  # sigma = sigma_factor / beta
+    num_energy_bits::Int = 10,
+    w0::Float64 = 0.05,
+    a::Float64 = 1/10,
+    b::Float64 = 0.4,
+    with_coherent::Bool = true,
+)
+    dim = 2^num_qubits
+    sigma = sigma_factor / beta
+    w_gamma = 1 / beta
+    sigma_gamma = sqrt(2 * w_gamma / beta - sigma^2)
+    t0 = 2pi / (2^num_energy_bits * w0)
+    num_trotter_steps_per_t0 = 10
+
+    hamiltonian = load_hamiltonian("heis", num_qubits)
+    hamiltonian = finalize_hamham(hamiltonian, beta)
+
+    # Jump operators: X, Y, Z on each site
+    jump_paulis = [[X], [Y], [Z]]
+    num_of_jumps = length(jump_paulis) * num_qubits
+    jump_normalization = sqrt(num_of_jumps)
+    jumps = JumpOp[]
+    for pauli in jump_paulis
+        for site in 1:num_qubits
+            jump_op = pad_term(pauli, num_qubits, site) / jump_normalization
+            jump_op_in_eigenbasis = hamiltonian.eigvecs' * jump_op * hamiltonian.eigvecs
+            orthogonal = (jump_op == transpose(jump_op))
+            hermitian = (jump_op == jump_op')
+            push!(jumps, JumpOp(jump_op, jump_op_in_eigenbasis, orthogonal, hermitian))
+        end
+    end
+
+    trotter = TrottTrott(hamiltonian, t0, num_trotter_steps_per_t0)
+
+    # Return everything tests might need
+    return (; num_qubits, dim, beta, sigma, w_gamma, sigma_gamma,
+             w0, t0, a, b, num_energy_bits, num_trotter_steps_per_t0,
+             hamiltonian, trotter, jumps, with_coherent, jump_normalization)
+end
+
+"""Create a LiouvConfig from the test system parameters."""
+function make_liouv_config(sys, domain::AbstractDomain)
+    LiouvConfig(
+        num_qubits = sys.num_qubits,
+        with_coherent = sys.with_coherent,
+        with_linear_combination = true,
+        domain = domain,
+        beta = sys.beta,
+        sigma = sys.sigma,
+        gaussian_parameters = (sys.w_gamma, sys.sigma_gamma),
+        a = sys.a,
+        b = sys.b,
+        num_energy_bits = sys.num_energy_bits,
+        w0 = sys.w0,
+        t0 = sys.t0,
+        eta = 0.0,
+        num_trotter_steps_per_t0 = sys.num_trotter_steps_per_t0,
+    )
+end
+
+"""Create a ThermalizeConfig from the test system parameters."""
+function make_therm_config(sys, domain::AbstractDomain; delta=0.01, mixing_time=10.0)
+    ThermalizeConfig(
+        num_qubits = sys.num_qubits,
+        with_coherent = sys.with_coherent,
+        with_linear_combination = true,
+        domain = domain,
+        beta = sys.beta,
+        sigma = sys.sigma,
+        gaussian_parameters = (sys.w_gamma, sys.sigma_gamma),
+        a = sys.a,
+        b = sys.b,
+        num_energy_bits = sys.num_energy_bits,
+        w0 = sys.w0,
+        t0 = sys.t0,
+        eta = 0.0,
+        num_trotter_steps_per_t0 = sys.num_trotter_steps_per_t0,
+        mixing_time = mixing_time,
+        delta = delta,
+    )
+end
+
+# --- Tolerance tiers ---
+# These map to the error hierarchy
+const TOL_MACHINE = 1e-12    # Machine precision (exact operations)
+const TOL_BOHR_EXACT = 1e-10 # Bohr+B should give Gibbs to near machine precision
+const TOL_ENERGY_QUAD = 1e-4 # Energy domain introduces Gaussian quadrature error
+const TOL_TIME_QUAD = 1e-3   # Time domain adds Riemann sum quadrature error
+const TOL_TROTTER = 1e-2     # Trotter adds time discretization error
+const TOL_DELTA_SINGLE = 0.1 # Single delta-step error (O(delta^2))
+const TOL_TRAJECTORY_STAT = 0.05  # Trajectory statistical error (1/sqrt(ntraj))
+```
+
+### Test Tier 1: Detailed Balance (Gibbs Fixed Point)
+
+**Tests:** BohrDomain with coherent term B gives Gibbs state as exact fixed point.
+
+**What this validates:** The fundamental mathematical property -- the Lindbladian with exact KMS detailed balance has the Gibbs state as its kernel.
+
+```julia
+# test/test_detailed_balance.jl
+@testset "Detailed Balance: Gibbs Fixed Point" begin
+    sys = make_test_system(num_qubits=3)
+
+    @testset "Bohr+B: Liouvillian kernel is Gibbs" begin
+        config = make_liouv_config(sys, BohrDomain())
+        result = run_lindbladian(sys.jumps, config, sys.hamiltonian)
+
+        @test trace_distance_h(
+            Hermitian(result.fixed_point),
+            sys.hamiltonian.gibbs
+        ) < TOL_BOHR_EXACT
+    end
+
+    @testset "Bohr+B: DM thermalization converges to Gibbs" begin
+        config = make_therm_config(sys, BohrDomain(); delta=0.005, mixing_time=50.0)
+        dm0 = Matrix{ComplexF64}(I(sys.dim) / sys.dim)
+        result = run_thermalization(sys.jumps, config, dm0, sys.hamiltonian)
+
+        @test result.distances_to_gibbs[end] < TOL_BOHR_EXACT
+    end
+
+    @testset "Energy domain: fixed point near Gibbs (quadrature error)" begin
+        config = make_liouv_config(sys, EnergyDomain())
+        result = run_lindbladian(sys.jumps, config, sys.hamiltonian)
+
+        dist = trace_distance_h(Hermitian(result.fixed_point), sys.hamiltonian.gibbs)
+        @test dist < TOL_ENERGY_QUAD
+        @test dist > TOL_BOHR_EXACT  # Should NOT be exact -- verifies error is real
+    end
+
+    @testset "Error hierarchy: Bohr < Energy < Time < Trotter" begin
+        distances = Float64[]
+        for domain in [BohrDomain(), EnergyDomain(), TimeDomain(), TrotterDomain()]
+            config = make_liouv_config(sys, domain)
+            trotter_arg = domain isa TrotterDomain ? sys.trotter : nothing
+            result = run_lindbladian(sys.jumps, config, sys.hamiltonian; trotter=trotter_arg)
+            push!(distances, trace_distance_h(
+                Hermitian(result.fixed_point), sys.hamiltonian.gibbs))
+        end
+
+        @test distances[1] < distances[2]  # Bohr < Energy
+        @test distances[2] < distances[3]  # Energy < Time
+        @test distances[3] < distances[4]  # Time < Trotter
+    end
 end
 ```
 
-For numerical packages, tolerance-based testing is standard:
+### Test Tier 2: Coherent Term Consistency
+
+**Tests:** `coherent_bohr()` equals `B_time()` up to time quadrature error, equals `B_trotter()` up to Trotter error.
 
 ```julia
-@test norm(B_bohr - B_time) < 1e-8  # Cross-domain validation
-@test trace_distance_h(steady_state, gibbs) < 1e-6  # Convergence
-@test isapprox(tr(dm), 1.0, atol=1e-14)  # Physical constraints
+# test/test_coherent_term.jl
+@testset "Coherent Term B Consistency" begin
+    sys = make_test_system(num_qubits=3)
+    jump = sys.jumps[1]
+
+    @testset "B_bohr vs B_time (time quadrature error)" begin
+        config_bohr = make_liouv_config(sys, BohrDomain())
+        config_time = make_liouv_config(sys, TimeDomain())
+
+        pd_bohr = precompute_data(BohrDomain(), config_bohr, sys.hamiltonian)
+        pd_time = precompute_data(TimeDomain(), config_time, sys.hamiltonian)
+
+        B_bohr = coherent_bohr(sys.hamiltonian, jump, config_bohr)
+        rmul!(B_bohr, pd_bohr.gamma_norm_factor)
+
+        B_t = B_time(jump, sys.hamiltonian, pd_time.b_minus, pd_time.b_plus,
+                     sys.t0, sys.beta, sys.sigma)
+        rmul!(B_t, pd_time.gamma_norm_factor)
+
+        @test norm(B_bohr - B_t) < TOL_TIME_QUAD
+        @test norm(B_bohr - B_t) > TOL_MACHINE  # Not exact (verifies error is real)
+    end
+
+    @testset "B_time vs B_trotter (Trotter error)" begin
+        config_time = make_liouv_config(sys, TimeDomain())
+        config_trotter = make_liouv_config(sys, TrotterDomain())
+
+        pd_time = precompute_data(TimeDomain(), config_time, sys.hamiltonian)
+        pd_trotter = precompute_data(TrotterDomain(), config_trotter, sys.trotter)
+
+        B_t = B_time(jump, sys.hamiltonian, pd_time.b_minus, pd_time.b_plus,
+                     sys.t0, sys.beta, sys.sigma)
+        rmul!(B_t, pd_time.gamma_norm_factor)
+
+        B_tr = B_trotter(jump, sys.trotter, pd_trotter.b_minus, pd_trotter.b_plus,
+                         sys.beta, sys.sigma)
+        rmul!(B_tr, pd_trotter.gamma_norm_factor)
+
+        # Transform B_trotter to eigenbasis for comparison
+        V = sys.hamiltonian.eigvecs' * sys.trotter.eigvecs
+        B_tr_in_eigen = V * B_tr * V'
+
+        @test norm(B_t - B_tr_in_eigen) < TOL_TROTTER
+    end
+
+    @testset "B is Hermitian" begin
+        config = make_liouv_config(sys, BohrDomain())
+        pd = precompute_data(BohrDomain(), config, sys.hamiltonian)
+        B = coherent_bohr(sys.hamiltonian, jump, config)
+        @test norm(B - B') < TOL_MACHINE
+    end
+end
 ```
 
-(HIGH confidence: verified from Julia docs and multiple package structures.)
+### Test Tier 3: OFT Consistency
 
-### Documentation
+**Tests:** `oft!()` (Bohr-exact Gaussian filter) matches `time_oft!()` (Riemann sum) up to time quadrature, matches `trotter_oft!()` up to Trotter error.
 
-The Documenter.jl + Literate.jl combination used by QuantumFurnace.jl is the ecosystem standard. Key practices from mature packages:
+```julia
+# test/test_oft_consistency.jl
+@testset "OFT Consistency Across Domains" begin
+    sys = make_test_system(num_qubits=3)
+    jump = sys.jumps[1]
 
-- Docstrings on all exported functions with `@ref` cross-links to related functions
-- Literate.jl tutorials that are both executable Julia scripts and rendered documentation
-- CI auto-deploys docs on push to main (already configured in `.github/workflows/Documentation.yml`)
-- Theory pages with LaTeX math rendered via KaTeX in Documenter.jl
-- API reference page auto-generated from docstrings via `@autodocs`
+    @testset "oft! vs NUFFT prefactors (Time domain)" begin
+        config = make_liouv_config(sys, TimeDomain())
+        pd = precompute_data(TimeDomain(), config, sys.hamiltonian)
 
-(HIGH confidence: QuantumFurnace.jl already uses this stack. The setup is correct; content needs expansion.)
+        test_energies = [0.0, 0.1, -0.1]
+        for w in test_energies
+            if haskey(pd.oft_nufft_prefactors.energy_to_index, w)
+                A_exact = oft(jump, w, sys.hamiltonian, sys.sigma)
+                pref = prefactor_view(pd.oft_nufft_prefactors, w)
+                A_nufft = jump.in_eigenbasis .* pref
 
-### Python Interop
+                @test norm(A_exact - A_nufft) < TOL_TIME_QUAD
+            end
+        end
+    end
+end
+```
 
-For Qiskit integration, PythonCall.jl is the recommended bridge over the older PyCall.jl because:
+### Test Tier 4: DM Step Error Scaling
 
-- Actively maintained (improvements noted in September 2025)
-- Supports a wider range of type conversions
-- Bidirectional: Julia can call Python and Python can call Julia (via JuliaCall)
-- More robust garbage collection across language boundaries
+**Tests:** Single delta-step error is O(delta^2), multi-step error is O(delta). This corresponds to Chen Theorem III.1.
 
-The recommended pattern for quantum circuit interop: export gate parameters as plain Julia arrays/dicts, then construct Qiskit `QuantumCircuit` objects on the Python side. Avoid passing complex Julia types across the boundary.
+```julia
+# test/test_dm_step_errors.jl
+@testset "DM Step Error Scaling (Chen Theorem III.1)" begin
+    sys = make_test_system(num_qubits=3)
 
-(MEDIUM confidence: PythonCall.jl is well-documented but specific Qiskit integration patterns are not widely documented in the Julia ecosystem.)
+    @testset "Single step: error ~ O(delta^2)" begin
+        domain = EnergyDomain()
+        deltas = [0.1, 0.05, 0.025]
+        errors = Float64[]
+
+        for delta in deltas
+            config = make_therm_config(sys, domain; delta=delta, mixing_time=delta)
+            dm0 = Matrix{ComplexF64}(I(sys.dim) / sys.dim)
+            result = run_thermalization(sys.jumps, config, copy(dm0), sys.hamiltonian)
+
+            # Compare single-step DM output against exact channel
+            # (exact channel = exp(delta * L) applied to dm0)
+            liouv_config = make_liouv_config(sys, domain)
+            liouv = construct_lindbladian(sys.jumps, liouv_config, sys.hamiltonian)
+            exact_dm_vec = exp(delta * liouv) * vec(dm0)
+            exact_dm = reshape(exact_dm_vec, sys.dim, sys.dim)
+
+            push!(errors, norm(result.evolved_dm - exact_dm))
+        end
+
+        # Check quadratic scaling: error(delta/2) / error(delta) ~ 1/4
+        for i in 1:(length(errors)-1)
+            ratio = errors[i+1] / errors[i]
+            @test ratio < 0.35  # Should be ~0.25 for O(delta^2)
+        end
+    end
+end
+```
+
+### Test Tier 5: Trajectory Correctness (Post-Fix)
+
+**Tests:** After the two-stage sampling fix, trajectory-averaged density matrix matches DM simulation.
+
+```julia
+# test/test_trajectory.jl
+@testset "Trajectory Simulation" begin
+    sys = make_test_system(num_qubits=3)
+
+    @testset "Trajectory average matches DM (EnergyDomain)" begin
+        domain = EnergyDomain()
+        delta = 0.01
+        mixing_time = 20.0
+        ntraj = 500  # Enough for statistical convergence
+
+        config = make_therm_config(sys, domain; delta=delta, mixing_time=mixing_time)
+
+        # DM reference
+        dm0 = Matrix{ComplexF64}(I(sys.dim) / sys.dim)
+        dm_result = run_thermalization(sys.jumps, config, copy(dm0), sys.hamiltonian)
+
+        # Trajectory average
+        psi0 = ones(ComplexF64, sys.dim) / sqrt(sys.dim)
+        traj_result = run_trajectories(sys.jumps, config, psi0, sys.hamiltonian;
+                                       ntraj=ntraj, delta=delta, total_time=mixing_time)
+
+        @test trace_distance_h(
+            Hermitian(traj_result.rho_mean),
+            Hermitian(dm_result.evolved_dm)
+        ) < TOL_TRAJECTORY_STAT
+    end
+
+    @testset "Trajectory converges to Gibbs (EnergyDomain)" begin
+        domain = EnergyDomain()
+        delta = 0.005
+        mixing_time = 100.0
+        ntraj = 1000
+
+        config = make_therm_config(sys, domain; delta=delta, mixing_time=mixing_time)
+        psi0 = ones(ComplexF64, sys.dim) / sqrt(sys.dim)
+
+        result = run_trajectories(sys.jumps, config, psi0, sys.hamiltonian;
+                                  ntraj=ntraj, delta=delta, total_time=mixing_time)
+
+        dist = trace_distance_h(Hermitian(result.rho_mean), sys.hamiltonian.gibbs)
+        @test dist < TOL_ENERGY_QUAD + TOL_TRAJECTORY_STAT
+    end
+end
+```
+
+### Test Tier 6: Trajectory vs DM Cross-Validation
+
+**Tests:** Same error hierarchy structure in trajectories as in DM mode.
+
+```julia
+# test/test_traj_vs_dm.jl
+@testset "Trajectory vs DM Cross-Validation" begin
+    sys = make_test_system(num_qubits=3)
+
+    @testset "Error hierarchy preserved in trajectories" begin
+        # Same test as Tier 1 error hierarchy, but using trajectories
+        delta = 0.005
+        mixing_time = 100.0
+        ntraj = 500
+        psi0 = ones(ComplexF64, sys.dim) / sqrt(sys.dim)
+
+        distances = Float64[]
+        for domain in [EnergyDomain(), TimeDomain(), TrotterDomain()]
+            config = make_therm_config(sys, domain; delta=delta, mixing_time=mixing_time)
+            trotter_arg = domain isa TrotterDomain ? sys.trotter : nothing
+            result = run_trajectories(sys.jumps, config, psi0, sys.hamiltonian;
+                                      ntraj=ntraj, delta=delta, total_time=mixing_time,
+                                      trotter=trotter_arg)
+            push!(distances, trace_distance_h(
+                Hermitian(result.rho_mean), sys.hamiltonian.gibbs))
+        end
+
+        @test distances[1] < distances[2] + TOL_TRAJECTORY_STAT  # Energy < Time
+        @test distances[2] < distances[3] + TOL_TRAJECTORY_STAT  # Time < Trotter
+    end
+end
+```
+
+## Data Flow: Trajectory Validation Pipeline
+
+### Full Validation Data Flow
+
+```
+[make_test_system()]
+    |
+    +----> HamHam, JumpOps, TrottTrott, parameters
+    |
+    +----> [make_liouv_config(domain)]
+    |         |
+    |         v
+    |     [run_lindbladian()] ----------> HotSpectralResults
+    |         |                              |
+    |         v                              v
+    |     fixed_point (Liouv kernel)    spectral_gap
+    |         |
+    |         +----> REFERENCE: trace_distance(fixed_point, gibbs)
+    |
+    +----> [make_therm_config(domain, delta)]
+              |
+              +----> [run_thermalization()] --> HotAlgorithmResults
+              |         |                          |
+              |         v                          v
+              |     evolved_dm               distances_to_gibbs[]
+              |         |
+              |         +----> DM REFERENCE for trajectory comparison
+              |
+              +----> [run_trajectories()] --> (rho_mean, ...)
+                        |                        |
+                        v                        v
+                    rho_mean (traj avg)     [optional: measurements]
+                        |
+                        +----> CROSS-VALIDATE: trace_distance(rho_mean, evolved_dm)
+                        +----> GIBBS CHECK:    trace_distance(rho_mean, gibbs)
+```
+
+### Error Budget Propagation
+
+```
+Gibbs state (exact target)
+    |
+    v
+BohrDomain + B          error_1 ~ 0 (machine precision)
+    |
+    v  + Gaussian filter quadrature (w0 discretization)
+EnergyDomain + B        error_2 = error_1 + O(w0 * exp(-sigma^2))
+    |
+    v  + Riemann sum time quadrature (t0 discretization)
+TimeDomain + B           error_3 = error_2 + O(t0 * exp(-sigma^2 * t_max^2))
+    |
+    v  + Trotter time evolution approximation
+TrotterDomain + B        error_4 = error_3 + O(t0 / num_trotter_steps)
+    |
+    v  + delta-stepping error (weak measurement discretization)
+DM step simulation       error_5 = error_4 + O(delta) per mixing time
+    |
+    v  + statistical sampling error
+Trajectory simulation    error_6 = error_5 + O(1/sqrt(ntraj))
+```
+
+Each test tier validates one layer of this error budget.
+
+## Component Boundaries for New vs Existing Code
+
+### New Files
+
+| File | Purpose | Dependencies |
+|------|---------|--------------|
+| `test/runtests.jl` | Central test runner | All test files |
+| `test/test_helpers.jl` | Shared fixtures, configs, tolerances | QuantumFurnace module |
+| `test/test_detailed_balance.jl` | Tier 1: Gibbs fixed point tests | test_helpers, run_lindbladian, run_thermalization |
+| `test/test_coherent_term.jl` | Tier 2: B operator cross-domain tests | test_helpers, coherent_bohr, B_time, B_trotter |
+| `test/test_oft_consistency.jl` | Tier 3: OFT cross-domain tests | test_helpers, oft!, nufft prefactors |
+| `test/test_dm_step_errors.jl` | Tier 4: DM step error scaling | test_helpers, run_thermalization, construct_lindbladian |
+| `test/test_trajectory.jl` | Tier 5: Trajectory correctness | test_helpers, run_trajectories |
+| `test/test_traj_vs_dm.jl` | Tier 6: Cross-validation | test_helpers, run_trajectories, run_thermalization |
+
+### Modified Files
+
+| File | What Changes | Why |
+|------|-------------|-----|
+| `trajectories.jl` | Fix `build_trajectoryframework` scope bug (line 53: `trotter` undefined). Add `R_per_jump` field to `TrajectoryFramework`. Restructure dissipative-jump branch in `step_along_trajectory!` for two-stage sampling. | Core sampling fix. |
+| `structs.jl` | No changes needed (TrajectoryFramework is in trajectories.jl, not structs.jl) | -- |
+
+### Unchanged Files (Used As-Is by Tests)
+
+All other source files remain unchanged. Tests exercise them as black boxes through the existing public API.
+
+## Build Order: Dependency-Aware Sequencing
+
+The dependency between the trajectory fix and the test suite determines build order:
+
+```
+Phase 0: Test infrastructure (no dependency on trajectory fix)
+    |
+    +-- test/runtests.jl
+    +-- test/test_helpers.jl
+    +-- test/test_detailed_balance.jl   (uses only DM / Liouvillian)
+    +-- test/test_coherent_term.jl      (uses only B computation)
+    +-- test/test_oft_consistency.jl    (uses only OFT)
+    +-- test/test_dm_step_errors.jl     (uses only DM stepping)
+    |
+    All of these can be written and run BEFORE fixing trajectories.
+    They validate the known-good DM path and establish reference values.
+
+Phase 1: Fix trajectory sampling (depends on understanding from Phase 0 tests)
+    |
+    +-- Fix build_trajectoryframework scope bug
+    +-- Add R_per_jump precomputation
+    +-- Restructure step_along_trajectory! for two-stage sampling
+    +-- Quick smoke test: single trajectory doesn't crash
+    |
+    Run Phase 0 tests to verify nothing is broken.
+
+Phase 2: Trajectory validation tests (depends on Phase 1)
+    |
+    +-- test/test_trajectory.jl         (trajectory average matches DM)
+    +-- test/test_traj_vs_dm.jl         (error hierarchy in trajectories)
+    |
+    These can only be written after the sampling fix.
+
+Phase 3: Cleanup
+    |
+    +-- Remove ~200 lines of commented-out code in jump_workers.jl, trajectories.jl
+    +-- Remove old KrausFramework, precompute_kraus_jumps, etc.
+```
+
+**Why this order:**
+1. Phase 0 establishes the DM reference values that Phase 2 will compare against. If DM tests fail, we know the bug is in DM code (not trajectories), which saves debugging time.
+2. Phase 1 cannot be properly tested without the DM reference oracle from Phase 0.
+3. Phase 2 depends on Phase 1 (fixed sampling) and Phase 0 (reference values).
+4. Phase 3 is cosmetic and should only happen after validation confirms correctness.
+
+## Known Bugs to Fix Before Validation
+
+### Bug 1: `build_trajectoryframework` Scope Error (trajectories.jl:53)
+
+```julia
+# Line 48: function signature has `where T` but T is not used
+function build_trajectoryframework(
+    jumps::AbstractVector{<:JumpOp},
+    ham_or_trott::Union{HamHam, TrottTrott},
+    config::AbstractThermalizeConfig,
+    precomputed_data,
+    scratch::KrausScratch{ComplexF64},
+    delta::Float64) where T    # <-- T is unused, remove `where T`
+
+# Line 53: `trotter` variable is not defined in this scope
+    B_total = precompute_coherent_total_B(jumps, ham_or_trott, config, precomputed_data; trotter=trotter)
+    #                                                                                    ^^^^^^^
+    # `trotter` was never passed in. Should be removed or derived from ham_or_trott.
+```
+
+**Fix:** Remove `where T` from the signature. Remove `; trotter=trotter` from the `precompute_coherent_total_B` call -- this function already receives `ham_or_trott` which is either `HamHam` or `TrottTrott`, and `precompute_coherent_total_B` already handles both cases via its domain dispatch (line 23-36 of coherent.jl).
+
+### Bug 2: Coherent Unitary Applied AFTER Branching (trajectories.jl:472-477)
+
+In `step_along_trajectory!`, the coherent unitary `U_B` is applied **after** computing `K0*psi` and the branch probabilities, but **before** the branch is taken. This means the branching probabilities are computed on the pre-U_B state, but the post-branch state includes U_B. The DM version (`jump_contribution!` in jump_workers.jl line 163-169) applies U_B **before** everything else, which is the correct order.
+
+**Fix:** Move the U_B application block to the very beginning of `step_along_trajectory!`, before computing `Rpsi` and `K0*psi`. This matches the DM code.
+
+```julia
+# CORRECT ORDER:
+# 1. Apply U_B (coherent unitary)
+# 2. Compute R*psi, K0*psi, p_nojump, p_res, p_jump_total
+# 3. Branch
+```
+
+### Bug 3: Coherent Term Variable Name Mismatch (trajectories.jl:96)
+
+```julia
+# Line 96: passes B_total but the variable was defined on line 54 as B_total
+return TrajectoryFramework(
+    ...
+    B_total,    # This is the B matrix
+    U_B,        # exp(-i delta B_total) -- correct
+    ...
+)
+```
+
+When `config.with_coherent == false`, `B_total` is never assigned (the `if` block is skipped). The `TrajectoryFramework` constructor would receive an undefined variable. Need to add `B_total = nothing` before the `if` block, or restructure.
+
+**Fix:**
+```julia
+B_total = nothing
+if config.with_coherent
+    B_total = precompute_coherent_total_B(jumps, ham_or_trott, config, precomputed_data)
+    B_total .= 0.5 .* (B_total .+ B_total')
+    U_B = exp(-1im * delta * Hermitian(B_total))
+else
+    U_B = nothing
+end
+```
+
+## Patterns for This Milestone
+
+### Pattern: Reference Oracle Testing
+
+**What:** Test correctness by comparing a new computation against an established reference implementation at a coarser approximation level.
+
+**When to use:** Every layer of the error hierarchy.
+
+**How it works in QuantumFurnace:**
+
+```
+Bohr (exact) --reference-for--> Energy (check: ||Bohr - Energy|| < tol_quadrature)
+Energy       --reference-for--> Time   (check: ||Energy - Time||  < tol_time)
+Time         --reference-for--> Trotter(check: ||Time - Trotter|| < tol_trotter)
+DM mode      --reference-for--> Trajectory (check: ||DM_rho - Traj_rho|| < tol_stat)
+```
+
+Each test uses the next-higher level as an oracle. This is possible because the higher-level computations are already validated and working.
+
+### Pattern: Statistical Tolerance with Confidence Bounds
+
+**What:** Trajectory tests are inherently statistical. Use `ntraj` large enough that the standard error `~1/sqrt(ntraj)` is well below the tolerance.
+
+**Rule of thumb:** For tolerance `tol`, use `ntraj >= 4 / tol^2`. For `tol = 0.05`, need `ntraj >= 1600`. For `tol = 0.1`, need `ntraj >= 400`.
+
+**Trade-off:** More trajectories = slower tests. Use smaller `ntraj` (100-500) for quick CI, larger (1000-5000) for thorough validation runs.
+
+### Pattern: Error Monotonicity Assertion
+
+**What:** Assert that errors increase monotonically along the approximation hierarchy. If `error(Energy) > error(Time)`, something is wrong -- the extra approximation in Time should make things worse, not better.
+
+**Implementation:**
+```julia
+@test dist_bohr < dist_energy < dist_time < dist_trotter
+```
+
+This is a powerful diagnostic: it catches both bugs in individual domains AND bugs in the error analysis.
+
+## Anti-Patterns to Avoid
+
+### Anti-Pattern: Testing Against Hardcoded Numerical Values
+
+**What people do:** `@test norm(B_bohr) == 0.0023456789` (hardcoded from a previous run).
+
+**Why it's wrong:** Numerical values depend on the specific Hamiltonian realization (which uses random disorder coefficients via `find_ideal_heisenberg`). If the BSON file changes or the random seed differs, all tests break even though the code is correct.
+
+**Do this instead:** Test *relationships* (e.g., `||B_bohr - B_time|| < tolerance`) and *properties* (e.g., `B == B'` for Hermiticity). Use the deterministic `load_hamiltonian("heis", n)` which loads from a fixed BSON file, not random generation.
+
+### Anti-Pattern: Single Tolerance for All Tests
+
+**What people do:** `const TOL = 1e-8` used everywhere.
+
+**Why it's wrong:** The error hierarchy spans 10+ orders of magnitude. A tolerance tight enough for Bohr (1e-12) will fail for Trotter (1e-2). A tolerance loose enough for Trotter (1e-2) won't catch bugs in Bohr.
+
+**Do this instead:** Use tiered tolerances as shown in `test_helpers.jl` above. Each test tier has a tolerance that matches its expected error level.
+
+### Anti-Pattern: Testing Only Convergence to Gibbs
+
+**What people do:** Only test `trace_distance(rho, gibbs) < tolerance` at the end of a long simulation.
+
+**Why it's wrong:** This is a weak test -- many bugs still converge to something near Gibbs. It doesn't catch: wrong convergence rate, wrong spectral gap, transient errors, or sampling bias that averages out over long time.
+
+**Do this instead:** Test intermediate properties too: error scaling with delta, DM vs trajectory agreement at intermediate times, convergence rate consistency with spectral gap.
 
 ## Sources
 
-- [QuantumOptics.jl GitHub repository](https://github.com/qojulia/QuantumOptics.jl) -- src directory structure, master.jl + mcwf.jl dual mode
-- [QuantumToolbox.jl GitHub repository](https://github.com/qutip/QuantumToolbox.jl) -- src directory structure, Qobj design, multiple dispatch
-- [QuantumToolbox.jl paper (Quantum, 2025)](https://quantum-journal.org/papers/q-2025-09-29-1866/) -- architecture description, AD integration, multiple dispatch patterns
-- [QuantumOptics.jl paper (arXiv:1707.01060)](https://arxiv.org/pdf/1707.01060) -- basis system, operator abstraction, open quantum system framework
-- [Yao.jl (yaoquantum.org)](https://yaoquantum.org/) -- meta-package structure, QBIR intermediate representation, component packages
-- [PythonCall.jl documentation](https://juliapy.github.io/PythonCall.jl/stable/) -- Julia-Python interop, comparison to PyCall.jl
-- [Julia Test module documentation](https://docs.julialang.org/en/v1/stdlib/Test/) -- @testset, @test, runtests.jl standard
-- [Documenter.jl documentation](https://documenter.juliadocs.org/stable/) -- documentation generation for Julia packages
-- [Literate.jl documentation](https://fredrikekre.github.io/Literate.jl/stable/) -- executable documentation from Julia scripts
-- [Julia Package Testing Best Practices (Great Lakes Consulting)](https://blog.glcs.io/package-testing) -- test organization patterns
-- [Bridging Worlds: Julia-Python Interoperability (arXiv:2404.18170)](https://arxiv.org/html/2404.18170v1) -- PythonCall vs PyCall analysis
+- Direct codebase analysis of all 23 source files in `src/`
+- Direct analysis of all 7 test files in `test/`
+- Direct analysis of simulation scripts in `simulations/`
+- Direct analysis of playground scripts (especially `unraveling.jl`)
+- Chen, Kastoryano, Gilyen (2025) -- KMS detailed balance construction, Theorem III.1 on delta-step errors
+- Chen, Kastoryano, Brandao, Gilyen (2023) -- approximate GNS construction, error hierarchy
+- Julia Test module documentation -- `@testset`, `@test`, `runtests.jl` standard
+- QuantumOptics.jl `test/` structure -- pattern for quantum simulation test suites
 
 ---
-*Architecture research for: Quantum Lindbladian simulation Julia package (QuantumFurnace.jl)*
+*Architecture research for: Trajectory validation and test suite integration (v1.0 Trajectories milestone)*
 *Researched: 2026-02-13*
