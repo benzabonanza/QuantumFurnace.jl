@@ -13,7 +13,7 @@ Requirements for milestone v1.0 Trajectories. Each maps to roadmap phases.
 - [ ] **TFIX-02**: Fix coherent unitary U_B ordering in `step_along_trajectory!` to match DM code
 - [ ] **TFIX-03**: Add probability normalization assertion (p_nojump + p_res + p_jump_total ≈ 1.0)
 - [ ] **TFIX-04**: Add S matrix PSD guard before Cholesky factorization
-- [ ] **TFIX-05**: Rewrite trajectory jump sampling as two-stage: first sample Lindblad operator A^a (weighted by total rate per operator), then sample frequency omega within that operator — matching DM simulation jump selection structure
+- [ ] **TFIX-05**: Ensure trajectory jump sampling faithfully implements Chen's weak measurement scheme, matching how the DM simulator applies the CPTP channel — verify by comparing trajectory channel structure against `jump_contribution!` in DM code and the paper's algorithm
 
 ### Trajectory Validation
 
@@ -76,33 +76,33 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| TFIX-01 | — | Pending |
-| TFIX-02 | — | Pending |
-| TFIX-03 | — | Pending |
-| TFIX-04 | — | Pending |
-| TFIX-05 | — | Pending |
-| TVAL-01 | — | Pending |
-| TVAL-02 | — | Pending |
-| TVAL-03 | — | Pending |
-| TVAL-04 | — | Pending |
-| TVAL-05 | — | Pending |
-| TVAL-06 | — | Pending |
-| DMTST-01 | — | Pending |
-| DMTST-02 | — | Pending |
-| DMTST-03 | — | Pending |
-| DMTST-04 | — | Pending |
-| DMTST-05 | — | Pending |
-| DMTST-06 | — | Pending |
-| TINF-01 | — | Pending |
-| TINF-02 | — | Pending |
-| TINF-03 | — | Pending |
-| TINF-04 | — | Pending |
+| TFIX-01 | Phase 1 | Pending |
+| TFIX-02 | Phase 2 | Pending |
+| TFIX-03 | Phase 2 | Pending |
+| TFIX-04 | Phase 2 | Pending |
+| TFIX-05 | Phase 2 | Pending |
+| TVAL-01 | Phase 2 | Pending |
+| TVAL-02 | Phase 4 | Pending |
+| TVAL-03 | Phase 4 | Pending |
+| TVAL-04 | Phase 4 | Pending |
+| TVAL-05 | Phase 5 | Pending |
+| TVAL-06 | Phase 4 | Pending |
+| DMTST-01 | Phase 3 | Pending |
+| DMTST-02 | Phase 3 | Pending |
+| DMTST-03 | Phase 3 | Pending |
+| DMTST-04 | Phase 3 | Pending |
+| DMTST-05 | Phase 3 | Pending |
+| DMTST-06 | Phase 3 | Pending |
+| TINF-01 | Phase 1 | Pending |
+| TINF-02 | Phase 5 | Pending |
+| TINF-03 | Phase 3 | Pending |
+| TINF-04 | Phase 1 | Pending |
 
 **Coverage:**
 - v1 requirements: 21 total
-- Mapped to phases: 0
-- Unmapped: 21 ⚠️
+- Mapped to phases: 21
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-13*
-*Last updated: 2026-02-13 after initial definition*
+*Last updated: 2026-02-13 after roadmap creation*
