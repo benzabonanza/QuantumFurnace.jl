@@ -27,11 +27,22 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 
 ### Active
 
-- [ ] Trajectory simulation: debug and validate `TrajectoryFramework` against density matrix results
+#### Current Milestone: v1.0 Trajectories
+
+**Goal:** Fix, validate, and test trajectory simulation against density matrix results with a comprehensive correctness test suite.
+
+**Target features:**
+- Fix trajectory sampling: two-stage jump selection (pick Lindblad operator A^a, then sample omega) instead of flat (a, omega) pool
+- Validate trajectory-averaged density matrix against DM simulation for 3-4 qubit Heisenberg (Energy, Time, Trotter domains)
+- Gibbs convergence validation accounting for error budget (quadrature, sampling, delta-step, Trotter)
+- Comprehensive test suite: detailed balance checks, domain error nesting, OFT consistency, DM step errors, trajectory vs DM cross-validation
+- Regression tests for known-good numerical results
+
+#### Future
+
 - [ ] 1D Ising model Hamiltonian generation
 - [ ] 2D Heisenberg Hamiltonian generation (lattice graph support)
 - [ ] General k-local Hamiltonian construction on arbitrary graphs
-- [ ] Comprehensive test suite: unit tests for each domain, cross-validation between DM and trajectory methods
 - [ ] Error/convergence analysis functions: trace distance to Gibbs, fidelity, relative entropy vs. time/steps
 - [ ] Qiskit circuit generation for resource estimation (gate count, circuit depth)
 - [ ] Hamiltonian simulation time counter (total Hamiltonian simulation cost per Gibbs sample)
@@ -78,7 +89,7 @@ Results needed for publication: convergence curves (trace distance vs. steps), m
 ## Constraints
 
 - **Language**: Julia -- non-negotiable, leverages Julia's multiple dispatch for domain hierarchy and performance
-- **Correctness**: All Lindbladian constructions must be mathematically faithful to the source papers; detailed balance properties must hold to machine precision (for exact KMS) or documented approximation bounds (for GNS)
+- **Correctness**: All Lindbladian constructions must be mathematically faithful to the source papers; detailed balance properties must hold to machine precision (for exact KMS) or documented approximation bounds (for GNS and for implemented KMS due to Trotterization or quadrature errors.)
 - **System size**: Practical limit ~12-14 qubits due to exponential Hilbert space scaling (density matrix 2^n x 2^n)
 - **Dependencies**: Minimize external dependencies; rely on Julia stdlib + established numerical packages (Arpack, FINUFFT)
 - **Dual purpose**: Code must be both performant (for research results) and readable (for community pedagogy) -- well-documented functions with mathematical cross-references to papers
@@ -94,4 +105,4 @@ Results needed for publication: convergence curves (trace distance vs. steps), m
 | Single-node multi-core for trajectories | Shared memory for precomputed data avoids serialization overhead; cluster nodes have enough RAM | -- Pending benchmarks |
 
 ---
-*Last updated: 2026-02-13 after initialization*
+*Last updated: 2026-02-13 after milestone v1.0 Trajectories started*
