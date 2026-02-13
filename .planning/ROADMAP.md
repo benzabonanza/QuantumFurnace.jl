@@ -28,10 +28,10 @@ Decimal phases appear between their surrounding integers in numeric order.
   1. `using QuantumFurnace` loads without errors and `build_trajectoryframework` can be called without compilation failures
   2. `Pkg.test()` runs a test suite that includes shared fixtures (`make_test_system`, tiered tolerance constants matching error hierarchy)
   3. Project.toml has test-only dependencies (StableRNGs, HypothesisTests, StatsBase, Aqua) in `[extras]` section, not polluting production `[deps]`
-**Plans**: TBD
+**Plans:** 1 plan
 
 Plans:
-- [ ] 01-01: Project.toml cleanup, test helpers module, trajectory compilation fix
+- [ ] 01-01-PLAN.md — Fix compilation bugs, clean Project.toml, create test infrastructure with fixtures and smoke tests
 
 ### Phase 2: Trajectory Bug Fixes
 **Goal**: Trajectory simulation runs correctly with proper jump sampling, normalization guards, and CPTP channel verification
