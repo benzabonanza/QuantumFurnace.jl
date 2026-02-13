@@ -12,7 +12,7 @@ This milestone takes trajectory simulation from broken (compilation errors, orde
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Foundation and Compilation** - Test infrastructure setup and trajectory compilation fix
+- [x] **Phase 1: Foundation and Compilation** - Test infrastructure setup and trajectory compilation fix
 - [ ] **Phase 2: Trajectory Bug Fixes** - Fix trajectory code bugs and verify CPTP channel correctness
 - [ ] **Phase 3: DM Reference Test Suite** - Establish density matrix ground truth across all domains
 - [ ] **Phase 4: Trajectory Cross-Validation** - Validate trajectory averages match DM evolution per domain
@@ -31,7 +31,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans:** 1 plan
 
 Plans:
-- [ ] 01-01-PLAN.md — Fix compilation bugs, clean Project.toml, create test infrastructure with fixtures and smoke tests
+- [x] 01-01-PLAN.md — Fix compilation bugs, clean Project.toml, create test infrastructure with fixtures and smoke tests
 
 ### Phase 2: Trajectory Bug Fixes
 **Goal**: Trajectory simulation runs correctly with proper jump sampling, normalization guards, and CPTP channel verification
@@ -102,7 +102,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation and Compilation | 0/1 | Not started | - |
+| 1. Foundation and Compilation | 1/1 | ✓ Complete | 2026-02-13 |
 | 2. Trajectory Bug Fixes | 0/2 | Not started | - |
 | 3. DM Reference Test Suite | 0/3 | Not started | - |
 | 4. Trajectory Cross-Validation | 0/2 | Not started | - |
