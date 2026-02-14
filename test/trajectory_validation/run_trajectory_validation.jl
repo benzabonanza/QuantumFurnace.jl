@@ -178,12 +178,11 @@ end
     gibbs_trott = Hermitian(SMALL_TROTTER.eigvecs' * gibbs_comp * SMALL_TROTTER.eigvecs)
 
     # Liouvillian fixed point (exact steady state of L).
-    # The TrotterDomain Liouvillian's fixed point has a small domain approximation
-    # offset (~0.005) from the true Gibbs state. This is intrinsic to the domain
-    # and confirmed by DMTST-02 hierarchy tests. We compare against the fixed point
-    # for DM convergence (deterministic), and validate trajectory convergence toward
-    # the Gibbs state region with a threshold that accounts for both domain approximation
-    # and statistical noise from finite trajectory count.
+    # The TrotterDomain Liouvillian's fixed point has a negligible domain approximation
+    # offset (~1e-6) from the true Gibbs state after the Trotter basis transform fix.
+    # We compare against the fixed point for DM convergence (deterministic), and
+    # validate trajectory convergence toward the Gibbs state region with a threshold
+    # that accounts for statistical noise from finite trajectory count.
     eig = eigen(L)
     ss_idx = argmin(abs.(eig.values))
     ss_vec = eig.vectors[:, ss_idx]
@@ -194,7 +193,7 @@ end
     # Sanity check: fixed point is close to Gibbs (domain approximation error)
     fp_gibbs_dist = QuantumFurnace.trace_distance_h(Hermitian(ss_dm), gibbs_trott)
     println("  Fixed point -> Gibbs trace distance: $(round(fp_gibbs_dist; sigdigits=4))")
-    @test fp_gibbs_dist < 0.01  # Domain approximation error is small
+    @test fp_gibbs_dist < 1e-4  # Domain approximation error is negligible after basis fix
 
     # -- DM evolution via iterated matrix-vector multiply --
     psi0 = fill(ComplexF64(1.0), dim) / sqrt(dim)
@@ -233,10 +232,10 @@ end
 
     # Trajectory-averaged rho converges toward the Gibbs state region.
     # With 10,000 trajectories, the 1/sqrt(N) statistical noise floor is ~0.01.
-    # Combined with the domain approximation offset (~0.005), the total expected
-    # trace distance to Gibbs is ~0.015. We assert < 0.02 (safe margin).
+    # Domain approximation is now negligible (~1e-6), so the dominant error source is
+    # purely statistical noise. Total expected distance is ~0.01. We assert < 0.015 (safe margin).
     dist_traj_gibbs = QuantumFurnace.trace_distance_h(Hermitian(rho_traj), gibbs_trott)
-    @test dist_traj_gibbs < 0.02  # Trajectory near Gibbs (domain approx + statistical noise)
+    @test dist_traj_gibbs < 0.015  # Trajectory near Gibbs (statistical noise dominant)
 
     # Trajectory must also be closer to the fixed point than the initial state was
     # (confirming thermalization happened, not just noise)
