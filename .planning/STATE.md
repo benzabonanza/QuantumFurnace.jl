@@ -68,7 +68,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-None yet.
+- [ ] Refactor step_along_trajectory to per-operator branching (trajectories) — [todo](./todos/pending/2026-02-14-refactor-step-along-trajectory-to-per-operator-branching.md)
 
 ### Quick Tasks Completed
 
