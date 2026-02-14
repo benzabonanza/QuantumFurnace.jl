@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-13)
 Phase: 4 of 5 (Trajectory Cross-Validation) - COMPLETE
 Plan: 2 of 2 in current phase (ALL COMPLETE)
 Status: Phase 4 complete, Phase 5 next
-Last activity: 2026-02-14 - Completed quick task 8: Fix TrotterDomain Gibbs fixed point distance
+Last activity: 2026-02-14 - Completed quick task 9: Remove trafo_from_eigen_to_trotter from TrottTrott
 
 Progress: [########░░] 80%
 
@@ -77,6 +77,8 @@ Recent decisions affecting current work:
 - [quick-7]: JumpOp[jumps[a]] forces Vector{JumpOp} type for dispatch compatibility
 - [Phase quick-8]: Trotter basis transform (U * A * U') applied before NUFFT dissipative loops in all three entry points
 - [Phase quick-8]: JumpOp[] typed comprehension to preserve Vector{JumpOp} for struct field compatibility
+- [quick-9]: Removed trafo_from_eigen_to_trotter field; use trotter.eigvecs' * j.data * trotter.eigvecs directly
+- [quick-9]: Test back-transforms use U_t2e = trotter.eigvecs' * ham.eigvecs (equivalent to removed field)
 
 ### Pending Todos
 
@@ -94,6 +96,7 @@ None
 | 6 | Fix B_trotter() basis mismatch | 2026-02-14 | 2334a5e | [6-fix-b-time-vs-b-trott-basis-mismatch-in-](./quick/6-fix-b-time-vs-b-trott-basis-mismatch-in-/) |
 | 7 | Refactor step_along_trajectory to per-operator Lie-Trotter splitting | 2026-02-14 | 0c879e7 | [7-refactor-step-along-trajectory-to-per-op](./quick/7-refactor-step-along-trajectory-to-per-op/) |
 | 8 | Fix TrotterDomain Gibbs fixed point distance (~0.004 -> ~9e-9) | 2026-02-14 | e0ef0fc | [8-fix-trotterdomain-gibbs-fixed-point-dist](./quick/8-fix-trotterdomain-gibbs-fixed-point-dist/) |
+| 9 | Remove trafo_from_eigen_to_trotter from TrottTrott | 2026-02-14 | 5646187 | [9-remove-trafo-from-eigen-to-trotter-from-](./quick/9-remove-trafo-from-eigen-to-trotter-from-/) |
 
 ### Blockers/Concerns
 
@@ -105,5 +108,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-14
-Stopped at: Completed quick task 8 (TrotterDomain Gibbs fixed point basis fix)
+Stopped at: Completed quick task 9 (Remove trafo_from_eigen_to_trotter from TrottTrott)
 Resume file: None
