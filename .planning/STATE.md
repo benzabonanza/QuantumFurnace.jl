@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-13)
 Phase: 4 of 5 (Trajectory Cross-Validation) - COMPLETE
 Plan: 2 of 2 in current phase (ALL COMPLETE)
 Status: Phase 4 complete, Phase 5 next
-Last activity: 2026-02-14 - Completed 04-02: Multi-step Gibbs convergence test (TVAL-06)
+Last activity: 2026-02-14 - Completed quick task 7: Refactor step_along_trajectory to per-operator branching
 
 Progress: [########░░] 80%
 
