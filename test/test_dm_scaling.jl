@@ -113,7 +113,8 @@ end
                          BETA, SIGMA)
     rmul!(B_trott, precomputed_trott.gamma_norm_factor)
     # Transform from Trotter eigenbasis to Hamiltonian eigenbasis
-    B_trott_in_eigen = TEST_TROTTER.trafo_from_eigen_to_trotter' * B_trott * TEST_TROTTER.trafo_from_eigen_to_trotter
+    U_t2e = TEST_TROTTER.eigvecs' * TEST_HAM.eigvecs  # Trotter eigenbasis <- H eigenbasis
+    B_trott_in_eigen = U_t2e' * B_trott * U_t2e
 
     # Diagnostics
     dist_bohr_time = norm(B_bohr - B_time_val)
@@ -159,13 +160,13 @@ end
     A_time .*= time_oft_prefactor
 
     # Trotter OFT: trotter_oft! needs jump in Trotter eigenbasis
-    U = TEST_TROTTER.trafo_from_eigen_to_trotter  # H-eigen -> Trotter eigen
-    jump_trott = JumpOp(jump.data, U * jump.in_eigenbasis * U', jump.orthogonal, jump.hermitian)
+    jump_trott = JumpOp(jump.data, TEST_TROTTER.eigvecs' * jump.data * TEST_TROTTER.eigvecs, jump.orthogonal, jump.hermitian)
     A_trott = Matrix{ComplexF64}(undef, DIM, DIM)
     QuantumFurnace.trotter_oft!(A_trott, caches, jump_trott, w, TEST_TROTTER, oft_time_labels, SIGMA)
     A_trott .*= time_oft_prefactor
     # Transform result from Trotter eigenbasis back to H-eigenbasis
-    A_trott_in_eigen = U' * A_trott * U
+    U_t2e = TEST_TROTTER.eigvecs' * TEST_HAM.eigvecs
+    A_trott_in_eigen = U_t2e' * A_trott * U_t2e
 
     # Diagnostics
     dist_energy_time = norm(A_energy - A_time)
@@ -227,19 +228,19 @@ end
 
     @test haskey(precomputed_trott.oft_nufft_prefactors.energy_to_index, w)
 
-    U = TEST_TROTTER.trafo_from_eigen_to_trotter
-    jump_trott = JumpOp(jump.data, U * jump.in_eigenbasis * U', jump.orthogonal, jump.hermitian)
+    jump_trott = JumpOp(jump.data, TEST_TROTTER.eigvecs' * jump.data * TEST_TROTTER.eigvecs, jump.orthogonal, jump.hermitian)
+    U_t2e = TEST_TROTTER.eigvecs' * TEST_HAM.eigvecs
 
     nufft_pf_trott = QuantumFurnace.prefactor_view(precomputed_trott.oft_nufft_prefactors, w)
     A_nufft_trott = jump_trott.in_eigenbasis .* nufft_pf_trott
     A_nufft_trott .*= time_oft_prefactor
-    A_nufft_trott_in_eigen = U' * A_nufft_trott * U
+    A_nufft_trott_in_eigen = U_t2e' * A_nufft_trott * U_t2e
 
     # Direct trotter_oft! for comparison
     A_trott = Matrix{ComplexF64}(undef, DIM, DIM)
     QuantumFurnace.trotter_oft!(A_trott, caches, jump_trott, w, TEST_TROTTER, oft_time_labels, SIGMA)
     A_trott .*= time_oft_prefactor
-    A_trott_in_eigen = U' * A_trott * U
+    A_trott_in_eigen = U_t2e' * A_trott * U_t2e
 
     # === Diagnostics ===
     dist_nufft_time_vs_time = norm(A_nufft_time - A_time)
