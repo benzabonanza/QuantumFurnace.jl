@@ -431,18 +431,15 @@ end
 """
     step_along_trajectory!(psi, fw::TrajectoryFramework)  for D ∈ {TimeDomain, TrotterDomain}
 
-    Implements one Chen-faithful δ-step unraveling of the *full* CPTP Kraus map:
-    - no-jump Kraus:      K0 = I - α R,   α = 1 - sqrt(1-δ)
-    - jump Kraus family:  K_{a,ω} = √(δ rate2(ω)) A_{a,ω}   (generated on the fly via NUFFT prefactors)
-    - residual Kraus:     K_res = U_residual  with  S = U_res† U_res = I - K0†K0 - δR
-    Applies the deterministic coherent unitary U_B (if present) FIRST, before all Kraus operations.
+    Per-operator Lie-Trotter splitting: randomly select ONE operator a, apply that operator's
+    CPTP channel (K0_a, U_res_a, jump outcomes for operator a only).
 
-    # Channel structure (Chen 2023, Theorem III.1):
-    #   K0 = I - alpha*R, where alpha = 1 - sqrt(1-delta)
-    #   K_{a,w} = sqrt(delta * gamma(w)) * L_{a,w}  (jump operators)
-    #   U_res: U_res'*U_res = S = (2*alpha - delta)*R - alpha^2*R^2  (residual)
-    # Sampling: p_nojump = ||K0*psi||^2, p_jump = delta*<psi|R|psi>, p_res = ||U_res*psi||^2
-    # TFIX-05: Cross-checked against jump_contribution! in jump_workers.jl -- structure matches.
+    # Per-operator channel structure (Chen 2023, adapted for Lie-Trotter splitting):
+    #   Pick a ∈ {1,...,N_jumps} uniformly at random
+    #   K0_a = I - alpha*R_a, where alpha = 1 - sqrt(1-delta_eff), delta_eff = delta*N_jumps
+    #   K_{a,w} = sqrt(delta_eff * scaled_rate(w)) * L_{a,w}  (jump operators for operator a)
+    #   U_res_a: U_res_a'*U_res_a = S_a  (residual for operator a)
+    # Rates rescaled by 1/p_jump so net effect per unit time matches DM run_thermalization.
 """
 function step_along_trajectory!(
     psi::Vector{ComplexF64},
@@ -453,54 +450,51 @@ function step_along_trajectory!(
     cfg = fw.config
     pd  = fw.precomputed_data
 
-    # Pull hot fields into locals (fewer dynamic dispatches / repeated getproperty)
+    # Pull hot fields into locals
     transition         = pd.transition
     energy_labels      = pd.energy_labels
     oft_prefactors     = pd.oft_nufft_prefactors
     gamma_norm_factor  = pd.gamma_norm_factor
 
-    delta = fw.delta
-    alpha = fw.alpha
-    R = fw.R
+    delta_eff = fw.delta_eff
 
-    # Same rate prefactor used in precompute_R(::TimeDomain/::TrotterDomain) (no extra δ)
-    base_prefactor = cfg.w0 * cfg.t0^2 * (cfg.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
+    # Rate prefactor with 1/p_jump rescaling baked in
+    # base_prefactor already includes gamma_norm_factor; multiply by n_jumps for 1/p_jump
+    scaled_prefactor = cfg.w0 * cfg.t0^2 * (cfg.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor / (1.0 / fw.n_jumps)
 
     # ------------------------------------------------------------------
-    # TFIX-02: Apply coherent unitary FIRST, before Kraus probabilities (matches DM code ordering)
+    # Random operator selection (Lie-Trotter splitting)
     # ------------------------------------------------------------------
-    if fw.U_B !== nothing
-        mul!(ws.psi_tmp, fw.U_B, psi)
+    a = rand(1:fw.n_jumps)
+    per_op = fw.per_operator[a]
+    jump = fw.jumps[a]
+
+    # ------------------------------------------------------------------
+    # Apply per-operator coherent unitary FIRST (matches DM code ordering)
+    # ------------------------------------------------------------------
+    if per_op.U_B !== nothing
+        mul!(ws.psi_tmp, per_op.U_B, psi)
         copyto!(psi, ws.psi_tmp)
-        rmul!(psi, 1.0 / sqrt(max(_norm2(psi), eps(Float64))))  # guard drift from expm / roundoff
+        rmul!(psi, 1.0 / sqrt(max(_norm2(psi), eps(Float64))))
     end
-    
-    # ------------------------------------------------------------------
-    # Compute p_nojump and p_jump_total cheaply from one Rψ
-    # ------------------------------------------------------------------
-    mul!(ws.Rpsi, R, psi)                          # ws.Rpsi := Rψ
-    expR = real(dot(psi, ws.Rpsi))                 # <ψ|R|ψ>, should be ≥ 0
-    expR = max(expR, 0.0)
 
-    # K0ψ = (I - αR)ψ = ψ - α(Rψ)
-    copyto!(ws.psi_tmp, psi)
-    @inbounds @. ws.psi_tmp = ws.psi_tmp - alpha * ws.Rpsi
+    # ------------------------------------------------------------------
+    # Compute probabilities from per-operator R_a, K0_a, U_residual_a
+    # ------------------------------------------------------------------
+    mul!(ws.Rpsi, per_op.R, psi)                    # R_a * psi
+    expR = max(real(dot(psi, ws.Rpsi)), 0.0)        # <psi|R_a|psi>
+
+    mul!(ws.psi_tmp, per_op.K0, psi)                # K0_a * psi
     p_nojump = _norm2(ws.psi_tmp)
 
-    # total dissipative jump probability (excluding residual completion)
-    p_jump_total = delta * expR
+    p_jump_total = delta_eff * expR                  # delta_eff, NOT delta
 
-    # ------------------------------------------------------------------
-    # Residual probability p_res = ||U_residual ψ||^2
-    #    Reuse ws.Rpsi buffer (Rψ no longer needed beyond expR + K0ψ)
-    # ------------------------------------------------------------------
-    mul!(ws.Rpsi, fw.U_residual, psi)              # ws.Rpsi := U_res ψ
+    mul!(ws.Rpsi, per_op.U_residual, psi)           # U_res_a * psi (reuse buffer)
     p_res = _norm2(ws.Rpsi)
 
     total_weight = p_nojump + p_res + p_jump_total
     total_weight = max(total_weight, 0.0)
 
-    # TFIX-03: Normalization warning
     if abs(total_weight - 1.0) > 1e-6
         @warn "Normalization violation: sum = $(round(total_weight; digits=6))"
     end
@@ -508,76 +502,50 @@ function step_along_trajectory!(
     r = rand() * total_weight
 
     # ------------------------------------------------------------------
-    # Branch: no-jump / residual / dissipative jump
+    # Branch: no-jump / residual / dissipative jump (for selected operator a only)
     # ------------------------------------------------------------------
-
     if r < p_nojump
-        # ψ ← K0ψ / ||K0ψ||
         copyto!(psi, ws.psi_tmp)
         rmul!(psi, 1.0 / sqrt(max(p_nojump, eps(Float64))))
 
     elseif r < (p_nojump + p_res)
-        # ψ ← U_res ψ / ||U_res ψ||
         copyto!(psi, ws.Rpsi)
         rmul!(psi, 1.0 / sqrt(max(p_res, eps(Float64))))
 
     else
-        # Dissipative jump: sample one (a,ω,±) outcome by cumulative probability scan.
+        # Dissipative jump: sample one (ω,±) outcome for the SINGLE selected operator a
         target = r - p_nojump - p_res
         csum   = 0.0
-
         chosen = false
         last_norm2 = 0.0
 
-        @inbounds for jump in fw.jumps
-            if jump.hermitian
-                # half-grid (w_raw <= 0) and explicit mirrored negative partner
-                for w_raw in energy_labels
-                    w_raw > 1e-12 && continue
-                    w = abs(w_raw)
+        @inbounds if jump.hermitian
+            for w_raw in energy_labels
+                w_raw > 1e-12 && continue
+                w = abs(w_raw)
 
-                    # Build A_{a,ω} = A ∘ P(ω) into the single d×d buffer.
-                    pref = prefactor_view(oft_prefactors, w)
-                    @. ws.jump_oft = jump.in_eigenbasis * pref
+                pref = prefactor_view(oft_prefactors, w)
+                @. ws.jump_oft = jump.in_eigenbasis * pref
 
-                    # Positive-frequency jump operator: A_{a,ω}
-                    mul!(ws.Rpsi, ws.jump_oft, psi)              # reuse ws.Rpsi as candidate buffer
-                    n2 = _norm2(ws.Rpsi)
-                    last_norm2 = n2
-                    p = delta * (base_prefactor * transition(w)) * n2
-                    csum += p
-                    if csum >= target
-                        copyto!(psi, ws.Rpsi)
-                        rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
-                        chosen = true
-                        break
-                    end
-
-                    # Negative-frequency partner uses operator A_{a,ω}† and weight transition(-w)
-                    if w > 1e-12
-                        mul!(ws.Rpsi, ws.jump_oft', psi)
-                        n2 = _norm2(ws.Rpsi)
-                        last_norm2 = n2
-                        p = delta * (base_prefactor * transition(-w)) * n2
-                        csum += p
-                        if csum >= target
-                            copyto!(psi, ws.Rpsi)
-                            rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
-                            chosen = true
-                            break
-                        end
-                    end
+                # Positive-frequency
+                mul!(ws.Rpsi, ws.jump_oft, psi)
+                n2 = _norm2(ws.Rpsi)
+                last_norm2 = n2
+                p = delta_eff * (scaled_prefactor * transition(w)) * n2
+                csum += p
+                if csum >= target
+                    copyto!(psi, ws.Rpsi)
+                    rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
+                    chosen = true
+                    break
                 end
-            else
-                # full grid for non-Hermitian jumps
-                for w in energy_labels
-                    pref = prefactor_view(oft_prefactors, w)
-                    @. ws.jump_oft = jump.in_eigenbasis * pref
 
-                    mul!(ws.Rpsi, ws.jump_oft, psi)
+                # Negative-frequency partner
+                if w > 1e-12
+                    mul!(ws.Rpsi, ws.jump_oft', psi)
                     n2 = _norm2(ws.Rpsi)
                     last_norm2 = n2
-                    p = delta * (base_prefactor * transition(w)) * n2
+                    p = delta_eff * (scaled_prefactor * transition(-w)) * n2
                     csum += p
                     if csum >= target
                         copyto!(psi, ws.Rpsi)
@@ -587,13 +555,26 @@ function step_along_trajectory!(
                     end
                 end
             end
+        else
+            for w in energy_labels
+                pref = prefactor_view(oft_prefactors, w)
+                @. ws.jump_oft = jump.in_eigenbasis * pref
 
-            chosen && break
+                mul!(ws.Rpsi, ws.jump_oft, psi)
+                n2 = _norm2(ws.Rpsi)
+                last_norm2 = n2
+                p = delta_eff * (scaled_prefactor * transition(w)) * n2
+                csum += p
+                if csum >= target
+                    copyto!(psi, ws.Rpsi)
+                    rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
+                    chosen = true
+                    break
+                end
+            end
         end
 
-        # Fallback if rounding prevents hitting target: normalize last candidate buffer.
         if !chosen
-            # ws.Rpsi holds the last computed candidate state
             copyto!(psi, ws.Rpsi)
             rmul!(psi, 1.0 / sqrt(max(last_norm2, eps(Float64))))
         end
@@ -604,22 +585,8 @@ end
 """
     step_along_trajectory!(psi, fw::TrajectoryFramework)  for D == EnergyDomain
 
-    Same logic as the Time/Trotter variant, but A_{a,ω} is generated by `oft!(...)` (Gaussian in Bohr-frequency space),
-    not via NUFFT prefactors.
-
-    # Channel structure (Chen 2023, Theorem III.1):
-    #   K0 = I - alpha*R, where alpha = 1 - sqrt(1-delta)
-    #   K_{a,w} = sqrt(delta * gamma(w)) * L_{a,w}  (jump operators)
-    #   U_res: U_res'*U_res = S = (2*alpha - delta)*R - alpha^2*R^2  (residual)
-    # Sampling: p_nojump = ||K0*psi||^2, p_jump = delta*<psi|R|psi>, p_res = ||U_res*psi||^2
-    # TFIX-05: Cross-checked against jump_contribution! in jump_workers.jl -- structure matches.
-
-    Probabilities:
-    - p_nojump = ||(I-αR)ψ||^2
-    - p_jump_total = δ <ψ|R|ψ>
-    - p_res = ||U_res ψ||^2
-    - per-outcome p(a,ω,+) = δ * rate2(ω) * ||A_{a,ω} ψ||^2
-    - per-outcome p(a,ω,-) = δ * rate2(-ω) * ||A_{a,ω}† ψ||^2   (Hermitian jump case via explicit partner)
+    Per-operator Lie-Trotter splitting for EnergyDomain.
+    Same logic as Time/Trotter variant but A_{a,ω} is generated by `oft!(...)`.
 """
 function step_along_trajectory!(
     psi::Vector{ComplexF64},
@@ -634,46 +601,44 @@ function step_along_trajectory!(
     energy_labels      = pd.energy_labels
     gamma_norm_factor  = pd.gamma_norm_factor
 
-    δ = fw.delta
-    α = fw.alpha
-    R = fw.R
+    delta_eff = fw.delta_eff
 
-    # Same base prefactor as precompute_R(::EnergyDomain) (no extra δ)
-    base_prefactor = cfg.w0 / (cfg.sigma * sqrt(2 * pi)) * gamma_norm_factor
+    # Rate prefactor with 1/p_jump rescaling: base * n_jumps
+    scaled_prefactor = cfg.w0 / (cfg.sigma * sqrt(2 * pi)) * gamma_norm_factor / (1.0 / fw.n_jumps)
 
     # ------------------------------------------------------------------
-    # TFIX-02: Apply coherent unitary FIRST, before Kraus probabilities (matches DM code ordering)
+    # Random operator selection (Lie-Trotter splitting)
     # ------------------------------------------------------------------
-    if fw.U_B !== nothing
-        mul!(ws.psi_tmp, fw.U_B, psi)
+    a = rand(1:fw.n_jumps)
+    per_op = fw.per_operator[a]
+    jump = fw.jumps[a]
+
+    # ------------------------------------------------------------------
+    # Apply per-operator coherent unitary FIRST
+    # ------------------------------------------------------------------
+    if per_op.U_B !== nothing
+        mul!(ws.psi_tmp, per_op.U_B, psi)
         copyto!(psi, ws.psi_tmp)
-        rmul!(psi, 1.0 / sqrt(max(_norm2(psi), eps(Float64))))  # guard drift from expm / roundoff
+        rmul!(psi, 1.0 / sqrt(max(_norm2(psi), eps(Float64))))
     end
 
     # ------------------------------------------------------------------
-    # Compute p_nojump and p_jump_total cheaply from one Rψ
+    # Compute probabilities from per-operator Kraus data
     # ------------------------------------------------------------------
-    mul!(ws.Rpsi, R, psi)                          # Rψ
-    expR = real(dot(psi, ws.Rpsi))
-    expR = max(expR, 0.0)
+    mul!(ws.Rpsi, per_op.R, psi)
+    expR = max(real(dot(psi, ws.Rpsi)), 0.0)
 
-    # K0ψ = ψ - α Rψ
-    copyto!(ws.psi_tmp, psi)
-    @inbounds @. ws.psi_tmp = ws.psi_tmp - α * ws.Rpsi
+    mul!(ws.psi_tmp, per_op.K0, psi)
     p_nojump = _norm2(ws.psi_tmp)
 
-    p_jump_total = δ * expR
+    p_jump_total = delta_eff * expR
 
-    # ------------------------------------------------------------------
-    # Residual probability
-    # ------------------------------------------------------------------
-    mul!(ws.Rpsi, fw.U_residual, psi)              # U_res ψ
+    mul!(ws.Rpsi, per_op.U_residual, psi)
     p_res = _norm2(ws.Rpsi)
 
     total_weight = p_nojump + p_res + p_jump_total
     total_weight = max(total_weight, 0.0)
 
-    # TFIX-03: Normalization warning
     if abs(total_weight - 1.0) > 1e-6
         @warn "Normalization violation: sum = $(round(total_weight; digits=6))"
     end
@@ -681,7 +646,7 @@ function step_along_trajectory!(
     r = rand() * total_weight
 
     # ------------------------------------------------------------------
-    # Branch
+    # Branch: no-jump / residual / dissipative jump (for selected operator a only)
     # ------------------------------------------------------------------
     if r < p_nojump
         copyto!(psi, ws.psi_tmp)
@@ -694,61 +659,36 @@ function step_along_trajectory!(
     else
         target = r - p_nojump - p_res
         csum   = 0.0
-
         chosen = false
         last_norm2 = 0.0
 
-        # Hamiltonian (or Trotter) object is needed to build A_{a,ω} in eigenbasis
         ham = fw.ham_or_trott
-        @assert ham isa HamHam  # EnergyDomain should be paired with HamHam
+        @assert ham isa HamHam
 
-        @inbounds for jump in fw.jumps
-            if jump.hermitian
-                # half-grid + explicit mirror partner
-                for w_raw in energy_labels
-                    w_raw > 1e-12 && continue
-                    w = abs(w_raw)
+        @inbounds if jump.hermitian
+            for w_raw in energy_labels
+                w_raw > 1e-12 && continue
+                w = abs(w_raw)
 
-                    # Build A_{a,ω} into ws.jump_oft buffer
-                    oft!(ws.jump_oft, jump, w, ham, cfg.sigma)
+                oft!(ws.jump_oft, jump, w, ham, cfg.sigma)
 
-                    # + branch: A_{a,ω}
-                    mul!(ws.Rpsi, ws.jump_oft, psi)
-                    n2 = _norm2(ws.Rpsi)
-                    last_norm2 = n2
-                    p = δ * (base_prefactor * transition(w)) * n2
-                    csum += p
-                    if csum >= target
-                        copyto!(psi, ws.Rpsi)
-                        rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
-                        chosen = true
-                        break
-                    end
-
-                    # - branch: A_{a,ω}† with transition(-w)
-                    if w > 1e-12
-                        mul!(ws.Rpsi, ws.jump_oft', psi)
-                        n2 = _norm2(ws.Rpsi)
-                        last_norm2 = n2
-                        p = δ * (base_prefactor * transition(-w)) * n2
-                        csum += p
-                        if csum >= target
-                            copyto!(psi, ws.Rpsi)
-                            rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
-                            chosen = true
-                            break
-                        end
-                    end
+                mul!(ws.Rpsi, ws.jump_oft, psi)
+                n2 = _norm2(ws.Rpsi)
+                last_norm2 = n2
+                p = delta_eff * (scaled_prefactor * transition(w)) * n2
+                csum += p
+                if csum >= target
+                    copyto!(psi, ws.Rpsi)
+                    rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
+                    chosen = true
+                    break
                 end
-            else
-                # full grid
-                for w in energy_labels
-                    oft!(ws.jump_oft, jump, w, ham, cfg.sigma)
 
-                    mul!(ws.Rpsi, ws.jump_oft, psi)
+                if w > 1e-12
+                    mul!(ws.Rpsi, ws.jump_oft', psi)
                     n2 = _norm2(ws.Rpsi)
                     last_norm2 = n2
-                    p = δ * (base_prefactor * transition(w)) * n2
+                    p = delta_eff * (scaled_prefactor * transition(-w)) * n2
                     csum += p
                     if csum >= target
                         copyto!(psi, ws.Rpsi)
@@ -758,8 +698,22 @@ function step_along_trajectory!(
                     end
                 end
             end
+        else
+            for w in energy_labels
+                oft!(ws.jump_oft, jump, w, ham, cfg.sigma)
 
-            chosen && break
+                mul!(ws.Rpsi, ws.jump_oft, psi)
+                n2 = _norm2(ws.Rpsi)
+                last_norm2 = n2
+                p = delta_eff * (scaled_prefactor * transition(w)) * n2
+                csum += p
+                if csum >= target
+                    copyto!(psi, ws.Rpsi)
+                    rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
+                    chosen = true
+                    break
+                end
+            end
         end
 
         if !chosen
