@@ -63,7 +63,19 @@ function build_trajectoryframework(
 
     alpha = 1 - sqrt(1 - delta_eff)
 
+    # For TrotterDomain, transform jump operators from Hamiltonian eigenbasis
+    # to Trotter eigenbasis. The NUFFT prefactors use Trotter quasi-Bohr frequencies,
+    # so the element-wise product A .* P requires A in the same basis.
+    jumps_for_diss = if config.domain isa TrotterDomain && ham_or_trott isa TrottTrott
+        U = ham_or_trott.trafo_from_eigen_to_trotter
+        JumpOp[JumpOp(j.data, U * j.in_eigenbasis * U', j.orthogonal, j.hermitian) for j in jumps]
+    else
+        JumpOp[j for j in jumps]
+    end
+
     # Precompute per-operator coherent B terms (one per jump)
+    # NOTE: precompute_coherent_total_B handles its own Trotter basis transform internally
+    # (via B_trotter in coherent.jl), so we pass the ORIGINAL jumps here.
     per_op_U_B = Vector{Union{Nothing, Matrix{ComplexF64}}}(undef, n_jumps)
     if config.with_coherent
         @inbounds for a in 1:n_jumps
@@ -81,7 +93,7 @@ function build_trajectoryframework(
 
     @inbounds for a in 1:n_jumps
         # Compute R^a for single operator, rescaled by 1/p_jump
-        precompute_R(config.domain, [jumps[a]], ham_or_trott, config, precomputed_data, scratch)
+        precompute_R(config.domain, [jumps_for_diss[a]], ham_or_trott, config, precomputed_data, scratch)
         R_a = copy(scratch.R)
         R_a .*= (1.0 / p_jump)   # rescale: R_a = (1/p_jump) * sum_w rate2(w) * A_w' * A_w
 
@@ -111,7 +123,7 @@ function build_trajectoryframework(
 
     return TrajectoryFramework(
         config.domain,
-        collect(jumps),
+        jumps_for_diss,
         ham_or_trott,
         config,
         precomputed_data,

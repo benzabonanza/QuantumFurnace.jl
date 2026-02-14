@@ -68,9 +68,19 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::AbstractLiouvConfi
         vectorize_liouvillian_coherent!(total_lindbladian, Btot, ws)
     end
 
+    # For TrotterDomain, transform jump operators from Hamiltonian eigenbasis
+    # to Trotter eigenbasis. The NUFFT prefactors use Trotter quasi-Bohr frequencies,
+    # so the element-wise product A .* P requires A in the same basis.
+    jumps_for_diss = if config.domain isa TrotterDomain
+        U = trotter.trafo_from_eigen_to_trotter
+        JumpOp[JumpOp(j.data, U * j.in_eigenbasis * U', j.orthogonal, j.hermitian) for j in jumps]
+    else
+        jumps
+    end
+
     # Accumulate Liouvillian in-place (no per-jump dim^2×dim^2 allocations).
-    for (k, jump) in pairs(jumps)
-        jump_contribution!(total_lindbladian, config.domain, jump, ham_or_trott, config, precomputed_data, ws; 
+    for (k, jump) in pairs(jumps_for_diss)
+        jump_contribution!(total_lindbladian, config.domain, jump, ham_or_trott, config, precomputed_data, ws;
             coherent_term=nothing)
     end
 
@@ -103,9 +113,18 @@ function run_thermalization(
 
     precomputed_data = precompute_data(config.domain, config, ham_or_trott)
 
+    # For TrotterDomain, transform jump operators from Hamiltonian eigenbasis
+    # to Trotter eigenbasis for the dissipative contribution.
+    jumps_for_diss = if config.domain isa TrotterDomain
+        U = trotter.trafo_from_eigen_to_trotter
+        JumpOp[JumpOp(j.data, U * j.in_eigenbasis * U', j.orthogonal, j.hermitian) for j in jumps]
+    else
+        jumps
+    end
+
     # precompute coherent U_B = exp(-i delta B(jump)) per jump to avoid allocations
     p_jump = 1.0 / length(jumps)
-    coherent_unitaries = precompute_coherent_unitary_terms(jumps, hamiltonian, config, precomputed_data; 
+    coherent_unitaries = precompute_coherent_unitary_terms(jumps, hamiltonian, config, precomputed_data;
         trotter=trotter, delta_scale = rescale_by_inv_prob ? (1.0 / p_jump) : 1.0)
 
     scratch = KrausScratch(ComplexF64, dim)
@@ -116,8 +135,8 @@ function run_thermalization(
     distances_to_gibbs = [trace_distance_h(Hermitian(evolving_dm), gibbs)]
 
     for step in 1:num_steps
-        idx = rand(rng, 1:length(jumps))
-        jump = jumps[idx]
+        idx = rand(rng, 1:length(jumps_for_diss))
+        jump = jumps_for_diss[idx]
 
         jump_contribution!(config.domain,
             evolving_dm,
