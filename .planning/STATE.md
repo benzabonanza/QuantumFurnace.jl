@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-13)
 Phase: 4 of 5 (Trajectory Cross-Validation) - COMPLETE
 Plan: 2 of 2 in current phase (ALL COMPLETE)
 Status: Phase 4 complete, Phase 5 next
-Last activity: 2026-02-14 - Completed quick task 7: Refactor step_along_trajectory to per-operator branching
+Last activity: 2026-02-14 - Completed quick task 8: Fix TrotterDomain Gibbs fixed point distance
 
 Progress: [########░░] 80%
 
@@ -75,6 +75,8 @@ Recent decisions affecting current work:
 - [quick-7]: Per-operator Lie-Trotter splitting: delta_eff = delta * N_jumps, alpha from delta_eff
 - [quick-7]: Per-operator coherent B via precompute_coherent_total_B with single-jump vector
 - [quick-7]: JumpOp[jumps[a]] forces Vector{JumpOp} type for dispatch compatibility
+- [Phase quick-8]: Trotter basis transform (U * A * U') applied before NUFFT dissipative loops in all three entry points
+- [Phase quick-8]: JumpOp[] typed comprehension to preserve Vector{JumpOp} for struct field compatibility
 
 ### Pending Todos
 
@@ -91,6 +93,7 @@ None
 | 5 | Tighten TrotterDomain error thresholds | 2026-02-14 | eb2569b | [5-tighten-trotterdomain-error-thresholds-f](./quick/5-tighten-trotterdomain-error-thresholds-f/) |
 | 6 | Fix B_trotter() basis mismatch | 2026-02-14 | 2334a5e | [6-fix-b-time-vs-b-trott-basis-mismatch-in-](./quick/6-fix-b-time-vs-b-trott-basis-mismatch-in-/) |
 | 7 | Refactor step_along_trajectory to per-operator Lie-Trotter splitting | 2026-02-14 | 0c879e7 | [7-refactor-step-along-trajectory-to-per-op](./quick/7-refactor-step-along-trajectory-to-per-op/) |
+| 8 | Fix TrotterDomain Gibbs fixed point distance (~0.004 -> ~9e-9) | 2026-02-14 | e0ef0fc | [8-fix-trotterdomain-gibbs-fixed-point-dist](./quick/8-fix-trotterdomain-gibbs-fixed-point-dist/) |
 
 ### Blockers/Concerns
 
@@ -102,5 +105,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-14
-Stopped at: Completed quick task 7 (per-operator Lie-Trotter trajectory refactor)
+Stopped at: Completed quick task 8 (TrotterDomain Gibbs fixed point basis fix)
 Resume file: None
