@@ -40,6 +40,18 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 
 ### Active
 
+## Current Milestone: v1.1 Reduce
+
+**Goal:** Refactor and simplify the codebase — prune unused code, simplify structs, introduce strategic type parameterization, clean up public API, remove redundant checks, and minimize allocations in core simulation paths.
+
+**Target features:**
+- Prune unused functions and dead comment blocks (keep linearmaps, log-sobolev, errors for future)
+- Simplify struct definitions
+- Strategic type parameterization on main structs (F64/F32 flexibility)
+- Clean up public API surface (expose building blocks for pedagogy, internalize implementation details)
+- Remove redundant checks and normalizations across layers
+- Minimize allocations in core simulation paths
+
 #### Future
 
 - [ ] 1D Ising model Hamiltonian generation
@@ -115,4 +127,4 @@ Results needed for publication: convergence curves (trace distance vs. steps), m
 | Single-node multi-core for trajectories | Shared memory for precomputed data avoids serialization overhead; cluster nodes have enough RAM | -- Pending benchmarks |
 
 ---
-*Last updated: 2026-02-14 after v1.0 Trajectories milestone*
+*Last updated: 2026-02-14 after v1.1 Reduce milestone started*
