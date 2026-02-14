@@ -15,6 +15,17 @@ function TrajectoryWorkspace(::Type{T}, dim::Int) where {T}
     )
 end
 
+"""
+Per-operator Kraus data for Lie-Trotter splitting.
+Each operator `a` has its own R_a, K0_a, U_residual_a, U_B_a.
+"""
+struct PerOperatorKraus{T}
+    R::Matrix{T}                        # R^a for this operator (rescaled by 1/p_jump)
+    K0::Matrix{T}                       # I - alpha * R^a
+    U_residual::Matrix{T}               # sqrt(S^a) via eigendecomposition
+    U_B::Union{Nothing, Matrix{T}}      # exp(-i * delta_eff * B^a), or nothing
+end
+
 struct TrajectoryFramework{T,C,H,PD,D<:AbstractDomain}
     domain::D
     jumps::Vector{JumpOp}
@@ -22,18 +33,14 @@ struct TrajectoryFramework{T,C,H,PD,D<:AbstractDomain}
     config::C
     precomputed_data::PD
 
-    # Coherent term (optional)
-    B::Union{Nothing, Matrix{T}}
-    U_B::Union{Nothing, Matrix{T}}
-
-    # Dissipative Kraus skeleton
-    R::Matrix{T}
-    K0::Matrix{T}
-    U_residual::Matrix{T}   # Residual Kraus: U_res' * U_res = S (via eigendecomposition, PSD-guarded)
+    # Per-operator Kraus data (Lie-Trotter splitting)
+    per_operator::Vector{PerOperatorKraus{T}}
+    n_jumps::Int
 
     # Step parameters
-    delta::Float64
-    alpha::Float64           # α = 1 - sqrt(1-δ)
+    delta::Float64           # original delta (for time stepping / num_steps)
+    delta_eff::Float64       # delta / p_jump = delta * n_jumps (for per-operator Kraus probabilities)
+    alpha::Float64           # α = 1 - sqrt(1-δ_eff)
 
     # Runtime workspace (mutated during stepping)
     ws::TrajectoryWorkspace{T}
@@ -48,36 +55,56 @@ function build_trajectoryframework(
     delta::Float64)
 
     dim = size(jumps[1].data, 1)
+    n_jumps = length(jumps)
+    p_jump = 1.0 / n_jumps
+    delta_eff = delta / p_jump   # = delta * n_jumps
 
+    @assert delta_eff < 1.0 "delta_eff = $(delta_eff) >= 1.0: delta=$(delta) * n_jumps=$(n_jumps) is too large for per-operator splitting"
+
+    alpha = 1 - sqrt(1 - delta_eff)
+
+    # Precompute per-operator coherent B terms (one per jump)
+    per_op_U_B = Vector{Union{Nothing, Matrix{ComplexF64}}}(undef, n_jumps)
     if config.with_coherent
-        B_total = precompute_coherent_total_B(jumps, ham_or_trott, config, precomputed_data)
-        B_total .= 0.5 .* (B_total .+ B_total')
-        U_B = exp(-1im * delta * Hermitian(B_total))
+        @inbounds for a in 1:n_jumps
+            B_a = precompute_coherent_total_B([jumps[a]], ham_or_trott, config, precomputed_data)
+            B_a .= 0.5 .* (B_a .+ B_a')
+            per_op_U_B[a] = exp(-1im * delta_eff * Hermitian(B_a))
+        end
     else
-        B_total = nothing
-        U_B = nothing
-    end
-    
-    R = precompute_R(config.domain, jumps, ham_or_trott, config, precomputed_data, scratch)
-    R = copy(scratch.R)
-
-    alpha = 1 - sqrt(1 - delta)
-    K0 = copy(R)
-    K0 .*= (-alpha)
-    @inbounds for i in 1:dim
-        K0[i,i] += 1
+        fill!(per_op_U_B, nothing)
     end
 
-    mul!(scratch.tmp1, R, R)  # tmp1 := R²
-    s1 = 2 * alpha - delta
-    s2 = alpha * alpha
-    @. scratch.tmp2 = s1 * R - s2 * scratch.tmp1   # tmp2 := S (up to roundoff)
+    # Build per-operator Kraus data
+    per_operator = Vector{PerOperatorKraus{ComplexF64}}(undef, n_jumps)
 
-    # TFIX-04: PSD guard -- clamp negative eigenvalues to zero (silent fallback)
-    S_herm = Hermitian(0.5 .* (scratch.tmp2 .+ scratch.tmp2'))
-    eig = eigen(S_herm)
-    eig.values .= max.(eig.values, 0.0)
-    U_residual = Matrix{ComplexF64}(Diagonal(sqrt.(eig.values)) * eig.vectors')
+    @inbounds for a in 1:n_jumps
+        # Compute R^a for single operator, rescaled by 1/p_jump
+        precompute_R(config.domain, [jumps[a]], ham_or_trott, config, precomputed_data, scratch)
+        R_a = copy(scratch.R)
+        R_a .*= (1.0 / p_jump)   # rescale: R_a = (1/p_jump) * sum_w rate2(w) * A_w' * A_w
+
+        # K0_a = I - alpha * R_a
+        K0_a = copy(R_a)
+        K0_a .*= (-alpha)
+        @inbounds for i in 1:dim
+            K0_a[i,i] += 1
+        end
+
+        # S_a = (2*alpha - delta_eff)*R_a - alpha^2 * R_a^2
+        mul!(scratch.tmp1, R_a, R_a)   # tmp1 := R_a^2
+        s1 = 2 * alpha - delta_eff
+        s2 = alpha * alpha
+        @. scratch.tmp2 = s1 * R_a - s2 * scratch.tmp1
+
+        # TFIX-04: PSD guard -- clamp negative eigenvalues to zero (silent fallback)
+        S_herm = Hermitian(0.5 .* (scratch.tmp2 .+ scratch.tmp2'))
+        eig = eigen(S_herm)
+        eig.values .= max.(eig.values, 0.0)
+        U_residual_a = Matrix{ComplexF64}(Diagonal(sqrt.(eig.values)) * eig.vectors')
+
+        per_operator[a] = PerOperatorKraus(R_a, K0_a, U_residual_a, per_op_U_B[a])
+    end
 
     ws = TrajectoryWorkspace(ComplexF64, dim)
 
@@ -87,12 +114,10 @@ function build_trajectoryframework(
         ham_or_trott,
         config,
         precomputed_data,
-        B_total,
-        U_B,
-        R,
-        K0,
-        U_residual,
+        per_operator,
+        n_jumps,
         delta,
+        delta_eff,
         alpha,
         ws,
     )
@@ -229,8 +254,8 @@ end
     rho_acc::Matrix{ComplexF64},
     psi::Vector{ComplexF64},
 )
-    # rho_acc += psi * psi'   (conjugate transpose)
-    BLAS.gerc!(one(ComplexF64), psi, psi, rho_acc)
+    # rho_acc += psi * psi'   (conjugate transpose, rank-1 update)
+    mul!(rho_acc, psi, psi', one(ComplexF64), one(ComplexF64))
     return nothing
 end
 
@@ -261,7 +286,7 @@ function _evolve_along_trajectory!(
         step_along_trajectory!(psi, fw)  # dispatches to EnergyDomain or Time/Trotter variant
     end
 
-    return nothing
+    return psi
 end
 
 # Allocation-free measure-add (writes into `acc[:, save_idx]` by +=)
