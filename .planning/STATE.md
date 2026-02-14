@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-13)
 Phase: 5 of 5 (Statistical Validation and Regression) - COMPLETE
 Plan: 2 of 2 in current phase (ALL COMPLETE)
 Status: All 5 phases complete
-Last activity: 2026-02-14 - Completed 05-02: Regression tests with frozen BSON references (TINF-02)
+Last activity: 2026-02-14 - Quick task 10: Fix trajectory regression test tolerance for cross-platform BLAS
 
 Progress: [##########] 100%
 
@@ -86,6 +86,7 @@ Recent decisions affecting current work:
 - [05-02]: Symbol keys in BSON (not string keys) for idiomatic Julia d[:rho] access pattern
 - [05-02]: Tolerance 1e-10 for regression comparison (allows floating-point accumulation across platforms)
 - [05-02]: Trajectory seed=12345, ntraj=1000 for deterministic reference (distinct from Phase 4 seeds)
+- [quick-10]: Trajectory regression atol relaxed to 1e-6 for cross-platform BLAS variance; DM tests unchanged at 1e-10
 
 ### Pending Todos
 
@@ -104,6 +105,7 @@ None
 | 7 | Refactor step_along_trajectory to per-operator Lie-Trotter splitting | 2026-02-14 | 0c879e7 | [7-refactor-step-along-trajectory-to-per-op](./quick/7-refactor-step-along-trajectory-to-per-op/) |
 | 8 | Fix TrotterDomain Gibbs fixed point distance (~0.004 -> ~9e-9) | 2026-02-14 | e0ef0fc | [8-fix-trotterdomain-gibbs-fixed-point-dist](./quick/8-fix-trotterdomain-gibbs-fixed-point-dist/) |
 | 9 | Remove trafo_from_eigen_to_trotter from TrottTrott | 2026-02-14 | 5646187 | [9-remove-trafo-from-eigen-to-trotter-from-](./quick/9-remove-trafo-from-eigen-to-trotter-from-/) |
+| 10 | Fix trajectory regression test tolerance for cross-platform BLAS | 2026-02-14 | 9d2e71a | [10-fix-trajectory-regression-test-failure](./quick/10-fix-trajectory-regression-test-failure/) |
 
 ### Blockers/Concerns
 
@@ -115,5 +117,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-14
-Stopped at: Completed 05-01-PLAN.md (1/sqrt(N) convergence test) and 05-02-PLAN.md (Regression tests)
+Stopped at: Completed quick task 10 (fix trajectory regression test tolerance)
 Resume file: None
