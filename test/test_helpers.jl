@@ -90,6 +90,58 @@ const TEST_JUMPS = TEST_SYSTEM.jumps
 const TEST_GIBBS = TEST_SYSTEM.gibbs
 
 # ---------------------------------------------------------------------------
+# Small test system: 3-qubit Hamiltonian, jump operators, Gibbs state
+# ---------------------------------------------------------------------------
+"""
+    make_small_test_system() -> (; hamiltonian, jumps, gibbs)
+
+Loads the 3-qubit disordered Heisenberg Hamiltonian, finalizes it at inverse
+temperature BETA, and creates 9 single-site Pauli jump operators (X, Y, Z
+on each of 3 sites), normalized by sqrt(9).
+
+Returns a named tuple with:
+- `hamiltonian`: finalized HamHam with bohr_dict and gibbs populated
+- `jumps`: Vector{JumpOp} of 9 jump operators
+- `gibbs`: the Gibbs state matrix (Hermitian, trace 1)
+"""
+function make_small_test_system()
+    small_num_qubits = 3
+    source_root = dirname(@__DIR__)
+    ham_path = joinpath(source_root, "hamiltonians", "heis_disordered_periodic_n$(small_num_qubits).bson")
+    bson_data = BSON.load(ham_path)
+    hamiltonian = bson_data[:hamiltonian]
+    hamiltonian = finalize_hamham(hamiltonian, BETA)
+
+    # Create jump operators: single-site Paulis (X, Y, Z) on each site
+    jump_paulis = [[X], [Y], [Z]]
+    jump_sites = 1:small_num_qubits
+    num_of_jumps = length(jump_paulis) * length(jump_sites)
+    jump_normalization = sqrt(num_of_jumps)
+
+    jumps = JumpOp[]
+    for pauli in jump_paulis
+        for site in jump_sites
+            jump_op = Matrix(pad_term(pauli, small_num_qubits, site)) ./ jump_normalization
+
+            jump_in_eigen = hamiltonian.eigvecs' * jump_op * hamiltonian.eigvecs
+            orthogonal = (jump_op == transpose(jump_op))
+            herm = (jump_op == jump_op')
+            push!(jumps, JumpOp(jump_op, jump_in_eigen, orthogonal, herm))
+        end
+    end
+
+    gibbs = hamiltonian.gibbs
+
+    return (; hamiltonian, jumps, gibbs)
+end
+
+const SMALL_SYSTEM = make_small_test_system()
+const SMALL_HAM = SMALL_SYSTEM.hamiltonian
+const SMALL_JUMPS = SMALL_SYSTEM.jumps
+const SMALL_GIBBS = SMALL_SYSTEM.gibbs
+const SMALL_DIM = 2^3  # 8
+
+# ---------------------------------------------------------------------------
 # Trotter helper
 # ---------------------------------------------------------------------------
 """
