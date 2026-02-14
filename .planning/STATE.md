@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-13)
 Phase: 3 of 5 (DM Reference Test Suite) -- COMPLETE
 Plan: 3 of 3 in current phase (ALL COMPLETE)
 Status: Phase 03 verified and complete, Phase 04 next
-Last activity: 2026-02-14 - Completed quick task 5: Tighten TrotterDomain error thresholds
+Last activity: 2026-02-14 - Completed quick task 6: Fix B_trotter() basis mismatch
 
 Progress: [######░░░░] 60%
 
@@ -79,6 +79,7 @@ None yet.
 | 3 | Fix OFT consistency test basis transformation (DMTST-06) | 2026-02-14 | c3b94f3 | [3-fix-oft-consistency-test-basis-transform](./quick/3-fix-oft-consistency-test-basis-transform/) |
 | 4 | Add NUFFT OFT consistency test (DMTST-06b) | 2026-02-14 | c4a2126 | [4-add-nufft-oft-consistency-test-alongside](./quick/4-add-nufft-oft-consistency-test-alongside/) |
 | 5 | Tighten TrotterDomain error thresholds | 2026-02-14 | eb2569b | [5-tighten-trotterdomain-error-thresholds-f](./quick/5-tighten-trotterdomain-error-thresholds-f/) |
+| 6 | Fix B_trotter() basis mismatch | 2026-02-14 | 2334a5e | [6-fix-b-time-vs-b-trott-basis-mismatch-in-](./quick/6-fix-b-time-vs-b-trott-basis-mismatch-in-/) |
 
 ### Blockers/Concerns
 
@@ -90,5 +91,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-14
-Stopped at: Completed quick-5 (tighten TrotterDomain error thresholds)
+Stopped at: Completed quick-6 (fix B_trotter() basis mismatch)
 Resume file: None
