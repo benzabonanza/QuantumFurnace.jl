@@ -1,2 +1,3 @@
 tools/mathematica/*.nb linguist-vendored
 tools/python/*.ipynb linguist-vendored
+*.js linguist-vendored
