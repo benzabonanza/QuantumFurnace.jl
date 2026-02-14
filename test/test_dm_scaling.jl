@@ -85,3 +85,94 @@ end
         @test 1.5 <= ratio <= 2.5
     end
 end
+
+# DMTST-05: Coherent term B consistency across domains
+# B_bohr (exact, Bohr/Energy domain) vs B_time (time quadrature) vs B_trotter (Trotter + time quadrature)
+# Expected: B_bohr ~ B_time within TOL_QUADRATURE; B_trotter has additional Trotter error.
+
+@testset "DMTST-05: Coherent term B consistency" begin
+    jump = TEST_JUMPS[1]  # X on site 1
+
+    # B_bohr (exact, in Hamiltonian eigenbasis)
+    config_bohr = make_liouv_config(BohrDomain())
+    precomputed_bohr = precompute_data(BohrDomain(), config_bohr, TEST_HAM)
+    B_bohr = coherent_bohr(TEST_HAM, jump, config_bohr)
+    rmul!(B_bohr, precomputed_bohr.gamma_norm_factor)
+
+    # B_time (time quadrature, in Hamiltonian eigenbasis)
+    config_time = make_liouv_config(TimeDomain())
+    precomputed_time = precompute_data(TimeDomain(), config_time, TEST_HAM)
+    B_time_val = B_time(jump, TEST_HAM, precomputed_time.b_minus, precomputed_time.b_plus,
+                        T0, BETA, SIGMA)
+    rmul!(B_time_val, precomputed_time.gamma_norm_factor)
+
+    # B_trotter (Trotter + time quadrature, in Trotter eigenbasis)
+    config_trott = make_liouv_config(TrotterDomain())
+    precomputed_trott = precompute_data(TrotterDomain(), config_trott, TEST_TROTTER)
+    B_trott = B_trotter(jump, TEST_TROTTER, precomputed_trott.b_minus, precomputed_trott.b_plus,
+                         BETA, SIGMA)
+    rmul!(B_trott, precomputed_trott.gamma_norm_factor)
+    # Transform from Trotter eigenbasis to Hamiltonian eigenbasis
+    B_trott_in_eigen = TEST_TROTTER.trafo_from_eigen_to_trotter' * B_trott * TEST_TROTTER.trafo_from_eigen_to_trotter
+
+    # Diagnostics
+    dist_bohr_time = norm(B_bohr - B_time_val)
+    dist_bohr_trott = norm(B_bohr - B_trott_in_eigen)
+    println("DMTST-05 norm(B_bohr - B_time): ", dist_bohr_time)
+    println("DMTST-05 norm(B_bohr - B_trott): ", dist_bohr_trott)
+    println("DMTST-05 norm(B_time - B_trott): ", norm(B_time_val - B_trott_in_eigen))
+
+    # B_bohr and B_time agree up to time quadrature tolerance
+    @test dist_bohr_time < TOL_QUADRATURE
+
+    # Trotter error is at least as large as time quadrature error (with small numerical margin)
+    @test dist_bohr_trott >= dist_bohr_time - 1e-10
+
+    # Sanity: Trotter error should not be huge
+    @test dist_bohr_trott < 0.1
+end
+
+# DMTST-06: OFT consistency across domains
+# oft! (analytical, Energy domain) vs time_oft! (time quadrature) vs trotter_oft! (Trotter)
+# Expected: energy ~ time within TOL_QUADRATURE; trotter has additional error.
+
+@testset "DMTST-06: OFT consistency" begin
+    jump = TEST_JUMPS[1]  # X on site 1
+    w = -3 * W0           # Test energy value
+
+    # Energy OFT (analytical, Bohr/Energy domain)
+    energy_oft_prefactor = 1 / sqrt(SIGMA * sqrt(2 * pi))
+    A_energy = Matrix{ComplexF64}(undef, DIM, DIM)
+    oft!(A_energy, jump, w, TEST_HAM, SIGMA)
+    A_energy .*= energy_oft_prefactor
+
+    # Time OFT (time domain quadrature)
+    # Reconstruct oft_time_labels since they are not stored in precomputed_data
+    energy_labels = QuantumFurnace.create_energy_labels(NUM_ENERGY_BITS, W0)
+    time_labels_full = energy_labels .* (T0 / W0)
+    oft_time_labels = QuantumFurnace.truncate_time_labels_for_oft(time_labels_full, SIGMA)
+
+    time_oft_prefactor = T0 * sqrt(SIGMA * sqrt(2 / pi) / (2 * pi))
+    caches = OFTCaches(DIM)
+    A_time = Matrix{ComplexF64}(undef, DIM, DIM)
+    QuantumFurnace.time_oft!(A_time, caches, jump, w, TEST_HAM, oft_time_labels, SIGMA)
+    A_time .*= time_oft_prefactor
+
+    # Trotter OFT
+    A_trott = Matrix{ComplexF64}(undef, DIM, DIM)
+    QuantumFurnace.trotter_oft!(A_trott, caches, jump, w, TEST_TROTTER, oft_time_labels, SIGMA)
+    A_trott .*= time_oft_prefactor
+
+    # Diagnostics
+    dist_energy_time = norm(A_energy - A_time)
+    dist_energy_trott = norm(A_energy - A_trott)
+    println("DMTST-06 norm(A_energy - A_time): ", dist_energy_time)
+    println("DMTST-06 norm(A_energy - A_trott): ", dist_energy_trott)
+    println("DMTST-06 norm(A_time - A_trott): ", norm(A_time - A_trott))
+
+    # Energy and time OFT agree up to quadrature tolerance
+    @test dist_energy_time < TOL_QUADRATURE
+
+    # Trotter error is at least as large as time quadrature error (with small numerical margin)
+    @test dist_energy_trott >= dist_energy_time - 1e-10
+end
