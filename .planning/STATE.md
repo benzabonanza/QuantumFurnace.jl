@@ -19,9 +19,9 @@ Progress: [######░░░░] 60%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 4
+- Total plans completed: 5
 - Average duration: 5 min
-- Total execution time: 0.35 hours
+- Total execution time: 0.43 hours
 
 **By Phase:**
 
@@ -29,10 +29,10 @@ Progress: [######░░░░] 60%
 |-------|-------|-------|----------|
 | 01-foundation-and-compilation | 1 | 8 min | 8 min |
 | 02-trajectory-bug-fixes | 2 | 7 min | 4 min |
-| 03-dm-reference-test-suite | 1 | 6 min | 6 min |
+| 03-dm-reference-test-suite | 2 | 11 min | 6 min |
 
 **Recent Trend:**
-- Last 5 plans: 8, 5, 2, 6 min
+- Last 5 plans: 8, 5, 2, 6, 5 min
 - Trend: stable
 
 *Updated after each plan completion*
@@ -59,6 +59,9 @@ Recent decisions affecting current work:
 - [03-03]: Disabled Aqua ambiguities/piracies checks (legitimate multiple dispatch + kron! extension)
 - [03-03]: Removed 4 undefined exports (create_trotter, create_hamham, evolve_along_trajectory, evolve_and_measure_along_trajectory)
 - [03-03]: Added comprehensive compat bounds for all deps/extras/julia to satisfy Aqua quality gate
+- [03-01]: Used eigen() instead of Arpack eigs for small dense Liouvillians (deterministic, no convergence issues)
+- [03-01]: QuantumFurnace.trace_distance_h qualified access since function not exported
+- [03-01]: Hierarchy tolerance 1e-12 for numerical noise in domain distance comparisons
 
 ### Pending Todos
 
