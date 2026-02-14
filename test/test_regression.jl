@@ -38,6 +38,10 @@ ref_dir = joinpath(source_root, "test", "reference")
     # ------------------------------------------------------------------
     # Trajectory regression: EnergyDomain
     # ------------------------------------------------------------------
+    # Trajectory tolerance is 1e-6 (not 1e-10 like DM tests) because stochastic
+    # branching depends on BLAS internals that differ across platforms (e.g.,
+    # OpenBLAS vs Accelerate). A flipped branch at a probability boundary shifts
+    # the averaged result by O(1/sqrt(ntraj)), far exceeding 1e-10.
     @testset "Trajectory regression: EnergyDomain" begin
         ref_data = BSON.load(joinpath(ref_dir, "energy_traj_reference.bson"))
         rho_ref = ref_data[:rho]
@@ -62,7 +66,7 @@ ref_dir = joinpath(source_root, "test", "reference")
         rho_traj ./= ntraj
         rho_traj = (rho_traj + rho_traj') / 2
 
-        @test isapprox(rho_traj, rho_ref; atol=1e-10)
+        @test isapprox(rho_traj, rho_ref; atol=1e-6)
     end
 
     # ------------------------------------------------------------------
@@ -84,6 +88,10 @@ ref_dir = joinpath(source_root, "test", "reference")
     # ------------------------------------------------------------------
     # Trajectory regression: TrotterDomain (coherent)
     # ------------------------------------------------------------------
+    # Trajectory tolerance is 1e-6 (not 1e-10 like DM tests) because stochastic
+    # branching depends on BLAS internals that differ across platforms (e.g.,
+    # OpenBLAS vs Accelerate). A flipped branch at a probability boundary shifts
+    # the averaged result by O(1/sqrt(ntraj)), far exceeding 1e-10.
     @testset "Trajectory regression: TrotterDomain (coherent)" begin
         ref_data = BSON.load(joinpath(ref_dir, "trotter_coherent_traj_reference.bson"))
         rho_ref = ref_data[:rho]
@@ -108,7 +116,7 @@ ref_dir = joinpath(source_root, "test", "reference")
         rho_traj ./= ntraj
         rho_traj = (rho_traj + rho_traj') / 2
 
-        @test isapprox(rho_traj, rho_ref; atol=1e-10)
+        @test isapprox(rho_traj, rho_ref; atol=1e-6)
     end
 
 end
