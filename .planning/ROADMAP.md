@@ -75,11 +75,11 @@ Plans:
   2. For TimeDomain on 3-4 qubit Heisenberg: trajectory-averaged rho matches DM rho within statistical tolerance
   3. For TrotterDomain with_coherent=true on 3-4 qubit Heisenberg: trajectory-averaged rho matches DM rho within statistical tolerance
   4. TrotterDomain with_coherent=true reaches trace distance to Gibbs state of 1e-6 or less, confirming coherent term correctness in trajectory mode
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 04-01: Trajectory vs DM cross-validation for Energy, Time, Trotter domains
-- [ ] 04-02: Coherent term Gibbs convergence test
+- [ ] 04-01-PLAN.md — Single-step trajectory-vs-DM cross-validation with delta^2 scaling for Energy, Time, Trotter domains
+- [ ] 04-02-PLAN.md — Multi-step TrotterDomain coherent convergence to Gibbs state
 
 ### Phase 5: Statistical Validation and Regression
 **Goal**: Trajectory convergence properties are verified and known-good numerical results are frozen for regression testing
