@@ -16,7 +16,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: Trajectory Bug Fixes** - Fix trajectory code bugs and verify CPTP channel correctness
 - [x] **Phase 3: DM Reference Test Suite** - Establish density matrix ground truth across all domains
 - [x] **Phase 4: Trajectory Cross-Validation** - Validate trajectory averages match DM evolution per domain
-- [ ] **Phase 5: Statistical Validation and Regression** - Convergence properties and frozen reference data
+- [x] **Phase 5: Statistical Validation and Regression** - Convergence properties and frozen reference data
 
 ## Phase Details
 
@@ -91,8 +91,8 @@ Plans:
 **Plans:** 2 plans
 
 Plans:
-- [ ] 05-01-PLAN.md — Gated 1/sqrt(N) convergence ratio test for EnergyDomain and TrotterDomain (with coherent)
-- [ ] 05-02-PLAN.md — Regression test framework with BSON-frozen reference data (always-on in Pkg.test())
+- [x] 05-01-PLAN.md — Gated 1/sqrt(N) convergence ratio test for EnergyDomain and TrotterDomain (with coherent)
+- [x] 05-02-PLAN.md — Regression test framework with BSON-frozen reference data (always-on in Pkg.test())
 
 ## Progress
 
@@ -106,4 +106,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 2. Trajectory Bug Fixes | 2/2 | ✓ Complete | 2026-02-14 |
 | 3. DM Reference Test Suite | 3/3 | ✓ Complete | 2026-02-14 |
 | 4. Trajectory Cross-Validation | 2/2 | ✓ Complete | 2026-02-14 |
-| 5. Statistical Validation and Regression | 0/2 | Not started | - |
+| 5. Statistical Validation and Regression | 2/2 | ✓ Complete | 2026-02-14 |
