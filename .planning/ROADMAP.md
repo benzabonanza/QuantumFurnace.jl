@@ -13,7 +13,7 @@ This milestone takes trajectory simulation from broken (compilation errors, orde
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundation and Compilation** - Test infrastructure setup and trajectory compilation fix
-- [ ] **Phase 2: Trajectory Bug Fixes** - Fix trajectory code bugs and verify CPTP channel correctness
+- [x] **Phase 2: Trajectory Bug Fixes** - Fix trajectory code bugs and verify CPTP channel correctness
 - [ ] **Phase 3: DM Reference Test Suite** - Establish density matrix ground truth across all domains
 - [ ] **Phase 4: Trajectory Cross-Validation** - Validate trajectory averages match DM evolution per domain
 - [ ] **Phase 5: Statistical Validation and Regression** - Convergence properties and frozen reference data
@@ -46,8 +46,8 @@ Plans:
 **Plans:** 2 plans
 
 Plans:
-- [ ] 02-01-PLAN.md — Fix trajectory bugs (U_B ordering, normalization warning, PSD guard, jump sampling verification) and create single-step tests
-- [ ] 02-02-PLAN.md — CPTP completeness verification test across all three domains
+- [x] 02-01-PLAN.md — Fix trajectory bugs (U_B ordering, normalization warning, PSD guard, jump sampling verification) and create single-step tests
+- [x] 02-02-PLAN.md — CPTP completeness verification test across all three domains
 
 ### Phase 3: DM Reference Test Suite
 **Goal**: Density matrix simulation has a comprehensive correctness test suite establishing ground truth for all approximation domains
@@ -103,7 +103,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation and Compilation | 1/1 | ✓ Complete | 2026-02-13 |
-| 2. Trajectory Bug Fixes | 0/2 | Not started | - |
+| 2. Trajectory Bug Fixes | 2/2 | ✓ Complete | 2026-02-14 |
 | 3. DM Reference Test Suite | 0/3 | Not started | - |
 | 4. Trajectory Cross-Validation | 0/2 | Not started | - |
 | 5. Statistical Validation and Regression | 0/2 | Not started | - |
