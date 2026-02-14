@@ -67,7 +67,8 @@ function build_trajectoryframework(
     per_op_U_B = Vector{Union{Nothing, Matrix{ComplexF64}}}(undef, n_jumps)
     if config.with_coherent
         @inbounds for a in 1:n_jumps
-            B_a = precompute_coherent_total_B([jumps[a]], ham_or_trott, config, precomputed_data)
+            single_jump = JumpOp[jumps[a]]  # Force Vector{JumpOp} for dispatch compatibility
+            B_a = precompute_coherent_total_B(single_jump, ham_or_trott, config, precomputed_data)
             B_a .= 0.5 .* (B_a .+ B_a')
             per_op_U_B[a] = exp(-1im * delta_eff * Hermitian(B_a))
         end

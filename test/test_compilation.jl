@@ -12,8 +12,8 @@
         )
         @test fw isa TrajectoryFramework
         @test fw.delta == TEST_DELTA
-        @test fw.B !== nothing
-        @test fw.U_B !== nothing
+        # Per-operator: each operator should have a coherent unitary
+        @test all(per_op -> per_op.U_B !== nothing, fw.per_operator)
     end
 
     @testset "build_trajectoryframework without coherent" begin
@@ -24,8 +24,8 @@
             TEST_JUMPS, TEST_HAM, config, precomputed, scratch, TEST_DELTA
         )
         @test fw isa TrajectoryFramework
-        @test fw.B === nothing
-        @test fw.U_B === nothing
+        # Per-operator: no coherent unitaries
+        @test all(per_op -> per_op.U_B === nothing, fw.per_operator)
     end
 
     @testset "Fixtures available" begin

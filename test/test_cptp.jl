@@ -1,19 +1,20 @@
 using Test
 using LinearAlgebra
 
-# CPTP completeness verification (TVAL-01)
-# Verifies: K0'*K0 + delta*R + U_res'*U_res = I
+# CPTP Per-Operator Completeness verification (TVAL-01)
+# Verifies per-operator channel: K0_a'*K0_a + delta_eff*R_a + U_res_a'*U_res_a = I
 #
-# Derivation (Chen 2023, Theorem III.1):
-#   K0 = I - alpha*R, alpha = 1 - sqrt(1-delta)
-#   S = (2*alpha - delta)*R - alpha^2*R^2
-#   U_res'*U_res = S (by construction)
-#   K0'*K0 = I - 2*alpha*R + alpha^2*R^2
-#   K0'*K0 + delta*R + S = I - 2*alpha*R + alpha^2*R^2 + delta*R + (2*alpha - delta)*R - alpha^2*R^2 = I
+# Derivation (Chen 2023, Theorem III.1, adapted for per-operator Lie-Trotter splitting):
+#   delta_eff = delta * N_jumps (rate rescaling for per-operator channel)
+#   alpha = 1 - sqrt(1 - delta_eff)
+#   K0_a = I - alpha*R_a
+#   S_a = (2*alpha - delta_eff)*R_a - alpha^2*R_a^2
+#   U_res_a'*U_res_a = S_a (by construction)
+#   K0_a'*K0_a + delta_eff*R_a + S_a = I (same algebraic identity, per operator)
 #
 # Tolerance: 1e-10 (per user decision -- allows small numerical accumulation)
 
-@testset "CPTP Completeness (TVAL-01)" begin
+@testset "CPTP Per-Operator Completeness (TVAL-01)" begin
 
     @testset "EnergyDomain" begin
         config = make_thermalize_config(EnergyDomain(); delta=TEST_DELTA)
@@ -23,9 +24,12 @@ using LinearAlgebra
             TEST_JUMPS, TEST_HAM, config, precomputed, scratch, TEST_DELTA
         )
 
-        completeness = fw.K0' * fw.K0 + TEST_DELTA * fw.R + fw.U_residual' * fw.U_residual
+        @test fw.n_jumps == length(TEST_JUMPS)
         identity = Matrix{ComplexF64}(I, DIM, DIM)
-        @test isapprox(completeness, identity; atol=1e-10)
+        for (a, per_op) in enumerate(fw.per_operator)
+            completeness = per_op.K0' * per_op.K0 + fw.delta_eff * per_op.R + per_op.U_residual' * per_op.U_residual
+            @test isapprox(completeness, identity; atol=1e-10)
+        end
     end
 
     @testset "TimeDomain" begin
@@ -36,9 +40,12 @@ using LinearAlgebra
             TEST_JUMPS, TEST_HAM, config, precomputed, scratch, TEST_DELTA
         )
 
-        completeness = fw.K0' * fw.K0 + TEST_DELTA * fw.R + fw.U_residual' * fw.U_residual
+        @test fw.n_jumps == length(TEST_JUMPS)
         identity = Matrix{ComplexF64}(I, DIM, DIM)
-        @test isapprox(completeness, identity; atol=1e-10)
+        for (a, per_op) in enumerate(fw.per_operator)
+            completeness = per_op.K0' * per_op.K0 + fw.delta_eff * per_op.R + per_op.U_residual' * per_op.U_residual
+            @test isapprox(completeness, identity; atol=1e-10)
+        end
     end
 
     @testset "TrotterDomain" begin
@@ -49,9 +56,12 @@ using LinearAlgebra
             TEST_JUMPS, TEST_TROTTER, config, precomputed, scratch, TEST_DELTA
         )
 
-        completeness = fw.K0' * fw.K0 + TEST_DELTA * fw.R + fw.U_residual' * fw.U_residual
+        @test fw.n_jumps == length(TEST_JUMPS)
         identity = Matrix{ComplexF64}(I, DIM, DIM)
-        @test isapprox(completeness, identity; atol=1e-10)
+        for (a, per_op) in enumerate(fw.per_operator)
+            completeness = per_op.K0' * per_op.K0 + fw.delta_eff * per_op.R + per_op.U_residual' * per_op.U_residual
+            @test isapprox(completeness, identity; atol=1e-10)
+        end
     end
 
 end
