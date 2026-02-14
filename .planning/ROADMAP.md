@@ -59,12 +59,12 @@ Plans:
   3. Single DM step error scales as O(delta^2) and multi-step error accumulates as O(delta) over full evolution, verified empirically with a delta-sweep
   4. Coherent term B is consistent across domains: B_bohr vs B_time match up to time quadrature errors, B_trotter matches with additional Trotter errors
   5. OFT consistency verified: `oft!()` and `time_oft!()` produce matching results up to time quadrature errors; `trotter_oft!()` matches with additional Trotter errors
-**Plans**: TBD
+**Plans:** 3 plans
 
 Plans:
-- [ ] 03-01: Detailed balance and domain hierarchy tests
-- [ ] 03-02: DM step error scaling, coherent term, and OFT consistency tests
-- [ ] 03-03: Aqua.jl package quality checks
+- [ ] 03-01-PLAN.md — Detailed balance (DMTST-01) and domain error hierarchy (DMTST-02) tests with 3-qubit fixture
+- [ ] 03-02-PLAN.md — DM step error scaling (DMTST-03/04), coherent term B consistency (DMTST-05), and OFT consistency (DMTST-06)
+- [ ] 03-03-PLAN.md — Aqua.jl package quality checks (TINF-03)
 
 ### Phase 4: Trajectory Cross-Validation
 **Goal**: Trajectory-averaged density matrix matches DM evolution for Energy, Time, and Trotter domains, and coherent term produces correct Gibbs convergence
