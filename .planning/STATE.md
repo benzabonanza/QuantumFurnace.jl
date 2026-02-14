@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-13)
 Phase: 3 of 5 (DM Reference Test Suite) -- COMPLETE
 Plan: 3 of 3 in current phase (ALL COMPLETE)
 Status: Phase 03 verified and complete, Phase 04 next
-Last activity: 2026-02-14 -- Phase 03 verified: 9/9 must-haves passed
+Last activity: 2026-02-14 - Completed quick task 1: Fix TrotterDomain eigenbasis mismatch in DMTST-02
 
 Progress: [######░░░░] 60%
 
@@ -69,6 +69,12 @@ Recent decisions affecting current work:
 ### Pending Todos
 
 None yet.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 1 | Fix TrotterDomain eigenbasis mismatch in DMTST-02 | 2026-02-14 | 8ad104f | [1-fix-trotterdomain-eigenbasis-mismatch-in](./quick/1-fix-trotterdomain-eigenbasis-mismatch-in/) |
 
 ### Blockers/Concerns
 
