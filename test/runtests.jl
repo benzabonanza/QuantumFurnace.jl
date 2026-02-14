@@ -12,5 +12,5 @@ include("test_helpers.jl")
     include("test_cptp.jl")
     include("test_dm_detailed_balance.jl")
     include("test_dm_scaling.jl")
-    # Future phases add test includes here
+    include("test_regression.jl")
 end
