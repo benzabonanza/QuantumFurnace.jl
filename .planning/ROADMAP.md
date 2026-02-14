@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundation and Compilation** - Test infrastructure setup and trajectory compilation fix
 - [x] **Phase 2: Trajectory Bug Fixes** - Fix trajectory code bugs and verify CPTP channel correctness
-- [ ] **Phase 3: DM Reference Test Suite** - Establish density matrix ground truth across all domains
+- [x] **Phase 3: DM Reference Test Suite** - Establish density matrix ground truth across all domains
 - [ ] **Phase 4: Trajectory Cross-Validation** - Validate trajectory averages match DM evolution per domain
 - [ ] **Phase 5: Statistical Validation and Regression** - Convergence properties and frozen reference data
 
@@ -62,9 +62,9 @@ Plans:
 **Plans:** 3 plans
 
 Plans:
-- [ ] 03-01-PLAN.md — Detailed balance (DMTST-01) and domain error hierarchy (DMTST-02) tests with 3-qubit fixture
-- [ ] 03-02-PLAN.md — DM step error scaling (DMTST-03/04), coherent term B consistency (DMTST-05), and OFT consistency (DMTST-06)
-- [ ] 03-03-PLAN.md — Aqua.jl package quality checks (TINF-03)
+- [x] 03-01-PLAN.md — Detailed balance (DMTST-01) and domain error hierarchy (DMTST-02) tests with 3-qubit fixture
+- [x] 03-02-PLAN.md — DM step error scaling (DMTST-03/04), coherent term B consistency (DMTST-05), and OFT consistency (DMTST-06)
+- [x] 03-03-PLAN.md — Aqua.jl package quality checks (TINF-03)
 
 ### Phase 4: Trajectory Cross-Validation
 **Goal**: Trajectory-averaged density matrix matches DM evolution for Energy, Time, and Trotter domains, and coherent term produces correct Gibbs convergence
@@ -104,6 +104,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 |-------|----------------|--------|-----------|
 | 1. Foundation and Compilation | 1/1 | ✓ Complete | 2026-02-13 |
 | 2. Trajectory Bug Fixes | 2/2 | ✓ Complete | 2026-02-14 |
-| 3. DM Reference Test Suite | 0/3 | Not started | - |
+| 3. DM Reference Test Suite | 3/3 | ✓ Complete | 2026-02-14 |
 | 4. Trajectory Cross-Validation | 0/2 | Not started | - |
 | 5. Statistical Validation and Regression | 0/2 | Not started | - |
