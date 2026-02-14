@@ -5,33 +5,34 @@
 See: .planning/PROJECT.md (updated 2026-02-13)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** Phase 1 complete - ready for Phase 2
+**Current focus:** Phase 2 in progress - trajectory bug fixes
 
 ## Current Position
 
-Phase: 1 of 5 (Foundation and Compilation)
-Plan: 1 of 1 in current phase (COMPLETE)
-Status: Phase 1 complete
-Last activity: 2026-02-13 -- Executed 01-01-PLAN (compilation fixes + test infrastructure)
+Phase: 2 of 5 (Trajectory Bug Fixes)
+Plan: 1 of 2 in current phase (COMPLETE)
+Status: Plan 02-01 complete, Plan 02-02 next
+Last activity: 2026-02-14 -- Executed 02-01-PLAN (trajectory bug fixes: TFIX-02/03/04/05)
 
-Progress: [##░░░░░░░░] 20%
+Progress: [####░░░░░░] 40%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 1
-- Average duration: 8 min
-- Total execution time: 0.13 hours
+- Total plans completed: 2
+- Average duration: 7 min
+- Total execution time: 0.22 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01-foundation-and-compilation | 1 | 8 min | 8 min |
+| 02-trajectory-bug-fixes | 1 | 5 min | 5 min |
 
 **Recent Trend:**
-- Last 5 plans: 8 min
-- Trend: baseline
+- Last 5 plans: 8, 5 min
+- Trend: improving
 
 *Updated after each plan completion*
 
@@ -49,6 +50,9 @@ Recent decisions affecting current work:
 - [01-01]: Relaxed stdlib compat bounds to support Julia 1.11+ (original were 1.12-only)
 - [01-01]: Test Hamiltonian loaded via @__DIR__ path, not load_hamiltonian(), for Pkg.test() compatibility
 - [01-01]: TOL_DELTA constant C=5.0, TEST_DELTA=0.01 for unraveling error tolerance
+- [02-01]: EnergyDomain had U_B ordering bug; Time/Trotter variant was already correct
+- [02-01]: Used TrottTrott() constructor directly -- create_trotter() is exported but never defined
+- [02-01]: Replaced Cholesky with eigendecomposition for PSD guard (silent clamp to zero)
 
 ### Pending Todos
 
@@ -57,10 +61,11 @@ None yet.
 ### Blockers/Concerns
 
 - TFIX-01 (compilation bug) -- RESOLVED in Phase 1
-- TFIX-05 is about faithfulness to Chen's weak measurement scheme -- the specific fix (two-stage, normalization, or other) to be determined by comparing trajectory code against DM code and paper during Phase 2
+- TFIX-02/03/04/05 -- RESOLVED in Phase 2 Plan 1
+- TFIX-05: Cross-check confirmed jump sampling is structurally correct; U_B ordering (TFIX-02) was the root cause
 
 ## Session Continuity
 
-Last session: 2026-02-13
-Stopped at: Completed 01-01-PLAN.md (Foundation and Compilation)
+Last session: 2026-02-14
+Stopped at: Completed 02-01-PLAN.md (Trajectory Bug Fixes)
 Resume file: None
