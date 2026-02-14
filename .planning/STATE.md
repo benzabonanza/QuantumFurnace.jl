@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-13)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** Phase 4 COMPLETE - Trajectory Cross-Validation
+**Current focus:** Phase 5 COMPLETE - Statistical Validation and Regression
 
 ## Current Position
 
-Phase: 4 of 5 (Trajectory Cross-Validation) - COMPLETE
+Phase: 5 of 5 (Statistical Validation and Regression) - COMPLETE
 Plan: 2 of 2 in current phase (ALL COMPLETE)
-Status: Phase 4 complete, Phase 5 next
-Last activity: 2026-02-14 - Completed quick task 9: Remove trafo_from_eigen_to_trotter from TrottTrott
+Status: All 5 phases complete
+Last activity: 2026-02-14 - Completed 05-02: Regression tests with frozen BSON references (TINF-02)
 
-Progress: [########░░] 80%
+Progress: [##########] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 8
+- Total plans completed: 10
 - Average duration: 5 min
-- Total execution time: 0.67 hours
+- Total execution time: 0.83 hours
 
 **By Phase:**
 
@@ -31,9 +31,10 @@ Progress: [########░░] 80%
 | 02-trajectory-bug-fixes | 2 | 7 min | 4 min |
 | 03-dm-reference-test-suite | 3 | 17 min | 6 min |
 | 04-trajectory-cross-validation | 2 | 8 min | 4 min |
+| 05-statistical-validation-and-regression | 2 | 10 min | 5 min |
 
 **Recent Trend:**
-- Last 5 plans: 6, 5, 6, 6, 2 min
+- Last 5 plans: 6, 6, 2, 5, 5 min
 - Trend: stable
 
 *Updated after each plan completion*
@@ -79,6 +80,9 @@ Recent decisions affecting current work:
 - [Phase quick-8]: JumpOp[] typed comprehension to preserve Vector{JumpOp} for struct field compatibility
 - [quick-9]: Removed trafo_from_eigen_to_trotter field; use trotter.eigvecs' * j.data * trotter.eigvecs directly
 - [quick-9]: Test back-transforms use U_t2e = trotter.eigvecs' * ham.eigvecs (equivalent to removed field)
+- [05-02]: Symbol keys in BSON (not string keys) for idiomatic Julia d[:rho] access pattern
+- [05-02]: Tolerance 1e-10 for regression comparison (allows floating-point accumulation across platforms)
+- [05-02]: Trajectory seed=12345, ntraj=1000 for deterministic reference (distinct from Phase 4 seeds)
 
 ### Pending Todos
 
@@ -108,5 +112,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-14
-Stopped at: Completed quick task 9 (Remove trafo_from_eigen_to_trotter from TrottTrott)
+Stopped at: Completed 05-02-PLAN.md (Regression tests with frozen BSON references)
 Resume file: None
