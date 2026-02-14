@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-13)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** Phase 3 complete - ready for Phase 4
+**Current focus:** Phase 4 in progress - Trajectory Cross-Validation
 
 ## Current Position
 
-Phase: 3 of 5 (DM Reference Test Suite) -- COMPLETE
-Plan: 3 of 3 in current phase (ALL COMPLETE)
-Status: Phase 03 verified and complete, Phase 04 next
-Last activity: 2026-02-14 - Completed quick task 6: Fix B_trotter() basis mismatch
+Phase: 4 of 5 (Trajectory Cross-Validation)
+Plan: 1 of 2 in current phase (Plan 1 COMPLETE)
+Status: 04-01 complete, 04-02 next
+Last activity: 2026-02-14 - Completed 04-01: Single-step trajectory-vs-DM cross-validation
 
-Progress: [######░░░░] 60%
+Progress: [#######░░░] 70%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 6
+- Total plans completed: 7
 - Average duration: 5 min
-- Total execution time: 0.53 hours
+- Total execution time: 0.63 hours
 
 **By Phase:**
 
@@ -30,9 +30,10 @@ Progress: [######░░░░] 60%
 | 01-foundation-and-compilation | 1 | 8 min | 8 min |
 | 02-trajectory-bug-fixes | 2 | 7 min | 4 min |
 | 03-dm-reference-test-suite | 3 | 17 min | 6 min |
+| 04-trajectory-cross-validation | 1 | 6 min | 6 min |
 
 **Recent Trend:**
-- Last 5 plans: 5, 2, 6, 5, 6 min
+- Last 5 plans: 2, 6, 5, 6, 6 min
 - Trend: stable
 
 *Updated after each plan completion*
@@ -65,6 +66,9 @@ Recent decisions affecting current work:
 - [03-02]: EnergyDomain Liouvillian for Euler scaling tests (simplest non-trivial domain)
 - [03-02]: Maximally mixed initial state for clean scaling measurement
 - [03-02]: Non-exported functions (time_oft!, trotter_oft!, etc.) accessed via QuantumFurnace.func()
+- [04-01]: 50,000 trajectories per delta point (10k insufficient -- noise floor ~0.01 trace distance)
+- [04-01]: Delta sweep [0.2, 0.1, 0.05] (delta=0.025 falls below statistical noise floor)
+- [04-01]: Ratio bounds [2.0, 8.0] for O(delta^2) check (accommodates statistical fluctuations)
 
 ### Pending Todos
 
@@ -91,5 +95,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-14
-Stopped at: Completed quick-6 (fix B_trotter() basis mismatch)
+Stopped at: Completed 04-01-PLAN.md (single-step trajectory cross-validation)
 Resume file: None
