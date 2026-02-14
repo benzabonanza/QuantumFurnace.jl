@@ -9,6 +9,7 @@ function oft!(out_matrix::Matrix{ComplexF64}, jump::JumpOp, energy::Float64, ham
     return out_matrix
 end
 
+# Depricated but used for tests. We use precomputed NUFFT prefactors now in jump_contributions!()
 function time_oft!(
     out_matrix::Matrix{ComplexF64},
     caches::OFTCaches,
@@ -132,6 +133,6 @@ end
 # oft_time_labels = truncate_time_labels_for_oft(time_labels, beta)
 # jump = jumps[6]
 # oft_trott = trotter_oft(jump, w, trotter, oft_time_labels, beta) * t0 * sqrt((sqrt(2 / pi)/beta) / (2 * pi))
-# oft_trott = trotter.trafo_from_eigen_to_trotter' * oft_trott * trotter.trafo_from_eigen_to_trotter
+# To compare trotter OFT with energy OFT: transform via trotter.eigvecs and hamiltonian.eigvecs
 # oft_w = oft(jump, w, hamiltonian, beta) * sqrt(beta / sqrt(2 * pi))
 # norm(oft_w - oft_trott)

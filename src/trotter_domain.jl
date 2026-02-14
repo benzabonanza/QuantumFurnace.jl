@@ -7,14 +7,12 @@
     - `t0`: The time unit for the Trotter step.
     - `num_trotter_steps_per_t0`: Self-explanatory. Usually `t0` is small enough to just use 1 Trotter step for it. 
     - `eigvals_t0`, `eigvecs`: Eigenvalues of the evolution operator for one time unit `t0`, and corresponding eigenvectors.
-    - `trafo_from_eigen_to_trotter`: Basis transformation matrix from Hamiltonian eigenspace to Trotter eigenspace.
 """
 mutable struct TrottTrott
     t0::Float64
     num_trotter_steps_per_t0::Float64
     eigvals_t0::Vector{ComplexF64}
     eigvecs::Matrix{ComplexF64}
-    trafo_from_eigen_to_trotter::Matrix{ComplexF64}  # U' X_trott U = X_eigenbasis in H
     bohr_freqs::Matrix{Float64}
 end
 
@@ -22,14 +20,12 @@ function TrottTrott(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
 
     trottU = trotterize2(hamiltonian, t, num_trotter_steps)
     trottU_eigvals, trottU_eigvecs = eigen(trottU)
-    unitary_from_eigen_to_trotter = trottU_eigvecs' * hamiltonian.eigvecs
     bohr_freqs = trotter_bohr_freqs(trottU_eigvals, t)  # quasi Bohr frequencies due to Trotterization.
     return TrottTrott(
         t,
-        num_trotter_steps, 
-        trottU_eigvals, 
-        trottU_eigvecs, 
-        unitary_from_eigen_to_trotter, 
+        num_trotter_steps,
+        trottU_eigvals,
+        trottU_eigvecs,
         bohr_freqs
         )
 end

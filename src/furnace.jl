@@ -72,8 +72,7 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::AbstractLiouvConfi
     # to Trotter eigenbasis. The NUFFT prefactors use Trotter quasi-Bohr frequencies,
     # so the element-wise product A .* P requires A in the same basis.
     jumps_for_diss = if config.domain isa TrotterDomain
-        U = trotter.trafo_from_eigen_to_trotter
-        JumpOp[JumpOp(j.data, U * j.in_eigenbasis * U', j.orthogonal, j.hermitian) for j in jumps]
+        JumpOp[JumpOp(j.data, trotter.eigvecs' * j.data * trotter.eigvecs, j.orthogonal, j.hermitian) for j in jumps]
     else
         jumps
     end
@@ -116,8 +115,7 @@ function run_thermalization(
     # For TrotterDomain, transform jump operators from Hamiltonian eigenbasis
     # to Trotter eigenbasis for the dissipative contribution.
     jumps_for_diss = if config.domain isa TrotterDomain
-        U = trotter.trafo_from_eigen_to_trotter
-        JumpOp[JumpOp(j.data, U * j.in_eigenbasis * U', j.orthogonal, j.hermitian) for j in jumps]
+        JumpOp[JumpOp(j.data, trotter.eigvecs' * j.data * trotter.eigvecs, j.orthogonal, j.hermitian) for j in jumps]
     else
         jumps
     end

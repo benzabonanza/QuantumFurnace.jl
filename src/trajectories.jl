@@ -67,8 +67,7 @@ function build_trajectoryframework(
     # to Trotter eigenbasis. The NUFFT prefactors use Trotter quasi-Bohr frequencies,
     # so the element-wise product A .* P requires A in the same basis.
     jumps_for_diss = if config.domain isa TrotterDomain && ham_or_trott isa TrottTrott
-        U = ham_or_trott.trafo_from_eigen_to_trotter
-        JumpOp[JumpOp(j.data, U * j.in_eigenbasis * U', j.orthogonal, j.hermitian) for j in jumps]
+        JumpOp[JumpOp(j.data, ham_or_trott.eigvecs' * j.data * ham_or_trott.eigvecs, j.orthogonal, j.hermitian) for j in jumps]
     else
         JumpOp[j for j in jumps]
     end

@@ -217,9 +217,8 @@ function B_trotter(jump::JumpOp, trotter::TrottTrott, b_minus::Dict{Float64, Com
     dim = size(trotter.eigvecs)
     trotter_time_evolution(n::Int64) = Diagonal(trotter.eigvals_t0 .^ n)  # n - number of t0 time chunks
 
-    # Transform jump operator from Hamiltonian eigenbasis to Trotter eigenbasis
-    U = trotter.trafo_from_eigen_to_trotter
-    jump_in_trotter = U * jump.in_eigenbasis * U'
+    # Transform jump operator from computational basis to Trotter eigenbasis
+    jump_in_trotter = trotter.eigvecs' * jump.data * trotter.eigvecs
 
     trott_U = zeros(ComplexF64, dim)
     trott_U_2 = zeros(ComplexF64, dim)
@@ -250,9 +249,6 @@ function B_trotter(jumps::Vector{JumpOp}, trotter::TrottTrott, b_minus::Dict{Flo
     dim = size(trotter.eigvecs)
     trotter_time_evolution(n::Int64) = Diagonal(trotter.eigvals_t0 .^ n)  # n - number of t0 time chunks
 
-    # Basis transformation from Hamiltonian eigenbasis to Trotter eigenbasis
-    U = trotter.trafo_from_eigen_to_trotter
-
     trott_U = zeros(ComplexF64, dim)
     trott_U_2 = zeros(ComplexF64, dim)
     # Inner summand f_plus
@@ -263,7 +259,7 @@ function B_trotter(jumps::Vector{JumpOp}, trotter::TrottTrott, b_minus::Dict{Flo
         trott_U .= trotter_time_evolution(num_t0_steps)
         trott_U_2 .= trotter_time_evolution(-2 * num_t0_steps)
         for jump_a in jumps
-            jump_a_trotter = U * jump_a.in_eigenbasis * U'
+            jump_a_trotter = trotter.eigvecs' * jump_a.data * trotter.eigvecs
             b_plus_summand .+= (b_s * trott_U * jump_a_trotter' * trott_U_2 * jump_a_trotter * trott_U)
         end
     end
