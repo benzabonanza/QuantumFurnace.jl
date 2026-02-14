@@ -128,8 +128,8 @@ end
     # Trotter error is at least as large as time quadrature error (with small numerical margin)
     @test dist_bohr_trott >= dist_bohr_time - 1e-10
 
-    # Trotter error on B term (measured ~0.011, threshold 2x margin)
-    @test dist_bohr_trott < 0.02
+    # Trotter error on B term (tightened after basis fix in B_trotter)
+    @test dist_bohr_trott < 1e-5
 end
 
 # DMTST-06: OFT consistency across domains
