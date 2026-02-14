@@ -26,14 +26,14 @@ export AbstractConfig, AbstractLiouvConfig, AbstractThermalizeConfig,
        BohrDomain, EnergyDomain, TimeDomain, TrotterDomain, LindbladWorkspace, LSIFramework,
        OFTCaches, NUFFTPrefactors
 export run_lindbladian, run_thermalization, construct_lindbladian, B_time, B_trotter, coherent_bohr
-export generate_filename, validate_config!, create_trotter, compute_trotter_error, gibbs_state, gibbs_state_in_eigen,
-       create_bohr_dict, pad_term, pick_transition, create_hamham, find_ideal_heisenberg, create_alpha, 
+export generate_filename, validate_config!, compute_trotter_error, gibbs_state, gibbs_state_in_eigen,
+       create_bohr_dict, pad_term, pick_transition, find_ideal_heisenberg, create_alpha,
        expm_pauli_padded, finalize_hamham, load_hamiltonian, oft!, prepare_oft_nufft_prefactors, prefactor_view,
        precompute_coherent_terms, precompute_coherent_total_B
 export create_alpha_gns
 # Quantum Trajectory
-export TrajectoryFramework, TrajectoryWorkspace, build_trajectoryframework, step_along_trajectory!, evolve_along_trajectory,
-       evolve_and_measure_along_trajectory, run_trajectories, precompute_R,
+export TrajectoryFramework, TrajectoryWorkspace, build_trajectoryframework, step_along_trajectory!,
+       run_trajectories, precompute_R,
        precompute_data
 export KrausScratch, jump_contribution!
 # Log Sobolev bound
