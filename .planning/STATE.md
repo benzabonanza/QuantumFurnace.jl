@@ -72,10 +72,13 @@ Recent decisions affecting current work:
 - [04-02]: DM convergence against Liouvillian fixed point (not Gibbs) to isolate convergence from domain approximation
 - [04-02]: Trajectory threshold 0.02 to Gibbs (domain approx ~0.005 + statistical noise ~0.01 makes 1e-3 unachievable)
 - [04-02]: Thermalization assertion: trajectory must move >10x closer to fixed point than initial state
+- [quick-7]: Per-operator Lie-Trotter splitting: delta_eff = delta * N_jumps, alpha from delta_eff
+- [quick-7]: Per-operator coherent B via precompute_coherent_total_B with single-jump vector
+- [quick-7]: JumpOp[jumps[a]] forces Vector{JumpOp} type for dispatch compatibility
 
 ### Pending Todos
 
-- [ ] Refactor step_along_trajectory to per-operator branching (trajectories) — [todo](./todos/pending/2026-02-14-refactor-step-along-trajectory-to-per-operator-branching.md)
+None
 
 ### Quick Tasks Completed
 
@@ -87,6 +90,7 @@ Recent decisions affecting current work:
 | 4 | Add NUFFT OFT consistency test (DMTST-06b) | 2026-02-14 | c4a2126 | [4-add-nufft-oft-consistency-test-alongside](./quick/4-add-nufft-oft-consistency-test-alongside/) |
 | 5 | Tighten TrotterDomain error thresholds | 2026-02-14 | eb2569b | [5-tighten-trotterdomain-error-thresholds-f](./quick/5-tighten-trotterdomain-error-thresholds-f/) |
 | 6 | Fix B_trotter() basis mismatch | 2026-02-14 | 2334a5e | [6-fix-b-time-vs-b-trott-basis-mismatch-in-](./quick/6-fix-b-time-vs-b-trott-basis-mismatch-in-/) |
+| 7 | Refactor step_along_trajectory to per-operator Lie-Trotter splitting | 2026-02-14 | 0c879e7 | [7-refactor-step-along-trajectory-to-per-op](./quick/7-refactor-step-along-trajectory-to-per-op/) |
 
 ### Blockers/Concerns
 
@@ -98,5 +102,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-14
-Stopped at: Completed 04-02-PLAN.md (multi-step Gibbs convergence, Phase 4 complete)
+Stopped at: Completed quick task 7 (per-operator Lie-Trotter trajectory refactor)
 Resume file: None
