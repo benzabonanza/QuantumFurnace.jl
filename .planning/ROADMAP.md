@@ -43,11 +43,11 @@ Plans:
   3. `build_trajectoryframework` with a non-PSD S matrix does not crash on Cholesky but falls back gracefully (eigenvalue guard)
   4. Trajectory jump sampling faithfully implements Chen's weak measurement scheme, verified by comparing channel structure against DM code (`jump_contribution!`) and the paper's algorithm
   5. CPTP verification test confirms K0*K0 + delta*R + U_res*U_res = I to machine precision for Energy, Time, and Trotter domains
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 02-01: Fix trajectory code bugs (U_B ordering, normalization, PSD guard, faithful jump sampling)
-- [ ] 02-02: CPTP verification test
+- [ ] 02-01-PLAN.md — Fix trajectory bugs (U_B ordering, normalization warning, PSD guard, jump sampling verification) and create single-step tests
+- [ ] 02-02-PLAN.md — CPTP completeness verification test across all three domains
 
 ### Phase 3: DM Reference Test Suite
 **Goal**: Density matrix simulation has a comprehensive correctness test suite establishing ground truth for all approximation domains
