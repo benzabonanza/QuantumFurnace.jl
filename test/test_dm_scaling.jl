@@ -128,8 +128,8 @@ end
     # Trotter error is at least as large as time quadrature error (with small numerical margin)
     @test dist_bohr_trott >= dist_bohr_time - 1e-10
 
-    # Sanity: Trotter error should not be huge
-    @test dist_bohr_trott < 0.1
+    # Trotter error on B term (measured ~0.011, threshold 2x margin)
+    @test dist_bohr_trott < 0.02
 end
 
 # DMTST-06: OFT consistency across domains
@@ -180,8 +180,8 @@ end
     # Trotter error is at least as large as time quadrature error (with small numerical margin)
     @test dist_energy_trott >= dist_energy_time - 1e-10
 
-    # Sanity: Trotter OFT error should not be huge (was 1.396 before basis fix)
-    @test dist_energy_trott < 0.1
+    # Trotter OFT error (measured ~1.5e-8, tight threshold)
+    @test dist_energy_trott < 1e-5
 end
 
 # DMTST-06b: NUFFT OFT consistency
@@ -260,6 +260,6 @@ end
     # NUFFT time OFT matches analytical (same tolerance as DMTST-06 time vs energy)
     @test dist_nufft_time_vs_energy < TOL_QUADRATURE
 
-    # NUFFT trotter OFT matches analytical within Trotter error bound
-    @test dist_nufft_trott_vs_energy < 0.1
+    # NUFFT Trotter OFT error (measured ~1.5e-8, tight threshold)
+    @test dist_nufft_trott_vs_energy < 1e-5
 end
