@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-13)
 Phase: 3 of 5 (DM Reference Test Suite) -- COMPLETE
 Plan: 3 of 3 in current phase (ALL COMPLETE)
 Status: Phase 03 verified and complete, Phase 04 next
-Last activity: 2026-02-14 - Completed quick task 4: Add NUFFT OFT consistency test (DMTST-06b)
+Last activity: 2026-02-14 - Completed quick task 5: Tighten TrotterDomain error thresholds
 
 Progress: [######░░░░] 60%
 
@@ -78,6 +78,7 @@ None yet.
 | 2 | Fix Gibbs basis transformation for TrotterDomain in DMTST-02 | 2026-02-14 | 7a117c7 | [2-fix-gibbs-basis-transformation-for-trott](./quick/2-fix-gibbs-basis-transformation-for-trott/) |
 | 3 | Fix OFT consistency test basis transformation (DMTST-06) | 2026-02-14 | c3b94f3 | [3-fix-oft-consistency-test-basis-transform](./quick/3-fix-oft-consistency-test-basis-transform/) |
 | 4 | Add NUFFT OFT consistency test (DMTST-06b) | 2026-02-14 | c4a2126 | [4-add-nufft-oft-consistency-test-alongside](./quick/4-add-nufft-oft-consistency-test-alongside/) |
+| 5 | Tighten TrotterDomain error thresholds | 2026-02-14 | eb2569b | [5-tighten-trotterdomain-error-thresholds-f](./quick/5-tighten-trotterdomain-error-thresholds-f/) |
 
 ### Blockers/Concerns
 
@@ -89,5 +90,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-14
-Stopped at: Completed quick-4 (DMTST-06b NUFFT OFT consistency test)
+Stopped at: Completed quick-5 (tighten TrotterDomain error thresholds)
 Resume file: None
