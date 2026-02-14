@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Foundation and Compilation** - Test infrastructure setup and trajectory compilation fix
 - [x] **Phase 2: Trajectory Bug Fixes** - Fix trajectory code bugs and verify CPTP channel correctness
 - [x] **Phase 3: DM Reference Test Suite** - Establish density matrix ground truth across all domains
-- [ ] **Phase 4: Trajectory Cross-Validation** - Validate trajectory averages match DM evolution per domain
+- [x] **Phase 4: Trajectory Cross-Validation** - Validate trajectory averages match DM evolution per domain
 - [ ] **Phase 5: Statistical Validation and Regression** - Convergence properties and frozen reference data
 
 ## Phase Details
@@ -78,8 +78,8 @@ Plans:
 **Plans:** 2 plans
 
 Plans:
-- [ ] 04-01-PLAN.md — Single-step trajectory-vs-DM cross-validation with delta^2 scaling for Energy, Time, Trotter domains
-- [ ] 04-02-PLAN.md — Multi-step TrotterDomain coherent convergence to Gibbs state
+- [x] 04-01-PLAN.md — Single-step trajectory-vs-DM cross-validation with delta^2 scaling for Energy, Time, Trotter domains
+- [x] 04-02-PLAN.md — Multi-step TrotterDomain coherent convergence to Gibbs state
 
 ### Phase 5: Statistical Validation and Regression
 **Goal**: Trajectory convergence properties are verified and known-good numerical results are frozen for regression testing
@@ -105,5 +105,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 1. Foundation and Compilation | 1/1 | ✓ Complete | 2026-02-13 |
 | 2. Trajectory Bug Fixes | 2/2 | ✓ Complete | 2026-02-14 |
 | 3. DM Reference Test Suite | 3/3 | ✓ Complete | 2026-02-14 |
-| 4. Trajectory Cross-Validation | 0/2 | Not started | - |
+| 4. Trajectory Cross-Validation | 2/2 | ✓ Complete | 2026-02-14 |
 | 5. Statistical Validation and Regression | 0/2 | Not started | - |
