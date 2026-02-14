@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-13)
 Phase: 5 of 5 (Statistical Validation and Regression) - COMPLETE
 Plan: 2 of 2 in current phase (ALL COMPLETE)
 Status: All 5 phases complete
-Last activity: 2026-02-14 - Quick task 10: Fix trajectory regression test tolerance for cross-platform BLAS
+Last activity: 2026-02-14 - Completed quick task 11: Widen trajectory regression tolerance to 1e-3 for Julia version portability
 
 Progress: [##########] 100%
 
@@ -87,6 +87,7 @@ Recent decisions affecting current work:
 - [05-02]: Tolerance 1e-10 for regression comparison (allows floating-point accumulation across platforms)
 - [05-02]: Trajectory seed=12345, ntraj=1000 for deterministic reference (distinct from Phase 4 seeds)
 - [quick-10]: Trajectory regression atol relaxed to 1e-6 for cross-platform BLAS variance; DM tests unchanged at 1e-10
+- [quick-11]: Trajectory regression atol widened to 1e-3; 1e-6 insufficient for Julia 1.11→1.12 + x86→aarch64 differences (max diff ~7.5e-5 observed)
 
 ### Pending Todos
 
@@ -106,6 +107,7 @@ None
 | 8 | Fix TrotterDomain Gibbs fixed point distance (~0.004 -> ~9e-9) | 2026-02-14 | e0ef0fc | [8-fix-trotterdomain-gibbs-fixed-point-dist](./quick/8-fix-trotterdomain-gibbs-fixed-point-dist/) |
 | 9 | Remove trafo_from_eigen_to_trotter from TrottTrott | 2026-02-14 | 5646187 | [9-remove-trafo-from-eigen-to-trotter-from-](./quick/9-remove-trafo-from-eigen-to-trotter-from-/) |
 | 10 | Fix trajectory regression test tolerance for cross-platform BLAS | 2026-02-14 | 9d2e71a | [10-fix-trajectory-regression-test-failure](./quick/10-fix-trajectory-regression-test-failure/) |
+| 11 | Widen trajectory regression tolerance to 1e-3 for Julia version portability | 2026-02-14 | 7ab18ae | [11-widen-trajectory-regression-tolerance-to](./quick/11-widen-trajectory-regression-tolerance-to/) |
 
 ### Blockers/Concerns
 
@@ -117,5 +119,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-14
-Stopped at: Completed quick task 10 (fix trajectory regression test tolerance)
+Stopped at: Completed quick task 11 (widen trajectory regression tolerance to 1e-3)
 Resume file: None
