@@ -9,7 +9,7 @@ pick_transition(config::ThermalizeConfigGNS) = _pick_transition_gns(config)
 function _pick_transition_kms(config::Union{LiouvConfig, ThermalizeConfig})
 
     if !(config.with_linear_combination)  # Gaussian case
-        @printf("Gaussian\n")
+        # @printf("Gaussian\n")
         return w -> begin
             return exp(-(w + config.gaussian_parameters[1])^2 /(2 * config.gaussian_parameters[2]^2))
         end
@@ -24,7 +24,7 @@ function _pick_transition_kms(config::Union{LiouvConfig, ThermalizeConfig})
             return exp((- 2 * sqrtA * sqrtB - config.beta * w / 2 - config.beta^2 * config.sigma^2 / 4))
         end
     elseif (config.b != 0 && config.a != 0)  # No time singularity and no kinky Metro (Glauberish)
-        @printf("Smooth Metro\n")
+        # @printf("Smooth Metro\n")
         return w -> begin
             sqrtB = sqrt(config.beta / 4) * abs(w + config.beta * config.sigma^2 / 2)
             u_min = sqrt(config.beta * config.sigma^2 * config.b / 2)  # integral lower limit
@@ -38,7 +38,7 @@ function _pick_transition_kms(config::Union{LiouvConfig, ThermalizeConfig})
             #     + exp(4 * sqrtA * sqrtB) * erfc(sqrtA * sqrt(b) + sqrtB / sqrt(b))) / 2)
         end
     elseif config.a == 0  # Time singularity and kinky Metro, i.e. simple shifted Metro
-        @printf("Kinky Metro\n")
+        # @printf("Kinky Metro\n")
         return w -> begin
             return exp(-config.beta * max(w + config.beta * config.sigma^2 / 2, 0.0))
         end
@@ -66,7 +66,7 @@ function _pick_transition_gns(config::Union{LiouvConfigGNS, ThermalizeConfigGNS}
     # Gaussian case
     # KMS condition satisfied at inverse temperature β requires β = 2\omega_\gamma/\sigma_\gamma^2.
     if !(config.with_linear_combination)
-        @printf("Gaussian approx GNS gamma\n")
+        # @printf("Gaussian approx GNS gamma\n")
         return w -> begin
             # gaussian_parameters = [ωγ, σγ]
             w_gamma = config.gaussian_parameters[1]
@@ -84,7 +84,7 @@ function _pick_transition_gns(config::Union{LiouvConfigGNS, ThermalizeConfigGNS}
         end
     elseif (config.b != 0 && config.a != 0)
         # Smooth Metropolis (Glauber-like smoothing) — UN-SHIFTED.
-        @printf("Smooth Metro approx GNS gamma \n")
+        # @printf("Smooth Metro approx GNS gamma \n")
         return w -> begin
             sqrtB = sqrt(config.beta / 4) * abs(w)
             u_min = sqrt(config.beta * config.sigma^2 * config.b / 2)  # integral lower limit
@@ -96,7 +96,7 @@ function _pick_transition_gns(config::Union{LiouvConfigGNS, ThermalizeConfigGNS}
         end
     elseif config.a == 0
         # Kinky Metropolis — UN-SHIFTED.
-        @printf("Kinky Metro approx GNS gamma\n")
+        # @printf("Kinky Metro approx GNS gamma\n")
         return w -> begin
             return exp(-config.beta * max(w, 0.0))
         end
