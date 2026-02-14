@@ -90,6 +90,20 @@ const TEST_JUMPS = TEST_SYSTEM.jumps
 const TEST_GIBBS = TEST_SYSTEM.gibbs
 
 # ---------------------------------------------------------------------------
+# Trotter helper
+# ---------------------------------------------------------------------------
+"""
+    make_test_trotter() -> TrottTrott
+
+Create a TrottTrott object for TrotterDomain tests using the shared test Hamiltonian.
+"""
+function make_test_trotter()
+    TrottTrott(TEST_HAM, T0, NUM_TROTTER_STEPS_PER_T0)
+end
+
+const TEST_TROTTER = make_test_trotter()
+
+# ---------------------------------------------------------------------------
 # Factory functions for configs
 # ---------------------------------------------------------------------------
 """
