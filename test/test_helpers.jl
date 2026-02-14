@@ -207,3 +207,65 @@ function make_thermalize_config(domain;
         delta = delta,
     )
 end
+
+# ---------------------------------------------------------------------------
+# Small Trotter helper (3-qubit)
+# ---------------------------------------------------------------------------
+function make_small_test_trotter()
+    TrottTrott(SMALL_HAM, T0, NUM_TROTTER_STEPS_PER_T0)
+end
+
+const SMALL_TROTTER = make_small_test_trotter()
+
+# ---------------------------------------------------------------------------
+# Small config factories (3-qubit)
+# ---------------------------------------------------------------------------
+"""
+    make_small_thermalize_config(domain; with_coherent=false, delta=TEST_DELTA, mixing_time=1.0) -> ThermalizeConfig
+
+Create a ThermalizeConfig for the 3-qubit SMALL system.
+"""
+function make_small_thermalize_config(domain;
+    with_coherent::Bool=false,
+    delta::Float64=TEST_DELTA,
+    mixing_time::Float64=1.0,
+)
+    ThermalizeConfig(
+        num_qubits = 3,
+        with_coherent = with_coherent,
+        with_linear_combination = true,
+        domain = domain,
+        beta = BETA,
+        sigma = SIGMA,
+        a = BETA / 30.0,
+        b = 0.4,
+        num_energy_bits = NUM_ENERGY_BITS,
+        w0 = W0,
+        t0 = T0,
+        num_trotter_steps_per_t0 = NUM_TROTTER_STEPS_PER_T0,
+        mixing_time = mixing_time,
+        delta = delta,
+    )
+end
+
+"""
+    make_small_liouv_config(domain; with_coherent=false) -> LiouvConfig
+
+Create a LiouvConfig for the 3-qubit SMALL system.
+"""
+function make_small_liouv_config(domain; with_coherent::Bool=false)
+    LiouvConfig(
+        num_qubits = 3,
+        with_coherent = with_coherent,
+        with_linear_combination = true,
+        domain = domain,
+        beta = BETA,
+        sigma = SIGMA,
+        a = BETA / 30.0,
+        b = 0.4,
+        num_energy_bits = NUM_ENERGY_BITS,
+        w0 = W0,
+        t0 = T0,
+        num_trotter_steps_per_t0 = NUM_TROTTER_STEPS_PER_T0,
+    )
+end
