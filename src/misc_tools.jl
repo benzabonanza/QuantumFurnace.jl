@@ -1,33 +1,37 @@
-function generate_filename(config::LiouvConfig)
-    pic_str = string(typeof(config.domain))
-    
-    beta_str = "beta=$(config.beta)"
-    a_str = "a=$(config.a)"
-    b_str = "b=$(config.b)"
-    nqb_str = "n=$(config.num_qubits)"
-    if config.with_coherent
-        B = "B"
-    else
-        B = "noB"
-    end
-
-    return join(["liouv", pic_str, nqb_str, beta_str, B, a_str, b_str], "_") * ".bson"
+function load_hamiltonian(type::String, num_qubits::Int)
+    project_root = Pkg.project().path |> dirname
+    data_dir = joinpath(project_root, "hamiltonians")
+    output_filename = join([type, "disordered", "periodic", "n$num_qubits"], "_") * ".bson"
+    ham_path = joinpath(data_dir, output_filename)
+    bson_hamiltonian_data = BSON.load(ham_path)
+    return bson_hamiltonian_data[:hamiltonian]
 end
 
-function generate_filename(config::ThermalizeConfig)
+function generate_filename(config::AbstractLiouvConfig)
     pic_str = string(typeof(config.domain))
+    db_str = (config isa LiouvConfigGNS) ? "GNS" : "KMS"
     
     beta_str = "beta=$(config.beta)"
     a_str = "a=$(config.a)"
     b_str = "b=$(config.b)"
     nqb_str = "n=$(config.num_qubits)"
-    if config.with_coherent
-        B = "B"
-    else
-        B = "noB"
-    end
+    B = config.with_coherent ? "B" : "noB"
+
+    return join(["liouv", db_str, pic_str, nqb_str, beta_str, B, a_str, b_str], "_") * ".bson"
+end
+
+function generate_filename(config::AbstractThermalizeConfig)
+    pic_str = string(typeof(config.domain))
+    db_str = (config isa ThermalizeConfigGNS) ? "GNS" : "KMS"
+
+    beta_str = "beta=$(config.beta)"
+    a_str = "a=$(config.a)"
+    b_str = "b=$(config.b)"
+    nqb_str = "n=$(config.num_qubits)"
+    B = config.with_coherent ? "B" : "noB"
     mix = "mix=$(config.mixing_time)"
-    return join(["alg", pic_str, nqb_str, beta_str, B, a_str, b_str, mix], "_") * ".bson"  #! BSON now
+
+    return join(["alg", db_str, pic_str, nqb_str, beta_str, B, a_str, b_str, mix], "_") * ".bson"
 end
 
 function riemann_sum(f::Function, grid::Vector{Float64})
@@ -44,108 +48,87 @@ function riemann_sum(fvals::Vector{ComplexF64}, d0::Float64)
     return d0 * sum(fvals)
 end
 
-# function pick_transition(beta::Float64, a::Float64, b::Float64)
-
-#     sqrtA = sqrt((4 * a / beta + 1) / 8)
-#     if (b == 0 && a != 0)  # No time singularity but kinky Metro in energy
-#         return w -> begin
-#             sqrtB = beta * abs(w + 1 / (2 * beta)) / sqrt(2)
-#             return exp((- 2 * sqrtA * sqrtB - beta * w / 2 - 1 / 4))
-#         end
-#     elseif (b != 0 && a != 0)  # No time singularity and no kinky Metro (Glauberish)
-#         return w -> begin
-#             sqrtB = beta * abs(w + 1 / (2 * beta)) / sqrt(2)
-#             transition_eh = exp((- 2 * sqrtA * sqrtB - beta * w / 2 - 1 / 4))
-
-#             return (transition_eh * (erfc(sqrtA * sqrt(b) - sqrtB / sqrt(b)) 
-#                 + exp(4 * sqrtA * sqrtB) * erfc(sqrtA * sqrt(b) + sqrtB / sqrt(b))) / 2)
-#         end
-#     elseif a == 0  # Time singularity and kinky Metro
-#         return w -> begin
-#             return exp(-beta * max(w + 1/(2 * beta), 0.0))
-#         end
-#     end
-# end
-
-# function is_config_valid(config::Union{LiouvConfig, ThermalizeConfig})::Bool
+#! Old validation before GNS:
+# function validate_config!(config::AbstractConfig)
 #     errors = String[]
 
-#     # Check based on the domain type.
-#     if config.domain == BOHR
-#         nothing
-#     elseif config.domain == ENERGY
-#         if config.num_energy_bits <= 0
-#             push!(errors, "For domain ENERGY, num_energy_bits must be > 0.")
-#         end
-#         if config.w0 <= 0.
-#             push!(errors, "For domain ENERGY, w0 must be > 0.")
-#         end
-#     elseif config.domain == TIME
-#         if config.num_energy_bits <= 0
-#             push!(errors, "For domain TIME, num_energy_bits must be > 0.")
-#         end
-#         if config.t0 <= 0.
-#             push!(errors, "For domain TIME, t0 must be > 0.")
-#         end
-#         if config.w0 <= 0.
-#             push!(errors, "For domain TIME, w0 must be > 0.")
-#         end
-#         if (config.t0 * config.w0 != 2pi/2^config.num_energy_bits)
-#             push!(errors, "t0 * w0 != 2pi / N")
-#         end
-#         if (config.a == 0. && config.eta <= 0. && config.with_linear_combination)
-#             push!(errors, "For linear combinations and domain TIME, a = 0 needs an eta > 0")
-#         end 
-#     elseif config.domain == TROTTER
-#         if config.num_energy_bits <= 0
-#             push!(errors, "For domain TROTTER, num_energy_bits must be > 0.")
-#         end
-#         if config.t0 <= 0.
-#             push!(errors, "For domain TROTTER, t0 must be > 0.")
-#         end
-#         if config.w0 <= 0.
-#             push!(errors, "For domain TROTTER, w0 must be > 0.")
-#         end
-#         if config.num_trotter_steps_per_t0 <= 0
-#             push!(errors, "For domain TROTTER, num_trotter_steps_per_t0 must be > 0.")
-#         end
-#         if (norm(config.t0 * config.w0 - 2pi/2^config.num_energy_bits) > 1e-15)
-#             push!(errors, "t0 * w0 != 2pi / N")
-#         end
-#         if (config.a == 0. && config.eta <= 0. && config.with_linear_combination)
-#             push!(errors, "For linear combinations and domain TROTTER, a = 0 needs an eta > 0")
-#         end 
-#     else
-#         push!(errors, "Unknown domain type.")
+#     # --- Domain-Specific Validation ---
+#     _collect_config_errors!(errors, config.domain, config)
+
+#     # --- Common Validation Logic ---
+#     if !(config.with_linear_combination) && config.gaussian_parameters == (nothing, nothing)
+#         push!(errors, "If with_linear_combination is false, gaussian_parameters must be set.")
 #     end
 
-#     if (config.b != 0. && config.a == 0. && config.with_linear_combination)
-#         push!(errors, "For linear combinations when b > 0, then we need, a > 0.")
+#     if !(config.with_linear_combination)
+#         parameter_relation_holds = isapprox(config.beta,
+#                                     2 * config.gaussian_parameters[1] / (config.sigma^2 + config.gaussian_parameters[2]^2))
+#         if !(parameter_relation_holds)
+#             push!(errors, "For Gaussian transitions the parameters have to relate as beta = 2 w_gamma / (sigma^2 + sigma_gamma^2)")
+#         end
 #     end
 
+#     if config.with_linear_combination && config.a == 0.0
+#         if config.b != 0.0
+#             push!(errors, "For linear combinations with b != 0, a must also be non-zero.")
+#         end
+#         if config.domain isa Union{TimeDomain, TrotterDomain} && config.eta <= 0.0
+#             push!(errors, "For linear combinations with a=0 in TIME or TROTTER domain, eta must be > 0.")
+#         end
+#     end
+
+#     # --- Error Throwing ---
 #     if !isempty(errors)
-#         for err in errors
-#             println(err)
-#         end
-#         return false
+#         error_message = "Invalid configuration found:\n" * join(["  - " * err for err in errors], "\n")
+#         throw(ArgumentError(error_message))
 #     end
 
-#     return true
+#     return nothing
 # end
 
-function validate_config!(config::Union{LiouvConfig, ThermalizeConfig})
+function validate_config!(config::AbstractConfig)
     errors = String[]
 
     # --- Domain-Specific Validation ---
     _collect_config_errors!(errors, config.domain, config)
 
     # --- Common Validation Logic ---
+    # GNS configs are defined without the coherent correction term B.
+    if (config isa Union{LiouvConfigGNS, ThermalizeConfigGNS}) && config.with_coherent
+        push!(errors, "GNS configs must have with_coherent=false (no coherent B term in this line).")
+    end
+
+    if !(config.with_linear_combination) && config.gaussian_parameters == (nothing, nothing)
+        push!(errors, "If with_linear_combination is false, gaussian_parameters must be set.")
+    end
+
+    if !(config.with_linear_combination)
+        w_gamma, sigma_gamma = config.gaussian_parameters
+        if w_gamma === nothing || sigma_gamma === nothing
+            push!(errors, "For Gaussian transitions gaussian_parameters=(ω_γ, σ_γ) must be set.")
+        else
+            rhs = if config isa Union{LiouvConfigGNS, ThermalizeConfigGNS}
+                2 * w_gamma / (sigma_gamma^2)
+            else
+                2 * w_gamma / (config.sigma^2 + sigma_gamma^2)
+            end
+            parameter_relation_holds = isapprox(config.beta, rhs)
+            if !(parameter_relation_holds)
+                if config isa Union{LiouvConfigGNS, ThermalizeConfigGNS}
+                    push!(errors, "For Gaussian transitions (GNS line) require beta ≈ 2*ω_γ/σ_γ^2")
+                else
+                    push!(errors, "For Gaussian transitions (KMS line) require beta ≈ 2*ω_γ/(σ^2+σ_γ^2)")
+                end
+            end
+        end
+    end
+
     if config.with_linear_combination && config.a == 0.0
         if config.b != 0.0
             push!(errors, "For linear combinations with b != 0, a must also be non-zero.")
         end
-        if config.domain isa Union{TimeDomain, TrotterDomain} && config.eta <= 0.0
-            push!(errors, "For linear combinations with a=0 in TIME or TROTTER domain, eta must be > 0.")
+        if config.domain isa Union{TimeDomain, TrotterDomain} && config.with_coherent && config.eta <= 0.0
+            push!(errors, "For linear combinations in the KMS DB case with a=0 in TIME or TROTTER domain, eta must be > 0.")
         end
     end
 
@@ -205,12 +188,15 @@ function _collect_config_errors!(errors::Vector{String}, ::TrotterDomain, config
 end
 
 
-function print_press(config::LiouvConfig)
+function print_press(config::AbstractLiouvConfig)
     params = [
+        ("db", (config isa LiouvConfigGNS) ? :GNS : :KMS),
         ("domain", config.domain),
         ("num_qubits", config.num_qubits),
         ("num_energy_bits", config.num_energy_bits),
         ("beta", config.beta),
+        ("sigma", config.sigma),
+        ("gaussian_parameters", config.gaussian_parameters),
         ("a", config.a),
         ("b", config.b),
         ("eta", config.eta),
@@ -232,12 +218,15 @@ function print_press(config::LiouvConfig)
     println("-----------------")
 end
 
-function print_press(config::ThermalizeConfig)
+function print_press(config::AbstractThermalizeConfig)
     params = [
+        ("db", (config isa ThermalizeConfigGNS) ? :GNS : :KMS),
         ("domain", config.domain),
         ("num_qubits", config.num_qubits),
         ("num_energy_bits", config.num_energy_bits),
         ("beta", config.beta),
+        ("sigma", config.sigma),
+        ("gaussian_parameters", config.gaussian_parameters),
         ("a", config.a),
         ("b", config.b),
         ("eta", config.eta),
@@ -259,27 +248,6 @@ function print_press(config::ThermalizeConfig)
         println("$name: $value")
     end
     println("-----------------")
-end
-
-function create_jumpop(pauli::Vector{String}, num_qubits::Int64, site::Int64, hamiltonian::HamHam; 
-    trotter::Union{TrottTrott, Nothing} = nothing)
-
-    pauli = pauli_string_to_matrix(pauli)
-    jump_op = Matrix(pad_term(pauli, num_qubits, site))
-    jump_op_in_eigenbasis = hamiltonian.eigvecs' * jump_op * hamiltonian.eigvecs
-    if trotter !== nothing
-        jump_in_trotter_basis = trotter.eigvecs' * jump_op * trotter.eigvecs
-    else
-        jump_in_trotter_basis = zeros(2^num_qubits, 2^num_qubits)
-    end
-    orthogonal = (jump_op == transpose(jump_op))
-    jump = JumpOp(jump_op,
-            jump_op_in_eigenbasis,
-            Dict{Float64, SparseMatrixCSC{ComplexF64, Int64}}(), 
-            zeros(0),
-            jump_in_trotter_basis,
-            orthogonal)
-    return jump
 end
 
 function pauli_string_to_matrix(paulistring::Vector{String})

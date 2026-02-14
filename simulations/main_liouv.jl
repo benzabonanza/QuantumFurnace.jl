@@ -1,34 +1,36 @@
 using Distributed
+# addprocs(4, exeflags="--project=@.")
 
-if "SLURM_JOB_ID" in keys(ENV)
-    # For HPC environments
-    using ClusterManagers
-    num_tasks = parse(Int, ENV["SLURM_NTASKS"])
-    addprocs(SlurmManager(num_tasks))
-    println("Slurm environment. Added $(nworkers()) workers.")
-else
-    # For local testing
-    if nprocs() == 1
-        println("No external workers detected. Adding 4 local workers for testing...")
-        addprocs(4)
-        println("Workers available: ", workers())
-    end
+using Revise
+includet("../src/QuantumFurnace.jl")
+using .QuantumFurnace
+
+@everywhere begin
+    using Revise
+    includet("../src/QuantumFurnace.jl")
+    using .QuantumFurnace
 end
 
-println("Loading QuantumFurnace on all $(nworkers()) workers...")
-@everywhere using QuantumFurnace
-# @everywhere using Pkg, LinearAlgebra, Random, Printf, SparseArrays, BSON, Arpack
+using Pkg, LinearAlgebra, Random, Printf, SparseArrays, BSON, Arpack
 
 function main()
         #* Config
         num_qubits = 4
         dim = 2^num_qubits
         beta = 10.  # 5, 10, 30
+        sigma = 1 / beta
+        w_gamma = 1 / beta
+        sigma_gamma = 1 / beta
+
+        # change from 1 / beta:
+        sigma = 1.0 / beta  # w0 = 0.005, for broad enough time integrals in OFTs
+        w_gamma = 1 / beta
+        sigma_gamma = sqrt(2 * w_gamma / beta - sigma^2)
 
         # Smooth Metro
-        a = beta / 30. # a = beta / 50.
-        b = 0.4  # b = 0.5
-        eta = 0.0  # eta = 0.2
+        a = 1 / 10
+        b = 0.4
+        eta = 0.0 
 
         # Kinky Metro 
         # a = 0.0
@@ -37,28 +39,12 @@ function main()
 
         with_coherent = true
         with_linear_combination = true
-        # energy_domain = EnergyDomain()
         domain = TimeDomain()
-        num_energy_bits = 11  # 11
+        num_energy_bits = 12 # 11
         w0 = 0.05
         max_E = w0 * 2^num_energy_bits / 2
         t0 = 2pi / (2^num_energy_bits * w0)  # Max time evolution pi / w0
         num_trotter_steps_per_t0 = 10
-
-        # energy_config = LiouvConfig(
-        #         num_qubits = num_qubits, 
-        #         with_coherent = with_coherent,
-        #         with_linear_combination = with_linear_combination, 
-        #         domain = energy_domain,
-        #         beta = beta,
-        #         a = a,
-        #         b = b,
-        #         num_energy_bits = num_energy_bits,
-        #         w0 = w0,
-        #         t0 = t0,
-        #         eta = eta,
-        #         num_trotter_steps_per_t0 = num_trotter_steps_per_t0
-        # )
 
         config = LiouvConfig(
                 num_qubits = num_qubits, 
@@ -66,6 +52,8 @@ function main()
                 with_linear_combination = with_linear_combination, 
                 domain = domain,
                 beta = beta,
+                sigma = sigma,
+                gaussian_parameters = (w_gamma, sigma_gamma),
                 a = a,
                 b = b,
                 num_energy_bits = num_energy_bits,
@@ -75,31 +63,39 @@ function main()
                 num_trotter_steps_per_t0 = num_trotter_steps_per_t0
         )
 
+        #* Approx GNS Config
+        # sigma_gamma = sqrt(2 * w_gamma / beta)
+        # config = LiouvConfigGNS(
+        #         num_qubits = num_qubits,
+        #         with_linear_combination = with_linear_combination,
+        #         domain = domain,
+        #         beta = beta,
+        #         sigma = sigma,
+        #         gaussian_parameters = (w_gamma, sigma_gamma),
+        #         a = a,
+        #         b = b,
+        #         num_energy_bits = num_energy_bits,
+        #         w0 = w0,
+        #         t0 = t0,
+        #         num_trotter_steps_per_t0 = num_trotter_steps_per_t0
+        # )
+
         #* Hamiltonian
         # hamiltonian = find_ideal_heisenberg(num_qubits, fill(1.0, 3); batch_size=100)
         # hamiltonian_terms = [["X", "X"], ["Y", "Y"], ["Z", "Z"]]
         # hamiltonian_coeffs = fill(1.0, length(hamiltonian_terms))
-        # hamiltonian = create_hamham(hamiltonian_terms, hamiltonian_coeffs, num_qubits)
-
-        # Hamiltonian path
-        project_root = Pkg.project().path |> dirname
-        data_dir = joinpath(project_root, "hamiltonians")
-        output_filename = join(["heis", "disordered", "periodic", "n$num_qubits"], "_") * ".bson"
-        ham_path = joinpath(data_dir, output_filename)
+        # hamiltonian = HamHam(hamiltonian_terms, hamiltonian_coeffs, num_qubits)
 
         # Load Hamiltonian
-        bson_ham_data = BSON.load(ham_path)
-        hamiltonian = bson_ham_data[:hamiltonian]
-        @printf("Hamiltonian is loaded.\n")
-        hamiltonian.bohr_freqs = hamiltonian.eigvals .- transpose(hamiltonian.eigvals)
-        hamiltonian.bohr_dict = create_bohr_dict(hamiltonian)
-        hamiltonian.gibbs = Hermitian(gibbs_state_in_eigen(hamiltonian, beta))
+        hamiltonian = load_hamiltonian("heis", num_qubits)
+        hamiltonian = finalize_hamham(hamiltonian, beta)
+    
         initial_dm = Matrix{ComplexF64}(I(dim) / dim)
         @assert norm(real(tr(initial_dm)) - 1.) < 1e-15 "Trace is not 1.0"
         @assert norm(initial_dm - initial_dm') < 1e-15 "Not Hermitian"
 
         #* Trotter
-        trotter = create_trotter(hamiltonian, t0, num_trotter_steps_per_t0)
+        trotter = TrottTrott(hamiltonian, t0, num_trotter_steps_per_t0)
         trotter_error_T = compute_trotter_error(hamiltonian, trotter, 2^num_energy_bits * t0 / 2)
         gibbs_in_trotter = Hermitian(trotter.eigvecs' * gibbs_state(hamiltonian, beta) * trotter.eigvecs)
         @printf("Trotter is created.\n")
@@ -107,35 +103,40 @@ function main()
         #* Jumps
         jump_paulis = [[X], [Y], [Z]]
 
-        num_of_jumps = length(jump_paulis) * num_qubits
+        jump_sites = 1:num_qubits
+        num_of_jumps = length(jump_paulis) * length(jump_sites)
         jump_normalization = sqrt(num_of_jumps)
         # jump_normalization = 1.0
         jumps::Vector{JumpOp} = []
         for pauli in jump_paulis
-                for site in 1:num_qubits
+                for site in jump_sites
                         jump_op = Matrix(pad_term(pauli, num_qubits, site)) / jump_normalization
-                        jump_op_in_eigenbasis = hamiltonian.eigvecs' * jump_op * hamiltonian.eigvecs
-                        # jump_op_in_eigenbasis = trotter.eigvecs' * jump_op * trotter.eigvecs  #! Uncomment for Trotter
+
+                        basis_unitary = (domain isa TrotterDomain) ? trotter.eigvecs : hamiltonian.eigvecs
+                        jump_op_in_eigenbasis = basis_unitary' * jump_op * basis_unitary
+
                         orthogonal = (jump_op == transpose(jump_op))
+                        hermitian = (jump_op == jump_op')
                         jump = JumpOp(jump_op,
                                 jump_op_in_eigenbasis,
-                                orthogonal)
+                                orthogonal,
+                                hermitian)
                         push!(jumps, jump)
                 end
         end
         @printf("Jumps are created.\n")
 
         #* Liouvillian
-        liouv_result = @time run_liouvillian(jumps, config, hamiltonian; trotter = trotter)
+        liouv_result = @time run_lindbladian(jumps, config, hamiltonian; trotter = trotter)
         @printf("Distance to Gibbs: %s\n", norm(liouv_result.fixed_point - hamiltonian.gibbs))
         @printf("Distance to Gibbs (TROTTER): %s\n", norm(liouv_result.fixed_point - gibbs_in_trotter))
-        @printf("Spectral gap: %s\n", abs(real(liouv_result.lambda_2)))
+        @printf("Spectral gap: %s\n", abs(real(liouv_result.spectral_gap)))
 
 
         # opt_delta =  2 / (abs(liouv_eigvals[2]) + abs(liouv_eigvals[end]))
         # stability_barrier = 2 / (abs(liouv_eigvals[end]))
 
-        # liouv_result_energy = run_liouvillian(jumps, energy_config, hamiltonian; trotter = trotter)
+        # liouv_result_energy = run_lindbladian(jumps, energy_config, hamiltonian; trotter = trotter)
         # @printf("Distance to Gibbs (ENERGY): %s\n", norm(liouv_result_energy.fixed_point - hamiltonian.gibbs))
         # norm(liouv_result_energy.data - liouv_result.data)
 
@@ -165,9 +166,9 @@ end
 # jld_data = JLD2.load(full_path)
 # loaded_results = jld_data["results"]
 
-# liouv_energy = construct_liouvillian(jumps, configs[2]; hamiltonian=hamiltonian)
-# liouv_time = construct_liouvillian(jumps, configs[3]; hamiltonian=hamiltonian)
-# liouv_trotter = construct_liouvillian(jumps, configs[1]; trotter=trotter)
+# liouv_energy = construct_lindbladian(jumps, configs[2]; hamiltonian=hamiltonian)
+# liouv_time = construct_lindbladian(jumps, configs[3]; hamiltonian=hamiltonian)
+# liouv_trotter = construct_lindbladian(jumps, configs[1]; trotter=trotter)
 
 # norm(liouv_bohr - liouv_time)
 # norm(liouv_trotter - liouv_time)

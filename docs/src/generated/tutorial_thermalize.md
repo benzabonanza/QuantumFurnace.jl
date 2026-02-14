@@ -101,7 +101,7 @@ nothing #hide
 Generate a 4-qubit chain antiferromagnetic Heisenberg Hamiltonian with a disordering field
 
 ````@example tutorial_thermalize
-hamiltonian = create_hamham(hamiltonian_terms, hamiltonian_coeffs, disordering_term, disordering_coeffs, num_qubits)
+hamiltonian = HamHam(hamiltonian_terms, hamiltonian_coeffs, disordering_term, disordering_coeffs, num_qubits)
 hamiltonian.gibbs = Hermitian(gibbs_state_in_eigen(hamiltonian, beta));
 nothing #hide
 ````

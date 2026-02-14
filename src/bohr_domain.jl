@@ -1,102 +1,3 @@
-#* LINEAR COMBINATIONS ------------------------------------------------------------------------------------------------
-function construct_liouvillian_bohr(jumps::Vector{JumpOp}, hamiltonian::HamHam, config::LiouvConfig)
-    """(a,b) = (0, 0) : Metropolis-like; b!=0 Glauber-like; a!=0 regularizes time domain f+."""
-
-    dim = size(hamiltonian.data, 1)
-    unique_freqs = keys(hamiltonian.bohr_dict)
-
-    alpha = pick_alpha(config)
-
-    liouv = zeros(ComplexF64, dim^2, dim^2)
-    p = Progress(Int(length(jumps) * length(unique_freqs)), desc="Liouvillian (BOHR)...")
-    for jump in jumps
-        # Coherent part
-        if config.with_coherent
-            coherent_term = coherent_bohr(hamiltonian, jump, config)
-            liouv .+= vectorize_liouvillian_coherent(coherent_term)
-        end
-
-        # Dissipative part
-        for nu_2 in unique_freqs  #TODO: Reduce this for loop, by knowing that unique freqs is symmetric in + -
-            alpha_nu1_matrix = alpha.(hamiltonian.bohr_freqs, nu_2, config.beta, config.a, config.b)
-
-            A_nu_2::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
-            A_nu_2[hamiltonian.bohr_dict[nu_2]] .= jump.in_eigenbasis[hamiltonian.bohr_dict[nu_2]]
-
-            liouv .+= vectorize_liouvillian_diss(alpha_nu1_matrix .* jump.in_eigenbasis, A_nu_2')
-            next!(p)
-        end
-    end
-
-    return liouv
-end
-
-function thermalize_bohr(jumps::Vector{JumpOp}, hamiltonian::HamHam, evolving_dm::Matrix{ComplexF64}, 
-    config::ThermalizeConfig)
-
-    dim = size(hamiltonian.data, 1)
-    num_liouv_steps = Int(ceil(config.mixing_time / config.delta))
-    gibbs = Hermitian(gibbs_state_in_eigen(hamiltonian, config.beta))
-
-    if unravel
-        @printf("Unraveling => actual_num_liouv_steps = num_jumps * num_liouv_steps = %i\n", length(jumps) * num_liouv_steps)
-        @printf("Mixing time thus also becomes longer: %f\n", config.mixing_time * length(jumps))
-        time_steps = [0.0:config.delta:(length(jumps) * num_liouv_steps * config.delta);]
-    else
-        time_steps = [0.0:config.delta:(num_liouv_steps * config.delta);]
-    end
-
-    unique_freqs = keys(hamiltonian.bohr_dict)
-    distances_to_gibbs = [trace_distance_h(Hermitian(evolving_dm), gibbs)]
-
-    # This implementation applies all jumps at once for one Liouvillian step.
-    p = Progress(Int(num_liouv_steps * length(jumps) * length(unique_freqs)), desc="Thermalize (BOHR)...")
-    for step in 1:num_liouv_steps
-        step_coherent = zeros(ComplexF64, dim, dim)
-        step_dissipative = zeros(ComplexF64, dim, dim)
-
-        for jump in jumps  # Apply the sum of jumps at once or unravel
-            jump_coherent = zeros(ComplexF64, dim, dim)
-            jump_dissipative = zeros(ComplexF64, dim, dim)
-            # Coherent part
-            if with_coherent
-                coherent_term = coherent_bohr(hamiltonian, jump, config.beta, config.a , config.b)
-                jump_coherent .+= - 1im * (coherent_term * evolving_dm - evolving_dm * coherent_term)
-            end
-
-            # Dissipative part
-            for nu_2 in keys(hamiltonian.bohr_dict)
-                A_nu_2::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
-                indices_nu_2 = hamiltonian.bohr_dict[nu_2]
-                A_nu_2[indices_nu_2] .= jump.in_eigenbasis[indices_nu_2]
-
-                alpha_A_nu1 = create_alpha.(hamiltonian.bohr_freqs, nu_2, config.beta, config.a, config.b) .* jump.in_eigenbasis
-
-                jump_dissipative .+= (alpha_A_nu1 * evolving_dm * A_nu_2' - 0.5 * (A_nu_2' * alpha_A_nu1 * evolving_dm 
-                                                + evolving_dm * A_nu_2' * alpha_A_nu1))
-                next!(p)
-            end
-
-            if !(config.unravel)  # Accumulate
-                step_coherent .+= jump_coherent
-                step_dissipative .+= jump_dissipative
-            else # Apply immediately
-                evolving_dm .+= config.delta * (jump_coherent + jump_dissipative)
-                dist = trace_distance_h(Hermitian(evolving_dm), gibbs)
-                push!(distances_to_gibbs, dist)
-            end
-        end
-
-        if !(config.unravel)
-            evolving_dm .+= config.delta * (step_coherent + step_dissipative)
-            dist = trace_distance_h(Hermitian(evolving_dm), gibbs)
-            push!(distances_to_gibbs, dist)
-        end
-
-    end
-    return HotAlgorithmResults(evolving_dm, distances_to_gibbs, time_steps)
-end
-
 #! Changed it slightly for speed without debugging
 function coherent_bohr(hamiltonian::HamHam, jump::JumpOp, config::Union{LiouvConfig, ThermalizeConfig})
 
@@ -111,151 +12,142 @@ function coherent_bohr(hamiltonian::HamHam, jump::JumpOp, config::Union{LiouvCon
         A_nu_2::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
         indices = hamiltonian.bohr_dict[nu_2]
         A_nu_2[indices] .= jump.in_eigenbasis[indices]
-        @. f_A_nu_1 = f(hamiltonian.bohr_freqs, nu_2, config.beta, config.a, config.b) * jump.in_eigenbasis
+        @. f_A_nu_1 = f(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
 
         B .+= A_nu_2' * f_A_nu_1
     end
     return B
 end
 
+function coherent_bohr(hamiltonian::HamHam, jumps::Vector{JumpOp}, config::Union{LiouvConfig, ThermalizeConfig})
+
+    dim = size(hamiltonian.data, 1)
+    unique_freqs = keys(hamiltonian.bohr_dict)
+
+    f = pick_f(config)  # Picks rates for B in Bohr domain
+
+    B = zeros(ComplexF64, dim, dim)
+    for jump in jumps
+        f_A_nu_1 = zeros(ComplexF64, dim, dim)
+        for nu_2 in unique_freqs
+            A_nu_2::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
+            indices = hamiltonian.bohr_dict[nu_2]
+            A_nu_2[indices] .= jump.in_eigenbasis[indices]
+            @. f_A_nu_1 = f(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
+
+            B .+= A_nu_2' * f_A_nu_1
+        end
+    end
+    return B
+end
+
 function pick_f(config::Union{LiouvConfig, ThermalizeConfig})
+
+    beta = config.beta
+    sigma = config.sigma
     if config.with_linear_combination
-        return (nu_1, nu_2, beta, a, b) -> create_f(nu_1, nu_2, config.beta, config.a, config.b)
+        a = config.a
+        b = config.b
+        return (nu_1, nu_2) -> create_f(nu_1, nu_2, beta, sigma, a, b)
     else
-        return (nu_1, nu_2, beta, a=nothing, b=nothing) -> create_f_gauss(nu_1, nu_2, config.beta)
+        gaussian_parameters = config.gaussian_parameters
+        return (nu_1, nu_2) -> create_f_gauss(nu_1, nu_2, beta, sigma, gaussian_parameters)
     end 
 end
 
-function create_f(nu_1::Float64, nu_2::Float64, beta::Float64, a::Float64, b::Float64)
-    alpha = create_alpha(nu_1, nu_2, beta, a, b)
+function create_f(nu_1::Float64, nu_2::Float64, beta::Float64, sigma::Float64, a::Float64, b::Float64)
+    alpha = create_alpha(nu_1, nu_2, beta, sigma, a, b)
     return tanh(-beta * (nu_1 - nu_2) / 4) * alpha / (2im)
 end
 
-function create_f_gauss(nu_1::Float64, nu_2::Float64, beta::Float64)
-    """Tanh * alpha. Gaussian parameters = 1/β"""
-    alpha_nu1_nu2 = create_alpha_gauss(nu_1, nu_2, beta)
+function create_f_gauss(nu_1::Float64, nu_2::Float64, beta::Float64, sigma::Float64, 
+    gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}})
+    """Tanh * alpha."""
+    alpha_nu1_nu2 = create_alpha_gauss(nu_1, nu_2, sigma, gaussian_parameters)
     return tanh(-beta * (nu_1 - nu_2) / 4) * alpha_nu1_nu2 / (2im)
 end
 
-function pick_alpha(config::Union{LiouvConfig, ThermalizeConfig})
+pick_alpha(config::LiouvConfig) = _pick_alpha_kms(config)
+pick_alpha(config::ThermalizeConfig) = _pick_alpha_kms(config)
+pick_alpha(config::LiouvConfigGNS) = _pick_alpha_gns(config)
+pick_alpha(config::ThermalizeConfigGNS) = _pick_alpha_gns(config)
+
+function _pick_alpha_kms(config::Union{LiouvConfig, ThermalizeConfig})
+
+    sigma = config.sigma
     if config.with_linear_combination
-        return (nu_1, nu_2, beta, a, b) -> create_alpha(nu_1, nu_2, config.beta, config.a, config.b)
+        beta = config.beta
+        a = config.a
+        b = config.b
+        return (nu_1, nu_2) -> create_alpha(nu_1, nu_2, beta, sigma, a, b)
     else
-        return (nu_1, nu_2, beta, a=nothing, b=nothing) -> create_alpha_gauss(nu_1, nu_2, config.beta)
+        gaussian_parameters = config.gaussian_parameters
+        return (nu_1, nu_2) -> create_alpha_gauss(nu_1, nu_2, sigma, gaussian_parameters)
     end 
 end
 
-function create_alpha(nu_1::Float64, nu_2::Float64, beta::Float64, a::Float64, b::Float64)
-    
-    eh = sqrt(4 * a / beta + 1)
-    nu = nu_1 + nu_2
+function create_alpha(nu_1::Float64, nu_2::Float64, beta::Float64, sigma::Float64, a::Float64, b::Float64)
 
-    alpha_nu_1 = (exp(-beta^2 * (nu_1 - nu_2)^2 / 8) 
-        * exp(a / (2 * beta)) * exp(-beta * nu * (1 + eh) / 4) * (
-        erfc((eh * (1 + b) - beta * nu) / sqrt(8 * (1 + b))) 
-        + exp(beta * nu * eh / 2) * erfc((eh * (1 + b) + beta * nu) / sqrt(8 * (1 + b)))) / 2)
+    sqrtA = sqrt(beta * (4 * a + 1) / 4)
+    sqrtB = sqrt(beta / 16) * abs(nu_1 + nu_2)
+    C = beta * (nu_1 + nu_2) / 4
+    prefactor = exp(a * beta^2 * sigma^2 / 2) / 2
+    u_min = sqrt(beta * sigma^2 * (1 + b) / 2)
+    z_plus = sqrtA * u_min + sqrtB / u_min
+    z_minus = sqrtA * u_min - sqrtB / u_min
+
+    alpha_nu_1 = (prefactor * exp(-C) * exp(-(nu_1 - nu_2)^2 / (8 * sigma^2)) * exp(- 2 * sqrtA * sqrtB) *
+                    (erfc(z_minus) + exp(4 * sqrtA * sqrtB) * erfc(z_plus)))
+
     return alpha_nu_1
 end
 
-function create_alpha_gauss(nu_1::Float64, nu_2::Float64, beta::Float64)
-    """Gaussian parameters = 1/β"""
-    alpha_fn(nu_1) = exp(-beta^2 * (nu_1 + nu_2 + 2/beta)^2/16) * exp(-beta^2 * (nu_1 - nu_2)^2/8) / sqrt(2) #! sqrt(8)->sqrt(2)
-    return alpha_fn(nu_1)
-end
+function _pick_alpha_gns(config::Union{LiouvConfigGNS, ThermalizeConfigGNS})
 
-#* GAUSS --------------------------------------------------------------------------------------------------------------------
-function construct_liouvillian_bohr_gauss(jumps::Vector{JumpOp}, hamiltonian::HamHam, config::LiouvConfig)
-
-    dim = size(hamiltonian.data, 1)
-    unique_freqs = keys(hamiltonian.bohr_dict)
-
-    liouv = zeros(ComplexF64, dim^2, dim^2)
-    p = Progress(Int(length(jumps) * length(unique_freqs)), desc="Liouvillian (BOHR GAUSS)...")
-    for jump in jumps
-        # Coherent part
-        if with_coherent
-            coherent_term = coherent_bohr_gauss(hamiltonian, jump, beta)
-            liouv .+= vectorize_liouvillian_coherent(coherent_term)
-        end
-
-        # Dissipative part
-        for nu_2 in unique_freqs
-            alpha_nu1_matrix = create_alpha_gauss.(hamiltonian.bohr_freqs, nu_2, beta)
-
-            A_nu_2::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
-            A_nu_2[hamiltonian.bohr_dict[nu_2]] .= jump.in_eigenbasis[hamiltonian.bohr_dict[nu_2]]
-
-            liouv .+= vectorize_liouvillian_diss(alpha_nu1_matrix .* jump.in_eigenbasis, A_nu_2')
-            next!(p)
-        end
-    end
-    return liouv
-end
-
-
-function thermalize_bohr_gauss(jumps::Vector{JumpOp}, hamiltonian::HamHam, evolving_dm::Matrix{ComplexF64}, 
-    with_coherent::Bool, beta::Float64, mixing_time::Float64, delta::Float64, unravel::Bool)
-
-    dim = size(hamiltonian.data, 1)
-    num_liouv_steps = Int(ceil(mixing_time / delta))
-    gibbs = Hermitian(gibbs_state_in_eigen(hamiltonian, beta))
-
-    if unravel
-        @printf("Unraveling => actual_num_liouv_steps = num_jumps * num_liouv_steps = %i\n", length(jumps) * num_liouv_steps)
-        @printf("Mixing time thus also becomes longer: %f\n", mixing_time * length(jumps))
-        time_steps = [0.0:delta:(length(jumps) * num_liouv_steps * delta);]
+    sigma = config.sigma
+    if config.with_linear_combination
+        beta = config.beta
+        a = config.a
+        b = config.b
+        return (nu_1, nu_2) -> create_alpha_gns(nu_1, nu_2, beta, sigma, a, b)
     else
-        time_steps = [0.0:delta:(num_liouv_steps * delta);]
+        gaussian_parameters = config.gaussian_parameters  # but now β = 2ω_γ / σ_γ^2
+        return (nu_1, nu_2) -> create_alpha_gauss(nu_1, nu_2, sigma, gaussian_parameters)
     end
+end
 
-    unique_freqs = keys(hamiltonian.bohr_dict)
+"""
+Coming from unshifted γ(ω) in the energy domain, leads to a partially shifted Kossakowski matrix α.
+Difference vs the KMS DB case: |ν1 + ν2| → |ν1 + ν2 + β σ^2 / 2| (and thus not skew symmetric due to the Gaussian filters)
+Also: No f and no b-funcs will be constructed because in this setup there is no fine-tuned B in the Lindbladian.
+"""
+function create_alpha_gns(nu_1::Float64, nu_2::Float64, beta::Float64, sigma::Float64, a::Float64, b::Float64)
+    sqrtA = sqrt(beta * (4 * a + 1) / 4)
+    sqrtB = sqrt(beta / 16) * abs(nu_1 + nu_2 + beta * sigma^2 / 2)
+    C = beta * (nu_1 + nu_2) / 4
+    prefactor = exp(a * beta^2 * sigma^2 / 2) / 2
+    u_min = sqrt(beta * sigma^2 * (1 + b) / 2)
+    z_plus = sqrtA * u_min + sqrtB / u_min
+    z_minus = sqrtA * u_min - sqrtB / u_min
 
-    distances_to_gibbs = [trace_distance_h(Hermitian(evolving_dm), gibbs)]
+    alpha_nu_1 = (prefactor * exp(-C) * exp(-(nu_1 - nu_2)^2 / (8 * sigma^2)) * exp(- 2 * sqrtA * sqrtB) *
+                    (erfc(z_minus) + exp(4 * sqrtA * sqrtB) * erfc(z_plus)))
 
-    # This implementation applies all jumps at once for one Liouvillian step.
-    p = Progress(Int(num_liouv_steps * length(jumps) * length(unique_freqs)), desc="Thermalize (BOHR GAUSS)...")
-    for step in 1:num_liouv_steps
-        step_coherent = zeros(ComplexF64, dim, dim)
-        step_dissipative = zeros(ComplexF64, dim, dim)
+    return alpha_nu_1
+end
 
-        for jump in jumps  # Apply the sum of jumps at once
-            jump_coherent = zeros(ComplexF64, dim, dim)
-            jump_dissipative = zeros(ComplexF64, dim, dim)
-            # Coherent part
-            if with_coherent
-                coherent_term = coherent_bohr_gauss(hamiltonian, jump, beta)
-                jump_coherent .+= - 1im * (coherent_term * evolving_dm - evolving_dm * coherent_term)
-            end
-
-            # Dissipative part
-            for nu_2 in keys(hamiltonian.bohr_dict)
-                A_nu_2::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
-                A_nu_2[hamiltonian.bohr_dict[nu_2]] .= jump.in_eigenbasis[hamiltonian.bohr_dict[nu_2]]
-
-                alpha_A_nu1 = create_alpha_gauss.(hamiltonian.bohr_freqs, nu_2, beta) .* jump.in_eigenbasis
-
-                jump_dissipative .+= (alpha_A_nu1 * evolving_dm * A_nu_2' - 0.5 * (A_nu_2' * alpha_A_nu1 * evolving_dm 
-                                                + evolving_dm * A_nu_2' * alpha_A_nu1))
-                next!(p)
-            end
-
-            if !(unravel)  # Accumulate
-                step_coherent .+= jump_coherent
-                step_dissipative .+= jump_dissipative
-            else # Apply immediately
-                evolving_dm .+= delta * (jump_coherent + jump_dissipative)
-                dist = trace_distance_h(Hermitian(evolving_dm), gibbs)
-                push!(distances_to_gibbs, dist)
-            end
-        end
-        
-        if !(unravel)
-            evolving_dm .+= delta * (step_coherent + step_dissipative)
-            dist = trace_distance_h(Hermitian(evolving_dm), gibbs)
-            push!(distances_to_gibbs, dist)
-        end
-    end
-    return HotAlgorithmResults(evolving_dm, distances_to_gibbs, time_steps)
+function create_alpha_gauss(
+    nu_1::Float64, 
+    nu_2::Float64, 
+    sigma::Float64, 
+    gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}})
+    
+    (w_gamma, sigma_gamma) = gaussian_parameters
+    combined_sigma = sigma^2 + sigma_gamma^2
+    prefactor = sigma_gamma / sqrt(combined_sigma)
+    alpha_fn(nu_1) = prefactor * (exp(-(nu_1 + nu_2 + 2 * w_gamma)^2 / (8 * combined_sigma)) 
+                                    * exp(-(nu_1 - nu_2)^2 / (8 * sigma^2)))
+    return alpha_fn(nu_1)
 end
 
 function coherent_bohr_gauss(hamiltonian::HamHam, jump::JumpOp, beta::Float64)
@@ -291,31 +183,6 @@ function transition_bohr_gauss_vectorized(jumps::Vector{JumpOp}, hamiltonian::Ha
                 T .+= kron(alpha_nu1_matrix .* jump.in_eigenbasis, transpose(A_nu_2_dagger))
             else
                 T .+= kron(adjoint(alpha_nu1_matrix .* jump.in_eigenbasis), transpose(A_nu_2))
-            end
-        end
-    end
-    return T
-end
-
-function transition_bohr_vectorized_slow(jumps::Vector{JumpOp}, hamiltonian::HamHam, beta::Float64; do_adjoint::Bool=false)
-    dim = size(hamiltonian.data, 1)
-    alpha(nu_1, nu_2) = exp(-beta^2 * (nu_1 + nu_2 + 2/beta)^2/16) * exp(-beta^2 * (nu_1 - nu_2)^2/8) / sqrt(8)
-
-    T = zeros(ComplexF64, dim^2, dim^2)
-    for jump in jumps
-        for nu_1 in keys(hamiltonian.bohr_dict)
-            for nu_2 in keys(hamiltonian.bohr_dict)
-                A_nu_1::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
-                A_nu_2::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
-                A_nu_1[hamiltonian.bohr_dict[nu_1]] .= jump.in_eigenbasis[hamiltonian.bohr_dict[nu_1]]
-                A_nu_2[hamiltonian.bohr_dict[nu_2]] .= jump.in_eigenbasis[hamiltonian.bohr_dict[nu_2]]
-                if !(do_adjoint)
-                    A_nu_2_dagger::SparseMatrixCSC{ComplexF64} = A_nu_2'
-                    T .+= alpha(nu_1, nu_2) * kron(A_nu_1, transpose(A_nu_2_dagger))
-                else
-                    A_nu_1_dagger::SparseMatrixCSC{ComplexF64} = A_nu_1'
-                    T .+= alpha(nu_1, nu_2) * kron(A_nu_1_dagger, transpose(A_nu_2))
-                end
             end
         end
     end
@@ -470,69 +337,6 @@ end
 #     eps = 1e-14
 #     nu1s_minus_nu_2 = bohr_freqs .- nu_2
 #     return map(x -> any(abs.(unique_freqs .- x) .< eps), nu1s_minus_nu_2) .+ 0
-# end
-
-# function B_nu_metro(nu::Float64, nu_2::Float64, hamiltonian::HamHam, bohr_dict::Dict{Float64, Vector{CartesianIndex{2}}}, 
-#     jump::JumpOp, beta::Float64)
-
-#     dim = size(hamiltonian.data, 1)
-
-#     B_nu = zeros(ComplexF64, dim, dim)
-#     nu_1 = nu + nu_2
-    
-#     A_nu_2::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
-#     A_nu_1::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
-#     A_nu_2[bohr_dict[nu_2]] .= jump.in_eigenbasis[bohr_dict[nu_2]]
-#     A_nu_1[bohr_dict[nu_1]] .= jump.in_eigenbasis[bohr_dict[nu_1]]
-#     f_nu1_nu2 = create_f_metro(nu_1, nu_2, beta)
-
-#     B_nu .= f_nu1_nu2 * A_nu_2' * (A_nu_1)
-
-#     return B_nu
-# end
-
-# function R_nu_metro(nu::Float64, nu_2::Float64, hamiltonian::HamHam, bohr_dict::Dict{Float64, Vector{CartesianIndex{2}}}, 
-#     jump::JumpOp, beta::Float64)
-
-#     dim = size(hamiltonian.data, 1)
-
-#     R_nu = zeros(ComplexF64, dim, dim)
-#     nu_1 = nu + nu_2
-    
-#     A_nu_2::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
-#     A_nu_1::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
-#     A_nu_2[bohr_dict[nu_2]] .= jump.in_eigenbasis[bohr_dict[nu_2]]
-#     A_nu_1[bohr_dict[nu_1]] .= jump.in_eigenbasis[bohr_dict[nu_1]]
-#     f_nu1_nu2 = create_alpha_metro(nu_1, nu_2, beta)
-
-#     R_nu .= f_nu1_nu2 * A_nu_2' * (A_nu_1)
-
-#     return R_nu
-# end
-
-# function transition_bohr_metro(jumps::Vector{JumpOp}, hamiltonian::HamHam, beta::Float64; do_adjoint::Bool=false)
-
-#     dim = size(hamiltonian.data, 1)
-#     bohr_dict::Dict{Float64, Vector{CartesianIndex{2}}} = create_bohr_dict(hamiltonian)
-#     unique_freqs = keys(bohr_dict)
-
-#     T = zeros(ComplexF64, dim^2, dim^2)
-#     for jump in jumps
-#         for nu_2 in unique_freqs
-#             alpha_nu1_matrix = create_alpha_nu1_matrix_metro(hamiltonian.bohr_freqs, nu_2, beta)
-
-#             A_nu_2::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
-#             A_nu_2[bohr_dict[nu_2]] .= jump.in_eigenbasis[bohr_dict[nu_2]]
-#             A_nu_2_dagger::SparseMatrixCSC{ComplexF64} = A_nu_2'
-
-#             if !(do_adjoint)
-#                 T .+= kron(alpha_nu1_matrix .* jump.in_eigenbasis, transpose(A_nu_2_dagger))
-#             else
-#                 T .+= kron(adjoint(alpha_nu1_matrix .* jump.in_eigenbasis), transpose(A_nu_2))
-#             end
-#         end
-#     end
-#     return T
 # end
 
 # function transition_bohr_metro_gibbsed(jumps::Vector{JumpOp}, hamiltonian::HamHam, beta::Float64)

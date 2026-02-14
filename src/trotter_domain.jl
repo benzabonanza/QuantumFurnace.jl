@@ -1,244 +1,388 @@
-#* Linear Combinations
-function construct_liouvillian_trotter(jumps::Vector{JumpOp}, trotter::TrottTrott, time_labels::Vector{Float64},
-    energy_labels::Vector{Float64}, config::LiouvConfig)
+"""
+    TrottTrott
 
-    dim = size(trotter.eigvecs, 1)
-    w0 = energy_labels[2] - energy_labels[1]
-    oft_time_labels = truncate_time_labels_for_oft(time_labels, config.beta)
+    Stores precomputed data for Trotterized time evolution.
 
-    transition = pick_transition(config.beta, config.a, config.b, config.with_linear_combination)
-
-    if config.with_coherent
-        f_minus = compute_truncated_func(compute_f_minus, time_labels, config.beta)
-        if config.with_linear_combination  
-            if config.a != 0.0  # Improved Metro / Glauber
-                f_plus = compute_truncated_func(compute_f_plus_eh, time_labels, config.beta, config.a, config.b)
-            else  # Metro
-                f_plus = compute_truncated_func(compute_f_plus_metro, time_labels, config.beta, config.eta)
-            end
-        else  # Gaussian
-            f_plus = compute_truncated_func(compute_f_plus, time_labels, config.beta)
-        end
-    end
-
-    total_liouv_coherent_part = zeros(ComplexF64, dim^2, dim^2)
-    total_liouv_diss_part = zeros(ComplexF64, dim^2, dim^2)
-    p = Progress(Int(length(jumps) * length(energy_labels)), desc="Liouvillian (TROTTER)...")
-    for jump in jumps
-        if config.with_coherent  # There is no energy formulation of the coherent term, only Bohr and time.
-            coherent_term = coherent_term_trotter(jump, trotter, f_minus, f_plus)
-            coherent_term = trotter.trafo_from_eigen_to_trotter' * coherent_term * trotter.trafo_from_eigen_to_trotter
-            total_liouv_coherent_part .+= vectorize_liouvillian_coherent(coherent_term)
-        end
-
-        for w in energy_labels
-            jump_oft = trotter_oft(jump, w, trotter, oft_time_labels, config.beta) # t0 * sqrt((sqrt(2 / pi)/beta) / (2 * pi))
-            jump_oft = trotter.trafo_from_eigen_to_trotter' * jump_oft * trotter.trafo_from_eigen_to_trotter
-
-            total_liouv_diss_part .+= transition(w) * vectorize_liouvillian_diss(jump_oft)
-            next!(p)
-        end
-    end
-    
-    prefactor = w0 * trotter.t0^2 * (sqrt(2 / pi) / config.beta) / (2 * pi)
-    return total_liouv_coherent_part .+ prefactor * total_liouv_diss_part  # L in energy basis
+    # Fields
+    - `t0`: The time unit for the Trotter step.
+    - `num_trotter_steps_per_t0`: Self-explanatory. Usually `t0` is small enough to just use 1 Trotter step for it. 
+    - `eigvals_t0`, `eigvecs`: Eigenvalues of the evolution operator for one time unit `t0`, and corresponding eigenvectors.
+"""
+mutable struct TrottTrott
+    t0::Float64
+    num_trotter_steps_per_t0::Float64
+    eigvals_t0::Vector{ComplexF64}
+    eigvecs::Matrix{ComplexF64}
+    bohr_freqs::Matrix{Float64}
 end
 
-function thermalize_trotter(jumps::Vector{JumpOp}, trotter::TrottTrott, evolving_dm::Matrix{ComplexF64}, 
-    time_labels::Vector{Float64}, energy_labels::Vector{Float64}, with_coherent::Bool, beta::Float64, a::Float64, b::Float64, 
-    mixing_time::Float64, delta::Float64, unravel::Bool)
-    """In Trotter basis"""
+function TrottTrott(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
 
-    dim = size(hamiltonian.data, 1)
-    w0 = energy_labels[2] - energy_labels[1]
-    oft_time_labels = truncate_time_labels_for_oft(time_labels, beta)
+    trottU = trotterize2(hamiltonian, t, num_trotter_steps)
+    trottU_eigvals, trottU_eigvecs = eigen(trottU)
+    bohr_freqs = trotter_bohr_freqs(trottU_eigvals, t)  # quasi Bohr frequencies due to Trotterization.
+    return TrottTrott(
+        t,
+        num_trotter_steps,
+        trottU_eigvals,
+        trottU_eigvecs,
+        bohr_freqs
+        )
+end
 
-    # Working in Trotter basis
-    gibbs = Hermitian(trotter.trafo_from_eigen_to_trotter * gibbs_state_in_eigen(hamiltonian, beta)
-                                    * trotter.trafo_from_eigen_to_trotter')
-    evolving_dm = trotter.trafo_from_eigen_to_trotter * evolving_dm * trotter.trafo_from_eigen_to_trotter'
+function trotter_bohr_freqs(trottU_T_eigvals::Vector{ComplexF64}, t::Float64)
+    bohr_freqs = angle.(trottU_T_eigvals) ./ t  # quasi Bohr frequencies due to Trotterization.
+    return bohr_freqs .- bohr_freqs'  # dim×dim
+end
 
-    distances_to_gibbs = [trace_distance_h(Hermitian(evolving_dm), gibbs)]
+function compute_trotter_error(hamiltonian::HamHam, trotter::TrottTrott, t::Float64)
+    
+    num_t0_steps = Int(t / trotter.t0)
+    exact_time_evolution = Diagonal(exp.(1im * hamiltonian.eigvals * t))  # In energy eigenbasis
+    trotter_time_evolution = Diagonal(trotter.eigvals_t0.^num_t0_steps)
+    trotter_time_evolution = (hamiltonian.eigvecs' * trotter.eigvecs 
+                                * trotter_time_evolution * trotter.eigvecs' * hamiltonian.eigvecs)
+    return norm(exact_time_evolution - trotter_time_evolution)
+end
 
-    oft_prefactor = (sqrt(2 / pi) / beta) / (2 * pi)
+function trotterize2(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
+    """For 1 and 2 site Hamiltonians"""
+    timestep::Float64 = t / num_trotter_steps
+    num_qubits::Int64 = Int(log2(size(hamiltonian.data)[1]))
+    dim = 2^num_qubits
+    odd_system::Bool = (num_qubits % 2 == 1)
+    is_bdr_strange::Bool = (odd_system && hamiltonian.periodic)
 
-    transition = pick_transition(beta, a, b)
+    U::Matrix{ComplexF64} = exp(im * t * hamiltonian.shift) * I(2^num_qubits)  # Shift
 
-    if with_coherent
-        f_minus = compute_truncated_f_minus(time_labels, beta)
+    groups = group_hamiltonian_terms(hamiltonian)
 
-        if a != 0.0
-            f_plus = compute_truncated_f_plus_eh(time_labels, beta, a, b)
+    # Base terms
+    odd_sites = collect(1:2:(num_qubits - 1))
+    U_odd = compute_U_group(groups.commuting[1], groups.commuting[2], odd_sites, num_qubits, timestep)
+
+    even_sites = collect(2:2:num_qubits)
+    U_even = compute_U_group(groups.commuting[1], groups.commuting[2], even_sites, num_qubits, timestep)
+
+    U_odd_bdr = Matrix{ComplexF64}(I, dim, dim)
+    if is_bdr_strange  # Strange odd boundary
+        odd_bdr_site = [num_qubits]
+        U_odd_bdr *= compute_U_group(groups.commuting[1], groups.commuting[2], odd_bdr_site, num_qubits, timestep)
+    end
+
+    # 1-site terms in the Hamiltonian (with same coeffs on all sites)
+    U_1site_terms = I(2^num_qubits)
+    if length(groups.one_sites[1]) != 0
+        all_sites = collect(1:num_qubits)
+        U_1site_terms = compute_U_group(groups.one_sites[1], groups.one_sites[2], all_sites, num_qubits, timestep)
+    end
+
+    # disorderinging part (1-site with different coeffs one each site, i.e. disordered)
+    U_disordering = Matrix{ComplexF64}(I, dim, dim)
+    if hamiltonian.disordering_term !== nothing
+        for q in 1:num_qubits
+            expm_disordering_pauli_term = expm_pauli_padded(hamiltonian.disordering_term, 
+                    timestep * hamiltonian.disordering_coeffs[q] / 2, num_qubits, q)
+            U_disordering *= expm_disordering_pauli_term
+        end
+    end
+
+    # 2-site terms in the Hamiltonian that do not commute with e.g. XX on site (1, 2)
+    sequence_2site_not_commuting = []
+    if length(groups.noncommuting[1]) != 0
+        for (term, coupling) in (groups.noncommuting[1], groups.noncommuting[2])
+            for q in 1:num_qubits
+                expm_pauli_term = expm_pauli_padded(term, timestep * coupling / 2, num_qubits, q)
+                push!(sequence_2site_not_commuting, expm_pauli_term)
+            end
+        end
+    end
+
+    # Assemble a δ step
+    left_unitary_sequence = Matrix{ComplexF64}[]
+    append!(left_unitary_sequence, [U_odd, U_even, U_odd_bdr, U_1site_terms, U_disordering], sequence_2site_not_commuting)
+    U_step = foldl(*, left_unitary_sequence) * foldl(*, reverse(left_unitary_sequence))
+    for step in 1:num_trotter_steps
+        U *= U_step
+    end
+    return U
+end
+
+function does_term_differ_at_both_sites(term::Vector{Matrix{ComplexF64}}, 
+    list_to_compare_with::Vector{Vector{Matrix{ComplexF64}}})::Bool
+
+    if isempty(list_to_compare_with)
+        return true
+    else
+        ref_term = list_to_compare_with[1]
+        first_site_good::Bool = (term[1] != ref_term[1])
+        second_site_good::Bool = (term[2] != ref_term[2])
+        # return true if (diff, diff) or (same, same) for commutation
+        return !(xor(first_site_good, second_site_good))
+    end
+end
+
+function group_hamiltonian_terms(hamiltonian::HamHam)
+    list_of_kinda_commuting_2site_terms::Vector{Vector{Matrix{ComplexF64}}} = []
+    coeffs_kinda_commuting_2site::Vector{Float64} = []
+
+    list_of_not_commuting_2site_terms::Vector{Vector{Matrix{ComplexF64}}} = []
+    coeffs_not_commuting_2site::Vector{Float64} = []
+
+    list_of_1site_terms::Vector{Vector{Matrix{ComplexF64}}} = []
+    coeffs_1site::Vector{Float64} = []
+
+    for (i, term) in enumerate(hamiltonian.base_terms)
+        if length(term) == 1
+            push!(list_of_1site_terms, term)
+            push!(coeffs_1site, hamiltonian.base_coeffs[i])
+        elseif length(term) == 2
+            if does_term_differ_at_both_sites(term, list_of_kinda_commuting_2site_terms)
+                push!(list_of_kinda_commuting_2site_terms, term)
+                push!(coeffs_kinda_commuting_2site, hamiltonian.base_coeffs[i])
+            else
+                push!(list_of_not_commuting_2site_terms, term)
+                push!(coeffs_not_commuting_2site, hamiltonian.base_coeffs[i])
+            end
         else
-            f_plus = compute_truncated_f_plus_metro(time_labels, beta, eta)
+            throw(ErrorException("Can only handle 1- or 2-site terms atm."))
         end
     end
-
-    num_liouv_steps = Int(ceil(mixing_time / delta))
-    if unravel
-        @printf("Unraveling => actual_num_liouv_steps = num_jumps * num_liouv_steps = %i\n", length(jumps) * num_liouv_steps)
-        @printf("Mixing time thus also becomes longer: %f\n", mixing_time * length(jumps))
-        time_steps = [0.0:delta:(length(jumps) * num_liouv_steps * delta);]
-    else
-        time_steps = [0.0:delta:(num_liouv_steps * delta);]
-    end
-
-    p = Progress(Int(num_liouv_steps * length(jumps) * length(energy_labels)), desc="Thermalize (TROTTER)...")
-    for step in 1:num_liouv_steps
-        step_coherent = zeros(ComplexF64, dim, dim)
-        step_dissipative = zeros(ComplexF64, dim, dim)
-
-        for jump in jumps
-            jump_coherent = zeros(ComplexF64, dim, dim)
-            jump_dissipative = zeros(ComplexF64, dim, dim)
-
-            # Coherent part
-            if with_coherent
-                coherent_term = coherent_term_trotter(jump, trotter, f_minus, f_plus)
-                jump_coherent .+= - 1im * (coherent_term * evolving_dm - evolving_dm * coherent_term)
-            end
-
-            # Dissipative part
-            for w in energy_labels
-                jump_oft = trotter_oft(jump, w, trotter, oft_time_labels, beta) # t0 * sqrt((sqrt(2 / pi)/beta) / (2 * pi))
-                jump_dag_jump = jump_oft' * jump_oft
-                jump_dissipative .+= transition(w) * (
-                    jump_oft * evolving_dm * jump_oft' - 0.5 * (jump_dag_jump * evolving_dm + evolving_dm * jump_dag_jump))
-                next!(p)
-            end
-
-            if !(unravel)  # Accumulate
-                step_coherent .+= jump_coherent
-                step_dissipative .+= jump_dissipative
-            else # Apply immediately
-                evolving_dm .+= delta * (jump_coherent + w0 * trotter.t0^2 * oft_prefactor * jump_dissipative)
-                dist = trace_distance_h(Hermitian(evolving_dm), gibbs)
-                push!(distances_to_gibbs, dist)
-            end
-        end
-        
-        if !(unravel)
-            evolving_dm .+= delta * (step_coherent + w0 * t0^2 * oft_prefactor * step_dissipative)
-            dist = trace_distance_h(Hermitian(evolving_dm), gibbs)
-            push!(distances_to_gibbs, dist)
-        end
-    end
-    return HotAlgorithmResults(evolving_dm, distances_to_gibbs, time_steps)
+    return (
+        commuting = (list_of_kinda_commuting_2site_terms, coeffs_kinda_commuting_2site),
+        noncommuting = (list_of_not_commuting_2site_terms, coeffs_not_commuting_2site),
+        one_sites = (list_of_1site_terms, coeffs_1site)
+    )
 end
 
-#* GAUSS
-function construct_liouvillian_trotter_gauss(jumps::Vector{JumpOp}, trotter::TrottTrott, time_labels::Vector{Float64},
-    energy_labels::Vector{Float64}, config::LiouvConfig)
+function compute_U_group(terms::Vector{Vector{Matrix{ComplexF64}}}, couplings::Vector{Float64}, sites::Vector{Int64},
+    num_qubits::Int64, timestep::Float64)::Matrix{ComplexF64}
 
-    dim = size(trotter.eigvecs, 1)
-    w0 = energy_labels[2] - energy_labels[1]
-    oft_time_labels = truncate_time_labels_for_oft(time_labels, config.beta)
-
-    transition_gauss(w) = exp(-config.beta^2 * (w + 1 / config.beta)^2 /2)
-
-    if config.with_coherent  # Steup for coherent term in time domain
-        f_minus = compute_truncated_f_minus(time_labels, config.beta)
-        f_plus = compute_truncated_f_plus(time_labels, config.beta)
-    end
-
-    total_liouv_coherent_part = zeros(ComplexF64, dim^2, dim^2)
-    total_liouv_diss_part = zeros(ComplexF64, dim^2, dim^2)
-    p = Progress(Int(length(jumps) * length(energy_labels)), desc="Liouvillian (TROTTER GAUSS)...")
-    for jump in jumps
-        if config.with_coherent  # There is no energy formulation of the coherent term, only Bohr and time.
-            coherent_term = coherent_term_trotter(jump, trotter, f_minus, f_plus)
-            coherent_term = trotter.trafo_from_eigen_to_trotter' * coherent_term * trotter.trafo_from_eigen_to_trotter
-            total_liouv_coherent_part .+= vectorize_liouvillian_coherent(coherent_term)
-        end
-
-        for w in energy_labels
-            jump_oft = trotter_oft(jump, w, trotter, oft_time_labels, config.beta) # t0 * sqrt((sqrt(2 / pi)/beta) / (2 * pi))
-            jump_oft = trotter.trafo_from_eigen_to_trotter' * jump_oft * trotter.trafo_from_eigen_to_trotter
-            # jump_oft_w = oft(jump, w, hamiltonian, beta) * sqrt(beta / sqrt(2 * pi))
-            # @assert (norm(jump_oft_w - jump_oft * t0 * sqrt((sqrt(2 / pi)/beta) / (2 * pi))) < 1e-7)
-
-            total_liouv_diss_part .+= transition_gauss(w) * vectorize_liouvillian_diss(jump_oft)
-            next!(p)
+    U_group = Matrix{ComplexF64}(I, 2^num_qubits, 2^num_qubits)
+    for q in sites
+        for (term, coupling) in zip(terms, couplings)
+            expm_pauli_term = expm_pauli_padded(term, timestep * coupling / 2, num_qubits, q)
+            U_group *= expm_pauli_term
         end
     end
-    
-    prefactor = w0 * t0^2 * (sqrt(2 / pi)/config.beta) / (2 * pi)
-    return total_liouv_coherent_part .+ prefactor * total_liouv_diss_part  # L in energy basis
+    return U_group
 end
 
-function thermalize_trotter_gauss(jumps::Vector{JumpOp}, trotter::TrottTrott, evolving_dm::Matrix{ComplexF64}, 
-    time_labels::Vector{Float64}, energy_labels::Vector{Float64}, with_coherent::Bool, beta::Float64, 
-    mixing_time::Float64, delta::Float64, unravel::Bool)
-    """In Trotter basis"""
+function trotterize(hamiltonian::HamHam, T::Float64, num_trotter_steps::Int64)
+    """1st order Trotter, periodic"""
 
-    dim = size(hamiltonian.data, 1)
-    w0 = energy_labels[2] - energy_labels[1]
-    oft_time_labels = truncate_time_labels_for_oft(time_labels, beta)
+    timestep::Float64 = T / num_trotter_steps
+    num_qubits::Int64 = Int(log2(size(hamiltonian.data)[1]))
 
-    # Working in Trotter basis
-    gibbs = Hermitian(trotter.trafo_from_eigen_to_trotter * gibbs_state_in_eigen(hamiltonian, beta)
-                                    * trotter.trafo_from_eigen_to_trotter')
-    evolving_dm = trotter.trafo_from_eigen_to_trotter * evolving_dm * trotter.trafo_from_eigen_to_trotter'
-
-    distances_to_gibbs = [trace_distance_h(Hermitian(evolving_dm), gibbs)]
-
-    oft_prefactor = (sqrt(2 / pi) / beta) / (2 * pi)
-
-    transition_gauss(w) = exp(-beta^2 * (w + 1/beta)^2 /2)
-
-    if with_coherent  # Steup for coherent term in time domain
-        f_minus = compute_truncated_f_minus(time_labels, beta)
-        f_plus = compute_truncated_f_plus(time_labels, beta)
-    end
-
-    num_liouv_steps = Int(ceil(mixing_time / delta))
-    if unravel
-        @printf("Unraveling => actual_num_liouv_steps = num_jumps * num_liouv_steps = %i\n", length(jumps) * num_liouv_steps)
-        @printf("Mixing time thus also becomes longer: %f\n", mixing_time * length(jumps))
-        time_steps = [0.0:delta:(length(jumps) * num_liouv_steps * delta);]
-    else
-        time_steps = [0.0:delta:(num_liouv_steps * delta);]
-    end
-
-    p = Progress(Int(num_liouv_steps * length(jumps) * length(energy_labels)), desc="Thermalize (TROTTER GAUSS)...")
-    for step in 1:num_liouv_steps
-        step_coherent = zeros(ComplexF64, dim, dim)
-        step_dissipative = zeros(ComplexF64, dim, dim)
-
-        for jump in jumps
-            jump_coherent = zeros(ComplexF64, dim, dim)
-            jump_dissipative = zeros(ComplexF64, dim, dim)
-
-            # Coherent part
-            if with_coherent
-                coherent_term = coherent_term_trotter(jump, trotter, f_minus, f_plus)
-                jump_coherent .+= - 1im * (coherent_term * evolving_dm - evolving_dm * coherent_term)
+    U::Matrix{ComplexF64} = exp(im * T * hamiltonian.shift) * I(2^num_qubits)  # Shift
+    p = Progress(num_trotter_steps)
+    @showprogress dt=1 desc="Trotterizing (1st order)..." for step in 1:num_trotter_steps
+        # Base Hamiltonian
+        for q in 1:num_qubits
+            for (i, term) in enumerate(hamiltonian.base_terms)
+                    expm_pauli_term = expm_pauli_padded(term, timestep * hamiltonian.base_coeffs[i], num_qubits, q)
+                    U *= expm_pauli_term
             end
 
-            # Dissipative part
-            for w in energy_labels
-                jump_oft = trotter_oft(jump, w, trotter, oft_time_labels, beta) # t0 * sqrt((sqrt(2 / pi)/beta) / (2 * pi))
-                jump_dag_jump = jump_oft' * jump_oft
-                jump_dissipative .+= transition_gauss(w) * (
-                    jump_oft * evolving_dm * jump_oft' - 0.5 * (jump_dag_jump * evolving_dm + evolving_dm * jump_dag_jump))
-                next!(p)
-            end
-
-            if !(unravel)  # Accumulate
-                step_coherent .+= jump_coherent
-                step_dissipative .+= jump_dissipative
-            else # Apply immediately
-                evolving_dm .+= delta * (jump_coherent + w0 * trotter.t0^2 * oft_prefactor * jump_dissipative)
-                dist = trace_distance_h(Hermitian(evolving_dm), gibbs)
-                push!(distances_to_gibbs, dist)
+        # disordering
+            if typeof(hamiltonian.disordering_term) != Nothing
+                expm_disordering_pauli_term = expm_pauli_padded(hamiltonian.disordering_term, 
+                                                            timestep * hamiltonian.disordering_coeffs[q], 
+                                                            num_qubits, q)
+                U *= expm_disordering_pauli_term
             end
         end
-        
-        if !(unravel)
-            evolving_dm .+= delta * (step_coherent + w0 * t0^2 * oft_prefactor * step_dissipative)
-            dist = trace_distance_h(Hermitian(evolving_dm), gibbs)
-            push!(distances_to_gibbs, dist)
-        end
     end
-    return HotAlgorithmResults(evolving_dm, distances_to_gibbs, time_steps)
+    return U
 end
+
+function trotter_diag(hamiltonian::HamHam, T::Float64, num_trotter_steps::Int64)
+    """1st order Trotter with diagonalization"""
+    timestep::Float64 = T / num_trotter_steps
+
+    trott_1step = trotterize(hamiltonian, timestep, 1)
+    eig_vals, eig_vecs = eigen(trott_1step)
+    return eig_vecs * Diagonal(eig_vals)^num_trotter_steps * eig_vecs'
+end
+
+function trotter2_diag(hamiltonian::HamHam, T::Float64, num_trotter_steps::Int64)
+    """2nd order Trotter with diagonalization"""
+    timestep::Float64 = T / num_trotter_steps
+
+    trott2_1step = trotterize2(hamiltonian, timestep, 1)
+    eig_vals, eig_vecs = eigen(trott2_1step)
+    return eig_vecs * Diagonal(eig_vals)^num_trotter_steps * eig_vecs'
+end
+
+function trotter2_t0_multiple(int_multiple::Int64, trott_t0_eigvals::Vector{ComplexF64})
+    """Trotter 2nd order with integer mutiples of t0 Trotter, to avoid diagonalization too many times.
+    NOTE: it's in Trotter eigenbasis"""
+    return Diagonal(trott_t0_eigvals)^int_multiple
+end
+
+#*#*#* TESTING *#*#*#
+
+# Pauli matrix exponentiation
+# sigmax::Matrix{ComplexF64} = [0 1; 1 0]
+# sigmay::Matrix{ComplexF64} = [0.0 -im; im 0.0]
+# sigmaz::Matrix{ComplexF64} = [1 0; 0 -1]
+# id::Matrix{ComplexF64} = [1 0; 0 1]
+
+# paulistring = ["X", "X", "I", "I", "I", "I", "I", "I", "I", "I", "I", "I"]
+# coeff = 3.9
+# @time expm_myway = expm_pauli(paulistring, coeff)
+# pauli_matrices = [sigmax, sigmax, id, id, id, id, id, id, id, id, id, id]
+
+# @time expm_normally = exp(im * coeff * kron(pauli_matrices...))
+
+# paulistring_nonpadded = ["X", "X"]
+
+# @time expm_myway_padded = expm_pauli_padded(paulistring_nonpadded, coeff, 12, 1)
+
+# @printf("Norm: %f\n", frobenius_norm(expm_myway - expm_normally))
+# @printf("Norm padded: %f\n", frobenius_norm(expm_normally - expm_myway_padded))
+
+
+#* Small Hamiltonian time evolution Test
+# sigmax::Matrix{ComplexF64} = [0 1; 1 0]
+# sigmay::Matrix{ComplexF64} = [0.0 -im; im 0.0]
+# sigmaz::Matrix{ComplexF64} = [1 0; 0 -1]
+
+# num_qubits = 5
+# T = 1.
+# num_trotter_steps = 1
+
+# terms = [["X", "Y"], ["Z", "X"]]
+# disordering = ["Z"]
+# coeffs = [2.2, 3.9]
+# disordering_coeffs = rand(num_qubits)
+# hamiltonian = HamHam(terms, coeffs, disordering, disordering_coeffs, num_qubits)
+
+# # Exact
+# exact_U = exp(im * T * hamiltonian.data)
+# # Trotter
+# trotter2_U = trotterize2(hamiltonian, T, num_trotter_steps)
+# trotter_U = trotterize(hamiltonian, T, num_trotter_steps)
+
+# dist = norm(trotter_U - exact_U)
+# dist2 = norm(trotter2_U - exact_U)
+
+# @printf("Distance: %s\n", dist)
+# @printf("Distance 2nd order: %s\n", dist2)
+
+#* Parameters
+# num_qubits = 3
+# mixing_time = 40.
+# delta = 1.
+# num_liouv_steps = Int(mixing_time / delta)
+# beta = 10.
+# eig_index = 3
+
+# #* Hamiltonian
+# hamiltonian = load("/Users/bence/code/liouvillian_metro/julia/data/hamiltonian_n3.jld")["ideal_ham"]
+# random_dm = random_density_matrix(num_qubits)
+# num_energy_bits = ceil(Int64, log2((0.45 * 4 + 2/beta) / hamiltonian.nu_min)) - 3 # Under Fig. 5. with secular approx.
+# N = 2^(num_energy_bits)
+# N_labels = [0:1:Int(N/2)-1; -Int(N/2):1:-1]
+# t0 = 2 * pi / (N * hamiltonian.nu_min)
+# factor = -4 
+# num_steps = 10
+
+# U = exp(im * factor * t0 * hamiltonian.data)
+# trotter = trotterize2(hamiltonian, factor * t0, abs(factor) * num_steps)
+# dist = norm(trotter - U)
+
+# evolved_dm = U * random_dm * U'
+# trotter_evolved_dm = trotter * random_dm * trotter'
+# b = SpinBasis(1//2)^num_qubits
+# trdist = tracedistance_nh(Operator(b, evolved_dm), Operator(b, trotter_evolved_dm))
+# @printf("After -4t0 evolution: %f\n", trdist)
+# factor = 3
+# U = exp(im * factor * t0 * hamiltonian.data)
+# trotter = trotterize2(hamiltonian, factor * t0, abs(factor) * num_steps)
+# evolved_again_dm = U * evolved_dm * U'
+# trotter_evolved_again_dm = trotter * trotter_evolved_dm * trotter'
+
+# trdist2 = tracedistance_nh(Operator(b, evolved_again_dm), Operator(b, trotter_evolved_again_dm))
+# @printf("After 3t0 evolution: %f\n", trdist2)
+
+# # #* Fourier labels
+# # num_energy_bits = ceil(Int64, log2((0.45 * 2) / hamiltonian.nu_min)) + 1  # paper (above 3.7.), later will be β dependent
+# # N = 2^(num_energy_bits)
+# # N_labels = [0:1:Int(N/2)-1; -Int(N/2):1:-1]
+
+# # t0 = 2 * pi / (N * hamiltonian.nu_min)
+# # time_labels = t0 * N_labels
+# # energy_labels = hamiltonian.nu_min * N_labels
+
+# # int_multiple = Int(N / 2)
+# # T_plus = int_multiple * t0
+# # T_minus = - T_plus
+
+# # #* Trotter
+# # # @time trott = trotter(hamiltonian, T, num_trotter_steps)
+# # # @time begin
+# # #     trott2_1step = trotter2(hamiltonian, T/num_trotter_steps, 1)
+# # #     eig_vals, eig_vecs = eigen(trott2_1step)
+# # #     diag_trott2 = Diagonal(eig_vals)
+# # #     trott2_with_diag = eig_vecs * diag_trott2^num_trotter_steps * eig_vecs'
+# # # end
+# # # @time trott2 = trotter2(hamiltonian, T, num_trotter_steps)
+
+# # # dist_trotts = norm(trott2 - trott2_with_diag)
+
+# # #* Exact time evolution 
+# # @time U_exact_plus = exp(im * T_plus * hamiltonian.data)
+# # U_exact_minus = exp(im * T_minus * hamiltonian.data)
+
+# # # dist = norm(trott - U_exact)
+# # # dist2 = norm(trott2 - U_exact)
+# # # dist2_diag = norm(trott2_with_diag - U_exact)
+# # # @printf("Distance: %f\n", dist)
+# # # @printf("Distance 2nd order: %s\n", dist2)
+# # # @printf("Distance 2nd order with diag: %s\n", dist2_diag)
+
+# # #* Testing fix number of trotter steps / t0, for different T
+# # @printf("w0: %f\n", hamiltonian.nu_min)
+# # @printf("T: %f\n", T_plus)
+# # @printf("t0: %f\n", t0)
+# # num_trotter_steps_per_t0 = 10
+
+# # num_trotter_steps = int_multiple * num_trotter_steps_per_t0
+
+# # @time trotter_plus = TrottTrott(hamiltonian, t0, num_trotter_steps_per_t0)
+# # @time trotter_minus = TrottTrott(hamiltonian, -t0, num_trotter_steps_per_t0)
+
+# # # How are negative and positive trotter eigvals related
+# # conj_dist = norm(trotter_plus.eigvals_t0 - conj.(trotter_minus.eigvals_t0))
+# # @printf("Conjugating the eigvals of + gets us - ... dist: %s\n", conj_dist)
+# # minus_norm = norm(trotter_plus.eigvals_t0 + trotter_minus.eigvals_t0)
+
+# # @time trott_error_plus = compute_trotter_error(hamiltonian, trotter_plus, T_plus)
+# # @time trott_error_minus = compute_trotter_error(hamiltonian, trotter_minus, T_minus)
+# # @printf("Trotter error +: %s\n", trott_error_plus)
+# # @printf("Trotter error -: %s\n", trott_error_minus)
+
+# # trott2_to_T_plus = trotttrotterize2(trotter_plus, T_plus)
+# # trott2_to_T_minus = trotttrotterize2(trotter_minus, T_minus)
+
+# # adjoint_trott2_to_T_plus = trott2_to_T_plus'
+# # adj_dist = norm(trott2_to_T_minus - adjoint_trott2_to_T_plus)
+
+# # rewinded_trott = trott2_to_T_plus * trott2_to_T_minus
+# # rewinded_exact = U_exact_plus * U_exact_minus
+# # dist_to_id_trott = norm(rewinded_trott - I(2^num_qubits))
+# # @printf("Distance to identity Trott rewind: %s\n", dist_to_id_trott)
+# # dist_to_id_exact = norm(rewinded_exact - I(2^num_qubits))
+# # @printf("Distance to identity Exact rewind: %s\n", dist_to_id_exact)
+
+# # #* With jump
+# # jump_site_index = 1
+# # sigmax::Matrix{ComplexF64} = [0 1; 1 0]
+# # jump_op = Matrix(pad_term([sigmax], num_qubits, jump_site_index))
+
+# # oft_core_trotter = trott2_to_T_plus * jump_op * trott2_to_T_minus
+# # oft_core_exact = U_exact_plus * jump_op * U_exact_minus
+
+# # dist_oft_cores = norm(oft_core_trotter - oft_core_exact)
+# # @printf("Distance of OFT Trotter vs Exact: %s\n", dist_oft_cores)

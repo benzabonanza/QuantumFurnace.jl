@@ -93,7 +93,7 @@ hamiltonian_coeffs = fill(1.0, length(hamiltonian_terms))
 disordering_term = [Z]
 disordering_coeffs = rand(num_qubits)
 # Generate a 4-qubit chain Heisenberg Hamiltonian
-hamiltonian = create_hamham(hamiltonian_terms, hamiltonian_coeffs, 
+hamiltonian = HamHam(hamiltonian_terms, hamiltonian_coeffs, 
     disordering_term, disordering_coeffs, num_qubits)
 
 # --- 3. Define the jump operators for the evolution ---

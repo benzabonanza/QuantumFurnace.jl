@@ -4,6 +4,7 @@
 *.jl.mem
 
 # Artifacts
+/papers/
 /build/
 /docs/build/
 /playground/
