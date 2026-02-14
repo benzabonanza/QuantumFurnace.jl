@@ -9,19 +9,19 @@ See: .planning/PROJECT.md (updated 2026-02-13)
 
 ## Current Position
 
-Phase: 3 of 5 (DM Reference Test Suite) -- IN PROGRESS
-Plan: 3 of 3 in current phase (03-03 COMPLETE)
-Status: Phase 03 plan 03 complete (Aqua.jl package quality)
-Last activity: 2026-02-14 -- Executed 03-03-PLAN (Aqua.jl package quality: TINF-03)
+Phase: 3 of 5 (DM Reference Test Suite) -- COMPLETE
+Plan: 3 of 3 in current phase (ALL COMPLETE)
+Status: Phase 03 complete, Phase 04 next
+Last activity: 2026-02-14 -- Executed 03-02-PLAN (DM scaling and consistency tests: DMTST-03/04/05/06)
 
 Progress: [######░░░░] 60%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 5
+- Total plans completed: 6
 - Average duration: 5 min
-- Total execution time: 0.43 hours
+- Total execution time: 0.53 hours
 
 **By Phase:**
 
@@ -29,10 +29,10 @@ Progress: [######░░░░] 60%
 |-------|-------|-------|----------|
 | 01-foundation-and-compilation | 1 | 8 min | 8 min |
 | 02-trajectory-bug-fixes | 2 | 7 min | 4 min |
-| 03-dm-reference-test-suite | 2 | 11 min | 6 min |
+| 03-dm-reference-test-suite | 3 | 17 min | 6 min |
 
 **Recent Trend:**
-- Last 5 plans: 8, 5, 2, 6, 5 min
+- Last 5 plans: 5, 2, 6, 5, 6 min
 - Trend: stable
 
 *Updated after each plan completion*
@@ -62,6 +62,9 @@ Recent decisions affecting current work:
 - [03-01]: Used eigen() instead of Arpack eigs for small dense Liouvillians (deterministic, no convergence issues)
 - [03-01]: QuantumFurnace.trace_distance_h qualified access since function not exported
 - [03-01]: Hierarchy tolerance 1e-12 for numerical noise in domain distance comparisons
+- [03-02]: EnergyDomain Liouvillian for Euler scaling tests (simplest non-trivial domain)
+- [03-02]: Maximally mixed initial state for clean scaling measurement
+- [03-02]: Non-exported functions (time_oft!, trotter_oft!, etc.) accessed via QuantumFurnace.func()
 
 ### Pending Todos
 
@@ -77,5 +80,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-14
-Stopped at: Completed 03-03-PLAN.md (Aqua.jl Package Quality)
+Stopped at: Completed 03-02-PLAN.md (DM Scaling and Consistency Tests)
 Resume file: None
