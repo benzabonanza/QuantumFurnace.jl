@@ -80,6 +80,9 @@ Recent decisions affecting current work:
 - [Phase quick-8]: JumpOp[] typed comprehension to preserve Vector{JumpOp} for struct field compatibility
 - [quick-9]: Removed trafo_from_eigen_to_trotter field; use trotter.eigvecs' * j.data * trotter.eigvecs directly
 - [quick-9]: Test back-transforms use U_t2e = trotter.eigvecs' * ham.eigvecs (equivalent to removed field)
+- [05-01]: High-N trajectory reference (500k) instead of Liouvillian DM reference to avoid Lie-Trotter splitting bias
+- [05-01]: Batch-averaged errors (10 batches per N_traj) for robust convergence ratio estimation
+- [05-01]: N_traj points [200, 800, 3200, 12800] with factor-of-4 steps for 1/sqrt(N) verification
 - [05-02]: Symbol keys in BSON (not string keys) for idiomatic Julia d[:rho] access pattern
 - [05-02]: Tolerance 1e-10 for regression comparison (allows floating-point accumulation across platforms)
 - [05-02]: Trajectory seed=12345, ntraj=1000 for deterministic reference (distinct from Phase 4 seeds)
@@ -112,5 +115,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-14
-Stopped at: Completed 05-02-PLAN.md (Regression tests with frozen BSON references)
+Stopped at: Completed 05-01-PLAN.md (1/sqrt(N) convergence test) and 05-02-PLAN.md (Regression tests)
 Resume file: None
