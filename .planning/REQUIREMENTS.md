@@ -15,7 +15,7 @@ Requirements for the Reduce milestone. Each maps to roadmap phases.
 
 ### Struct Simplification
 
-- [ ] **STRUCT-01**: Consolidate 4 config structs (LiouvConfig/GNS, ThermalizeConfig/GNS) into ≤2 structs with a db_type field
+- [ ] **STRUCT-01**: Reduce field duplication in 4 config structs through composition or shared constructors while keeping separate types for KMS/GNS extensibility (future Ding config)
 - [ ] **STRUCT-02**: Refactor HamHam to eliminate two-step initialization pattern (remove Nothing-typed fields, compute bohr_freqs/gibbs in constructor)
 - [ ] **STRUCT-03**: Make TrottTrott immutable and fix num_trotter_steps_per_t0 type from Float64 to Int
 
@@ -70,32 +70,32 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PRUNE-01 | — | Pending |
-| PRUNE-02 | — | Pending |
-| PRUNE-03 | — | Pending |
-| STRUCT-01 | — | Pending |
-| STRUCT-02 | — | Pending |
-| STRUCT-03 | — | Pending |
-| TYPE-01 | — | Pending |
-| TYPE-02 | — | Pending |
-| TYPE-03 | — | Pending |
-| API-01 | — | Pending |
-| API-02 | — | Pending |
-| API-03 | — | Pending |
-| DRY-01 | — | Pending |
-| DRY-02 | — | Pending |
-| DRY-03 | — | Pending |
-| DRY-04 | — | Pending |
-| ALLOC-01 | — | Pending |
-| ALLOC-02 | — | Pending |
-| ALLOC-03 | — | Pending |
-| ALLOC-04 | — | Pending |
+| PRUNE-01 | Phase 6 | Pending |
+| PRUNE-02 | Phase 6 | Pending |
+| PRUNE-03 | Phase 6 | Pending |
+| STRUCT-01 | Phase 8 | Pending |
+| STRUCT-02 | Phase 8 | Pending |
+| STRUCT-03 | Phase 8 | Pending |
+| TYPE-01 | Phase 9 | Pending |
+| TYPE-02 | Phase 9 | Pending |
+| TYPE-03 | Phase 9 | Pending |
+| API-01 | Phase 10 | Pending |
+| API-02 | Phase 10 | Pending |
+| API-03 | Phase 10 | Pending |
+| DRY-01 | Phase 7 | Pending |
+| DRY-02 | Phase 7 | Pending |
+| DRY-03 | Phase 7 | Pending |
+| DRY-04 | Phase 7 | Pending |
+| ALLOC-01 | Phase 11 | Pending |
+| ALLOC-02 | Phase 11 | Pending |
+| ALLOC-03 | Phase 11 | Pending |
+| ALLOC-04 | Phase 11 | Pending |
 
 **Coverage:**
 - v1.1 requirements: 20 total
-- Mapped to phases: 0
-- Unmapped: 20 ⚠️
+- Mapped to phases: 20
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-14*
-*Last updated: 2026-02-14 after scoping with user*
+*Last updated: 2026-02-14 after roadmap creation*

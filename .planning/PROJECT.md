@@ -46,7 +46,7 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 
 **Target features:**
 - Prune unused functions and dead comment blocks (keep linearmaps, log-sobolev, errors for future)
-- Simplify struct definitions
+- Simplify struct definitions (reduce config field duplication while keeping separate types for future Ding config extensibility)
 - Strategic type parameterization on main structs (F64/F32 flexibility)
 - Clean up public API surface (expose building blocks for pedagogy, internalize implementation details)
 - Remove redundant checks and normalizations across layers
