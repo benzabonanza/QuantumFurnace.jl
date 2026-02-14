@@ -88,11 +88,11 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. Trajectory error (trace distance to DM) decreases as 1/sqrt(N_traj) when doubling trajectory count, verified with a geometric progression of N_traj values
   2. Frozen reference data files exist for known-good DM and trajectory results, and regression tests compare current output against these references within tight tolerances
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 05-01: Statistical convergence test (1/sqrt(N) scaling)
-- [ ] 05-02: Regression test framework with frozen reference data
+- [ ] 05-01-PLAN.md — Gated 1/sqrt(N) convergence ratio test for EnergyDomain and TrotterDomain (with coherent)
+- [ ] 05-02-PLAN.md — Regression test framework with BSON-frozen reference data (always-on in Pkg.test())
 
 ## Progress
 
