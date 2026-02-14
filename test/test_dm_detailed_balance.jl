@@ -62,10 +62,11 @@ end
         ss_dm = (ss_dm + ss_dm') / 2
         ss_dm ./= tr(ss_dm)
 
-        # TrotterDomain Liouvillian operates in Trotter eigenbasis, so compare
-        # to Gibbs state transformed into that basis
+        # TrotterDomain Liouvillian operates in Trotter eigenbasis, so transform
+        # Gibbs state: eigenbasis -> computational -> Trotter eigenbasis
         gibbs_ref = if domain isa TrotterDomain
-            Hermitian(TEST_TROTTER.eigvecs' * TEST_GIBBS * TEST_TROTTER.eigvecs)
+            gibbs_comp = TEST_HAM.eigvecs * TEST_GIBBS * TEST_HAM.eigvecs'
+            Hermitian(TEST_TROTTER.eigvecs' * gibbs_comp * TEST_TROTTER.eigvecs)
         else
             TEST_GIBBS
         end
