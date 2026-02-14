@@ -62,7 +62,14 @@ end
         ss_dm = (ss_dm + ss_dm') / 2
         ss_dm ./= tr(ss_dm)
 
-        distances[name] = QuantumFurnace.trace_distance_h(Hermitian(ss_dm), TEST_GIBBS)
+        # TrotterDomain Liouvillian operates in Trotter eigenbasis, so compare
+        # to Gibbs state transformed into that basis
+        gibbs_ref = if domain isa TrotterDomain
+            Hermitian(TEST_TROTTER.eigvecs' * TEST_GIBBS * TEST_TROTTER.eigvecs)
+        else
+            TEST_GIBBS
+        end
+        distances[name] = QuantumFurnace.trace_distance_h(Hermitian(ss_dm), gibbs_ref)
     end
 
     @info "DMTST-02: Domain distances to Gibbs" bohr=distances[:bohr] energy=distances[:energy] time=distances[:time] trotter=distances[:trotter]
