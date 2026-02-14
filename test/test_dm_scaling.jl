@@ -183,3 +183,83 @@ end
     # Sanity: Trotter OFT error should not be huge (was 1.396 before basis fix)
     @test dist_energy_trott < 0.1
 end
+
+# DMTST-06b: NUFFT OFT consistency
+# Verifies the NUFFT-accelerated OFT matches both the direct summation methods (time_oft!, trotter_oft!)
+# and the analytical energy-domain OFT.
+
+@testset "DMTST-06b: NUFFT OFT consistency" begin
+    jump = TEST_JUMPS[1]  # X on site 1
+    w = -3 * W0           # Test energy value (must be on energy grid)
+
+    # --- Analytical OFT (reference) ---
+    energy_oft_prefactor = 1 / sqrt(SIGMA * sqrt(2 * pi))
+    A_energy = Matrix{ComplexF64}(undef, DIM, DIM)
+    oft!(A_energy, jump, w, TEST_HAM, SIGMA)
+    A_energy .*= energy_oft_prefactor
+
+    # --- Shared setup ---
+    energy_labels = QuantumFurnace.create_energy_labels(NUM_ENERGY_BITS, W0)
+    time_labels_full = energy_labels .* (T0 / W0)
+    oft_time_labels = QuantumFurnace.truncate_time_labels_for_oft(time_labels_full, SIGMA)
+    time_oft_prefactor = T0 * sqrt(SIGMA * sqrt(2 / pi) / (2 * pi))
+    caches = OFTCaches(DIM)
+
+    # === Time NUFFT OFT ===
+    config_time = make_liouv_config(TimeDomain())
+    precomputed_time = precompute_data(TimeDomain(), config_time, TEST_HAM)
+
+    # Sanity: test energy must be on the NUFFT grid
+    @test haskey(precomputed_time.oft_nufft_prefactors.energy_to_index, w)
+
+    nufft_pf_time = QuantumFurnace.prefactor_view(precomputed_time.oft_nufft_prefactors, w)
+    A_nufft_time = jump.in_eigenbasis .* nufft_pf_time
+    A_nufft_time .*= time_oft_prefactor
+
+    # Direct time_oft! for comparison
+    A_time = Matrix{ComplexF64}(undef, DIM, DIM)
+    QuantumFurnace.time_oft!(A_time, caches, jump, w, TEST_HAM, oft_time_labels, SIGMA)
+    A_time .*= time_oft_prefactor
+
+    # === Trotter NUFFT OFT ===
+    config_trott = make_liouv_config(TrotterDomain())
+    precomputed_trott = precompute_data(TrotterDomain(), config_trott, TEST_TROTTER)
+
+    @test haskey(precomputed_trott.oft_nufft_prefactors.energy_to_index, w)
+
+    U = TEST_TROTTER.trafo_from_eigen_to_trotter
+    jump_trott = JumpOp(jump.data, U * jump.in_eigenbasis * U', jump.orthogonal, jump.hermitian)
+
+    nufft_pf_trott = QuantumFurnace.prefactor_view(precomputed_trott.oft_nufft_prefactors, w)
+    A_nufft_trott = jump_trott.in_eigenbasis .* nufft_pf_trott
+    A_nufft_trott .*= time_oft_prefactor
+    A_nufft_trott_in_eigen = U' * A_nufft_trott * U
+
+    # Direct trotter_oft! for comparison
+    A_trott = Matrix{ComplexF64}(undef, DIM, DIM)
+    QuantumFurnace.trotter_oft!(A_trott, caches, jump_trott, w, TEST_TROTTER, oft_time_labels, SIGMA)
+    A_trott .*= time_oft_prefactor
+    A_trott_in_eigen = U' * A_trott * U
+
+    # === Diagnostics ===
+    dist_nufft_time_vs_time = norm(A_nufft_time - A_time)
+    dist_nufft_trott_vs_trott = norm(A_nufft_trott_in_eigen - A_trott_in_eigen)
+    dist_nufft_time_vs_energy = norm(A_nufft_time - A_energy)
+    dist_nufft_trott_vs_energy = norm(A_nufft_trott_in_eigen - A_energy)
+    println("DMTST-06b norm(A_nufft_time - A_time): ", dist_nufft_time_vs_time)
+    println("DMTST-06b norm(A_nufft_trott - A_trott): ", dist_nufft_trott_vs_trott)
+    println("DMTST-06b norm(A_nufft_time - A_energy): ", dist_nufft_time_vs_energy)
+    println("DMTST-06b norm(A_nufft_trott - A_energy): ", dist_nufft_trott_vs_energy)
+
+    # NUFFT time OFT matches direct time_oft! (both compute same sum, NUFFT uses FFT with eps=1e-12)
+    @test dist_nufft_time_vs_time < 1e-10
+
+    # NUFFT trotter OFT matches direct trotter_oft!
+    @test dist_nufft_trott_vs_trott < 1e-10
+
+    # NUFFT time OFT matches analytical (same tolerance as DMTST-06 time vs energy)
+    @test dist_nufft_time_vs_energy < TOL_QUADRATURE
+
+    # NUFFT trotter OFT matches analytical within Trotter error bound
+    @test dist_nufft_trott_vs_energy < 0.1
+end
