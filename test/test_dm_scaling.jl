@@ -158,21 +158,28 @@ end
     QuantumFurnace.time_oft!(A_time, caches, jump, w, TEST_HAM, oft_time_labels, SIGMA)
     A_time .*= time_oft_prefactor
 
-    # Trotter OFT
+    # Trotter OFT: trotter_oft! needs jump in Trotter eigenbasis
+    U = TEST_TROTTER.trafo_from_eigen_to_trotter  # H-eigen -> Trotter eigen
+    jump_trott = JumpOp(jump.data, U * jump.in_eigenbasis * U', jump.orthogonal, jump.hermitian)
     A_trott = Matrix{ComplexF64}(undef, DIM, DIM)
-    QuantumFurnace.trotter_oft!(A_trott, caches, jump, w, TEST_TROTTER, oft_time_labels, SIGMA)
+    QuantumFurnace.trotter_oft!(A_trott, caches, jump_trott, w, TEST_TROTTER, oft_time_labels, SIGMA)
     A_trott .*= time_oft_prefactor
+    # Transform result from Trotter eigenbasis back to H-eigenbasis
+    A_trott_in_eigen = U' * A_trott * U
 
     # Diagnostics
     dist_energy_time = norm(A_energy - A_time)
-    dist_energy_trott = norm(A_energy - A_trott)
+    dist_energy_trott = norm(A_energy - A_trott_in_eigen)
     println("DMTST-06 norm(A_energy - A_time): ", dist_energy_time)
     println("DMTST-06 norm(A_energy - A_trott): ", dist_energy_trott)
-    println("DMTST-06 norm(A_time - A_trott): ", norm(A_time - A_trott))
+    println("DMTST-06 norm(A_time - A_trott): ", norm(A_time - A_trott_in_eigen))
 
     # Energy and time OFT agree up to quadrature tolerance
     @test dist_energy_time < TOL_QUADRATURE
 
     # Trotter error is at least as large as time quadrature error (with small numerical margin)
     @test dist_energy_trott >= dist_energy_time - 1e-10
+
+    # Sanity: Trotter OFT error should not be huge (was 1.396 before basis fix)
+    @test dist_energy_trott < 0.1
 end
