@@ -9,17 +9,17 @@ See: .planning/PROJECT.md (updated 2026-02-14)
 
 ## Current Position
 
-Phase: 10 of 11 (API Surface Cleanup) -- IN PROGRESS
-Plan: 2 of 3 in current phase -- COMPLETE
-Status: Executing 10-02
-Last activity: 2026-02-15 - Completed 10-02 (Internal Function Prefix Rename)
+Phase: 10 of 11 (API Surface Cleanup) -- COMPLETE
+Plan: 3 of 3 in current phase -- COMPLETE
+Status: Phase 10 complete
+Last activity: 2026-02-15 - Completed 10-03 (Cross-file Call Site Update)
 
-Progress: [##################..] 90% (v1.0 complete, v1.1 7/8 phases)
+Progress: [####################] 100% (v1.0 complete, v1.1 8/8 phases)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 25 (v1.0: 10, v1.1: 12, quick: 3)
+- Total plans completed: 26 (v1.0: 10, v1.1: 13, quick: 3)
 - Average duration: --
 - Total execution time: --
 
@@ -35,7 +35,7 @@ Progress: [##################..] 90% (v1.0 complete, v1.1 7/8 phases)
 | 08-struct-simplification | 3 | 36min | 12min |
 | 09-type-parameterization | 3/3 | 22min | 7.3min |
 | quick-16 | 1 | 2min | 2min |
-| 10-api-surface-cleanup | 2/3 | 13min | 6.5min |
+| 10-api-surface-cleanup | 3/3 | 21min | 7min |
 
 *Updated after each plan completion*
 
@@ -82,6 +82,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - quick-16: Removed convenience constructor since only construction site already uses explicit {T}
 - 10-01: De-exported internal types/functions require qualified QuantumFurnace.name access in tests
 - 10-02: pick_transition kept un-renamed (exported function, public physics building block)
+- 10-03: Updated docstrings in coherent.jl to match _-prefixed function names
+- 10-03: Fixed trajectory_validation scripts from obsolete 3-arg to 2-arg _precompute_data call
 
 ### Pending Todos
 
@@ -102,5 +104,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 10-02-PLAN.md (Internal Function Prefix Rename)
+Stopped at: Completed 10-03-PLAN.md (Cross-file Call Site Update) -- Phase 10 complete
 Resume file: None
