@@ -158,7 +158,7 @@ No-op if U_B is nothing.
 end
 
 """
-    apply_cptp_channel!(evolving_dm, delta, scratch) -> evolving_dm
+    finalize_kraus_step!(evolving_dm, delta, scratch) -> evolving_dm
 
 Apply the CPTP weak-measurement channel after R and rho_jump have been accumulated.
 
@@ -171,7 +171,7 @@ Implements Chen Eq. 3.2:
 Expects scratch.R (Hermitianized) and scratch.rho_jump to be pre-filled by the
 domain-specific dissipative accumulation loop.
 """
-function apply_cptp_channel!(
+function finalize_kraus_step!(
     evolving_dm::Matrix{ComplexF64},
     delta::Float64,
     scratch::KrausScratch{ComplexF64},
@@ -306,7 +306,7 @@ function jump_contribution!(::BohrDomain,
     # Hermitianize R (numerical)
     hermitianize!(scratch.R)
 
-    apply_cptp_channel!(evolving_dm, config.delta, scratch)
+    finalize_kraus_step!(evolving_dm, config.delta, scratch)
     return evolving_dm
 end
 
@@ -384,7 +384,7 @@ function jump_contribution!(::EnergyDomain,
     # Hermitianize R (numerical)
     hermitianize!(scratch.R)
 
-    apply_cptp_channel!(evolving_dm, config.delta, scratch)
+    finalize_kraus_step!(evolving_dm, config.delta, scratch)
     return evolving_dm
 end
 
@@ -446,7 +446,7 @@ function jump_contribution!(::Union{TimeDomain, TrotterDomain},
     # Hermitianize R
     hermitianize!(scratch.R)
 
-    apply_cptp_channel!(evolving_dm, config.delta, scratch)
+    finalize_kraus_step!(evolving_dm, config.delta, scratch)
     return evolving_dm
 end
 
