@@ -51,9 +51,10 @@ function build_trajectoryframework(
     ham_or_trott::Union{HamHam, TrottTrott},
     config::AbstractThermalizeConfig,
     precomputed_data,
-    scratch::KrausScratch{ComplexF64},
-    delta::Float64)
+    scratch::KrausScratch{<:Complex},
+    delta::Real)
 
+    CT = eltype(scratch.R)
     dim = size(jumps[1].data, 1)
     n_jumps = length(jumps)
     p_jump = 1.0 / n_jumps
@@ -75,7 +76,7 @@ function build_trajectoryframework(
     # Precompute per-operator coherent B terms (one per jump)
     # NOTE: precompute_coherent_total_B handles its own Trotter basis transform internally
     # (via B_trotter in coherent.jl), so we pass the ORIGINAL jumps here.
-    per_op_U_B = Vector{Union{Nothing, Matrix{ComplexF64}}}(undef, n_jumps)
+    per_op_U_B = Vector{Union{Nothing, Matrix{CT}}}(undef, n_jumps)
     if config.with_coherent
         @inbounds for a in 1:n_jumps
             single_jump = JumpOp[jumps[a]]  # Force Vector{JumpOp} for dispatch compatibility
@@ -88,7 +89,7 @@ function build_trajectoryframework(
     end
 
     # Build per-operator Kraus data
-    per_operator = Vector{PerOperatorKraus{ComplexF64}}(undef, n_jumps)
+    per_operator = Vector{PerOperatorKraus{CT}}(undef, n_jumps)
 
     @inbounds for a in 1:n_jumps
         # Compute R^a for single operator, rescaled by 1/p_jump
@@ -114,12 +115,12 @@ function build_trajectoryframework(
         S_herm = Hermitian(scratch.tmp2)
         eig = eigen(S_herm)
         eig.values .= max.(eig.values, 0.0)
-        U_residual_a = Matrix{ComplexF64}(Diagonal(sqrt.(eig.values)) * eig.vectors')
+        U_residual_a = Matrix{CT}(Diagonal(sqrt.(eig.values)) * eig.vectors')
 
         per_operator[a] = PerOperatorKraus(R_a, K0_a, U_residual_a, per_op_U_B[a])
     end
 
-    ws = TrajectoryWorkspace(ComplexF64, dim)
+    ws = TrajectoryWorkspace(CT, dim)
 
     return TrajectoryFramework(
         config.domain,
@@ -129,15 +130,15 @@ function build_trajectoryframework(
         precomputed_data,
         per_operator,
         n_jumps,
-        delta,
-        delta_eff,
-        alpha,
+        Float64(delta),
+        Float64(delta_eff),
+        Float64(alpha),
         ws,
     )
 end
 
 """
-    precompute_R(domain, jumps, ham_or_trott, config, precomputed_data, scratch) -> Matrix{ComplexF64}
+    precompute_R(jumps, ham_or_trott, config, precomputed_data, scratch) -> Matrix{<:Complex}
 
     Compute
         R = ∑_{k>0} L_k† L_k
@@ -154,7 +155,7 @@ function precompute_R(
     hamiltonian::HamHam,
     config::AbstractThermalizeConfig{EnergyDomain},
     precomputed_data,
-    scratch::KrausScratch{ComplexF64},
+    scratch::KrausScratch{<:Complex},
     )
     dim = size(hamiltonian.data, 1)
     (; transition, gamma_norm_factor, energy_labels) = precomputed_data
@@ -210,7 +211,7 @@ function precompute_R(
     ham_or_trott::Union{HamHam, TrottTrott},
     config::AbstractThermalizeConfig{D},
     precomputed_data,
-    scratch::KrausScratch{ComplexF64},
+    scratch::KrausScratch{<:Complex},
     ) where {D<:Union{TimeDomain, TrotterDomain}}
     dim = size(jumps[1].in_eigenbasis, 1)
     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = precomputed_data
@@ -259,19 +260,20 @@ function precompute_R(
 end
 
 # Fast squared norm without sqrt
-@inline _norm2(v::AbstractVector{ComplexF64}) = real(dot(v, v))
+@inline _norm2(v::AbstractVector{<:Complex}) = real(dot(v, v))
 
 @inline function _accumulate_density_matrix!(
-    rho_acc::Matrix{ComplexF64},
-    psi::Vector{ComplexF64},
+    rho_acc::Matrix{<:Complex},
+    psi::Vector{<:Complex},
 )
     # rho_acc += psi * psi'   (conjugate transpose, rank-1 update)
-    mul!(rho_acc, psi, psi', one(ComplexF64), one(ComplexF64))
+    CT = eltype(rho_acc)
+    mul!(rho_acc, psi, psi', one(CT), one(CT))
     return nothing
 end
 
 """
-    evolve_along_trajectory(psi0, fw::TrajectoryFramework, total_time) -> Vector{ComplexF64}
+    _evolve_along_trajectory!(psi, fw::TrajectoryFramework, total_time) -> Vector{<:Complex}
 
     Runs `num_steps = ceil(total_time/δ)` full δ-steps using `step_along_trajectory!`.
     Does not allocate inside the loop (beyond RNG internals); all workspace is in `fw.ws`.
@@ -279,14 +281,14 @@ end
     Normalization: each step normalizes in the branch logic (and after U_B if present).
 """
 function _evolve_along_trajectory!(
-    psi::Vector{ComplexF64},
-    fw::TrajectoryFramework{ComplexF64},
-    total_time::Float64,
-    )::Vector{ComplexF64}
+    psi::Vector{<:Complex},
+    fw::TrajectoryFramework{<:Complex},
+    total_time::Real,
+)
 
     delta = fw.delta
     @assert delta > 0
-    @assert total_time ≥ 0
+    @assert total_time >= 0
 
     num_steps = ceil(Int, total_time / delta)
     # ensure normalized input (optional, but makes probabilities consistent)
@@ -302,11 +304,11 @@ end
 
 # Allocation-free measure-add (writes into `acc[:, save_idx]` by +=)
 function _accumulate_measurements!(
-    acc::AbstractMatrix{Float64},
+    acc::AbstractMatrix{<:Real},
     save_idx::Int,
-    psi::Vector{ComplexF64},
-    observables::Vector{Matrix{ComplexF64}},
-    tmp::Vector{ComplexF64},
+    psi::Vector{<:Complex},
+    observables::Vector{<:Matrix{<:Complex}},
+    tmp::Vector{<:Complex},
 )
     @inbounds for i in eachindex(observables)
         mul!(tmp, observables[i], psi)                 # tmp := O_i ψ
@@ -328,13 +330,13 @@ end
 function run_trajectories(
     jumps::Vector{JumpOp},
     config::AbstractThermalizeConfig,
-    psi0::Vector{ComplexF64},
+    psi0::Vector{<:Complex},
     hamiltonian::HamHam;
     trotter::Union{TrottTrott,Nothing}=nothing,
-    total_time::Float64 = config.mixing_time,
-    delta::Float64 = config.delta,
+    total_time::Real = config.mixing_time,
+    delta::Real = config.delta,
     ntraj::Int = 1,
-    observables::Union{Nothing, Vector{Matrix{ComplexF64}}} = nothing,
+    observables::Union{Nothing, Vector{<:Matrix{<:Complex}}} = nothing,
     save_every::Int = 1,
     store_states::Bool = false,
 )
@@ -342,8 +344,10 @@ function run_trajectories(
     validate_config!(config)
     print_press(config)
 
-    @assert ntraj ≥ 1
-    @assert save_every ≥ 1
+    @assert ntraj >= 1
+    @assert save_every >= 1
+
+    CT = eltype(psi0)
 
     # Choose evolution object consistent with domain
     ham_or_trott = if config.domain isa TrotterDomain
@@ -356,13 +360,13 @@ function run_trajectories(
     precomputed_data = precompute_data(config, ham_or_trott)
 
     dim = size(hamiltonian.data, 1)
-    rho_mean = zeros(ComplexF64, dim, dim)
-    builder_scratch = KrausScratch(ComplexF64, dim)
+    rho_mean = zeros(CT, dim, dim)
+    builder_scratch = KrausScratch(CT, dim)
 
     fw = build_trajectoryframework(jumps, ham_or_trott, config, precomputed_data, builder_scratch, delta)
 
     # ------------------------------------------------------------------
-    # No measurements: just run and (optionally) store final ψ per traj
+    # No measurements: just run and (optionally) store final psi per traj
     # ------------------------------------------------------------------
     if observables === nothing
         if ntraj == 1 && !store_states
@@ -373,7 +377,7 @@ function run_trajectories(
             return (framework = fw, psi = psi, rho_mean = rho_mean)
         end
 
-        states = store_states ? Matrix{ComplexF64}(undef, dim, ntraj) : nothing
+        states = store_states ? Matrix{CT}(undef, dim, ntraj) : nothing
         psi = copy(psi0)
 
         @inbounds for trajectory in 1:ntraj
@@ -392,7 +396,7 @@ function run_trajectories(
     end
 
     # ------------------------------------------------------------------
-    # With measurements: average ⟨O⟩ over trajectories, saved every `save_every`
+    # With measurements: average <O> over trajectories, saved every `save_every`
     # ------------------------------------------------------------------
     delta = fw.delta
     num_steps = ceil(Int, total_time / delta)
@@ -453,8 +457,8 @@ end
     # Rates rescaled by 1/p_jump so net effect per unit time matches DM run_thermalization.
 """
 function step_along_trajectory!(
-    psi::Vector{ComplexF64},
-    fw::TrajectoryFramework{ComplexF64,D},
+    psi::Vector{<:Complex},
+    fw::TrajectoryFramework{<:Complex,D},
     ) where {D<:Union{TimeDomain,TrotterDomain}}
 
     ws = fw.ws
@@ -600,8 +604,8 @@ end
     Same logic as Time/Trotter variant but A_{a,ω} is generated by `oft!(...)`.
 """
 function step_along_trajectory!(
-    psi::Vector{ComplexF64},
-    fw::TrajectoryFramework{ComplexF64,EnergyDomain},
+    psi::Vector{<:Complex},
+    fw::TrajectoryFramework{<:Complex,EnergyDomain},
     )
 
     ws = fw.ws

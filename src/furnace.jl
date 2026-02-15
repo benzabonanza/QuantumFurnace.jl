@@ -1,5 +1,9 @@
-function run_lindbladian(jumps::Vector{JumpOp}, config::AbstractLiouvConfig, hamiltonian::HamHam; 
-    trotter::Union{TrottTrott, Nothing}=nothing)
+function run_lindbladian(jumps::Vector{JumpOp}, config::AbstractLiouvConfig{D,Tc}, hamiltonian::HamHam{Th};
+    trotter::Union{TrottTrott, Nothing}=nothing) where {D, Tc<:AbstractFloat, Th<:AbstractFloat}
+
+    if Tc !== Th
+        error("Type mismatch: HamHam uses $Th but config uses $Tc. All structs must share the same precision.")
+    end
 
     validate_config!(config)
     print_press(config)
@@ -59,8 +63,10 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::AbstractLiouvConfi
     # end
 
     dim = size(hamiltonian.data, 1)
-    total_lindbladian = zeros(ComplexF64, dim^2, dim^2)
-    ws = LindbladianWorkspace(dim)
+    T = eltype(hamiltonian.eigvals)
+    CT = Complex{T}
+    total_lindbladian = zeros(CT, dim^2, dim^2)
+    ws = LindbladianWorkspace{T}(dim)
 
     # Precompute all B's for the A's if for KMS DB and with_coherent.
     Btot = precompute_coherent_total_B(jumps, ham_or_trott, config, precomputed_data)
@@ -88,13 +94,17 @@ end
 
 function run_thermalization(
     jumps::Vector{JumpOp},
-    config::AbstractThermalizeConfig,
-    evolving_dm::Matrix{ComplexF64},
-    hamiltonian::HamHam;
+    config::AbstractThermalizeConfig{D,Tc},
+    evolving_dm::Matrix{<:Complex},
+    hamiltonian::HamHam{Th};
     trotter::Union{TrottTrott, Nothing}=nothing,
     rng::AbstractRNG = Random.default_rng(),
     rescale_by_inv_prob::Bool = true,  # to retain the physical meaning of the input mixing time the same
-    )
+    ) where {D, Tc<:AbstractFloat, Th<:AbstractFloat}
+
+    if Tc !== Th
+        error("Type mismatch: HamHam uses $Th but config uses $Tc. All structs must share the same precision.")
+    end
 
     dim = size(hamiltonian.data, 1)
     validate_config!(config)
@@ -125,7 +135,7 @@ function run_thermalization(
     coherent_unitaries = precompute_coherent_unitary_terms(jumps, hamiltonian, config, precomputed_data;
         trotter=trotter, delta_scale = rescale_by_inv_prob ? (1.0 / p_jump) : 1.0)
 
-    scratch = KrausScratch(ComplexF64, dim)
+    scratch = KrausScratch(eltype(evolving_dm), dim)
 
     num_steps = Int(ceil(config.mixing_time / config.delta))
 
