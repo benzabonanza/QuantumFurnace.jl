@@ -26,12 +26,12 @@ struct PerOperatorKraus{T}
     U_B::Union{Nothing, Matrix{T}}      # exp(-i * delta_eff * B^a), or nothing
 end
 
-struct TrajectoryFramework{T,C,H,PD,D<:AbstractDomain}
+struct TrajectoryFramework{T,D<:AbstractDomain}
     domain::D
     jumps::Vector{JumpOp}
-    ham_or_trott::H
-    config::C
-    precomputed_data::PD
+    ham_or_trott::Union{HamHam, TrottTrott}
+    config::AbstractThermalizeConfig{D}
+    precomputed_data::Any  # NamedTuple from precompute_data, varies by domain
 
     # Per-operator Kraus data (Lie-Trotter splitting)
     per_operator::Vector{PerOperatorKraus{T}}
@@ -456,7 +456,7 @@ end
 """
 function step_along_trajectory!(
     psi::Vector{ComplexF64},
-    fw::TrajectoryFramework{ComplexF64,<:Any,<:Any,<:Any,D},
+    fw::TrajectoryFramework{ComplexF64,D},
     ) where {D<:Union{TimeDomain,TrotterDomain}}
 
     ws = fw.ws
@@ -603,7 +603,7 @@ end
 """
 function step_along_trajectory!(
     psi::Vector{ComplexF64},
-    fw::TrajectoryFramework{ComplexF64,<:Any,<:Any,<:Any,EnergyDomain},
+    fw::TrajectoryFramework{ComplexF64,EnergyDomain},
     )
 
     ws = fw.ws
