@@ -100,10 +100,11 @@ Plans:
   2. ~18 implementation-detail exports (workspaces, precompute helpers, internal dispatch functions) are removed from the public API
   3. `trace_distance_h` is exported and accessible for convergence analysis workflows
   4. All 224 existing tests pass with no regressions
-**Plans**: 2 plans
+**Plans**: 3 plans
 Plans:
-- [ ] 10-01-PLAN.md -- Reorganize export block: add physics exports, remove internal exports, organize into labeled groups
-- [ ] 10-02-PLAN.md -- Apply _ prefix convention to all internal functions across the codebase
+- [ ] 10-01-PLAN.md -- Reorganize export block: add physics exports, remove internal exports, confirm dead exports absent
+- [ ] 10-02-PLAN.md -- Apply _ prefix to internal function definitions and intra-file call sites
+- [ ] 10-03-PLAN.md -- Update cross-file call sites and test qualified access for _-prefixed names
 
 ### Phase 11: Allocation Optimization
 **Goal**: Core simulation hot paths avoid unnecessary heap allocations -- sparse matrices, Diagonal wrappers, filter intermediates, and redundant basis transforms are eliminated or precomputed
@@ -133,5 +134,5 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10 -> 11
 | 7. DRY Refactoring | v1.1 | 2/2 | Complete | 2026-02-15 |
 | 8. Struct Simplification | v1.1 | 3/3 | Complete | 2026-02-15 |
 | 9. Type Parameterization | v1.1 | 3/3 | Complete | 2026-02-15 |
-| 10. API Surface Cleanup | v1.1 | 0/? | Not started | - |
+| 10. API Surface Cleanup | v1.1 | 0/3 | Not started | - |
 | 11. Allocation Optimization | v1.1 | 0/? | Not started | - |
