@@ -165,7 +165,7 @@ Apply the CPTP weak-measurement channel after R and rho_jump have been accumulat
 Implements Chen Eq. 3.2:
   K0 = I - alpha * R,  alpha = 1 - sqrt(1 - delta)
   S  = (2*alpha - delta)*R - alpha^2 * R^2  (residual, O(delta^2))
-  U_residual = cholesky(S + eps*I).U
+  U_residual = sqrt_psd(S)  (eigendecomposition with clamped eigenvalues)
   rho_next = K0 * rho * K0' + rho_jump + U_res * rho * U_res'
 
 Expects scratch.R (Hermitianized) and scratch.rho_jump to be pre-filled by the
@@ -192,14 +192,12 @@ function apply_cptp_channel!(
     s2 = delta_factor_for_K0 * delta_factor_for_K0
     @. scratch.tmp2 = s1 * scratch.R - s2 * scratch.LdagL
 
-    # Guard against tiny negative eigenvalues from roundoff (S is O(delta^2))
-    eps_shift = 10 * eps(Float64)
-    @inbounds for i in 1:dim
-        scratch.tmp2[i,i] += eps_shift
-    end
-
-    cholesky_S = cholesky!(Hermitian(scratch.tmp2), check=false)
-    U_residual = cholesky_S.U
+    # PSD guard: clamp negative eigenvalues to zero (more robust than Cholesky + eps shift)
+    hermitianize!(scratch.tmp2)
+    S_herm = Hermitian(scratch.tmp2)
+    eig = eigen(S_herm)
+    eig.values .= max.(eig.values, 0.0)
+    U_residual = Matrix{ComplexF64}(Diagonal(sqrt.(eig.values)) * eig.vectors')
 
     # rho_next = K0 * rho * K0' + rho_jump + U_res * rho * U_res'
     mul!(scratch.tmp1, scratch.K0, evolving_dm)
