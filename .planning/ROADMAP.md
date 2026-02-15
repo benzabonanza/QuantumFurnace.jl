@@ -42,7 +42,9 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   2. All exported and internal functions are reachable from either the public API or the test suite
   3. LindbladianJumpCaches, LiouvLiouv structs and non-mutating `oft` wrapper no longer exist in the codebase
   4. All 224 existing tests pass with no regressions
-**Plans**: TBD
+**Plans**: 2 plans
+- [ ] 06-01-PLAN.md -- Remove ~930 lines of commented-out code blocks across 10 source files
+- [ ] 06-02-PLAN.md -- Remove ~35 unused functions, 3 dead structs, and update exports
 
 ### Phase 7: DRY Refactoring
 **Goal**: Repeated code patterns are extracted into single-source helpers -- Hermitianization, CPTP channel application, coherent unitary application, and Trotter basis transforms each have one canonical implementation
@@ -114,7 +116,7 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10 -> 11
 | 3. DM Reference Test Suite | v1.0 | 3/3 | Complete | 2026-02-14 |
 | 4. Trajectory Cross-Validation | v1.0 | 2/2 | Complete | 2026-02-14 |
 | 5. Statistical Validation and Regression | v1.0 | 2/2 | Complete | 2026-02-14 |
-| 6. Dead Code Pruning | v1.1 | 0/? | Not started | - |
+| 6. Dead Code Pruning | v1.1 | 0/2 | Planned | - |
 | 7. DRY Refactoring | v1.1 | 0/? | Not started | - |
 | 8. Struct Simplification | v1.1 | 0/? | Not started | - |
 | 9. Type Parameterization | v1.1 | 0/? | Not started | - |
