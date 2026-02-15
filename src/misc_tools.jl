@@ -73,7 +73,7 @@ function _load_hamiltonian_bson(path::String, beta::Float64)
     return HamHam(raw_nt, beta)
 end
 
-function generate_filename(config::AbstractLiouvConfig)
+function _generate_filename(config::AbstractLiouvConfig)
     pic_str = string(typeof(config.domain))
     db_str = (config isa LiouvConfigGNS) ? "GNS" : "KMS"
     
@@ -86,7 +86,7 @@ function generate_filename(config::AbstractLiouvConfig)
     return join(["liouv", db_str, pic_str, nqb_str, beta_str, B, a_str, b_str], "_") * ".bson"
 end
 
-function generate_filename(config::AbstractThermalizeConfig)
+function _generate_filename(config::AbstractThermalizeConfig)
     pic_str = string(typeof(config.domain))
     db_str = (config isa ThermalizeConfigGNS) ? "GNS" : "KMS"
 
@@ -100,17 +100,17 @@ function generate_filename(config::AbstractThermalizeConfig)
     return join(["alg", db_str, pic_str, nqb_str, beta_str, B, a_str, b_str, mix], "_") * ".bson"
 end
 
-function riemann_sum(f::Function, grid::Vector{Float64})
+function _riemann_sum(f::Function, grid::Vector{Float64})
     """Uniform grid, rectangle method"""
     d0 = grid[2] - grid[1]
     return d0 * sum(f, grid)
 end
 
-function riemann_sum(fvals::Vector{Float64}, d0::Float64)
+function _riemann_sum(fvals::Vector{Float64}, d0::Float64)
     return d0 * sum(fvals)
 end
 
-function riemann_sum(fvals::Vector{ComplexF64}, d0::Float64)
+function _riemann_sum(fvals::Vector{ComplexF64}, d0::Float64)
     return d0 * sum(fvals)
 end
 
@@ -218,7 +218,7 @@ function _collect_config_errors!(errors::Vector{String}, config::AbstractConfig{
 end
 
 
-function print_press(config::AbstractLiouvConfig)
+function _print_press(config::AbstractLiouvConfig)
     params = [
         ("db", (config isa LiouvConfigGNS) ? :GNS : :KMS),
         ("domain", config.domain),
@@ -248,7 +248,7 @@ function print_press(config::AbstractLiouvConfig)
     println("-----------------")
 end
 
-function print_press(config::AbstractThermalizeConfig)
+function _print_press(config::AbstractThermalizeConfig)
     params = [
         ("db", (config isa ThermalizeConfigGNS) ? :GNS : :KMS),
         ("domain", config.domain),

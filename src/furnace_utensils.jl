@@ -1,24 +1,24 @@
-function precompute_labels(config::AbstractConfig{D}) where {D<:Union{BohrDomain, EnergyDomain}}
+function _precompute_labels(config::AbstractConfig{D}) where {D<:Union{BohrDomain, EnergyDomain}}
     energy_labels = create_energy_labels(config.num_energy_bits, config.w0)
     truncated_energy_labels = truncate_energy_labels(energy_labels, config)
     return (truncated_energy_labels,)  # Energy labels
 end
 
-function precompute_labels(config::AbstractConfig{D}) where {D<:Union{TimeDomain, TrotterDomain}}
+function _precompute_labels(config::AbstractConfig{D}) where {D<:Union{TimeDomain, TrotterDomain}}
     energy_labels = create_energy_labels(config.num_energy_bits, config.w0)
     truncated_energy_labels = truncate_energy_labels(energy_labels, config)
     time_labels = energy_labels .* (config.t0 / config.w0)
     return (truncated_energy_labels, time_labels) # Energy and time labels
 end  
 
-function precompute_data(
+function _precompute_data(
     config::AbstractLiouvConfig{BohrDomain},
     ham_or_trott::Union{HamHam, TrottTrott}
 )
 
     alpha = pick_alpha(config)
     # Was the only way to bring in the normalizing factor 1 / ||γ||_∞
-    energy_labels, = precompute_labels(config)
+    energy_labels, = _precompute_labels(config)
     transition = pick_transition(config)
     gamma_norm_factor =  1.0 / maximum(transition.(energy_labels))
     return (
@@ -27,13 +27,13 @@ function precompute_data(
     )
 end
 
-function precompute_data(
+function _precompute_data(
     config::AbstractThermalizeConfig{BohrDomain},
     hamiltonian::HamHam
 )
     alpha = pick_alpha(config)
 
-    energy_labels, = precompute_labels(config)
+    energy_labels, = _precompute_labels(config)
     transition = pick_transition(config)
     gamma_norm_factor = 1.0 / maximum(transition.(energy_labels))
     
@@ -64,11 +64,11 @@ function precompute_data(
 
 end
 
-function precompute_data(
+function _precompute_data(
     config::AbstractConfig{EnergyDomain},
     ham_or_trott::Union{HamHam, TrottTrott}
 )
-    energy_labels, = precompute_labels(config)
+    energy_labels, = _precompute_labels(config)
     transition = pick_transition(config)
     gamma_norm_factor =  1.0 / maximum(transition.(energy_labels))
     
@@ -79,11 +79,11 @@ function precompute_data(
     )
 end
 
-function precompute_data(
+function _precompute_data(
     config::AbstractConfig{D},
     ham_or_trott::Union{HamHam, TrottTrott}
 ) where {D<:Union{TimeDomain, TrotterDomain}}
-    energy_labels, time_labels = precompute_labels(config)
+    energy_labels, time_labels = _precompute_labels(config)
     oft_time_labels = truncate_time_labels_for_oft(time_labels, config.sigma)
 
     transition = pick_transition(config)
@@ -92,7 +92,7 @@ function precompute_data(
     # Coherent term B
     b_minus, b_plus = if config.with_coherent
         _b_minus = compute_truncated_func(compute_b_minus, time_labels, config.beta, config.sigma)
-        chosen_b_plus, b_plus_args = select_b_plus_calculator(config)
+        chosen_b_plus, b_plus_args = _select_b_plus_calculator(config)
         _b_plus = compute_truncated_func(chosen_b_plus, time_labels, b_plus_args...)
         (_b_minus, _b_plus)
     else
@@ -120,7 +120,7 @@ function precompute_data(
     )
 end
 
-function select_b_plus_calculator(config::Union{LiouvConfig, ThermalizeConfig})
+function _select_b_plus_calculator(config::Union{LiouvConfig, ThermalizeConfig})
     if !config.with_linear_combination
         # Gaussian
         return (compute_b_plus, (config.beta, config.gaussian_parameters[1], config.gaussian_parameters[2]))

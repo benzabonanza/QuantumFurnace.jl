@@ -8,7 +8,7 @@
     If `config.with_coherent==true`, pass `coherent_term` already scaled by
     `gamma_norm_factor` to avoid modifying cached matrices.
 """
-function jump_contribution!(
+function _jump_contribution!(
     L_target::AbstractMatrix{<:Complex},
     jump::JumpOp,
     hamiltonian::HamHam,
@@ -44,7 +44,7 @@ function jump_contribution!(
     return L_target
 end
 
-function jump_contribution!(
+function _jump_contribution!(
     L_target::AbstractMatrix{<:Complex},
     jump::JumpOp,
     hamiltonian::HamHam,
@@ -88,7 +88,7 @@ function jump_contribution!(
     return L_target
 end
 
-function jump_contribution!(
+function _jump_contribution!(
     L_target::AbstractMatrix{<:Complex},
     jump::JumpOp,
     ham_or_trott::Union{HamHam, TrottTrott},
@@ -137,12 +137,12 @@ end
 #* Algorithmic jump contributions -------------------------------------------------------------------------------------------
 
 """
-    apply_coherent_unitary!(evolving_dm, U_B, scratch) -> nothing
+    _apply_coherent_unitary!(evolving_dm, U_B, scratch) -> nothing
 
 Apply coherent unitary evolution: rho -> U_B * rho * U_B'.
 No-op if U_B is nothing.
 """
-@inline function apply_coherent_unitary!(
+@inline function _apply_coherent_unitary!(
     evolving_dm::Matrix{<:Complex},
     U_B::Union{Nothing,Matrix{<:Complex}},
     scratch::KrausScratch{<:Complex},
@@ -155,7 +155,7 @@ No-op if U_B is nothing.
 end
 
 """
-    finalize_kraus_step!(evolving_dm, delta, scratch) -> evolving_dm
+    _finalize_kraus_step!(evolving_dm, delta, scratch) -> evolving_dm
 
 Apply the CPTP weak-measurement channel after R and rho_jump have been accumulated.
 
@@ -168,7 +168,7 @@ Implements Chen Eq. 3.2:
 Expects scratch.R (Hermitianized) and scratch.rho_jump to be pre-filled by the
 domain-specific dissipative accumulation loop.
 """
-function finalize_kraus_step!(
+function _finalize_kraus_step!(
     evolving_dm::Matrix{<:Complex},
     delta::Real,
     scratch::KrausScratch{<:Complex},
@@ -211,7 +211,7 @@ function finalize_kraus_step!(
     return evolving_dm
 end
 
-function jump_contribution!(
+function _jump_contribution!(
     evolving_dm::Matrix{<:Complex},
     jump::JumpOp,
     hamiltonian::HamHam,
@@ -233,7 +233,7 @@ function jump_contribution!(
     jump_weight_scaling = rescale_by_inv_prob ? (gamma_norm_factor / jump_prob) : gamma_norm_factor
     scaled_delta = config.delta * jump_weight_scaling
 
-    apply_coherent_unitary!(evolving_dm, coherent_unitary_cache, scratch)
+    _apply_coherent_unitary!(evolving_dm, coherent_unitary_cache, scratch)
 
     fill!(scratch.R, 0)
     fill!(scratch.rho_jump, 0)
@@ -305,11 +305,11 @@ function jump_contribution!(
     hermitianize!(scratch.R)
 
     # Apply R, K0, U_residual
-    finalize_kraus_step!(evolving_dm, config.delta, scratch)
+    _finalize_kraus_step!(evolving_dm, config.delta, scratch)
     return evolving_dm
 end
 
-function jump_contribution!(
+function _jump_contribution!(
     evolving_dm::Matrix{<:Complex},
     jump::JumpOp,
     hamiltonian::HamHam,
@@ -326,7 +326,7 @@ function jump_contribution!(
 
     jump_weight_scaling = rescale_by_inv_prob ? (gamma_norm_factor / jump_prob) : gamma_norm_factor
 
-    apply_coherent_unitary!(evolving_dm, coherent_unitary_cache, scratch)
+    _apply_coherent_unitary!(evolving_dm, coherent_unitary_cache, scratch)
 
     # --- Dissipative part ---
     # Matches the Euler prefactor in jump_contribution(::EnergyDomain, ...):
@@ -384,11 +384,11 @@ function jump_contribution!(
     hermitianize!(scratch.R)
 
     # Apply R, K0, U_residual
-    finalize_kraus_step!(evolving_dm, config.delta, scratch)
+    _finalize_kraus_step!(evolving_dm, config.delta, scratch)
     return evolving_dm
 end
 
-function jump_contribution!(
+function _jump_contribution!(
     evolving_dm::Matrix{<:Complex},
     jump::JumpOp,
     ham_or_trott,              # HamHam or TrottTrott depending on domain
@@ -405,7 +405,7 @@ function jump_contribution!(
 
     jump_weight_scaling = rescale_by_inv_prob ? (gamma_norm_factor / jump_prob) : gamma_norm_factor
 
-    apply_coherent_unitary!(evolving_dm, coherent_unitary_cache, scratch)
+    _apply_coherent_unitary!(evolving_dm, coherent_unitary_cache, scratch)
 
     base_prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * jump_weight_scaling
 
@@ -447,7 +447,7 @@ function jump_contribution!(
     hermitianize!(scratch.R)
 
     # Apply R, K0, U_residual
-    finalize_kraus_step!(evolving_dm, config.delta, scratch)
+    _finalize_kraus_step!(evolving_dm, config.delta, scratch)
     return evolving_dm
 end
 

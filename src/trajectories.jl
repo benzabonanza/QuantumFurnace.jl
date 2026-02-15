@@ -93,7 +93,7 @@ function build_trajectoryframework(
 
     @inbounds for a in 1:n_jumps
         # Compute R^a for single operator, rescaled by 1/p_jump
-        precompute_R([jumps_for_diss[a]], ham_or_trott, config, precomputed_data, scratch)
+        _precompute_R([jumps_for_diss[a]], ham_or_trott, config, precomputed_data, scratch)
         R_a = copy(scratch.R)
         R_a .*= (1.0 / p_jump)   # rescale: R_a = (1/p_jump) * sum_w rate2(w) * A_w' * A_w
 
@@ -150,7 +150,7 @@ end
 
     This returns `scratch.R` (Hermitianized).
 """
-function precompute_R(
+function _precompute_R(
     jumps::AbstractVector{<:JumpOp},
     hamiltonian::HamHam,
     config::AbstractThermalizeConfig{EnergyDomain},
@@ -206,7 +206,7 @@ function precompute_R(
 end
 
 
-function precompute_R(
+function _precompute_R(
     jumps::AbstractVector{<:JumpOp},
     ham_or_trott::Union{HamHam, TrottTrott},
     config::AbstractThermalizeConfig{D},
