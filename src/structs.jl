@@ -7,18 +7,20 @@ struct TimeDomain <: AbstractDomain end
 struct TrotterDomain <: AbstractDomain end
 
 # Became obsolete with NUFFTCaches. But used for debugging.
-struct OFTCaches
-    prefactors::Vector{ComplexF64}
-    U::Diagonal{ComplexF64, Vector{ComplexF64}}
-    temp_op::Matrix{ComplexF64}
-    
-    function OFTCaches(dim::Int)
-        prefactors = zeros(ComplexF64, 0) # Will be resized later
-        U = Diagonal(zeros(ComplexF64, dim))
-        temp_op = zeros(ComplexF64, dim, dim)
-        new(prefactors, U, temp_op)
+struct OFTCaches{T<:AbstractFloat}
+    prefactors::Vector{Complex{T}}
+    U::Diagonal{Complex{T}, Vector{Complex{T}}}
+    temp_op::Matrix{Complex{T}}
+
+    function OFTCaches{T}(dim::Int) where {T<:AbstractFloat}
+        CT = Complex{T}
+        prefactors = zeros(CT, 0) # Will be resized later
+        U = Diagonal(zeros(CT, dim))
+        temp_op = zeros(CT, dim, dim)
+        new{T}(prefactors, U, temp_op)
     end
 end
+OFTCaches(dim::Int) = OFTCaches{Float64}(dim)
 
 """Workspace for building a dense Liouvillian matrix with minimal allocations.
 
@@ -32,26 +34,28 @@ Buffers:
   - `jump_dag_jump`: scratch for `jump_tmp' * jump_tmp`.
   - `jump2_jump1`: scratch for `jump_2 * jump_1` in mixed (Bohr) note.
 """
-struct LindbladianWorkspace
-    Id::Matrix{ComplexF64}
-    jump_tmp::Matrix{ComplexF64}
-    jump_conj::Matrix{ComplexF64}
-    jump_dag_jump::Matrix{ComplexF64}
-    jump2_jump1::Matrix{ComplexF64}
+struct LindbladianWorkspace{T<:AbstractFloat}
+    Id::Matrix{Complex{T}}
+    jump_tmp::Matrix{Complex{T}}
+    jump_conj::Matrix{Complex{T}}
+    jump_dag_jump::Matrix{Complex{T}}
+    jump2_jump1::Matrix{Complex{T}}
 
-    function LindbladianWorkspace(dim::Int)
-        Id = Matrix{ComplexF64}(I, dim, dim)
-        jump_tmp = zeros(ComplexF64, dim, dim)
-        jump_conj = zeros(ComplexF64, dim, dim)
-        jump_dag_jump = zeros(ComplexF64, dim, dim)
-        jump2_jump1 = zeros(ComplexF64, dim, dim)
-        new(Id, jump_tmp, jump_conj, jump_dag_jump, jump2_jump1)
+    function LindbladianWorkspace{T}(dim::Int) where {T<:AbstractFloat}
+        CT = Complex{T}
+        Id = Matrix{CT}(I, dim, dim)
+        jump_tmp = zeros(CT, dim, dim)
+        jump_conj = zeros(CT, dim, dim)
+        jump_dag_jump = zeros(CT, dim, dim)
+        jump2_jump1 = zeros(CT, dim, dim)
+        new{T}(Id, jump_tmp, jump_conj, jump_dag_jump, jump2_jump1)
     end
 end
+LindbladianWorkspace(dim::Int) = LindbladianWorkspace{Float64}(dim)
 
-abstract type AbstractConfig{D<:AbstractDomain} end
-abstract type AbstractLiouvConfig{D<:AbstractDomain} <: AbstractConfig{D} end
-abstract type AbstractThermalizeConfig{D<:AbstractDomain} <: AbstractConfig{D} end
+abstract type AbstractConfig{D<:AbstractDomain, T<:AbstractFloat} end
+abstract type AbstractLiouvConfig{D<:AbstractDomain, T<:AbstractFloat} <: AbstractConfig{D,T} end
+abstract type AbstractThermalizeConfig{D<:AbstractDomain, T<:AbstractFloat} <: AbstractConfig{D,T} end
 
 # Let's keep this structure, and have the "give w0 for desired energy integral error" type of config optimization
 # before the construct_liouvillian function
@@ -84,20 +88,20 @@ abstract type AbstractThermalizeConfig{D<:AbstractDomain} <: AbstractConfig{D} e
     - **`TimeDomain()`**: Another level lower, in which the energy approximates are written up as Fourier's of the temporal equals.
     - **`TrotterDomain()`**: The lowest level, thus also the only one implementable on a quantum computer, in which all time evolutions are replaced via their Trotter series.
 """
-@kwdef struct LiouvConfig{D <: AbstractDomain} <: AbstractLiouvConfig{D}
+@kwdef struct LiouvConfig{D <: AbstractDomain, T <: AbstractFloat} <: AbstractLiouvConfig{D,T}
     num_qubits::Int64
     with_coherent::Bool
     with_linear_combination::Bool
     domain::D
-    beta::Float64
-    sigma::Float64
-    gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}} = (nothing, nothing)  # (ω_γ, σ_γ)
-    a::Union{Float64, Nothing} = nothing
-    b::Union{Float64, Nothing} = nothing
+    beta::T
+    sigma::T
+    gaussian_parameters::Union{Tuple{T, T}, Tuple{Nothing, Nothing}} = (nothing, nothing)  # (ω_γ, σ_γ)
+    a::Union{T, Nothing} = nothing
+    b::Union{T, Nothing} = nothing
     num_energy_bits::Union{Int, Nothing} = nothing
-    t0::Union{Float64, Nothing} = nothing
-    w0::Union{Float64, Nothing} = nothing
-    eta::Union{Float64, Nothing} = nothing
+    t0::Union{T, Nothing} = nothing
+    w0::Union{T, Nothing} = nothing
+    eta::Union{T, Nothing} = nothing
     num_trotter_steps_per_t0::Union{Int, Nothing} = nothing
 end
 """
@@ -110,33 +114,33 @@ end
 
     Fields are shared with `LiouvConfig`.
 """
-struct LiouvConfigGNS{D <: AbstractDomain} <: AbstractLiouvConfig{D}
+struct LiouvConfigGNS{D <: AbstractDomain, T <: AbstractFloat} <: AbstractLiouvConfig{D,T}
     num_qubits::Int64
     with_coherent::Bool
     with_linear_combination::Bool
     domain::D
-    beta::Float64
-    sigma::Float64
-    gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}}
-    a::Union{Float64, Nothing}
-    b::Union{Float64, Nothing}
+    beta::T
+    sigma::T
+    gaussian_parameters::Union{Tuple{T, T}, Tuple{Nothing, Nothing}}
+    a::Union{T, Nothing}
+    b::Union{T, Nothing}
     num_energy_bits::Union{Int, Nothing}
-    t0::Union{Float64, Nothing}
-    w0::Union{Float64, Nothing}
-    eta::Union{Float64, Nothing}
+    t0::Union{T, Nothing}
+    w0::Union{T, Nothing}
+    eta::Union{T, Nothing}
     num_trotter_steps_per_t0::Union{Int, Nothing}
 
-    function LiouvConfigGNS{D}(
+    function LiouvConfigGNS{D,T}(
         num_qubits::Int64, with_coherent::Bool, with_linear_combination::Bool, domain::D,
-        beta::Float64, sigma::Float64,
-        gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}},
-        a::Union{Float64, Nothing}, b::Union{Float64, Nothing},
-        num_energy_bits::Union{Int, Nothing}, t0::Union{Float64, Nothing},
-        w0::Union{Float64, Nothing}, eta::Union{Float64, Nothing},
+        beta::T, sigma::T,
+        gaussian_parameters::Union{Tuple{T, T}, Tuple{Nothing, Nothing}},
+        a::Union{T, Nothing}, b::Union{T, Nothing},
+        num_energy_bits::Union{Int, Nothing}, t0::Union{T, Nothing},
+        w0::Union{T, Nothing}, eta::Union{T, Nothing},
         num_trotter_steps_per_t0::Union{Int, Nothing}
-    ) where {D}
+    ) where {D, T}
         with_coherent && error("GNS configs must have with_coherent=false")
-        new{D}(num_qubits, with_coherent, with_linear_combination, domain,
+        new{D,T}(num_qubits, with_coherent, with_linear_combination, domain,
                beta, sigma, gaussian_parameters, a, b,
                num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0)
     end
@@ -148,18 +152,18 @@ function LiouvConfigGNS(;
     with_coherent::Bool = false,
     with_linear_combination::Bool,
     domain::D,
-    beta::Float64,
-    sigma::Float64,
-    gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}} = (nothing, nothing),
-    a::Union{Float64, Nothing} = nothing,
-    b::Union{Float64, Nothing} = nothing,
+    beta::T = 1.0,
+    sigma::T = 0.1,
+    gaussian_parameters::Union{Tuple{T, T}, Tuple{Nothing, Nothing}} = (nothing, nothing),
+    a::Union{T, Nothing} = nothing,
+    b::Union{T, Nothing} = nothing,
     num_energy_bits::Union{Int, Nothing} = nothing,
-    t0::Union{Float64, Nothing} = nothing,
-    w0::Union{Float64, Nothing} = nothing,
-    eta::Union{Float64, Nothing} = nothing,
+    t0::Union{T, Nothing} = nothing,
+    w0::Union{T, Nothing} = nothing,
+    eta::Union{T, Nothing} = nothing,
     num_trotter_steps_per_t0::Union{Int, Nothing} = nothing,
-) where {D <: AbstractDomain}
-    LiouvConfigGNS{D}(num_qubits, with_coherent, with_linear_combination, domain,
+) where {D <: AbstractDomain, T <: AbstractFloat}
+    LiouvConfigGNS{D,T}(num_qubits, with_coherent, with_linear_combination, domain,
                       beta, sigma, gaussian_parameters, a, b,
                       num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0)
 end
@@ -176,25 +180,25 @@ end
     - `mixing_time`: Total duration of the time evolution.
     - `delta`: Time step size for the weak-measurement emulation.
     """
-@kwdef struct ThermalizeConfig{D <: AbstractDomain}  <: AbstractThermalizeConfig{D}
+@kwdef struct ThermalizeConfig{D <: AbstractDomain, T <: AbstractFloat}  <: AbstractThermalizeConfig{D,T}
     num_qubits::Int64
     with_coherent::Bool
     with_linear_combination::Bool
     domain::D
-    beta::Float64
-    sigma::Float64
-    gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}} = (nothing, nothing)  # (ω_γ, σ_γ)
-    a::Union{Float64, Nothing} = nothing
-    b::Union{Float64, Nothing} = nothing
+    beta::T
+    sigma::T
+    gaussian_parameters::Union{Tuple{T, T}, Tuple{Nothing, Nothing}} = (nothing, nothing)  # (ω_γ, σ_γ)
+    a::Union{T, Nothing} = nothing
+    b::Union{T, Nothing} = nothing
     num_energy_bits::Union{Int, Nothing} = nothing
-    t0::Union{Float64, Nothing} = nothing
-    w0::Union{Float64, Nothing} = nothing
-    eta::Union{Float64, Nothing} = nothing
+    t0::Union{T, Nothing} = nothing
+    w0::Union{T, Nothing} = nothing
+    eta::Union{T, Nothing} = nothing
     num_trotter_steps_per_t0::Union{Int, Nothing} = nothing
 
     # For thermalization the configs:
-    mixing_time::Float64
-    delta::Float64
+    mixing_time::T
+    delta::T
 end
 
 """
@@ -207,37 +211,37 @@ end
 
     Fields are shared with `ThermalizeConfig`.
 """
-struct ThermalizeConfigGNS{D <: AbstractDomain} <: AbstractThermalizeConfig{D}
+struct ThermalizeConfigGNS{D <: AbstractDomain, T <: AbstractFloat} <: AbstractThermalizeConfig{D,T}
     num_qubits::Int64
     with_coherent::Bool
     with_linear_combination::Bool
     domain::D
-    beta::Float64
-    sigma::Float64
-    gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}}
-    a::Union{Float64, Nothing}
-    b::Union{Float64, Nothing}
+    beta::T
+    sigma::T
+    gaussian_parameters::Union{Tuple{T, T}, Tuple{Nothing, Nothing}}
+    a::Union{T, Nothing}
+    b::Union{T, Nothing}
     num_energy_bits::Union{Int, Nothing}
-    t0::Union{Float64, Nothing}
-    w0::Union{Float64, Nothing}
-    eta::Union{Float64, Nothing}
+    t0::Union{T, Nothing}
+    w0::Union{T, Nothing}
+    eta::Union{T, Nothing}
     num_trotter_steps_per_t0::Union{Int, Nothing}
 
-    mixing_time::Float64
-    delta::Float64
+    mixing_time::T
+    delta::T
 
-    function ThermalizeConfigGNS{D}(
+    function ThermalizeConfigGNS{D,T}(
         num_qubits::Int64, with_coherent::Bool, with_linear_combination::Bool, domain::D,
-        beta::Float64, sigma::Float64,
-        gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}},
-        a::Union{Float64, Nothing}, b::Union{Float64, Nothing},
-        num_energy_bits::Union{Int, Nothing}, t0::Union{Float64, Nothing},
-        w0::Union{Float64, Nothing}, eta::Union{Float64, Nothing},
+        beta::T, sigma::T,
+        gaussian_parameters::Union{Tuple{T, T}, Tuple{Nothing, Nothing}},
+        a::Union{T, Nothing}, b::Union{T, Nothing},
+        num_energy_bits::Union{Int, Nothing}, t0::Union{T, Nothing},
+        w0::Union{T, Nothing}, eta::Union{T, Nothing},
         num_trotter_steps_per_t0::Union{Int, Nothing},
-        mixing_time::Float64, delta::Float64
-    ) where {D}
+        mixing_time::T, delta::T
+    ) where {D, T}
         with_coherent && error("GNS configs must have with_coherent=false")
-        new{D}(num_qubits, with_coherent, with_linear_combination, domain,
+        new{D,T}(num_qubits, with_coherent, with_linear_combination, domain,
                beta, sigma, gaussian_parameters, a, b,
                num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0,
                mixing_time, delta)
@@ -250,20 +254,20 @@ function ThermalizeConfigGNS(;
     with_coherent::Bool = false,
     with_linear_combination::Bool,
     domain::D,
-    beta::Float64,
-    sigma::Float64,
-    gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}} = (nothing, nothing),
-    a::Union{Float64, Nothing} = nothing,
-    b::Union{Float64, Nothing} = nothing,
+    beta::T = 1.0,
+    sigma::T = 0.1,
+    gaussian_parameters::Union{Tuple{T, T}, Tuple{Nothing, Nothing}} = (nothing, nothing),
+    a::Union{T, Nothing} = nothing,
+    b::Union{T, Nothing} = nothing,
     num_energy_bits::Union{Int, Nothing} = nothing,
-    t0::Union{Float64, Nothing} = nothing,
-    w0::Union{Float64, Nothing} = nothing,
-    eta::Union{Float64, Nothing} = nothing,
+    t0::Union{T, Nothing} = nothing,
+    w0::Union{T, Nothing} = nothing,
+    eta::Union{T, Nothing} = nothing,
     num_trotter_steps_per_t0::Union{Int, Nothing} = nothing,
-    mixing_time::Float64,
-    delta::Float64,
-) where {D <: AbstractDomain}
-    ThermalizeConfigGNS{D}(num_qubits, with_coherent, with_linear_combination, domain,
+    mixing_time::T,
+    delta::T,
+) where {D <: AbstractDomain, T <: AbstractFloat}
+    ThermalizeConfigGNS{D,T}(num_qubits, with_coherent, with_linear_combination, domain,
                            beta, sigma, gaussian_parameters, a, b,
                            num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0,
                            mixing_time, delta)
@@ -279,15 +283,15 @@ end
     - `in_eigenbasis`: The operator transformed into the Hamiltonian's eigenbasis (or Trotter basis).
     - `orthogonal`: Boolean flag indicating if this operator is self-orthogonal. If yes, the algorithm simplifies a bit.
 """
-struct JumpOp{T <: AbstractMatrix{ComplexF64}}
+struct JumpOp{T <: AbstractMatrix{<:Complex}}
     data::T
-    in_eigenbasis::Matrix{ComplexF64}
+    in_eigenbasis::Matrix{<:Complex}
     orthogonal::Bool
     hermitian::Bool
 end
 
 """
-        HotAlgorithmResults{D}
+        HotAlgorithmResults{D, T}
 
     Results from the step-by-step quantum algorithm emulation on thermalization.
 
@@ -299,17 +303,17 @@ end
     - `trotter`: The [`TrottTrott`](@ref) data used, in case of a TrotterDomain simulation.
     - `config`: The given configuration used.
 """
-@kwdef struct HotAlgorithmResults{D}
-    evolved_dm::Matrix{ComplexF64}
-    distances_to_gibbs::Vector{Float64}
-    time_steps::Vector{Float64}
-    hamiltonian::HamHam
-    trotter::Union{TrottTrott,Nothing} = nothing
-    config::AbstractThermalizeConfig{D}
+@kwdef struct HotAlgorithmResults{D, T<:AbstractFloat}
+    evolved_dm::Matrix{Complex{T}}
+    distances_to_gibbs::Vector{T}
+    time_steps::Vector{T}
+    hamiltonian::HamHam{T}
+    trotter::Union{TrottTrott{T}, Nothing} = nothing
+    config::AbstractThermalizeConfig{D,T}
 end
 
 """
-        HotSpectralResults{D}
+        HotSpectralResults{D, T}
 
     Results from the spectral analysis of the Liouvillian.
 
@@ -322,14 +326,14 @@ end
     - `trotter`: The [`TrottTrott`](@ref) data used, in case of a TrotterDomain simulation.
     - `config`: The given configuration used.
 """
-@kwdef struct HotSpectralResults{D}
-    data::Matrix{ComplexF64}  #! Remove when space matters
-    fixed_point::Matrix{ComplexF64}
-    gap_mode::Matrix{ComplexF64}
-    spectral_gap::ComplexF64
-    hamiltonian::HamHam
-    trotter::Union{TrottTrott,Nothing} = nothing
-    config::AbstractLiouvConfig{D}
+@kwdef struct HotSpectralResults{D, T<:AbstractFloat}
+    data::Matrix{Complex{T}}  #! Remove when space matters
+    fixed_point::Matrix{Complex{T}}
+    gap_mode::Matrix{Complex{T}}
+    spectral_gap::Complex{T}
+    hamiltonian::HamHam{T}
+    trotter::Union{TrottTrott{T}, Nothing} = nothing
+    config::AbstractLiouvConfig{D,T}
 end
 
 struct LSIFramework{T}
@@ -340,9 +344,9 @@ struct LSIFramework{T}
     Gamma2_AdagA::Matrix{T}  # Γ_2(A'A) = sig^1/4 A'A sig^1/4
     gradient::Matrix{T}     # Gradient accumulator
 
-    temp1::Matrix{T}       
-    temp2::Matrix{T}        
-    temp3::Matrix{T}        
+    temp1::Matrix{T}
+    temp2::Matrix{T}
+    temp3::Matrix{T}
 
     sigma_quarter::Matrix{T}   # Sigma^1/4
     sigma_half::Matrix{T}      # Sigma^1/2
