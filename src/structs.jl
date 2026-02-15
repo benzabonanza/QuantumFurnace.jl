@@ -51,8 +51,6 @@ struct LindbladianWorkspace{T<:AbstractFloat}
         new{T}(Id, jump_tmp, jump_conj, jump_dag_jump, jump2_jump1)
     end
 end
-LindbladianWorkspace(dim::Int) = LindbladianWorkspace{Float64}(dim)
-
 abstract type AbstractConfig{D<:AbstractDomain, T<:AbstractFloat} end
 abstract type AbstractLiouvConfig{D<:AbstractDomain, T<:AbstractFloat} <: AbstractConfig{D,T} end
 abstract type AbstractThermalizeConfig{D<:AbstractDomain, T<:AbstractFloat} <: AbstractConfig{D,T} end
