@@ -5,6 +5,7 @@ struct TrajectoryWorkspace{T}
     jump_oft::Matrix{T}   # buffer for A_ω (or its dagger-partner is handled by swapping mul order)
     psi_tmp::Vector{T}    # generic tmp for matvec results (K0ψ, Aωψ, Uresψ, etc.)
     Rpsi::Vector{T}       # cache Rψ so K0ψ can be formed as ψ - α(Rψ) without a second matvec
+    rho_acc::Matrix{T}    # density matrix accumulator for trajectory averaging
 end
 
 function TrajectoryWorkspace(::Type{T}, dim::Int) where {T}
@@ -12,7 +13,19 @@ function TrajectoryWorkspace(::Type{T}, dim::Int) where {T}
         zeros(T, dim, dim),  # jump_oft
         zeros(T, dim),       # psi_tmp
         zeros(T, dim),       # Rpsi
+        zeros(T, dim, dim),  # rho_acc
     )
+end
+
+"""
+Result of a trajectory simulation run.
+"""
+struct TrajectoryResult{T}
+    rho_mean::Matrix{T}
+    n_trajectories::Int
+    seed::Int
+    times::Union{Nothing, Vector{Float64}}
+    measurements_mean::Union{Nothing, Matrix{Float64}}
 end
 
 """
@@ -41,9 +54,11 @@ struct TrajectoryFramework{T,D<:AbstractDomain}
     delta::Float64           # original delta (for time stepping / num_steps)
     delta_eff::Float64       # delta / p_jump = delta * n_jumps (for per-operator Kraus probabilities)
     alpha::Float64           # α = 1 - sqrt(1-δ_eff)
+end
 
-    # Runtime workspace (mutated during stepping)
-    ws::TrajectoryWorkspace{T}
+function TrajectoryWorkspace(fw::TrajectoryFramework{T}) where {T}
+    dim = size(fw.per_operator[1].R, 1)
+    TrajectoryWorkspace(T, dim)
 end
 
 function build_trajectoryframework(
@@ -120,8 +135,6 @@ function build_trajectoryframework(
         per_operator[a] = PerOperatorKraus(R_a, K0_a, U_residual_a, per_op_U_B[a])
     end
 
-    ws = TrajectoryWorkspace(CT, dim)
-
     return TrajectoryFramework(
         config.domain,
         jumps_for_diss,
@@ -133,7 +146,6 @@ function build_trajectoryframework(
         Float64(delta),
         Float64(delta_eff),
         Float64(alpha),
-        ws,
     )
 end
 
@@ -273,16 +285,18 @@ end
 end
 
 """
-    _evolve_along_trajectory!(psi, fw::TrajectoryFramework, total_time) -> Vector{<:Complex}
+    _evolve_along_trajectory!(psi, fw, ws, rng, total_time) -> Vector{<:Complex}
 
     Runs `num_steps = ceil(total_time/δ)` full δ-steps using `step_along_trajectory!`.
-    Does not allocate inside the loop (beyond RNG internals); all workspace is in `fw.ws`.
+    Does not allocate inside the loop (beyond RNG internals); all workspace is in `ws`.
 
     Normalization: each step normalizes in the branch logic (and after U_B if present).
 """
 function _evolve_along_trajectory!(
     psi::Vector{<:Complex},
     fw::TrajectoryFramework{<:Complex},
+    ws::TrajectoryWorkspace{<:Complex},
+    rng::AbstractRNG,
     total_time::Real,
 )
 
@@ -296,7 +310,7 @@ function _evolve_along_trajectory!(
     rmul!(psi, 1.0 / sqrt(max(psi_norm2, eps(Float64))))
 
     @inbounds for _ in 1:num_steps
-        step_along_trajectory!(psi, fw)  # dispatches to EnergyDomain or Time/Trotter variant
+        step_along_trajectory!(psi, fw, ws, rng)  # dispatches to EnergyDomain or Time/Trotter variant
     end
 
     return psi
@@ -320,12 +334,15 @@ end
 """
     run_trajectories(jumps, config, psi0, hamiltonian; trotter=nothing,
                      total_time=config.mixing_time, delta=config.delta,
-                     ntraj=1, observables=nothing, save_every=1, store_states=false)
+                     ntraj=1, observables=nothing, save_every=1, seed=nothing)
 
     Builds the TrajectoryFramework once, then runs `ntraj` trajectories.
+    Returns a `TrajectoryResult` containing the averaged density matrix, trajectory count,
+    and the RNG seed used (for reproducibility).
 
-    - If `observables === nothing`: returns final state(s) only.
-    - If `observables` provided: returns time grid and trajectory-averaged ⟨O_i⟩(t).
+    - If `seed` is `nothing`, a random seed is generated from system entropy.
+    - If `observables === nothing`: returns `TrajectoryResult` with `times=nothing`, `measurements_mean=nothing`.
+    - If `observables` provided: returns `TrajectoryResult` with time grid and trajectory-averaged ⟨O_i⟩(t).
 """
 function run_trajectories(
     jumps::Vector{JumpOp},
@@ -338,7 +355,7 @@ function run_trajectories(
     ntraj::Int = 1,
     observables::Union{Nothing, Vector{<:Matrix{<:Complex}}} = nothing,
     save_every::Int = 1,
-    store_states::Bool = false,
+    seed::Union{Int,Nothing} = nothing,
 )
 
     validate_config!(config)
@@ -360,39 +377,35 @@ function run_trajectories(
     precomputed_data = _precompute_data(config, ham_or_trott)
 
     dim = size(hamiltonian.data, 1)
-    rho_mean = zeros(CT, dim, dim)
     builder_scratch = KrausScratch(CT, dim)
 
     fw = build_trajectoryframework(jumps, ham_or_trott, config, precomputed_data, builder_scratch, delta)
 
+    # Create workspace and RNG separately from the framework
+    actual_seed = seed === nothing ? Int(rand(Random.RandomDevice(), UInt64) >> 1) : seed
+    rng = Random.Xoshiro(actual_seed)
+    ws = TrajectoryWorkspace(CT, dim)
+
     # ------------------------------------------------------------------
-    # No measurements: just run and (optionally) store final psi per traj
+    # No measurements: just run and accumulate density matrix
     # ------------------------------------------------------------------
     if observables === nothing
-        if ntraj == 1 && !store_states
-            psi = copy(psi0)
-            _evolve_along_trajectory!(psi, fw, total_time)
-            _accumulate_density_matrix!(rho_mean, psi)
-            hermitianize!(rho_mean)
-            return (framework = fw, psi = psi, rho_mean = rho_mean)
-        end
-
-        states = store_states ? Matrix{CT}(undef, dim, ntraj) : nothing
         psi = copy(psi0)
 
-        @inbounds for trajectory in 1:ntraj
-            copyto!(psi, psi0)
-            _evolve_along_trajectory!(psi, fw, total_time)
-            _accumulate_density_matrix!(rho_mean, psi)
-            if store_states
-                @views states[:, trajectory] .= psi
+        if ntraj == 1
+            _evolve_along_trajectory!(psi, fw, ws, rng, total_time)
+            _accumulate_density_matrix!(ws.rho_acc, psi)
+        else
+            @inbounds for trajectory in 1:ntraj
+                copyto!(psi, psi0)
+                _evolve_along_trajectory!(psi, fw, ws, rng, total_time)
+                _accumulate_density_matrix!(ws.rho_acc, psi)
             end
         end
 
-        rho_mean ./= ntraj
-        hermitianize!(rho_mean)
-
-        return (framework = fw, states = states, rho_mean = rho_mean)
+        rho_result = ws.rho_acc ./ ntraj
+        hermitianize!(rho_result)
+        return TrajectoryResult(rho_result, ntraj, actual_seed, nothing, nothing)
     end
 
     # ------------------------------------------------------------------
@@ -410,8 +423,8 @@ function run_trajectories(
 
     mean_data = zeros(Float64, num_obs, num_saves)
 
-    # reuse fw workspace vector as gemv buffer for measurement (safe between steps)
-    tmp_meas = fw.ws.psi_tmp
+    # reuse workspace vector as gemv buffer for measurement (safe between steps)
+    tmp_meas = ws.psi_tmp
     psi = copy(psi0)
 
     @inbounds for _ in 1:ntraj
@@ -426,28 +439,34 @@ function run_trajectories(
 
         save_idx = 1
         for step in 1:num_steps
-            step_along_trajectory!(psi, fw)
+            step_along_trajectory!(psi, fw, ws, rng)
 
             if step % save_every == 0
                 save_idx += 1
                 _accumulate_measurements!(mean_data, save_idx, psi, observables, tmp_meas)
             end
         end
-        _accumulate_density_matrix!(rho_mean, psi)
+        _accumulate_density_matrix!(ws.rho_acc, psi)
     end
 
     mean_data ./= ntraj
-    rho_mean ./= ntraj
-    hermitianize!(rho_mean)
+    rho_result = ws.rho_acc ./ ntraj
+    hermitianize!(rho_result)
 
-    return (framework = fw, times = times, measurements_mean = mean_data, rho_mean = rho_mean)
+    return TrajectoryResult(rho_result, ntraj, actual_seed, times, mean_data)
 end
 
 """
-    step_along_trajectory!(psi, fw::TrajectoryFramework)  for D ∈ {TimeDomain, TrotterDomain}
+    step_along_trajectory!(psi, fw, ws, rng)  for D ∈ {TimeDomain, TrotterDomain}
 
     Per-operator Lie-Trotter splitting: randomly select ONE operator a, apply that operator's
     CPTP channel (K0_a, U_res_a, jump outcomes for operator a only).
+
+    Arguments:
+    - `psi`: state vector (modified in-place)
+    - `fw`: read-only trajectory framework
+    - `ws`: mutable workspace (scratch buffers)
+    - `rng`: random number generator (explicit for thread safety and reproducibility)
 
     # Per-operator channel structure (Chen 2023, adapted for Lie-Trotter splitting):
     #   Pick a ∈ {1,...,N_jumps} uniformly at random
@@ -459,9 +478,10 @@ end
 function step_along_trajectory!(
     psi::Vector{<:Complex},
     fw::TrajectoryFramework{<:Complex,D},
+    ws::TrajectoryWorkspace{<:Complex},
+    rng::AbstractRNG,
     ) where {D<:Union{TimeDomain,TrotterDomain}}
 
-    ws = fw.ws
     cfg = fw.config
     pd  = fw.precomputed_data
 
@@ -480,7 +500,7 @@ function step_along_trajectory!(
     # ------------------------------------------------------------------
     # Random operator selection (Lie-Trotter splitting)
     # ------------------------------------------------------------------
-    a = rand(1:fw.n_jumps)
+    a = rand(rng, 1:fw.n_jumps)
     per_op = fw.per_operator[a]
     jump = fw.jumps[a]
 
@@ -514,7 +534,7 @@ function step_along_trajectory!(
         @warn "Normalization violation: sum = $(round(total_weight; digits=6))"
     end
 
-    r = rand() * total_weight
+    r = rand(rng) * total_weight
 
     # ------------------------------------------------------------------
     # Branch: no-jump / residual / dissipative jump (for selected operator a only)
@@ -598,7 +618,7 @@ function step_along_trajectory!(
 end
 
 """
-    step_along_trajectory!(psi, fw::TrajectoryFramework)  for D == EnergyDomain
+    step_along_trajectory!(psi, fw, ws, rng)  for D == EnergyDomain
 
     Per-operator Lie-Trotter splitting for EnergyDomain.
     Same logic as Time/Trotter variant but A_{a,ω} is generated by `oft!(...)`.
@@ -606,9 +626,10 @@ end
 function step_along_trajectory!(
     psi::Vector{<:Complex},
     fw::TrajectoryFramework{<:Complex,EnergyDomain},
+    ws::TrajectoryWorkspace{<:Complex},
+    rng::AbstractRNG,
     )
 
-    ws = fw.ws
     cfg = fw.config
     pd  = fw.precomputed_data
 
@@ -624,7 +645,7 @@ function step_along_trajectory!(
     # ------------------------------------------------------------------
     # Random operator selection (Lie-Trotter splitting)
     # ------------------------------------------------------------------
-    a = rand(1:fw.n_jumps)
+    a = rand(rng, 1:fw.n_jumps)
     per_op = fw.per_operator[a]
     jump = fw.jumps[a]
 
@@ -658,7 +679,7 @@ function step_along_trajectory!(
         @warn "Normalization violation: sum = $(round(total_weight; digits=6))"
     end
 
-    r = rand() * total_weight
+    r = rand(rng) * total_weight
 
     # ------------------------------------------------------------------
     # Branch: no-jump / residual / dissipative jump (for selected operator a only)

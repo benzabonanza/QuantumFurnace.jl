@@ -75,11 +75,12 @@ ref_dir = joinpath(source_root, "test", "reference")
         fw = build_trajectoryframework(SMALL_JUMPS, SMALL_HAM, therm_config,
             precomputed, scratch, delta)
 
-        Random.seed!(seed)
+        ws = QuantumFurnace.TrajectoryWorkspace(fw)
+        rng = Random.Xoshiro(seed)
         rho_traj = zeros(ComplexF64, SMALL_DIM, SMALL_DIM)
         for _ in 1:ntraj
             psi = copy(psi0)
-            step_along_trajectory!(psi, fw)
+            step_along_trajectory!(psi, fw, ws, rng)
             rho_traj .+= psi * psi'
         end
         rho_traj ./= ntraj
@@ -139,11 +140,12 @@ ref_dir = joinpath(source_root, "test", "reference")
         fw = build_trajectoryframework(SMALL_JUMPS, SMALL_TROTTER, therm_config,
             precomputed, scratch, delta)
 
-        Random.seed!(seed)
+        ws = QuantumFurnace.TrajectoryWorkspace(fw)
+        rng = Random.Xoshiro(seed)
         rho_traj = zeros(ComplexF64, SMALL_DIM, SMALL_DIM)
         for _ in 1:ntraj
             psi = copy(psi0)
-            step_along_trajectory!(psi, fw)
+            step_along_trajectory!(psi, fw, ws, rng)
             rho_traj .+= psi * psi'
         end
         rho_traj ./= ntraj

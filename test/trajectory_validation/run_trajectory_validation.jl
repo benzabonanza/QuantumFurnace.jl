@@ -57,10 +57,11 @@ function single_step_crossval(domain, delta::Float64;
 
     # 3. Run trajectories and accumulate rho
     rho_traj = zeros(ComplexF64, dim, dim)
-    Random.seed!(seed)
+    ws = QuantumFurnace.TrajectoryWorkspace(fw)
+    rng = Random.Xoshiro(seed)
     for _ in 1:ntraj
         psi = copy(psi0)
-        step_along_trajectory!(psi, fw)
+        step_along_trajectory!(psi, fw, ws, rng)
         rho_traj .+= psi * psi'
     end
     rho_traj ./= ntraj
@@ -219,9 +220,8 @@ end
     therm_config = make_small_thermalize_config(TrotterDomain();
         with_coherent=true, delta=delta, mixing_time=total_time)
 
-    Random.seed!(42)
     result = run_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
-        trotter=SMALL_TROTTER, total_time=total_time, delta=delta, ntraj=10_000)
+        trotter=SMALL_TROTTER, total_time=total_time, delta=delta, ntraj=10_000, seed=42)
     rho_traj = result.rho_mean
 
     # -- Assertions --

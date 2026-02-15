@@ -22,8 +22,9 @@ using Random
                 # Run a single step with a fixed RNG seed
                 psi = zeros(ComplexF64, DIM)
                 psi[1] = 1.0
-                Random.seed!(42)
-                step_along_trajectory!(psi, fw)
+                ws = QuantumFurnace.TrajectoryWorkspace(fw)
+                rng = Random.Xoshiro(42)
+                step_along_trajectory!(psi, fw, ws, rng)
 
                 # Output must be normalized (U_B ordering bug produced unnormalized output)
                 @test isapprox(norm(psi), 1.0; atol=1e-12)
@@ -47,10 +48,11 @@ using Random
 
         psi = zeros(ComplexF64, DIM)
         psi[1] = 1.0
-        Random.seed!(123)
+        ws = QuantumFurnace.TrajectoryWorkspace(fw)
+        rng = Random.Xoshiro(123)
 
         # Should complete without error; with properly built framework, no warning expected
-        step_along_trajectory!(psi, fw)
+        step_along_trajectory!(psi, fw, ws, rng)
         @test isapprox(norm(psi), 1.0; atol=1e-12)
 
         # Verify total_weight is approximately 1.0 by checking per-operator CPTP property
@@ -116,8 +118,9 @@ using Random
 
             # Run a single step and verify output is still normalized
             psi_copy = copy(psi)
-            Random.seed!(42)
-            step_along_trajectory!(psi_copy, fw)
+            ws_check = QuantumFurnace.TrajectoryWorkspace(fw)
+            rng_check = Random.Xoshiro(42)
+            step_along_trajectory!(psi_copy, fw, ws_check, rng_check)
             @test isapprox(norm(psi_copy), 1.0; atol=1e-12)
         end
     end
