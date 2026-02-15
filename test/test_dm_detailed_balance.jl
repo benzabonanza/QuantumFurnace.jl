@@ -40,7 +40,7 @@ errors: dist(Bohr) <= dist(Energy) <= dist(Time) <= dist(Trotter).
     ss_dm = (ss_dm + ss_dm') / 2
     ss_dm ./= tr(ss_dm)
 
-    dist = QuantumFurnace.trace_distance_h(Hermitian(ss_dm), SMALL_GIBBS)
+    dist = trace_distance_h(Hermitian(ss_dm), SMALL_GIBBS)
     @info "DMTST-01: Bohr fixed point trace distance to Gibbs" dist
     @test dist < 1e-10
 end
@@ -70,7 +70,7 @@ end
         else
             TEST_GIBBS
         end
-        distances[name] = QuantumFurnace.trace_distance_h(Hermitian(ss_dm), gibbs_ref)
+        distances[name] = trace_distance_h(Hermitian(ss_dm), gibbs_ref)
     end
 
     @info "DMTST-02: Domain distances to Gibbs" bohr=distances[:bohr] energy=distances[:energy] time=distances[:time] trotter=distances[:trotter]

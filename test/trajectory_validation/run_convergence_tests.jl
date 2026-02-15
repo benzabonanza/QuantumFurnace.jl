@@ -50,8 +50,8 @@ function convergence_ratio_test(domain; with_coherent::Bool, delta::Float64=0.1,
     therm_config = make_small_thermalize_config(domain;
         with_coherent=with_coherent, delta=delta, mixing_time=Float64(delta))
     ham_or_trott = domain isa TrotterDomain ? SMALL_TROTTER : SMALL_HAM
-    precomputed = precompute_data(domain, therm_config, ham_or_trott)
-    scratch = KrausScratch(ComplexF64, dim)
+    precomputed = QuantumFurnace.precompute_data(domain, therm_config, ham_or_trott)
+    scratch = QuantumFurnace.KrausScratch(ComplexF64, dim)
     fw = build_trajectoryframework(SMALL_JUMPS, ham_or_trott, therm_config,
         precomputed, scratch, delta)
 
@@ -90,7 +90,7 @@ function convergence_ratio_test(domain; with_coherent::Bool, delta::Float64=0.1,
             rho_traj = Matrix{ComplexF64}((rho_traj + rho_traj') / 2)
             rho_traj ./= tr(rho_traj)
 
-            dist = QuantumFurnace.trace_distance_h(Hermitian(rho_ref), Hermitian(rho_traj))
+            dist = trace_distance_h(Hermitian(rho_ref), Hermitian(rho_traj))
             push!(batch_errors, dist)
         end
         push!(mean_errors, mean(batch_errors))
