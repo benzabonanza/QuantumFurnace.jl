@@ -46,18 +46,26 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 
 ### Active
 
+**Current Milestone v1.2 Multi-threading:**
+- [ ] Multi-threaded trajectory sampling with shared precomputed data (n=12-ready architecture)
+- [ ] GNS (approximate, no B term) trajectory path via ThermalizeConfigGNS
+- [ ] Adaptive trajectory sampling (run until convergence criterion met)
+- [ ] Convergence tracking: trace distance to Gibbs of averaged trajectories
+- [ ] Per-observable trajectory convergence (observable TBD — research best choice for Heisenberg chain)
+- [ ] Data architecture for saving experiment results (convergence data, configs)
+- [ ] KMS-vs-GNS paper experiments: beta=5,10,20 (maybe 30), n=4,6,8, TrotterDomain, delta~1e-3
+
+**Future milestones:**
 - [ ] 1D Ising model Hamiltonian generation
 - [ ] 2D Heisenberg Hamiltonian generation (lattice graph support)
 - [ ] General k-local Hamiltonian construction on arbitrary graphs
-- [ ] Error/convergence analysis functions: trace distance to Gibbs, fidelity, relative entropy vs. time/steps
-- [ ] Qiskit circuit generation for resource estimation (gate count, circuit depth)
 - [ ] Hamiltonian simulation time counter (total Hamiltonian simulation cost per Gibbs sample)
 - [ ] Gate complexity counter for Trotter-based circuit implementations
-- [ ] Multi-threaded trajectory sampling with shared precomputed data
+- [ ] Mixing time estimation (trajectory-based, for n>8 where full Lindbladian infeasible)
+- [ ] Qiskit circuit generation for resource estimation (gate count, circuit depth)
 - [ ] Documentation: API docs via Documenter.jl, theory tutorials via Literate.jl
-- [ ] Paper-ready numerical results: convergence plots, mixing time scaling, domain comparison
+- [ ] Paper-ready plotting: convergence curves, sim time plots, gate complexity, mixing time
 - [ ] Ding et al. (2024) KMS Lindbladian construction with discrete jump operators (future addition)
-- [ ] Per-observable trajectory convergence (<Z_i> from trajectories matches DM)
 - [ ] Jump statistics histogram (empirical rates match theoretical predictions)
 - [ ] Confidence interval reporting (bootstrap CIs on trajectory-vs-DM trace distance)
 
@@ -125,5 +133,17 @@ Results needed for publication: convergence curves (trace distance vs. steps), m
 | Qiskit for circuit generation (Python interop) | Qiskit is the standard for quantum circuit representation; Julia quantum circuit ecosystem less mature | -- Pending |
 | Single-node multi-core for trajectories | Shared memory for precomputed data avoids serialization overhead; cluster nodes have enough RAM | -- Pending benchmarks |
 
+## Current Milestone: v1.2 Multi-threading
+
+**Goal:** Multi-threaded trajectory sampling engine with GNS comparison path, enabling paper-ready KMS-vs-GNS convergence experiments across temperature regimes and system sizes.
+
+**Target features:**
+- Multi-threaded trajectory engine with shared precomputed data (n=12-ready)
+- GNS (approximate, no B term) trajectory simulation path
+- Adaptive sampling until convergence criterion met
+- Convergence tracking (trace distance to Gibbs, per-observable)
+- Data saving architecture for experiment results
+- KMS-vs-GNS comparison experiments (beta sweep, n=4,6,8, TrotterDomain)
+
 ---
-*Last updated: 2026-02-15 after v1.1 Reduce milestone complete*
+*Last updated: 2026-02-15 after v1.2 Multi-threading milestone started*
