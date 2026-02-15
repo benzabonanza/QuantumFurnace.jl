@@ -13,4 +13,5 @@ include("test_helpers.jl")
     include("test_dm_detailed_balance.jl")
     include("test_dm_scaling.jl")
     include("test_regression.jl")
+    include("test_allocation.jl")
 end
