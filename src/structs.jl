@@ -116,8 +116,8 @@ end
     with_coherent::Bool = false
     with_linear_combination::Bool
     domain::D
-    beta::T = 1.0
-    sigma::T = 0.1
+    beta::T
+    sigma::T
     gaussian_parameters::Union{Tuple{T, T}, Tuple{Nothing, Nothing}} = (nothing, nothing)
     a::Union{T, Nothing} = nothing
     b::Union{T, Nothing} = nothing
@@ -137,17 +137,6 @@ end
                beta, sigma, gaussian_parameters, a, b,
                num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0)
     end
-end
-
-# Bridge for @kwdef: unparameterized positional -> parameterized inner constructor
-function LiouvConfigGNS(
-    num_qubits::Int64, with_coherent::Bool, with_linear_combination::Bool, domain::D,
-    beta::T, sigma::T, gaussian_parameters, a, b,
-    num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0
-) where {D <: AbstractDomain, T <: AbstractFloat}
-    LiouvConfigGNS{D,T}(num_qubits, with_coherent, with_linear_combination, domain,
-                      beta, sigma, gaussian_parameters, a, b,
-                      num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0)
 end
 
 """
@@ -198,8 +187,8 @@ end
     with_coherent::Bool = false
     with_linear_combination::Bool
     domain::D
-    beta::T = 1.0
-    sigma::T = 0.1
+    beta::T
+    sigma::T
     gaussian_parameters::Union{Tuple{T, T}, Tuple{Nothing, Nothing}} = (nothing, nothing)
     a::Union{T, Nothing} = nothing
     b::Union{T, Nothing} = nothing
@@ -224,19 +213,6 @@ end
                num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0,
                mixing_time, delta)
     end
-end
-
-# Bridge for @kwdef: unparameterized positional -> parameterized inner constructor
-function ThermalizeConfigGNS(
-    num_qubits::Int64, with_coherent::Bool, with_linear_combination::Bool, domain::D,
-    beta::T, sigma::T, gaussian_parameters, a, b,
-    num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0,
-    mixing_time::T, delta::T
-) where {D <: AbstractDomain, T <: AbstractFloat}
-    ThermalizeConfigGNS{D,T}(num_qubits, with_coherent, with_linear_combination, domain,
-                           beta, sigma, gaussian_parameters, a, b,
-                           num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0,
-                           mixing_time, delta)
 end
 
 """
