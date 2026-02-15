@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-14)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.1 Reduce -- Phase 11: Allocation Optimization (in progress)
+**Current focus:** v1.1 Reduce -- Phase 11: Allocation Optimization (COMPLETE)
 
 ## Current Position
 
 Phase: 11 of 11 (Allocation Optimization)
-Plan: 2 of 3 in current phase -- COMPLETE
-Status: Executing phase 11
-Last activity: 2026-02-15 - Completed 11-02: Diagonal elimination and redundant transform removal
+Plan: 3 of 3 in current phase -- COMPLETE
+Status: Phase 11 complete
+Last activity: 2026-02-15 - Completed 11-03: Allocation regression tests
 
-Progress: [#############       ] 67% (Phase 11: 2/3 plans)
+Progress: [####################] 100% (Phase 11: 3/3 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 30 (v1.0: 10, v1.1: 15, quick: 5)
+- Total plans completed: 31 (v1.0: 10, v1.1: 16, quick: 5)
 - Average duration: --
 - Total execution time: --
 
@@ -38,7 +38,7 @@ Progress: [#############       ] 67% (Phase 11: 2/3 plans)
 | 10-api-surface-cleanup | 3/3 | 21min | 7min |
 | quick-17 | 1 | 1min | 1min |
 | quick-18 | 1 | 1min | 1min |
-| 11-allocation-optimization | 2/3 | 13min | 6.5min |
+| 11-allocation-optimization | 3/3 | 21min | 7min |
 
 *Updated after each plan completion*
 
@@ -91,6 +91,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - 11-01: No SparseArrays import changes needed -- spzeros was only SparseArrays usage in bohr_domain.jl
 - 11-02: Used explicit .+= .* broadcasting instead of @. to avoid transpose-inside-@. pitfall
 - 11-02: Test DMTST-05 updated to transform jump to Trotter basis before direct B_trotter call
+- 11-03: Threshold-based @allocated tests rather than exact zero, accounting for return values, scratch buffers, and closure broadcasting overhead
+- 11-03: B_bohr threshold calibrated at num_freqs * dim^2 * sizeof(ComplexF64) to catch per-frequency sparse matrix reintroduction
 
 ### Pending Todos
 
@@ -113,5 +115,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 11-02-PLAN.md (Diagonal elimination and redundant transform removal)
+Stopped at: Completed 11-03-PLAN.md (Allocation regression tests) -- Phase 11 complete
 Resume file: None
