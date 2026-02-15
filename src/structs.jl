@@ -53,33 +53,6 @@ abstract type AbstractConfig{D<:AbstractDomain} end
 abstract type AbstractLiouvConfig{D<:AbstractDomain} <: AbstractConfig{D} end
 abstract type AbstractThermalizeConfig{D<:AbstractDomain} <: AbstractConfig{D} end
 
-"""
-    _build_common_fields(; kwargs...) -> NamedTuple
-
-Shared constructor helper for all 4 config types. Validates and returns
-the common fields as a NamedTuple. Centralizes default logic so that
-individual struct definitions stay DRY in construction.
-"""
-function _build_common_fields(;
-    num_qubits::Int64,
-    with_coherent::Bool,
-    with_linear_combination::Bool,
-    beta::Float64,
-    sigma::Float64,
-    gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}} = (nothing, nothing),
-    a::Union{Float64, Nothing} = nothing,
-    b::Union{Float64, Nothing} = nothing,
-    num_energy_bits::Union{Int, Nothing} = nothing,
-    t0::Union{Float64, Nothing} = nothing,
-    w0::Union{Float64, Nothing} = nothing,
-    eta::Union{Float64, Nothing} = nothing,
-    num_trotter_steps_per_t0::Union{Int, Nothing} = nothing,
-)
-    return (; num_qubits, with_coherent, with_linear_combination,
-            beta, sigma, gaussian_parameters, a, b,
-            num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0)
-end
-
 # Let's keep this structure, and have the "give w0 for desired energy integral error" type of config optimization
 # before the construct_liouvillian function
 """
