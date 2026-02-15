@@ -151,13 +151,13 @@ function create_alpha_gauss(
 end
 
 #* TOOLS --------------------------------------------------------------------------------------------------------------------
-function create_bohr_dict(bohr_freqs::Matrix{Float64})
-    """Creates a dictionary, where the keys are the Bohr frequencies, and the values are a list of their sparse indices 
+function create_bohr_dict(bohr_freqs::Matrix{T}) where {T<:AbstractFloat}
+    """Creates a dictionary, where the keys are the Bohr frequencies, and the values are a list of their sparse indices
     in the Bohr matrix. (With special care on the diagonal elements, that are identically 0.)"""
 
-    bohr_dict = DefaultDict{Float64, Vector{CartesianIndex{2}}}(() -> CartesianIndex{2}[])
+    bohr_dict = DefaultDict{T, Vector{CartesianIndex{2}}}(() -> CartesianIndex{2}[])
     dim = size(bohr_freqs, 1)
-    bohr_dict[0.0] = CartesianIndex{2}.(1:dim, 1:dim) # nu = 0.0 is the diagonal and might be other offdiags
+    bohr_dict[zero(T)] = CartesianIndex{2}.(1:dim, 1:dim) # nu = 0.0 is the diagonal and might be other offdiags
     for j in 1:dim
         for i in 1:(j - 1)
             push!(bohr_dict[bohr_freqs[i, j]], CartesianIndex{2}(i, j))
