@@ -57,7 +57,7 @@ config = LiouvConfig(
                 num_trotter_steps_per_t0 = num_trotter_steps_per_t0
         )
 
-precomputed_data = precompute_data(config.domain, config)
+precomputed_data = precompute_data(config)
 time_oft_caches = OFTCaches(dim)
 
 #* Hamiltonian

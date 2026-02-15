@@ -95,20 +95,20 @@ end
 
     # B_bohr (exact, in Hamiltonian eigenbasis)
     config_bohr = make_liouv_config(BohrDomain())
-    precomputed_bohr = precompute_data(BohrDomain(), config_bohr, TEST_HAM)
+    precomputed_bohr = precompute_data(config_bohr, TEST_HAM)
     B_bohr = coherent_bohr(TEST_HAM, jump, config_bohr)
     rmul!(B_bohr, precomputed_bohr.gamma_norm_factor)
 
     # B_time (time quadrature, in Hamiltonian eigenbasis)
     config_time = make_liouv_config(TimeDomain())
-    precomputed_time = precompute_data(TimeDomain(), config_time, TEST_HAM)
+    precomputed_time = precompute_data(config_time, TEST_HAM)
     B_time_val = B_time(jump, TEST_HAM, precomputed_time.b_minus, precomputed_time.b_plus,
                         T0, BETA, SIGMA)
     rmul!(B_time_val, precomputed_time.gamma_norm_factor)
 
     # B_trotter (Trotter + time quadrature, in Trotter eigenbasis)
     config_trott = make_liouv_config(TrotterDomain())
-    precomputed_trott = precompute_data(TrotterDomain(), config_trott, TEST_TROTTER)
+    precomputed_trott = precompute_data(config_trott, TEST_TROTTER)
     B_trott = B_trotter(jump, TEST_TROTTER, precomputed_trott.b_minus, precomputed_trott.b_plus,
                          BETA, SIGMA)
     rmul!(B_trott, precomputed_trott.gamma_norm_factor)
@@ -208,7 +208,7 @@ end
 
     # === Time NUFFT OFT ===
     config_time = make_liouv_config(TimeDomain())
-    precomputed_time = precompute_data(TimeDomain(), config_time, TEST_HAM)
+    precomputed_time = precompute_data(config_time, TEST_HAM)
 
     # Sanity: test energy must be on the NUFFT grid
     @test haskey(precomputed_time.oft_nufft_prefactors.energy_to_index, w)
@@ -224,7 +224,7 @@ end
 
     # === Trotter NUFFT OFT ===
     config_trott = make_liouv_config(TrotterDomain())
-    precomputed_trott = precompute_data(TrotterDomain(), config_trott, TEST_TROTTER)
+    precomputed_trott = precompute_data(config_trott, TEST_TROTTER)
 
     @test haskey(precomputed_trott.oft_nufft_prefactors.energy_to_index, w)
 

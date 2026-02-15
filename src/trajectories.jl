@@ -92,7 +92,7 @@ function build_trajectoryframework(
 
     @inbounds for a in 1:n_jumps
         # Compute R^a for single operator, rescaled by 1/p_jump
-        precompute_R(config.domain, [jumps_for_diss[a]], ham_or_trott, config, precomputed_data, scratch)
+        precompute_R([jumps_for_diss[a]], ham_or_trott, config, precomputed_data, scratch)
         R_a = copy(scratch.R)
         R_a .*= (1.0 / p_jump)   # rescale: R_a = (1/p_jump) * sum_w rate2(w) * A_w' * A_w
 
@@ -353,7 +353,7 @@ function run_trajectories(
         hamiltonian
     end
 
-    precomputed_data = precompute_data(config.domain, config, ham_or_trott)
+    precomputed_data = precompute_data(config, ham_or_trott)
 
     dim = size(hamiltonian.data, 1)
     rho_mean = zeros(ComplexF64, dim, dim)

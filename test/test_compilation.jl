@@ -5,7 +5,7 @@
 
     @testset "build_trajectoryframework with coherent" begin
         config = make_thermalize_config(EnergyDomain(); with_coherent=true)
-        precomputed = precompute_data(config.domain, config, TEST_HAM)
+        precomputed = precompute_data(config, TEST_HAM)
         scratch = KrausScratch(ComplexF64, DIM)
         fw = build_trajectoryframework(
             TEST_JUMPS, TEST_HAM, config, precomputed, scratch, TEST_DELTA
@@ -18,7 +18,7 @@
 
     @testset "build_trajectoryframework without coherent" begin
         config = make_thermalize_config(EnergyDomain(); with_coherent=false)
-        precomputed = precompute_data(config.domain, config, TEST_HAM)
+        precomputed = precompute_data(config, TEST_HAM)
         scratch = KrausScratch(ComplexF64, DIM)
         fw = build_trajectoryframework(
             TEST_JUMPS, TEST_HAM, config, precomputed, scratch, TEST_DELTA

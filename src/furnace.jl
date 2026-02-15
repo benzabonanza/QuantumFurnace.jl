@@ -51,7 +51,7 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::AbstractLiouvConfi
         hamiltonian
     end
 
-    precomputed_data = precompute_data(config.domain, config, ham_or_trott)
+    precomputed_data = precompute_data(config, ham_or_trott)
 
     #! uncomment for multi-threads
     # total_lindbladian = @distributed (+) for jump in jumps
@@ -79,7 +79,7 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::AbstractLiouvConfi
 
     # Accumulate Liouvillian in-place (no per-jump dim^2×dim^2 allocations).
     for (k, jump) in pairs(jumps_for_diss)
-        jump_contribution!(total_lindbladian, config.domain, jump, ham_or_trott, config, precomputed_data, ws;
+        jump_contribution!(total_lindbladian, jump, ham_or_trott, config, precomputed_data, ws;
             coherent_term=nothing)
     end
 
@@ -110,7 +110,7 @@ function run_thermalization(
         gibbs = hamiltonian.gibbs
     end
 
-    precomputed_data = precompute_data(config.domain, config, ham_or_trott)
+    precomputed_data = precompute_data(config, ham_or_trott)
 
     # For TrotterDomain, transform jump operators from Hamiltonian eigenbasis
     # to Trotter eigenbasis for the dissipative contribution.
@@ -136,7 +136,7 @@ function run_thermalization(
         idx = rand(rng, 1:length(jumps_for_diss))
         jump = jumps_for_diss[idx]
 
-        jump_contribution!(config.domain,
+        jump_contribution!(
             evolving_dm,
             jump,
             ham_or_trott,
