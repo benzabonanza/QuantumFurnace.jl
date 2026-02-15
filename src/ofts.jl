@@ -1,18 +1,18 @@
-function oft!(out_matrix::Matrix{ComplexF64}, jump::JumpOp, energy::Float64, hamiltonian::HamHam, sigma::Float64)
+function oft!(out_matrix::Matrix{<:Complex}, jump::JumpOp, energy::Real, hamiltonian::HamHam, sigma::Real)
     """Subnormalized, multiply by sqrt(1 / sigma sqrt(2 * pi))"""
-    @. out_matrix = jump.in_eigenbasis * exp(-(energy - hamiltonian.bohr_freqs)^2 / (4 * sigma^2)) 
+    @. out_matrix = jump.in_eigenbasis * exp(-(energy - hamiltonian.bohr_freqs)^2 / (4 * sigma^2))
     return out_matrix
 end
 
 # Depricated but used for tests. We use precomputed NUFFT prefactors now in jump_contributions!()
 function time_oft!(
-    out_matrix::Matrix{ComplexF64},
+    out_matrix::Matrix{<:Complex},
     caches::OFTCaches,
     jump::JumpOp,
-    energy::Float64,
-    hamiltonian::HamHam, 
-    time_labels::Vector{Float64},
-    sigma::Float64
+    energy::Real,
+    hamiltonian::HamHam,
+    time_labels::AbstractVector{<:Real},
+    sigma::Real
     )
     
     # Ensure the prefactor cache is the right size
@@ -58,13 +58,13 @@ function time_oft!(
 end
 
 function trotter_oft!(
-    out_matrix::Matrix{ComplexF64},
+    out_matrix::Matrix{<:Complex},
     caches::OFTCaches,
     jump::JumpOp,
-    energy::Float64,
-    trotter::TrottTrott, 
-    time_labels::Vector{Float64},
-    sigma::Float64
+    energy::Real,
+    trotter::TrottTrott,
+    time_labels::AbstractVector{<:Real},
+    sigma::Real
     )
 
     if length(caches.prefactors) != length(time_labels)

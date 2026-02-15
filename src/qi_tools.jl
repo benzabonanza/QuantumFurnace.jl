@@ -72,8 +72,8 @@ end
     there is some arithmetic error to an implementation that adds the parts together and then to the liouvillian.
 """
 function vectorize_liouv_diss_and_add!(
-    L_target::AbstractMatrix{ComplexF64},
-    jump::AbstractMatrix{ComplexF64},
+    L_target::AbstractMatrix{<:Complex},
+    jump::AbstractMatrix{<:Complex},
     scalar::Number,
     ws::LindbladianWorkspace
 )
@@ -94,9 +94,9 @@ function vectorize_liouv_diss_and_add!(
 end
 
 function vectorize_liouv_diss_and_add!(
-    L_target::AbstractMatrix{ComplexF64},
-    jump_1::AbstractMatrix{ComplexF64},
-    jump_2::AbstractMatrix{ComplexF64},
+    L_target::AbstractMatrix{<:Complex},
+    jump_1::AbstractMatrix{<:Complex},
+    jump_2::AbstractMatrix{<:Complex},
     scalar::Number,
     ws::LindbladianWorkspace
 )
@@ -113,8 +113,8 @@ function vectorize_liouv_diss_and_add!(
 end
 
 function vectorize_liouvillian_coherent!(
-    L_target::AbstractMatrix{ComplexF64},
-    coherent_term::AbstractMatrix{ComplexF64},
+    L_target::AbstractMatrix{<:Complex},
+    coherent_term::AbstractMatrix{<:Complex},
     ws::LindbladianWorkspace)
 
     Id = ws.Id
@@ -155,7 +155,7 @@ function fidelity(rho::Union{Hermitian{<:Real}, Hermitian{<:Complex}},
     return real(sum(sqrt.(eig_vals[eig_vals.>0])))^2
 end
 
-function frobenius_norm(A::Matrix{ComplexF64})
+function frobenius_norm(A::Matrix{<:Complex})
     eig_vals = eigvals(A)
     return sqrt(sum(abs.(eig_vals).^2))
 end
@@ -178,7 +178,7 @@ function is_density_matrix(rho::Union{Hermitian{<:Real}, Hermitian{<:Complex}})
     return true
 end
 
-function is_density_matrix(rho::Hermitian{ComplexF64, Matrix{ComplexF64}})
+function is_density_matrix(rho::Hermitian{Complex{T}, Matrix{Complex{T}}}) where {T<:AbstractFloat}
     if !isapprox(rho, rho')
         throw(ArgumentError("Input matrix is not Hermitian"))
     end
@@ -196,22 +196,23 @@ function is_density_matrix(rho::Hermitian{ComplexF64, Matrix{ComplexF64}})
     return true
 end
 
-function gibbs_state(hamiltonian::HamHam, beta::Float64)
+function gibbs_state(hamiltonian::HamHam{T}, beta::Real) where {T<:AbstractFloat}
     """Computes Gibbs state in computational basis!"""
+    CT = Complex{T}
     Z = sum(exp.(-beta * hamiltonian.eigvals))
-    rho = sum([exp(-beta * hamiltonian.eigvals[i]) * hamiltonian.eigvecs[:, i] * hamiltonian.eigvecs[:, i]' 
+    rho = sum([exp(-beta * hamiltonian.eigvals[i]) * hamiltonian.eigvecs[:, i] * hamiltonian.eigvecs[:, i]'
                                                                                     for i in 1:length(hamiltonian.eigvals)])
-    return Matrix{ComplexF64}(rho / Z)
+    return Matrix{CT}(rho / Z)
 end
 
-function gibbs_state_in_eigen(hamiltonian::HamHam, beta::Float64)
+function gibbs_state_in_eigen(hamiltonian::HamHam{T}, beta::Real) where {T<:AbstractFloat}
     """Computes Gibbs state in eigenbasis"""
-
+    CT = Complex{T}
     eigvecs_in_eigen = I(size(hamiltonian.data)[1])
     Z = sum(exp.(-beta * hamiltonian.eigvals))
-    rho = sum([exp(-beta * hamiltonian.eigvals[i]) * eigvecs_in_eigen[:, i] * eigvecs_in_eigen[:, i]' 
+    rho = sum([exp(-beta * hamiltonian.eigvals[i]) * eigvecs_in_eigen[:, i] * eigvecs_in_eigen[:, i]'
                                                                                     for i in 1:length(hamiltonian.eigvals)])
-    return Matrix{ComplexF64}(rho / Z)
+    return Matrix{CT}(rho / Z)
 end
 
 function random_density_matrix(num_qubits::Int)

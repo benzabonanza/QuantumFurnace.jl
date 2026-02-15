@@ -1,15 +1,16 @@
 #! Changed it slightly for speed without debugging
-function coherent_bohr(hamiltonian::HamHam, jump::JumpOp, config::Union{LiouvConfig, ThermalizeConfig})
+function coherent_bohr(hamiltonian::HamHam{T}, jump::JumpOp, config::Union{LiouvConfig, ThermalizeConfig}) where {T<:AbstractFloat}
 
     dim = size(hamiltonian.data, 1)
+    CT = Complex{T}
     unique_freqs = keys(hamiltonian.bohr_dict)
 
     f = pick_f(config)  # Picks rates for B in Bohr domain
 
-    B = zeros(ComplexF64, dim, dim)
-    f_A_nu_1 = zeros(ComplexF64, dim, dim)
+    B = zeros(CT, dim, dim)
+    f_A_nu_1 = zeros(CT, dim, dim)
     for nu_2 in unique_freqs
-        A_nu_2::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
+        A_nu_2 = spzeros(CT, dim, dim)
         indices = hamiltonian.bohr_dict[nu_2]
         A_nu_2[indices] .= jump.in_eigenbasis[indices]
         @. f_A_nu_1 = f(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
@@ -19,18 +20,19 @@ function coherent_bohr(hamiltonian::HamHam, jump::JumpOp, config::Union{LiouvCon
     return B
 end
 
-function coherent_bohr(hamiltonian::HamHam, jumps::Vector{JumpOp}, config::Union{LiouvConfig, ThermalizeConfig})
+function coherent_bohr(hamiltonian::HamHam{T}, jumps::Vector{JumpOp}, config::Union{LiouvConfig, ThermalizeConfig}) where {T<:AbstractFloat}
 
     dim = size(hamiltonian.data, 1)
+    CT = Complex{T}
     unique_freqs = keys(hamiltonian.bohr_dict)
 
     f = pick_f(config)  # Picks rates for B in Bohr domain
 
-    B = zeros(ComplexF64, dim, dim)
+    B = zeros(CT, dim, dim)
     for jump in jumps
-        f_A_nu_1 = zeros(ComplexF64, dim, dim)
+        f_A_nu_1 = zeros(CT, dim, dim)
         for nu_2 in unique_freqs
-            A_nu_2::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
+            A_nu_2 = spzeros(CT, dim, dim)
             indices = hamiltonian.bohr_dict[nu_2]
             A_nu_2[indices] .= jump.in_eigenbasis[indices]
             @. f_A_nu_1 = f(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
@@ -55,13 +57,13 @@ function pick_f(config::Union{LiouvConfig, ThermalizeConfig})
     end 
 end
 
-function create_f(nu_1::Float64, nu_2::Float64, beta::Float64, sigma::Float64, a::Float64, b::Float64)
+function create_f(nu_1::Real, nu_2::Real, beta::Real, sigma::Real, a::Real, b::Real)
     alpha = create_alpha(nu_1, nu_2, beta, sigma, a, b)
     return tanh(-beta * (nu_1 - nu_2) / 4) * alpha / (2im)
 end
 
-function create_f_gauss(nu_1::Float64, nu_2::Float64, beta::Float64, sigma::Float64, 
-    gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}})
+function create_f_gauss(nu_1::Real, nu_2::Real, beta::Real, sigma::Real,
+    gaussian_parameters::Union{Tuple{<:Real, <:Real}, Tuple{Nothing, Nothing}})
     """Tanh * alpha."""
     alpha_nu1_nu2 = create_alpha_gauss(nu_1, nu_2, sigma, gaussian_parameters)
     return tanh(-beta * (nu_1 - nu_2) / 4) * alpha_nu1_nu2 / (2im)
@@ -86,7 +88,7 @@ function _pick_alpha_kms(config::Union{LiouvConfig, ThermalizeConfig})
     end 
 end
 
-function create_alpha(nu_1::Float64, nu_2::Float64, beta::Float64, sigma::Float64, a::Float64, b::Float64)
+function create_alpha(nu_1::Real, nu_2::Real, beta::Real, sigma::Real, a::Real, b::Real)
 
     sqrtA = sqrt(beta * (4 * a + 1) / 4)
     sqrtB = sqrt(beta / 16) * abs(nu_1 + nu_2)
@@ -121,7 +123,7 @@ Coming from unshifted γ(ω) in the energy domain, leads to a partially shifted 
 Difference vs the KMS DB case: |ν1 + ν2| → |ν1 + ν2 + β σ^2 / 2| (and thus not skew symmetric due to the Gaussian filters)
 Also: No f and no b-funcs will be constructed because in this setup there is no fine-tuned B in the Lindbladian.
 """
-function create_alpha_gns(nu_1::Float64, nu_2::Float64, beta::Float64, sigma::Float64, a::Float64, b::Float64)
+function create_alpha_gns(nu_1::Real, nu_2::Real, beta::Real, sigma::Real, a::Real, b::Real)
     sqrtA = sqrt(beta * (4 * a + 1) / 4)
     sqrtB = sqrt(beta / 16) * abs(nu_1 + nu_2 + beta * sigma^2 / 2)
     C = beta * (nu_1 + nu_2) / 4
@@ -137,15 +139,15 @@ function create_alpha_gns(nu_1::Float64, nu_2::Float64, beta::Float64, sigma::Fl
 end
 
 function create_alpha_gauss(
-    nu_1::Float64, 
-    nu_2::Float64, 
-    sigma::Float64, 
-    gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}})
-    
+    nu_1::Real,
+    nu_2::Real,
+    sigma::Real,
+    gaussian_parameters::Union{Tuple{<:Real, <:Real}, Tuple{Nothing, Nothing}})
+
     (w_gamma, sigma_gamma) = gaussian_parameters
     combined_sigma = sigma^2 + sigma_gamma^2
     prefactor = sigma_gamma / sqrt(combined_sigma)
-    alpha_fn(nu_1) = prefactor * (exp(-(nu_1 + nu_2 + 2 * w_gamma)^2 / (8 * combined_sigma)) 
+    alpha_fn(nu_1) = prefactor * (exp(-(nu_1 + nu_2 + 2 * w_gamma)^2 / (8 * combined_sigma))
                                     * exp(-(nu_1 - nu_2)^2 / (8 * sigma^2)))
     return alpha_fn(nu_1)
 end
@@ -167,6 +169,6 @@ function create_bohr_dict(bohr_freqs::Matrix{T}) where {T<:AbstractFloat}
     return bohr_dict
 end
 
-function check_alpha_skew_symmetry(alpha::Function, nu_1::Float64, nu_2::Float64, beta::Float64)
+function check_alpha_skew_symmetry(alpha::Function, nu_1::Real, nu_2::Real, beta::Real)
     @assert norm(alpha(nu_1, nu_2) - alpha(-nu_2, -nu_1) * exp(-beta * (nu_1 + nu_2) / 2)) < 1e-14
 end

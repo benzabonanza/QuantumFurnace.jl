@@ -6,7 +6,7 @@
         config,
         precomputed_data;
         trotter=nothing,
-    ) -> Union{Nothing, Matrix{ComplexF64}}
+    ) -> Union{Nothing, Matrix{<:Complex}}
 
     Returns the total coherent operator B = sum_k B_k, already scaled by gamma_norm_factor.
     Returns nothing if config.with_coherent == false.
@@ -16,7 +16,7 @@ function precompute_coherent_total_B(
     ham_or_trott::Union{HamHam, TrottTrott},
     config::AbstractConfig,
     precomputed_data;
-    )::Union{Nothing, Matrix{ComplexF64}}
+    )
 
     config.with_coherent || return nothing
 
@@ -42,11 +42,11 @@ end
 """
     precompute_coherent_unitary_terms(
         jumps::AbstractVector{<:JumpOp},
-        hamiltonian::AbstractMatrix{ComplexF64},
+        hamiltonian::HamHam,
         config::AbstractThermalizeConfig,
         precomputed_data;
         trotter::Union{Nothing, TrottTrott}=nothing,
-    ) -> Union{Nothing, Vector{Matrix{ComplexF64}}}
+    ) -> Union{Nothing, Vector{Matrix{<:Complex}}}
 
     Precompute per-jump coherent unitaries for Kraus thermalization:
         U_k = exp(-1im * config.delta * B_k)
@@ -61,13 +61,14 @@ function precompute_coherent_unitary_terms(
     config::AbstractThermalizeConfig,
     precomputed_data;
     trotter::Union{Nothing, TrottTrott}=nothing,
-    delta_scale::Float64 = 1.0  # for randomized channels
-    )::Union{Nothing, Vector{Matrix{ComplexF64}}}
+    delta_scale::Real = 1.0  # for randomized channels
+    )
 
     config.with_coherent || return nothing
 
     delta = delta_scale * config.delta
-    U_terms = Vector{Matrix{ComplexF64}}(undef, length(jumps))
+    CT = Complex{eltype(hamiltonian.eigvals)}
+    U_terms = Vector{Matrix{CT}}(undef, length(jumps))
 
     if config.domain isa TimeDomain
         (; b_minus, b_plus, gamma_norm_factor) = precomputed_data
@@ -102,11 +103,11 @@ end
 """
     precompute_coherent_terms(
         jumps::AbstractVector{<:JumpOp},
-        hamiltonian::AbstractMatrix{ComplexF64},
+        hamiltonian::HamHam,
         config::AbstractConfig,
         precomputed_data;
         trotter::Union{Nothing, TrottTrott}=nothing,
-    ) -> Union{Nothing, Vector{Matrix{ComplexF64}}}
+    ) -> Union{Nothing, Vector{Matrix{<:Complex}}}
 
     Precompute and cache the coherent B term for each `JumpOp`, already scaled by `gamma_norm_factor`.
     Returns `nothing` if `config.with_coherent == false`.
@@ -117,11 +118,12 @@ function precompute_coherent_terms(
     config::AbstractConfig,
     precomputed_data;
     trotter::Union{Nothing, TrottTrott}=nothing,
-    )::Union{Nothing, Vector{Matrix{ComplexF64}}}
+    )
 
     config.with_coherent || return nothing
 
-    coherent_terms = Vector{Matrix{ComplexF64}}(undef, length(jumps))
+    CT = Complex{eltype(hamiltonian.eigvals)}
+    coherent_terms = Vector{Matrix{CT}}(undef, length(jumps))
 
     if config.domain isa TimeDomain
         (; b_minus, b_plus, gamma_norm_factor) = precomputed_data
@@ -155,16 +157,16 @@ end
 
 # (3.1) and Proposition III.1
 # Has to be on a symmetric time domain, otherwise it can't be Hermitian.
-function B_time(jump::JumpOp, hamiltonian::HamHam, b_minus::Dict{Float64, ComplexF64}, 
-    b_plus::Dict{Float64, ComplexF64}, t0::Float64, beta::Float64, sigma::Float64)
-    
+function B_time(jump::JumpOp, hamiltonian::HamHam, b_minus, b_plus, t0, beta, sigma)
+
     dim = size(hamiltonian.data)
+    CT = Complex{eltype(hamiltonian.eigvals)}
     diag_time_evolve(t) = Diagonal(exp.(1im * hamiltonian.eigvals * t))  # beta factor comes in for b_1,2
 
     # Inner summand b_plus
-    b_plus_summand = zeros(ComplexF64, dim)
-    U = zeros(ComplexF64, dim)
-    U_minus_2 = zeros(ComplexF64, dim)
+    b_plus_summand = zeros(CT, dim)
+    U = zeros(CT, dim)
+    U_minus_2 = zeros(CT, dim)
     for s in keys(b_plus)
         U .= diag_time_evolve(s * beta)
         U_minus_2 .= diag_time_evolve(-2.0 * s * beta)
@@ -173,7 +175,7 @@ function B_time(jump::JumpOp, hamiltonian::HamHam, b_minus::Dict{Float64, Comple
 
     # Outer summand b_minus
     # A is Hermitian
-    B = zeros(ComplexF64, dim)
+    B = zeros(CT, dim)
     for t in keys(b_minus)
         U .= diag_time_evolve(t / sigma)
         B .+= b_minus[t] * U' * b_plus_summand * U
@@ -182,16 +184,16 @@ function B_time(jump::JumpOp, hamiltonian::HamHam, b_minus::Dict{Float64, Comple
     return B * t0^2
 end
 
-function B_time(jumps::Vector{JumpOp}, hamiltonian::HamHam, b_minus::Dict{Float64, ComplexF64}, 
-    b_plus::Dict{Float64, ComplexF64}, t0::Float64, beta::Float64, sigma::Float64)
-    
+function B_time(jumps::Vector{JumpOp}, hamiltonian::HamHam, b_minus, b_plus, t0, beta, sigma)
+
     dim = size(hamiltonian.data)
+    CT = Complex{eltype(hamiltonian.eigvals)}
     diag_time_evolve(t) = Diagonal(exp.(1im * hamiltonian.eigvals * t))  # beta factor comes in for b_1,2
 
     # Inner summand b_plus
-    b_plus_summand = zeros(ComplexF64, dim)  # For all jumps A^a
-    U = zeros(ComplexF64, dim)
-    U_minus_2 = zeros(ComplexF64, dim)
+    b_plus_summand = zeros(CT, dim)  # For all jumps A^a
+    U = zeros(CT, dim)
+    U_minus_2 = zeros(CT, dim)
     for s in keys(b_plus)
         U .= diag_time_evolve(s * beta)
         U_minus_2 .= diag_time_evolve(-2.0 * s * beta)
@@ -202,7 +204,7 @@ function B_time(jumps::Vector{JumpOp}, hamiltonian::HamHam, b_minus::Dict{Float6
 
     # Outer summand b_minus
     # A is Hermitian
-    B = zeros(ComplexF64, dim)
+    B = zeros(CT, dim)
     for t in keys(b_minus)
         U .= diag_time_evolve(t / sigma)
         B .+= b_minus[t] * U' * b_plus_summand * U
@@ -211,19 +213,19 @@ function B_time(jumps::Vector{JumpOp}, hamiltonian::HamHam, b_minus::Dict{Float6
     return B * t0^2
 end
 
-function B_trotter(jump::JumpOp, trotter::TrottTrott, b_minus::Dict{Float64, ComplexF64},
-    b_plus::Dict{Float64, ComplexF64}, beta::Float64, sigma::Float64)
+function B_trotter(jump::JumpOp, trotter::TrottTrott, b_minus, b_plus, beta, sigma)
 
     dim = size(trotter.eigvecs)
+    CT = Complex{eltype(trotter.bohr_freqs)}
     trotter_time_evolution(n::Int64) = Diagonal(trotter.eigvals_t0 .^ n)  # n - number of t0 time chunks
 
     # Transform jump operator from computational basis to Trotter eigenbasis
     jump_in_trotter = trotter.eigvecs' * jump.data * trotter.eigvecs
 
-    trott_U = zeros(ComplexF64, dim)
-    trott_U_2 = zeros(ComplexF64, dim)
+    trott_U = zeros(CT, dim)
+    trott_U_2 = zeros(CT, dim)
     # Inner summand f_plus
-    b_plus_summand = zeros(ComplexF64, dim)
+    b_plus_summand = zeros(CT, dim)
     for (s, b_s) in b_plus
         num_t0_steps = Int(round(s * beta / trotter.t0))
 
@@ -232,7 +234,7 @@ function B_trotter(jump::JumpOp, trotter::TrottTrott, b_minus::Dict{Float64, Com
 
         b_plus_summand .+= (b_s * trott_U * jump_in_trotter' * trott_U_2 * jump_in_trotter * trott_U)
     end
-    B = zeros(ComplexF64, dim)
+    B = zeros(CT, dim)
     for (t, b_t) in b_minus
         num_t0_steps = Int(round(t / (sigma * trotter.t0)))
         trott_U .= trotter_time_evolution(num_t0_steps)
@@ -243,16 +245,16 @@ function B_trotter(jump::JumpOp, trotter::TrottTrott, b_minus::Dict{Float64, Com
     return B * trotter.t0^2  # B in Trotter basis
 end
 
-function B_trotter(jumps::Vector{JumpOp}, trotter::TrottTrott, b_minus::Dict{Float64, ComplexF64},
-    b_plus::Dict{Float64, ComplexF64}, beta::Float64, sigma::Float64)
+function B_trotter(jumps::Vector{JumpOp}, trotter::TrottTrott, b_minus, b_plus, beta, sigma)
 
     dim = size(trotter.eigvecs)
+    CT = Complex{eltype(trotter.bohr_freqs)}
     trotter_time_evolution(n::Int64) = Diagonal(trotter.eigvals_t0 .^ n)  # n - number of t0 time chunks
 
-    trott_U = zeros(ComplexF64, dim)
-    trott_U_2 = zeros(ComplexF64, dim)
+    trott_U = zeros(CT, dim)
+    trott_U_2 = zeros(CT, dim)
     # Inner summand f_plus
-    b_plus_summand = zeros(ComplexF64, dim)
+    b_plus_summand = zeros(CT, dim)
     for (s, b_s) in b_plus
         num_t0_steps = Int(round(s * beta / trotter.t0))
 
@@ -263,7 +265,7 @@ function B_trotter(jumps::Vector{JumpOp}, trotter::TrottTrott, b_minus::Dict{Flo
             b_plus_summand .+= (b_s * trott_U * jump_a_trotter' * trott_U_2 * jump_a_trotter * trott_U)
         end
     end
-    B = zeros(ComplexF64, dim)
+    B = zeros(CT, dim)
     for (t, b_t) in b_minus
         num_t0_steps = Int(round(t / (sigma * trotter.t0)))
         trott_U .= trotter_time_evolution(num_t0_steps)
@@ -276,20 +278,20 @@ end
 
 #* B1 AND B2 ---------------------------------------------------------------------------------------------------------------
 #TODO: Reintroduce sigmas here
-function compute_b_minus(t::Float64, beta::Float64, sigma::Float64)  # 2pi sqrt(pi) * f_minus(t / sigma_E)
+function compute_b_minus(t::Real, beta::Real, sigma::Real)  # 2pi sqrt(pi) * f_minus(t / sigma_E)
     f1(t) = 1 / cosh(2 * pi * t / (beta * sigma))
     f2(t) = sin(-t * beta * sigma) * exp(-2 * t^2)
     return 2 * sqrt(pi) * exp(beta^2 * sigma^2 / 8) * convolute(f1, f2, t) / (beta * sigma)
 end
 
-function compute_b_plus(t::Float64, beta::Float64, w_gamma::Float64, sigma_gamma::Float64)  # f_plus(t * beta) / (2pi sqrt(pi))
+function compute_b_plus(t::Real, beta::Real, w_gamma::Real, sigma_gamma::Real)  # f_plus(t * beta) / (2pi sqrt(pi))
     return beta * sigma_gamma * exp(- 2 * beta * w_gamma * (2 * t^2 + im * t)) / sqrt(pi^3)
 end
 
-function compute_b_plus_metro(t::Float64, beta::Float64, sigma::Float64, eta::Float64)
+function compute_b_plus_metro(t::Real, beta::Real, sigma::Real, eta::Real)
     if abs(t) < 1e-12  # Handle t=0
-        return complex(1 / (2 * sqrt(2) * pi^2)) 
-    elseif abs(t) ≤ eta
+        return complex(1 / (2 * sqrt(2) * pi^2))
+    elseif abs(t) <= eta
         numerator = exp(- sigma^2 * beta^2 * (2 * t^2 + 1im * t)) + 1im * (2 * t + 1im)
     else
         numerator = exp(- sigma^2 * beta^2 * (2 * t^2 + 1im * t))
@@ -298,29 +300,29 @@ function compute_b_plus_metro(t::Float64, beta::Float64, sigma::Float64, eta::Fl
     return (1 / (2 * sqrt(2) * pi^2)) * numerator / denominator
 end
 
-function compute_b_plus_smooth(t::Float64, beta::Float64, sigma::Float64, a::Float64, b::Float64)
+function compute_b_plus_smooth(t::Real, beta::Real, sigma::Real, a::Real, b::Real)
     b_vals = exp(- a * b / 2) * exp(- sigma^2 * beta^2 * t * (2 * t + 1im) * (1 + b)) / (4 * t^2 + a + 2im * t)
     return sqrt(4 * a + 1) * b_vals / (sqrt(2) * pi^2)
 end
 
-function compute_truncated_func(target_func::Function, time_labels::Vector{Float64}, fixed_args...; atol::Float64 = 1e-12)
+function compute_truncated_func(target_func::Function, time_labels::AbstractVector{<:Real}, fixed_args...; atol::Real = 1e-12)
     f_vals = Vector{ComplexF64}(target_func.(time_labels, fixed_args...))
     indices_to_keep = get_truncated_indices(f_vals; atol=atol)
     return Dict(zip(time_labels[indices_to_keep], f_vals[indices_to_keep]))
 end
 
 #* TOOLS --------------------------------------------------------------------------------------------------------------------
-function get_truncated_indices(fvals::Vector{Float64}; atol::Float64 = 1e-12)
+function get_truncated_indices(fvals::AbstractVector{<:Real}; atol::Real = 1e-12)
    """Find elements in `fvals` that are larger than `atol`"""
     return findall(abs.(fvals) .>= atol)
 end
 
-function get_truncated_indices(fvals::Vector{ComplexF64}; atol::Float64 = 1e-12)
+function get_truncated_indices(fvals::AbstractVector{<:Complex}; atol::Real = 1e-12)
     """Find elements in `fvals` that are larger than `atol`"""
      return findall(abs.(fvals) .>= atol)
  end
 
-function convolute(f::Function, g::Function, t::Float64; atol=1e-12, rtol=1e-12)
+function convolute(f::Function, g::Function, t::Real; atol=1e-12, rtol=1e-12)
     integrand(s) = f(s) * g(t - s)
     result, _ = quadgk(integrand, -Inf, Inf; atol=atol, rtol=rtol)
     return result

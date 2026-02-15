@@ -9,13 +9,13 @@
     `gamma_norm_factor` to avoid modifying cached matrices.
 """
 function jump_contribution!(
-    L_target::AbstractMatrix{ComplexF64},
+    L_target::AbstractMatrix{<:Complex},
     jump::JumpOp,
     hamiltonian::HamHam,
     config::AbstractLiouvConfig{BohrDomain},
     precomputed_data,
     ws::LindbladianWorkspace;
-    coherent_term::Union{Nothing, AbstractMatrix{ComplexF64}} = nothing,
+    coherent_term::Union{Nothing, AbstractMatrix{<:Complex}} = nothing,
     )
     dim = size(hamiltonian.data, 1)
     unique_freqs = keys(hamiltonian.bohr_dict)
@@ -45,13 +45,13 @@ function jump_contribution!(
 end
 
 function jump_contribution!(
-    L_target::AbstractMatrix{ComplexF64},
+    L_target::AbstractMatrix{<:Complex},
     jump::JumpOp,
     hamiltonian::HamHam,
     config::AbstractLiouvConfig{EnergyDomain},
     precomputed_data,
     ws::LindbladianWorkspace;
-    coherent_term::Union{Nothing, AbstractMatrix{ComplexF64}} = nothing,
+    coherent_term::Union{Nothing, AbstractMatrix{<:Complex}} = nothing,
     )
 
     (; transition, gamma_norm_factor, energy_labels) = precomputed_data
@@ -89,13 +89,13 @@ function jump_contribution!(
 end
 
 function jump_contribution!(
-    L_target::AbstractMatrix{ComplexF64},
+    L_target::AbstractMatrix{<:Complex},
     jump::JumpOp,
     ham_or_trott::Union{HamHam, TrottTrott},
     config::AbstractLiouvConfig{D},
     precomputed_data,
     ws::LindbladianWorkspace;
-    coherent_term::Union{Nothing, AbstractMatrix{ComplexF64}} = nothing,
+    coherent_term::Union{Nothing, AbstractMatrix{<:Complex}} = nothing,
     ) where {D<:Union{TimeDomain, TrotterDomain}}
 
     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors, b_minus, b_plus) = precomputed_data
@@ -143,9 +143,9 @@ Apply coherent unitary evolution: rho -> U_B * rho * U_B'.
 No-op if U_B is nothing.
 """
 @inline function apply_coherent_unitary!(
-    evolving_dm::Matrix{ComplexF64},
-    U_B::Union{Nothing,Matrix{ComplexF64}},
-    scratch::KrausScratch{ComplexF64},
+    evolving_dm::Matrix{<:Complex},
+    U_B::Union{Nothing,Matrix{<:Complex}},
+    scratch::KrausScratch{<:Complex},
 )
     U_B === nothing && return nothing
     mul!(scratch.tmp1, U_B, evolving_dm)
@@ -169,9 +169,9 @@ Expects scratch.R (Hermitianized) and scratch.rho_jump to be pre-filled by the
 domain-specific dissipative accumulation loop.
 """
 function finalize_kraus_step!(
-    evolving_dm::Matrix{ComplexF64},
-    delta::Float64,
-    scratch::KrausScratch{ComplexF64},
+    evolving_dm::Matrix{<:Complex},
+    delta::Real,
+    scratch::KrausScratch{<:Complex},
 )
     dim = size(evolving_dm, 1)
 
@@ -194,7 +194,8 @@ function finalize_kraus_step!(
     S_herm = Hermitian(scratch.tmp2)
     eig = eigen(S_herm)
     eig.values .= max.(eig.values, 0.0)
-    U_residual = Matrix{ComplexF64}(Diagonal(sqrt.(eig.values)) * eig.vectors')
+    CT = eltype(evolving_dm)
+    U_residual = Matrix{CT}(Diagonal(sqrt.(eig.values)) * eig.vectors')
 
     # rho_next = K0 * rho * K0' + rho_jump + U_res * rho * U_res'
     mul!(scratch.tmp1, scratch.K0, evolving_dm)
@@ -211,14 +212,14 @@ function finalize_kraus_step!(
 end
 
 function jump_contribution!(
-    evolving_dm::Matrix{ComplexF64},
+    evolving_dm::Matrix{<:Complex},
     jump::JumpOp,
     hamiltonian::HamHam,
     config::AbstractThermalizeConfig{BohrDomain},
     precomputed_data,
-    scratch::KrausScratch{ComplexF64};
-    coherent_unitary_cache::Union{Nothing,Matrix{ComplexF64}} = nothing,
-    jump_prob::Float64 = 1.0,
+    scratch::KrausScratch{<:Complex};
+    coherent_unitary_cache::Union{Nothing,Matrix{<:Complex}} = nothing,
+    jump_prob::Real = 1.0,
     rescale_by_inv_prob::Bool = false
     )
 
@@ -309,14 +310,14 @@ function jump_contribution!(
 end
 
 function jump_contribution!(
-    evolving_dm::Matrix{ComplexF64},
+    evolving_dm::Matrix{<:Complex},
     jump::JumpOp,
     hamiltonian::HamHam,
     config::AbstractThermalizeConfig{EnergyDomain},
     precomputed_data,
-    scratch::KrausScratch{ComplexF64};
-    coherent_unitary_cache::Union{Nothing,Matrix{ComplexF64}} = nothing,
-    jump_prob::Float64 = 1.0,
+    scratch::KrausScratch{<:Complex};
+    coherent_unitary_cache::Union{Nothing,Matrix{<:Complex}} = nothing,
+    jump_prob::Real = 1.0,
     rescale_by_inv_prob::Bool = false
     )
 
@@ -388,14 +389,14 @@ function jump_contribution!(
 end
 
 function jump_contribution!(
-    evolving_dm::Matrix{ComplexF64},
+    evolving_dm::Matrix{<:Complex},
     jump::JumpOp,
     ham_or_trott,              # HamHam or TrottTrott depending on domain
     config::AbstractThermalizeConfig{D},
     precomputed_data,
-    scratch::KrausScratch{ComplexF64};
-    coherent_unitary_cache::Union{Nothing,Matrix{ComplexF64}} = nothing,
-    jump_prob::Float64 = 1.0,
+    scratch::KrausScratch{<:Complex};
+    coherent_unitary_cache::Union{Nothing,Matrix{<:Complex}} = nothing,
+    jump_prob::Real = 1.0,
     rescale_by_inv_prob::Bool = false
     ) where {D<:Union{TimeDomain, TrotterDomain}}
 
