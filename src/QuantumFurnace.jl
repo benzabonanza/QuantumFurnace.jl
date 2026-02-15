@@ -32,32 +32,32 @@ export AbstractConfig, AbstractLiouvConfig, AbstractThermalizeConfig,
 # Types: Domains
 export BohrDomain, EnergyDomain, TimeDomain, TrotterDomain
 
-# Types: Trajectory
-export TrajectoryFramework
-
 # Types: Log-Sobolev
-export LSIFramework
+export LSIFramework, compute_LSI_alpha2
+
+# Trajectory
+export TrajectoryFramework, build_trajectoryframework, step_along_trajectory!
 
 # Simulation
 export run_lindbladian, run_thermalization, construct_lindbladian,
-       run_trajectories, build_trajectoryframework, step_along_trajectory!
+       run_trajectories
 
 # QI Tools
 export trace_distance_h, trace_distance_nh, trace_norm_h, trace_norm_nh,
        fidelity, frobenius_norm, is_density_matrix, random_density_matrix,
        hermitianize!, transform_jumps_to_basis
 
-# Gibbs & Hamiltonian
+# Gibbs & Hamiltonian & Trotter
 export gibbs_state, gibbs_state_in_eigen,
        find_ideal_heisenberg, load_hamiltonian,
        create_bohr_dict, compute_trotter_error
 
-# Transition functions & Kossakowski matrix
+# Transition functions & Kossakowski matrices
 export pick_transition, create_alpha, create_alpha_gns, create_alpha_gauss,
        create_f, create_f_gauss, check_alpha_skew_symmetry
 
 # Coherent terms (B operators)
-export B_time, B_trotter, coherent_bohr
+export B_time, B_trotter, B_bohr
 
 # Pauli & Trotter building blocks
 export X, Y, Z, Had,
@@ -66,9 +66,6 @@ export X, Y, Z, Had,
 
 # Config validation
 export validate_config!
-
-# Log-Sobolev bound
-export compute_LSI_alpha2
 
 # OFT (kept for debugging / pedagogy)
 export oft!

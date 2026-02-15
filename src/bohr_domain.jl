@@ -1,5 +1,5 @@
 #! Changed it slightly for speed without debugging
-function coherent_bohr(hamiltonian::HamHam{T}, jump::JumpOp, config::Union{LiouvConfig, ThermalizeConfig}) where {T<:AbstractFloat}
+function B_bohr(hamiltonian::HamHam{T}, jump::JumpOp, config::Union{LiouvConfig, ThermalizeConfig}) where {T<:AbstractFloat}
 
     dim = size(hamiltonian.data, 1)
     CT = Complex{T}
@@ -20,7 +20,7 @@ function coherent_bohr(hamiltonian::HamHam{T}, jump::JumpOp, config::Union{Liouv
     return B
 end
 
-function coherent_bohr(hamiltonian::HamHam{T}, jumps::Vector{JumpOp}, config::Union{LiouvConfig, ThermalizeConfig}) where {T<:AbstractFloat}
+function B_bohr(hamiltonian::HamHam{T}, jumps::Vector{JumpOp}, config::Union{LiouvConfig, ThermalizeConfig}) where {T<:AbstractFloat}
 
     dim = size(hamiltonian.data, 1)
     CT = Complex{T}

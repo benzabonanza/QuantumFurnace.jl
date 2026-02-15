@@ -32,7 +32,7 @@ function _precompute_coherent_total_B(
     else
         # BohrDomain / EnergyDomain
         (; gamma_norm_factor) = precomputed_data
-        B = coherent_bohr(ham_or_trott, jumps, config)
+        B = B_bohr(ham_or_trott, jumps, config)
     end
 
     rmul!(B, gamma_norm_factor)
@@ -91,7 +91,7 @@ function _precompute_coherent_unitary_terms(
         # BohrDomain / EnergyDomain
         (; gamma_norm_factor) = precomputed_data
         @inbounds for (k, jump) in pairs(jumps)
-            B = coherent_bohr(hamiltonian, jump, config)
+            B = B_bohr(hamiltonian, jump, config)
             rmul!(B, gamma_norm_factor)
             U_terms[k] = exp(-1im * delta * Hermitian(B))
         end
@@ -146,7 +146,7 @@ function _precompute_coherent_terms(
         # BohrDomain / EnergyDomain: coherent term is the BohrDomain B operator.
         (; gamma_norm_factor) = precomputed_data
         @inbounds for (k, jump) in pairs(jumps)
-            B = coherent_bohr(hamiltonian, jump, config)
+            B = B_bohr(hamiltonian, jump, config)
             rmul!(B, gamma_norm_factor)
             coherent_terms[k] = B
         end

@@ -88,7 +88,7 @@ for pauli in jump_paulis
 end
 
 jump = jumps[1]
-B_bohr = coherent_bohr(hamiltonian, jump, config) 
+B_bohr = B_bohr(hamiltonian, jump, config) 
 rmul!(B_bohr, precomputed_data.gamma_norm_factor)
 
 B_t = B_time(jump, hamiltonian, precomputed_data.b_minus, precomputed_data.b_plus, config.t0, config.beta, config.sigma)

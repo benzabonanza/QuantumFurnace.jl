@@ -96,8 +96,8 @@ end
     # B_bohr (exact, in Hamiltonian eigenbasis)
     config_bohr = make_liouv_config(BohrDomain())
     precomputed_bohr = QuantumFurnace._precompute_data(config_bohr, TEST_HAM)
-    B_bohr = coherent_bohr(TEST_HAM, jump, config_bohr)
-    rmul!(B_bohr, precomputed_bohr.gamma_norm_factor)
+    B_bohr_val = B_bohr(TEST_HAM, jump, config_bohr)
+    rmul!(B_bohr_val, precomputed_bohr.gamma_norm_factor)
 
     # B_time (time quadrature, in Hamiltonian eigenbasis)
     config_time = make_liouv_config(TimeDomain())
@@ -117,8 +117,8 @@ end
     B_trott_in_eigen = U_t2e' * B_trott * U_t2e
 
     # Diagnostics
-    dist_bohr_time = norm(B_bohr - B_time_val)
-    dist_bohr_trott = norm(B_bohr - B_trott_in_eigen)
+    dist_bohr_time = norm(B_bohr_val - B_time_val)
+    dist_bohr_trott = norm(B_bohr_val - B_trott_in_eigen)
     println("DMTST-05 norm(B_bohr - B_time): ", dist_bohr_time)
     println("DMTST-05 norm(B_bohr - B_trott): ", dist_bohr_trott)
     println("DMTST-05 norm(B_time - B_trott): ", norm(B_time_val - B_trott_in_eigen))
