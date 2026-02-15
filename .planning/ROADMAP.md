@@ -27,7 +27,7 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 - [x] **Phase 6: Dead Code Pruning** - Remove ~930 lines of commented code, ~35 unused functions, and dead structs -- completed 2026-02-15
 - [x] **Phase 7: DRY Refactoring** - Extract shared patterns into reusable helpers -- completed 2026-02-15
 - [x] **Phase 8: Struct Simplification** - Reduce config field duplication, fix HamHam initialization, make TrottTrott immutable -- completed 2026-02-15
-- [ ] **Phase 9: Type Parameterization** - Parameterize core structs on element type for F64/F32 flexibility
+- [x] **Phase 9: Type Parameterization** - Parameterize core structs on element type for F64/F32 flexibility -- completed 2026-02-15
 - [ ] **Phase 10: API Surface Cleanup** - Remove dead exports, internalize implementation details, export missing public functions
 - [ ] **Phase 11: Allocation Optimization** - Eliminate unnecessary allocations in hot paths
 
@@ -87,9 +87,9 @@ Plans:
   5. All 224 existing tests pass with no regressions
 **Plans**: 3 plans
 Plans:
-- [ ] 09-01-PLAN.md -- Parameterize HamHam{T} and TrottTrott{T} on element type
-- [ ] 09-02-PLAN.md -- Parameterize Config structs, LindbladianWorkspace, JumpOp, KrausScratch, NUFFTPrefactors
-- [ ] 09-03-PLAN.md -- Propagate T through simulation function signatures and verify full pipeline
+- [x] 09-01-PLAN.md -- Parameterize HamHam{T} and TrottTrott{T} on element type
+- [x] 09-02-PLAN.md -- Parameterize Config structs, LindbladianWorkspace, JumpOp, KrausScratch, NUFFTPrefactors
+- [x] 09-03-PLAN.md -- Propagate T through simulation function signatures and verify full pipeline
 
 ### Phase 10: API Surface Cleanup
 **Goal**: Public API exposes exactly what users and researchers need -- building blocks for pedagogy are exported, implementation details are internal
@@ -129,6 +129,6 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10 -> 11
 | 6. Dead Code Pruning | v1.1 | 2/2 | Complete | 2026-02-15 |
 | 7. DRY Refactoring | v1.1 | 2/2 | Complete | 2026-02-15 |
 | 8. Struct Simplification | v1.1 | 3/3 | Complete | 2026-02-15 |
-| 9. Type Parameterization | v1.1 | 0/? | Not started | - |
+| 9. Type Parameterization | v1.1 | 3/3 | Complete | 2026-02-15 |
 | 10. API Surface Cleanup | v1.1 | 0/? | Not started | - |
 | 11. Allocation Optimization | v1.1 | 0/? | Not started | - |
