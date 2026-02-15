@@ -150,10 +150,9 @@ end
     This returns `scratch.R` (Hermitianized).
 """
 function precompute_R(
-    ::EnergyDomain,
     jumps::AbstractVector{<:JumpOp},
     hamiltonian::HamHam,
-    config::AbstractThermalizeConfig,
+    config::AbstractThermalizeConfig{EnergyDomain},
     precomputed_data,
     scratch::KrausScratch{ComplexF64},
     )
@@ -207,13 +206,12 @@ end
 
 
 function precompute_R(
-    ::Union{TimeDomain, TrotterDomain},
     jumps::AbstractVector{<:JumpOp},
     ham_or_trott::Union{HamHam, TrottTrott},
-    config::AbstractThermalizeConfig,
+    config::AbstractThermalizeConfig{D},
     precomputed_data,
     scratch::KrausScratch{ComplexF64},
-    )
+    ) where {D<:Union{TimeDomain, TrotterDomain}}
     dim = size(jumps[1].in_eigenbasis, 1)
     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = precomputed_data
 

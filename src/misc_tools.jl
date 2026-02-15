@@ -118,7 +118,7 @@ function validate_config!(config::AbstractConfig)
     errors = String[]
 
     # --- Domain-Specific Validation ---
-    _collect_config_errors!(errors, config.domain, config)
+    _collect_config_errors!(errors, config)
 
     # --- Common Validation Logic ---
     # GNS configs are defined without the coherent correction term B.
@@ -169,11 +169,11 @@ function validate_config!(config::AbstractConfig)
     return nothing
 end
 
-function _collect_config_errors!(errors::Vector{String}, ::BohrDomain, config)
+function _collect_config_errors!(errors::Vector{String}, config::AbstractConfig{BohrDomain})
     return # No specific checks
 end
 
-function _collect_config_errors!(errors::Vector{String}, ::EnergyDomain, config)
+function _collect_config_errors!(errors::Vector{String}, config::AbstractConfig{EnergyDomain})
     if isnothing(config.num_energy_bits) || config.num_energy_bits <= 0
         push!(errors, "For EnergyDomain, num_energy_bits must be > 0.")
     end
@@ -182,7 +182,7 @@ function _collect_config_errors!(errors::Vector{String}, ::EnergyDomain, config)
     end
 end
 
-function _collect_config_errors!(errors::Vector{String}, ::TimeDomain, config)
+function _collect_config_errors!(errors::Vector{String}, config::AbstractConfig{TimeDomain})
     if isnothing(config.num_energy_bits) || config.num_energy_bits <= 0
         push!(errors, "For TimeDomain, num_energy_bits must be > 0.")
     end
@@ -198,7 +198,7 @@ function _collect_config_errors!(errors::Vector{String}, ::TimeDomain, config)
     end
 end
 
-function _collect_config_errors!(errors::Vector{String}, ::TrotterDomain, config)
+function _collect_config_errors!(errors::Vector{String}, config::AbstractConfig{TrotterDomain})
     if isnothing(config.num_energy_bits) || config.num_energy_bits <= 0
         push!(errors, "For TrotterDomain, num_energy_bits must be > 0.")
     end

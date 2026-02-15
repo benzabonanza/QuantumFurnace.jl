@@ -10,10 +10,9 @@
 """
 function jump_contribution!(
     L_target::AbstractMatrix{ComplexF64},
-    ::BohrDomain,
     jump::JumpOp,
     hamiltonian::HamHam,
-    config::AbstractLiouvConfig,
+    config::AbstractLiouvConfig{BohrDomain},
     precomputed_data,
     ws::LindbladianWorkspace;
     coherent_term::Union{Nothing, AbstractMatrix{ComplexF64}} = nothing,
@@ -47,10 +46,9 @@ end
 
 function jump_contribution!(
     L_target::AbstractMatrix{ComplexF64},
-    ::EnergyDomain,
     jump::JumpOp,
     hamiltonian::HamHam,
-    config::AbstractLiouvConfig,
+    config::AbstractLiouvConfig{EnergyDomain},
     precomputed_data,
     ws::LindbladianWorkspace;
     coherent_term::Union{Nothing, AbstractMatrix{ComplexF64}} = nothing,
@@ -92,14 +90,13 @@ end
 
 function jump_contribution!(
     L_target::AbstractMatrix{ComplexF64},
-    ::Union{TimeDomain, TrotterDomain},
     jump::JumpOp,
     ham_or_trott::Union{HamHam, TrottTrott},
-    config::AbstractLiouvConfig,
+    config::AbstractLiouvConfig{D},
     precomputed_data,
     ws::LindbladianWorkspace;
     coherent_term::Union{Nothing, AbstractMatrix{ComplexF64}} = nothing,
-    )
+    ) where {D<:Union{TimeDomain, TrotterDomain}}
 
     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors, b_minus, b_plus) = precomputed_data
 
@@ -213,11 +210,11 @@ function finalize_kraus_step!(
     return evolving_dm
 end
 
-function jump_contribution!(::BohrDomain,
+function jump_contribution!(
     evolving_dm::Matrix{ComplexF64},
     jump::JumpOp,
     hamiltonian::HamHam,
-    config::AbstractThermalizeConfig,
+    config::AbstractThermalizeConfig{BohrDomain},
     precomputed_data,
     scratch::KrausScratch{ComplexF64};
     coherent_unitary_cache::Union{Nothing,Matrix{ComplexF64}} = nothing,
@@ -311,11 +308,11 @@ function jump_contribution!(::BohrDomain,
     return evolving_dm
 end
 
-function jump_contribution!(::EnergyDomain,
+function jump_contribution!(
     evolving_dm::Matrix{ComplexF64},
     jump::JumpOp,
     hamiltonian::HamHam,
-    config::AbstractThermalizeConfig,
+    config::AbstractThermalizeConfig{EnergyDomain},
     precomputed_data,
     scratch::KrausScratch{ComplexF64};
     coherent_unitary_cache::Union{Nothing,Matrix{ComplexF64}} = nothing,
@@ -390,17 +387,17 @@ function jump_contribution!(::EnergyDomain,
     return evolving_dm
 end
 
-function jump_contribution!(::Union{TimeDomain, TrotterDomain},
+function jump_contribution!(
     evolving_dm::Matrix{ComplexF64},
     jump::JumpOp,
     ham_or_trott,              # HamHam or TrottTrott depending on domain
-    config::AbstractThermalizeConfig,
+    config::AbstractThermalizeConfig{D},
     precomputed_data,
     scratch::KrausScratch{ComplexF64};
     coherent_unitary_cache::Union{Nothing,Matrix{ComplexF64}} = nothing,
     jump_prob::Float64 = 1.0,
     rescale_by_inv_prob::Bool = false
-    )
+    ) where {D<:Union{TimeDomain, TrotterDomain}}
 
     dim = size(evolving_dm, 1)
     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors, b_minus, b_plus) = precomputed_data

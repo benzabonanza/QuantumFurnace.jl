@@ -1,24 +1,24 @@
-function precompute_labels(::Union{BohrDomain, EnergyDomain}, config::AbstractConfig)
+function precompute_labels(config::AbstractConfig{D}) where {D<:Union{BohrDomain, EnergyDomain}}
     energy_labels = create_energy_labels(config.num_energy_bits, config.w0)
     truncated_energy_labels = truncate_energy_labels(energy_labels, config)
     return (truncated_energy_labels,)  # Energy labels
 end
 
-function precompute_labels(::Union{TimeDomain, TrotterDomain}, config::AbstractConfig)
+function precompute_labels(config::AbstractConfig{D}) where {D<:Union{TimeDomain, TrotterDomain}}
     energy_labels = create_energy_labels(config.num_energy_bits, config.w0)
     truncated_energy_labels = truncate_energy_labels(energy_labels, config)
     time_labels = energy_labels .* (config.t0 / config.w0)
     return (truncated_energy_labels, time_labels) # Energy and time labels
 end  
 
-function precompute_data(::BohrDomain,
-    config::AbstractLiouvConfig,
+function precompute_data(
+    config::AbstractLiouvConfig{BohrDomain},
     ham_or_trott::Union{HamHam, TrottTrott}
 )
 
     alpha = pick_alpha(config)
     # Was the only way to bring in the normalizing factor 1 / ||γ||_∞
-    energy_labels, = precompute_labels(config.domain, config)
+    energy_labels, = precompute_labels(config)
     transition = pick_transition(config)
     gamma_norm_factor =  1.0 / maximum(transition.(energy_labels))
     return (
@@ -27,13 +27,13 @@ function precompute_data(::BohrDomain,
     )
 end
 
-function precompute_data(::BohrDomain,
-    config::AbstractThermalizeConfig,
+function precompute_data(
+    config::AbstractThermalizeConfig{BohrDomain},
     hamiltonian::HamHam
 )
     alpha = pick_alpha(config)
 
-    energy_labels, = precompute_labels(config.domain, config)
+    energy_labels, = precompute_labels(config)
     transition = pick_transition(config)
     gamma_norm_factor = 1.0 / maximum(transition.(energy_labels))
     
@@ -64,11 +64,11 @@ function precompute_data(::BohrDomain,
 
 end
 
-function precompute_data(::EnergyDomain, 
-    config::AbstractConfig, 
+function precompute_data(
+    config::AbstractConfig{EnergyDomain},
     ham_or_trott::Union{HamHam, TrottTrott}
 )
-    energy_labels, = precompute_labels(config.domain, config)
+    energy_labels, = precompute_labels(config)
     transition = pick_transition(config)
     gamma_norm_factor =  1.0 / maximum(transition.(energy_labels))
     
@@ -79,11 +79,11 @@ function precompute_data(::EnergyDomain,
     )
 end
 
-function precompute_data(::Union{TimeDomain, TrotterDomain},
-    config::AbstractConfig,
+function precompute_data(
+    config::AbstractConfig{D},
     ham_or_trott::Union{HamHam, TrottTrott}
-)
-    energy_labels, time_labels = precompute_labels(config.domain, config)
+) where {D<:Union{TimeDomain, TrotterDomain}}
+    energy_labels, time_labels = precompute_labels(config)
     oft_time_labels = truncate_time_labels_for_oft(time_labels, config.sigma)
 
     transition = pick_transition(config)
@@ -99,28 +99,16 @@ function precompute_data(::Union{TimeDomain, TrotterDomain},
         (nothing, nothing)
     end
 
-    # OFT NUFFT prefactors
-    if config.domain isa TimeDomain
-        oft_nufft_prefactors = prepare_oft_nufft_prefactors(
-            ham_or_trott.bohr_freqs,
-            oft_time_labels,
-            energy_labels,
-            config.sigma;
-            eps=1e-12,
-            nthreads=1,
-            use_shared_array=(nprocs() > 1),
-        )
-    elseif config.domain isa TrotterDomain
-        oft_nufft_prefactors = prepare_oft_nufft_prefactors(
-            ham_or_trott.bohr_freqs,
-            oft_time_labels,
-            energy_labels,
-            config.sigma;
-            eps=1e-12,
-            nthreads=1,
-            use_shared_array=(nprocs() > 1),
-        )
-    end
+    # OFT NUFFT prefactors (same call for both TimeDomain and TrotterDomain)
+    oft_nufft_prefactors = prepare_oft_nufft_prefactors(
+        ham_or_trott.bohr_freqs,
+        oft_time_labels,
+        energy_labels,
+        config.sigma;
+        eps=1e-12,
+        nthreads=1,
+        use_shared_array=(nprocs() > 1),
+    )
     
     return (
         transition = transition,
