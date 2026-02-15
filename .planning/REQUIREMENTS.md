@@ -76,29 +76,29 @@ Requirements for multi-threaded trajectory engine and KMS-vs-GNS comparison expe
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| THRD-01 | — | Pending |
-| THRD-02 | — | Pending |
-| THRD-03 | — | Pending |
-| THRD-04 | — | Pending |
-| GNS-01 | — | Pending |
-| GNS-02 | — | Pending |
-| CONV-01 | — | Pending |
-| CONV-02 | — | Pending |
-| CONV-03 | — | Pending |
-| CONV-04 | — | Pending |
-| CONV-05 | — | Pending |
-| DATA-01 | — | Pending |
-| DATA-02 | — | Pending |
-| EXPT-01 | — | Pending |
-| EXPT-02 | — | Pending |
-| EXPT-03 | — | Pending |
-| EXPT-04 | — | Pending |
+| THRD-01 | Phase 12 | Pending |
+| THRD-02 | Phase 13 | Pending |
+| THRD-03 | Phase 13 | Pending |
+| THRD-04 | Phase 13 | Pending |
+| GNS-01 | Phase 14 | Pending |
+| GNS-02 | Phase 14 | Pending |
+| CONV-01 | Phase 16 | Pending |
+| CONV-02 | Phase 16 | Pending |
+| CONV-03 | Phase 16 | Pending |
+| CONV-04 | Phase 17 | Pending |
+| CONV-05 | Phase 17 | Pending |
+| DATA-01 | Phase 15 | Pending |
+| DATA-02 | Phase 15 | Pending |
+| EXPT-01 | Phase 18 | Pending |
+| EXPT-02 | Phase 18 | Pending |
+| EXPT-03 | Phase 18 | Pending |
+| EXPT-04 | Phase 18 | Pending |
 
 **Coverage:**
 - v1.2 requirements: 17 total
-- Mapped to phases: 0
-- Unmapped: 17 (awaiting roadmap)
+- Mapped to phases: 17
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-15*
-*Last updated: 2026-02-15 after initial definition*
+*Last updated: 2026-02-15 after roadmap creation (phases 12-18)*
