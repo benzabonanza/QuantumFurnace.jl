@@ -1,23 +1,28 @@
 """
     HamHam
 
-    Container for Hamiltonian data, spectral decompositions, and Bohr frequencies.
+    Container for Hamiltonian data, spectral decompositions, Bohr frequencies, and Gibbs state.
+
+    All fields are fully initialized at construction time -- there are no `Nothing`-typed fields
+    for `bohr_freqs`, `bohr_dict`, or `gibbs`. The constructors take a `beta` (inverse temperature)
+    parameter and compute these derived quantities directly.
 
     # Fields
     - `data`: The full Hamiltonian matrix in the computational basis.
-    - `bohr_freqs`, `bohr_dict`: Precomputed Bohr frequencies and their mapping to indices.
+    - `bohr_freqs`: Precomputed Bohr frequency matrix (eigvals[i] - eigvals[j]).
+    - `bohr_dict`: Mapping from Bohr frequencies to their matrix indices.
     - `base_terms`, `base_coeffs`: The 1, 2 or more site terms that constitute the Hamiltonians, and their uniform coefficients.
-    - `disordering_term`, `disordering_coeffs`: Some external field term, that can have different coeffs. on each site.
+    - `disordering_term`, `disordering_coeffs`: Some external field term, that can have different coeffs. on each site (optional, may be `nothing`).
     - `eigvals`, `eigvecs`: Spectral decomposition of the Hamiltonian.
     - `nu_min`: Smallest Bohr frequency in the spectrum, which has to be resolved by all approximations in the algorithm.
     - `shift`, `rescaling_factor`: Values to rescale the spectrum to [0; 0.45].
     - `periodic`: Sets the boundary conditions periodic if `true`.
-    - `gibbs`: The theoretical Gibbs state with respect to the Hamiltonian``\\rho \\propto e^{-\\beta H}``.
+    - `gibbs`: The theoretical Gibbs state with respect to the Hamiltonian ``\\rho \\propto e^{-\\beta H}``, in the eigenbasis.
 """
 struct HamHam
     data::Matrix{ComplexF64}
-    bohr_freqs::Union{Matrix{Float64}, Nothing}
-    bohr_dict::Union{Dict{Float64, Vector{CartesianIndex{2}}}, Nothing}
+    bohr_freqs::Matrix{Float64}
+    bohr_dict::Dict{Float64, Vector{CartesianIndex{2}}}
     base_terms::Vector{Vector{Matrix{ComplexF64}}}
     base_coeffs::Vector{Float64}
     disordering_term::Union{Vector{Matrix{ComplexF64}}, Nothing}
@@ -28,17 +33,34 @@ struct HamHam
     shift::Float64
     rescaling_factor::Float64
     periodic::Bool
-    gibbs::Union{Hermitian{ComplexF64, Matrix{ComplexF64}}, Nothing}
+    gibbs::Hermitian{ComplexF64, Matrix{ComplexF64}}
 end
 
-function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64}, num_qubits::Int64; 
+"""
+    _gibbs_in_eigen(eigvals::Vector{Float64}, beta::Float64) -> Matrix{ComplexF64}
+
+Compute the Gibbs state in the eigenbasis: diagonal matrix with entries exp(-beta * E_i) / Z.
+Internal helper used by HamHam constructors before the HamHam object exists.
+"""
+function _gibbs_in_eigen(eigvals::Vector{Float64}, beta::Float64)
+    dim = length(eigvals)
+    Z = sum(exp.(-beta .* eigvals))
+    rho = zeros(ComplexF64, dim, dim)
+    for i in 1:dim
+        rho[i, i] = exp(-beta * eigvals[i]) / Z
+    end
+    return rho
+end
+
+function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64},
+    num_qubits::Int64, beta::Float64;
     periodic::Bool = true, hermitian_check = false)
-    """Creates a HamHam object from terms and coefficients."""
+    """Creates a HamHam object from terms and coefficients, fully initialized with bohr_freqs, bohr_dict, and gibbs."""
 
     hamiltonian_matrix = construct_base_ham(terms, coeffs, num_qubits; periodic=periodic)
 
     rescaling_factor, shift = rescaling_and_shift_factors(hamiltonian_matrix)
-    rescaled_hamiltonian::Hermitian{ComplexF64, Matrix{ComplexF64}} = hamiltonian_matrix / rescaling_factor + 
+    rescaled_hamiltonian::Hermitian{ComplexF64, Matrix{ComplexF64}} = hamiltonian_matrix / rescaling_factor +
                                                                                     shift * I(2^num_qubits)
 
     rescaled_eigvals, rescaled_eigvecs = eigen(rescaled_hamiltonian)
@@ -49,37 +71,40 @@ function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float6
         @assert ishermitian(rescaled_hamiltonian) "The resulting matrix is not Hermitian!"
     end
 
-    hamiltonian = HamHam(
+    bohr_freqs = rescaled_eigvals .- transpose(rescaled_eigvals)
+    bohr_dict = create_bohr_dict(bohr_freqs)
+    gibbs = Hermitian(_gibbs_in_eigen(rescaled_eigvals, beta))
+
+    return HamHam(
         rescaled_hamiltonian,
-        nothing,
-        nothing,
+        bohr_freqs,
+        bohr_dict,
         terms,
         rescaled_base_coeffs,
-        nothing,  # disordering_terms absent
-        nothing,  # disordering coeffs absent
+        nothing,  # disordering_term absent
+        nothing,  # disordering_coeffs absent
         rescaled_eigvals,
         rescaled_eigvecs,
         smallest_bohr_freq,
         shift,
         rescaling_factor,
         periodic,
-        nothing
-   )
-
-    return hamiltonian
+        gibbs,
+    )
 end
 
-function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64}, 
-    disordering_terms::Vector{Matrix{ComplexF64}}, disordering_coeffs::Vector{Float64}, 
-    num_qubits::Int64; periodic::Bool = true, hermitian_check = false)
-    """Creates a HamHam object from terms and coefficients."""
+function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64},
+    disordering_terms::Vector{Matrix{ComplexF64}}, disordering_coeffs::Vector{Float64},
+    num_qubits::Int64, beta::Float64;
+    periodic::Bool = true, hermitian_check = false)
+    """Creates a HamHam object from terms, coefficients, and disordering terms, fully initialized."""
 
     base_hamiltonian = construct_base_ham(terms, coeffs, num_qubits)
     disordering_hamiltonian = construct_disordering_terms(disordering_terms, disordering_coeffs, num_qubits)
     disordered_ham = base_hamiltonian + disordering_hamiltonian
 
     rescaling_factor, shift = rescaling_and_shift_factors(disordered_ham)
-    rescaled_hamiltonian::Hermitian{ComplexF64, Matrix{ComplexF64}} = disordered_ham / rescaling_factor + 
+    rescaled_hamiltonian::Hermitian{ComplexF64, Matrix{ComplexF64}} = disordered_ham / rescaling_factor +
                                                                                     shift * I(2^num_qubits)
 
     rescaled_eigvals, rescaled_eigvecs = eigen(rescaled_hamiltonian)
@@ -91,10 +116,14 @@ function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float6
         @assert ishermitian(rescaled_hamiltonian) "The resulting matrix is not Hermitian!"
     end
 
-    hamiltonian = HamHam(
+    bohr_freqs = rescaled_eigvals .- transpose(rescaled_eigvals)
+    bohr_dict = create_bohr_dict(bohr_freqs)
+    gibbs = Hermitian(_gibbs_in_eigen(rescaled_eigvals, beta))
+
+    return HamHam(
         rescaled_hamiltonian,
-        nothing,
-        nothing,
+        bohr_freqs,
+        bohr_dict,
         terms,
         rescaled_base_coeffs,
         disordering_terms,
@@ -105,14 +134,43 @@ function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float6
         shift,
         rescaling_factor,
         periodic,
-        nothing
-   )
-
-    return hamiltonian
+        gibbs,
+    )
 end
 
-"""find_ideal_heisenberg(num_qubits::Int, coeffs::Vector{Float64}; 
-    batch_size::Int=1, periodic::Bool=true) -> HamHam
+"""
+    HamHam(raw::NamedTuple, beta::Float64) -> HamHam
+
+Construct a fully-initialized HamHam from a NamedTuple of raw data (as returned by
+`find_ideal_heisenberg`) plus inverse temperature `beta`.
+
+Computes `bohr_freqs`, `bohr_dict`, and `gibbs` from the raw eigvals.
+"""
+function HamHam(raw::NamedTuple, beta::Float64)
+    bohr_freqs = raw.eigvals .- transpose(raw.eigvals)
+    bohr_dict = create_bohr_dict(bohr_freqs)
+    gibbs = Hermitian(_gibbs_in_eigen(raw.eigvals, beta))
+
+    return HamHam(
+        Hermitian(raw.matrix),
+        bohr_freqs,
+        bohr_dict,
+        raw.terms,
+        raw.base_coeffs,
+        raw.disordering_term,
+        raw.disordering_coeffs,
+        raw.eigvals,
+        raw.eigvecs,
+        raw.nu_min,
+        raw.shift,
+        raw.rescaling_factor,
+        raw.periodic,
+        gibbs,
+    )
+end
+
+"""find_ideal_heisenberg(num_qubits::Int, coeffs::Vector{Float64};
+    batch_size::Int=1, periodic::Bool=true) -> NamedTuple
 
     Constructs and optimizes a disordered 1D Heisenberg Hamiltonian to maximize the minimum level spacing (smallest Bohr frequency).
 
@@ -133,8 +191,9 @@ end
     - `periodic`: If `true`, applies periodic boundary conditions to the chain.
 
     # Returns
-    - `HamHam`: A container holding the optimized Hamiltonian data, spectral decomposition, and Bohr frequencies, etc.
-    **Note**: The `gibbs` field of the returned struct is set to `nothing`. Use [`add_gibbs_to_hamham`](@ref) to calculate the thermal state once the temperature is decided.
+    - `NamedTuple`: Raw Hamiltonian data with fields: `matrix`, `terms`, `base_coeffs`,
+      `disordering_term`, `disordering_coeffs`, `eigvals`, `eigvecs`, `nu_min`, `shift`,
+      `rescaling_factor`, `periodic`. Use `HamHam(raw, beta)` to construct a fully-initialized HamHam.
 """
 function find_ideal_heisenberg(num_qubits::Int64,
     coeffs::Vector{Float64}; batch_size::Int64 = 1, periodic::Bool = true)
@@ -164,7 +223,7 @@ function find_ideal_heisenberg(num_qubits::Int64,
         total_ham = base_hamiltonian + disordering_ham
         rescaling_factor, shift = rescaling_and_shift_factors(total_ham)
 
-        rescaled_ham = (total_ham ./ rescaling_factor) + shift * I 
+        rescaled_ham = (total_ham ./ rescaling_factor) + shift * I
 
         rescaled_eigvals, rescaled_eigvecs = eigen(Hermitian(rescaled_ham))
         # Check all differences between consecutive eigenvalues
@@ -188,31 +247,28 @@ function find_ideal_heisenberg(num_qubits::Int64,
         error("Optimization failed to find a valid Hamiltonian")
     end
 
-    return HamHam(
-        best_ham_matrix,
-        nothing,
-        nothing,
-        terms,
-        coeffs ./ best_rescaling_factor,
-        disordering_term,
-        best_disordering_coeffs ./ best_rescaling_factor,
-        best_eigvals,
-        best_eigvecs,
-        best_nu_min,
-        best_shift,
-        best_rescaling_factor,
-        periodic,
-        nothing
+    return (
+        matrix = best_ham_matrix,
+        terms = terms,
+        base_coeffs = coeffs ./ best_rescaling_factor,
+        disordering_term = disordering_term,
+        disordering_coeffs = best_disordering_coeffs ./ best_rescaling_factor,
+        eigvals = best_eigvals,
+        eigvecs = best_eigvecs,
+        nu_min = best_nu_min,
+        shift = best_shift,
+        rescaling_factor = best_rescaling_factor,
+        periodic = periodic,
     )
 end
 
 function construct_base_ham(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64},
     num_qubits::Int64; periodic::Bool = true)
-    
+
     if length(terms) != length(coeffs)
         throw(ArgumentError("The number of terms and coefficients must be equal"))
     end
-    
+
     hamiltonian::SparseMatrixCSC{ComplexF64} = spzeros(2^num_qubits, 2^num_qubits)
     for (i, term) in enumerate(terms)
         for q in 1:num_qubits
@@ -224,7 +280,7 @@ function construct_base_ham(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::V
     return Hermitian(Matrix(hamiltonian))
 end
 
-function construct_disordering_terms(term::Vector{Matrix{ComplexF64}}, 
+function construct_disordering_terms(term::Vector{Matrix{ComplexF64}},
     coeffs::Vector{Float64}, num_qubits::Int64)
 
     if length(coeffs) != num_qubits
@@ -250,32 +306,4 @@ function rescaling_and_shift_factors(hamiltonian::Hermitian{ComplexF64, Matrix{C
     rescaling_factor = (largest_eigval - smallest_eigval) * (2 / (1 - eps))
     shift = - (largest_eigval - smallest_eigval * eps) / (2 * (largest_eigval - smallest_eigval)) + 0.5
     return rescaling_factor, shift
-end
-"""
-    Creates a new HamHam struct from an old one with `bohr_freqs`, `bohr_dict`, and `gibbs`
-    It copies only the pointers to previous fields, not the data themselves
-"""
-function finalize_hamham(hamiltonian::HamHam, beta::Float64)::HamHam
-
-    gibbs_in_eigen = Hermitian(gibbs_state_in_eigen(hamiltonian, beta))
-
-    bohr_freqs = hamiltonian.eigvals .- transpose(hamiltonian.eigvals)
-    
-    return HamHam(
-        hamiltonian.data,
-        bohr_freqs,
-        create_bohr_dict(bohr_freqs),
-        hamiltonian.base_terms,
-        hamiltonian.base_coeffs,
-        hamiltonian.disordering_term,
-        hamiltonian.disordering_coeffs,
-        hamiltonian.eigvals,
-        hamiltonian.eigvecs,
-        hamiltonian.nu_min,
-        hamiltonian.shift,
-        hamiltonian.rescaling_factor,
-        hamiltonian.periodic,
-        gibbs_in_eigen
-    )
-    
 end
