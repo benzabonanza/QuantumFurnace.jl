@@ -116,7 +116,11 @@ Plans:
   3. Time/Trotter thermalize hot path in jump_workers.jl avoids the abs.(filter(...)) intermediate allocation
   4. B_trotter multi-jump variant precomputes Trotter basis transforms instead of recomputing in the inner loop
   5. All 224 existing tests pass with no regressions
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [ ] 11-01-PLAN.md -- Eliminate sparse allocations in B_bohr and filter+abs in jump_workers
+- [ ] 11-02-PLAN.md -- Eliminate Diagonal wrappers and redundant basis transforms in B_time/B_trotter
+- [ ] 11-03-PLAN.md -- Add @allocated regression tests for all optimized hot paths
 
 ## Progress
 
@@ -135,4 +139,4 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10 -> 11
 | 8. Struct Simplification | v1.1 | 3/3 | Complete | 2026-02-15 |
 | 9. Type Parameterization | v1.1 | 3/3 | Complete | 2026-02-15 |
 | 10. API Surface Cleanup | v1.1 | 3/3 | Complete | 2026-02-15 |
-| 11. Allocation Optimization | v1.1 | 0/? | Not started | - |
+| 11. Allocation Optimization | v1.1 | 0/3 | Not started | - |
