@@ -26,7 +26,7 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 
 - [x] **Phase 6: Dead Code Pruning** - Remove ~930 lines of commented code, ~35 unused functions, and dead structs -- completed 2026-02-15
 - [x] **Phase 7: DRY Refactoring** - Extract shared patterns into reusable helpers -- completed 2026-02-15
-- [ ] **Phase 8: Struct Simplification** - Reduce config field duplication, fix HamHam initialization, make TrottTrott immutable
+- [x] **Phase 8: Struct Simplification** - Reduce config field duplication, fix HamHam initialization, make TrottTrott immutable -- completed 2026-02-15
 - [ ] **Phase 9: Type Parameterization** - Parameterize core structs on element type for F64/F32 flexibility
 - [ ] **Phase 10: API Surface Cleanup** - Remove dead exports, internalize implementation details, export missing public functions
 - [ ] **Phase 11: Allocation Optimization** - Eliminate unnecessary allocations in hot paths
@@ -71,9 +71,9 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   4. All 224 existing tests pass with no regressions
 **Plans**: 3 plans
 Plans:
-- [ ] 08-01-PLAN.md -- Config struct deduplication + sentinel cleanup + TrottTrott immutability (STRUCT-01, STRUCT-03)
-- [ ] 08-02-PLAN.md -- HamHam initialization redesign (STRUCT-02)
-- [ ] 08-03-PLAN.md -- TrajectoryFramework type param cleanup + domain dispatch refactoring
+- [x] 08-01-PLAN.md -- Config struct deduplication + sentinel cleanup + TrottTrott immutability (STRUCT-01, STRUCT-03)
+- [x] 08-02-PLAN.md -- HamHam initialization redesign (STRUCT-02)
+- [x] 08-03-PLAN.md -- TrajectoryFramework type param cleanup + domain dispatch refactoring
 
 ### Phase 9: Type Parameterization
 **Goal**: Core structs are parameterized on element type, enabling future Float32 paths without changing calling code
@@ -124,7 +124,7 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10 -> 11
 | 5. Statistical Validation and Regression | v1.0 | 2/2 | Complete | 2026-02-14 |
 | 6. Dead Code Pruning | v1.1 | 2/2 | Complete | 2026-02-15 |
 | 7. DRY Refactoring | v1.1 | 2/2 | Complete | 2026-02-15 |
-| 8. Struct Simplification | v1.1 | 0/? | Not started | - |
+| 8. Struct Simplification | v1.1 | 3/3 | Complete | 2026-02-15 |
 | 9. Type Parameterization | v1.1 | 0/? | Not started | - |
 | 10. API Surface Cleanup | v1.1 | 0/? | Not started | - |
 | 11. Allocation Optimization | v1.1 | 0/? | Not started | - |

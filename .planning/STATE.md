@@ -5,7 +5,7 @@
 See: .planning/PROJECT.md (updated 2026-02-14)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.1 Reduce -- Phase 8: Struct Simplification (in progress)
+**Current focus:** v1.1 Reduce -- Phase 8: Struct Simplification (complete)
 
 ## Current Position
 
