@@ -19,7 +19,7 @@ Progress: [#############.......] 64% (v1.0 complete, v1.1 3/6 phases complete)
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 14 (v1.0: 10, v1.1: 4)
+- Total plans completed: 15 (v1.0: 10, v1.1: 4, quick: 1)
 - Average duration: --
 - Total execution time: --
 
@@ -30,6 +30,7 @@ Progress: [#############.......] 64% (v1.0 complete, v1.1 3/6 phases complete)
 | v1.0 phases 1-5 | 10 | -- | -- |
 | 06-dead-code-pruning | 2 | 16min | 8min |
 | 07-dry-refactoring | 2 | 8min | 4min |
+| quick-13 | 1 | 2min | 2min |
 
 *Updated after each plan completion*
 
@@ -49,6 +50,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - 07-01: coherent.jl B_trotter single-jump transforms left untouched (different pattern)
 - 07-02: apply_cptp_channel! expects scratch.R pre-Hermitianized; hermitianize! remains at call site
 - 07-02: apply_coherent_unitary! marked @inline for zero-overhead nothing dispatch
+- quick-13: hermitianize!(scratch.tmp2) added before eigen to handle floating-point asymmetry in S matrix
 
 ### Pending Todos
 
@@ -61,5 +63,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 07-02-PLAN.md (Phase 07 complete)
+Stopped at: Completed quick task 13 (unify residual Cholesky computation)
 Resume file: None
