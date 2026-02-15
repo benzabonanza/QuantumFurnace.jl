@@ -28,7 +28,7 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 - [x] **Phase 7: DRY Refactoring** - Extract shared patterns into reusable helpers -- completed 2026-02-15
 - [x] **Phase 8: Struct Simplification** - Reduce config field duplication, fix HamHam initialization, make TrottTrott immutable -- completed 2026-02-15
 - [x] **Phase 9: Type Parameterization** - Parameterize core structs on element type for F64/F32 flexibility -- completed 2026-02-15
-- [ ] **Phase 10: API Surface Cleanup** - Remove dead exports, internalize implementation details, export missing public functions
+- [x] **Phase 10: API Surface Cleanup** - Remove dead exports, internalize implementation details, export missing public functions -- completed 2026-02-15
 - [ ] **Phase 11: Allocation Optimization** - Eliminate unnecessary allocations in hot paths
 
 ## Phase Details
@@ -102,9 +102,9 @@ Plans:
   4. All 224 existing tests pass with no regressions
 **Plans**: 3 plans
 Plans:
-- [ ] 10-01-PLAN.md -- Reorganize export block: add physics exports, remove internal exports, confirm dead exports absent
-- [ ] 10-02-PLAN.md -- Apply _ prefix to internal function definitions and intra-file call sites
-- [ ] 10-03-PLAN.md -- Update cross-file call sites and test qualified access for _-prefixed names
+- [x] 10-01-PLAN.md -- Reorganize export block: add physics exports, remove internal exports, confirm dead exports absent
+- [x] 10-02-PLAN.md -- Apply _ prefix to internal function definitions and intra-file call sites
+- [x] 10-03-PLAN.md -- Update cross-file call sites and test qualified access for _-prefixed names
 
 ### Phase 11: Allocation Optimization
 **Goal**: Core simulation hot paths avoid unnecessary heap allocations -- sparse matrices, Diagonal wrappers, filter intermediates, and redundant basis transforms are eliminated or precomputed
@@ -134,5 +134,5 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10 -> 11
 | 7. DRY Refactoring | v1.1 | 2/2 | Complete | 2026-02-15 |
 | 8. Struct Simplification | v1.1 | 3/3 | Complete | 2026-02-15 |
 | 9. Type Parameterization | v1.1 | 3/3 | Complete | 2026-02-15 |
-| 10. API Surface Cleanup | v1.1 | 0/3 | Not started | - |
+| 10. API Surface Cleanup | v1.1 | 3/3 | Complete | 2026-02-15 |
 | 11. Allocation Optimization | v1.1 | 0/? | Not started | - |
