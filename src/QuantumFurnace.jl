@@ -68,7 +68,7 @@ export X, Y, Z, Had,
 export validate_config!
 
 # OFT (kept for debugging / pedagogy)
-export oft!
+export oft!, time_oft!, trotter_oft!
 
 # --- Internal Implementation ---
 include("constants.jl")

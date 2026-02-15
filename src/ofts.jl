@@ -5,7 +5,7 @@ function oft!(out_matrix::Matrix{<:Complex}, jump::JumpOp, energy::Real, hamilto
 end
 
 # Depricated but used for tests. We use precomputed NUFFT prefactors now in jump_contributions!()
-function _time_oft!(
+function time_oft!(
     out_matrix::Matrix{<:Complex},
     caches::OFTCaches,
     jump::JumpOp,
@@ -57,7 +57,7 @@ function _time_oft!(
     return out_matrix
 end
 
-function _trotter_oft!(
+function trotter_oft!(
     out_matrix::Matrix{<:Complex},
     caches::OFTCaches,
     jump::JumpOp,

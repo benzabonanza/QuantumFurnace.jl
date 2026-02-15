@@ -156,13 +156,13 @@ end
     time_oft_prefactor = T0 * sqrt(SIGMA * sqrt(2 / pi) / (2 * pi))
     caches = QuantumFurnace.OFTCaches(DIM)
     A_time = Matrix{ComplexF64}(undef, DIM, DIM)
-    QuantumFurnace._time_oft!(A_time, caches, jump, w, TEST_HAM, oft_time_labels, SIGMA)
+    QuantumFurnace.time_oft!(A_time, caches, jump, w, TEST_HAM, oft_time_labels, SIGMA)
     A_time .*= time_oft_prefactor
 
     # Trotter OFT: trotter_oft! needs jump in Trotter eigenbasis
     jump_trott = JumpOp(jump.data, TEST_TROTTER.eigvecs' * jump.data * TEST_TROTTER.eigvecs, jump.orthogonal, jump.hermitian)
     A_trott = Matrix{ComplexF64}(undef, DIM, DIM)
-    QuantumFurnace._trotter_oft!(A_trott, caches, jump_trott, w, TEST_TROTTER, oft_time_labels, SIGMA)
+    QuantumFurnace.trotter_oft!(A_trott, caches, jump_trott, w, TEST_TROTTER, oft_time_labels, SIGMA)
     A_trott .*= time_oft_prefactor
     # Transform result from Trotter eigenbasis back to H-eigenbasis
     U_t2e = TEST_TROTTER.eigvecs' * TEST_HAM.eigvecs
@@ -219,7 +219,7 @@ end
 
     # Direct time_oft! for comparison
     A_time = Matrix{ComplexF64}(undef, DIM, DIM)
-    QuantumFurnace._time_oft!(A_time, caches, jump, w, TEST_HAM, oft_time_labels, SIGMA)
+    QuantumFurnace.time_oft!(A_time, caches, jump, w, TEST_HAM, oft_time_labels, SIGMA)
     A_time .*= time_oft_prefactor
 
     # === Trotter NUFFT OFT ===
@@ -238,7 +238,7 @@ end
 
     # Direct trotter_oft! for comparison
     A_trott = Matrix{ComplexF64}(undef, DIM, DIM)
-    QuantumFurnace._trotter_oft!(A_trott, caches, jump_trott, w, TEST_TROTTER, oft_time_labels, SIGMA)
+    QuantumFurnace.trotter_oft!(A_trott, caches, jump_trott, w, TEST_TROTTER, oft_time_labels, SIGMA)
     A_trott .*= time_oft_prefactor
     A_trott_in_eigen = U_t2e' * A_trott * U_t2e
 
