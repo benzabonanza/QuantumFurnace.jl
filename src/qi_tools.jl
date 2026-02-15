@@ -206,17 +206,3 @@ function random_density_matrix(num_qubits::Int)
     return Hermitian(ρ)
 end
 
-function are_we_tp(liouv::Matrix{ComplexF64})
-    initial_dm_OG = zeros(ComplexF64, size(hamiltonian.data))
-    initial_dm_OG[2, 2] = 1.0
-    initial_dm_OG[1, 2] = 1.0
-    initial_dm_OG /= tr(initial_dm_OG)
-    initial_vec = vec(initial_dm_OG)
-
-    liouv_time_evolution(t) = exp(t * liouv)
-    t = 1.0
-    time_evolved_vec = liouv_time_evolution(t) * initial_vec
-    id = I(2^num_qubits)
-    vec_id = vec(id)
-    @printf("Are we TP?: %s\n", vec_id' * time_evolved_vec)
-end
