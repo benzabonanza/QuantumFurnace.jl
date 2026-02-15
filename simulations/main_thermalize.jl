@@ -83,15 +83,8 @@ function main()
     #     delta = delta,
     # )
 
-    #* Hamiltonian    
-    # Hamiltonian path
-    project_root = Pkg.project().path |> dirname
-    data_dir = joinpath(project_root, "hamiltonians")
-    output_filename = join(["heis", "disordered", "periodic", "n$num_qubits"], "_") * ".bson"
-    ham_path = joinpath(data_dir, output_filename)
-    bson_hamiltonian_data = BSON.load(ham_path)
-    hamiltonian = bson_hamiltonian_data[:hamiltonian]
-    hamiltonian = finalize_hamham(hamiltonian, beta)
+    #* Hamiltonian
+    hamiltonian = load_hamiltonian("heis", num_qubits; beta=beta)
     
     initial_dm = Matrix{ComplexF64}(I(dim) / dim)
     @assert norm(real(tr(initial_dm)) - 1.) < 1e-15 "Trace is not 1.0"

@@ -87,8 +87,7 @@ function main()
         # hamiltonian = HamHam(hamiltonian_terms, hamiltonian_coeffs, num_qubits)
 
         # Load Hamiltonian
-        hamiltonian = load_hamiltonian("heis", num_qubits)
-        hamiltonian = finalize_hamham(hamiltonian, beta)
+        hamiltonian = load_hamiltonian("heis", num_qubits; beta=beta)
     
         initial_dm = Matrix{ComplexF64}(I(dim) / dim)
         @assert norm(real(tr(initial_dm)) - 1.) < 1e-15 "Trace is not 1.0"

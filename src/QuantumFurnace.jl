@@ -28,7 +28,7 @@ export AbstractConfig, AbstractLiouvConfig, AbstractThermalizeConfig,
 export run_lindbladian, run_thermalization, construct_lindbladian, B_time, B_trotter, coherent_bohr
 export generate_filename, validate_config!, compute_trotter_error, gibbs_state, gibbs_state_in_eigen,
        create_bohr_dict, pad_term, pick_transition, find_ideal_heisenberg, create_alpha,
-       expm_pauli_padded, finalize_hamham, load_hamiltonian, oft!, prepare_oft_nufft_prefactors, prefactor_view,
+       expm_pauli_padded, finalize_hamham, load_hamiltonian, load_hamiltonian_bson, oft!, prepare_oft_nufft_prefactors, prefactor_view,
        precompute_coherent_terms, precompute_coherent_total_B
 export create_alpha_gns
 # Quantum Trajectory

@@ -169,6 +169,60 @@ function HamHam(raw::NamedTuple, beta::Float64)
     )
 end
 
+"""
+    load_hamiltonian_bson(path::String, beta::Float64) -> HamHam
+
+Load a HamHam from a legacy BSON file where `bohr_freqs` and `bohr_dict` were stored as `nothing`.
+Reconstructs a fully-initialized HamHam by computing the missing fields from `eigvals` and `beta`.
+"""
+function load_hamiltonian_bson(path::String, beta::Float64)
+    raw_parsed = BSON.parse(path)
+    ham_data = raw_parsed[:hamiltonian][:data]
+    cache = IdDict()
+    init = Main
+
+    data_matrix    = BSON.raise_recursive(ham_data[1], cache, init)
+    # Fields 2 (bohr_freqs) and 3 (bohr_dict) are nothing in legacy files -- skip
+    base_terms     = Vector{Vector{Matrix{ComplexF64}}}(BSON.raise_recursive(ham_data[4], cache, init))
+    base_coeffs    = Vector{Float64}(BSON.raise_recursive(ham_data[5], cache, init))
+    disordering_term_raw  = BSON.raise_recursive(ham_data[6], cache, init)
+    disordering_coeffs_raw = BSON.raise_recursive(ham_data[7], cache, init)
+    eigvals_data   = Vector{Float64}(BSON.raise_recursive(ham_data[8], cache, init))
+    eigvecs_data   = Matrix{ComplexF64}(BSON.raise_recursive(ham_data[9], cache, init))
+    nu_min         = Float64(BSON.raise_recursive(ham_data[10], cache, init))
+    shift          = Float64(BSON.raise_recursive(ham_data[11], cache, init))
+    rescaling_factor = Float64(BSON.raise_recursive(ham_data[12], cache, init))
+    periodic       = Bool(BSON.raise_recursive(ham_data[13], cache, init))
+
+    disordering_term = disordering_term_raw === nothing ? nothing : Vector{Matrix{ComplexF64}}(disordering_term_raw)
+    disordering_coeffs = disordering_coeffs_raw === nothing ? nothing : Vector{Float64}(disordering_coeffs_raw)
+
+    raw = (;
+        matrix = data_matrix,
+        terms = base_terms,
+        base_coeffs = base_coeffs,
+        disordering_term = disordering_term,
+        disordering_coeffs = disordering_coeffs,
+        eigvals = eigvals_data,
+        eigvecs = eigvecs_data,
+        nu_min = nu_min,
+        shift = shift,
+        rescaling_factor = rescaling_factor,
+        periodic = periodic,
+    )
+    return HamHam(raw, beta)
+end
+
+"""
+    finalize_hamham(path_or_ham, beta::Float64) -> HamHam
+
+Backward-compatible entry point. Accepts a BSON file path (String) and beta,
+loads the legacy HamHam data, and returns a fully-initialized HamHam.
+
+For new code, prefer `HamHam(raw::NamedTuple, beta)` or the term-based constructors directly.
+"""
+finalize_hamham(path::String, beta::Float64) = load_hamiltonian_bson(path, beta)
+
 """find_ideal_heisenberg(num_qubits::Int, coeffs::Vector{Float64};
     batch_size::Int=1, periodic::Bool=true) -> NamedTuple
 

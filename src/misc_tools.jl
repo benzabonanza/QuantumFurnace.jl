@@ -1,10 +1,76 @@
-function load_hamiltonian(type::String, num_qubits::Int)
+"""
+    load_hamiltonian(type, num_qubits; beta) -> HamHam
+
+Load a pre-computed Hamiltonian from BSON and construct a fully-initialized HamHam.
+
+The `beta` keyword is required -- it is used to compute bohr_freqs, bohr_dict, and gibbs
+via the `HamHam(NamedTuple, beta)` constructor.
+
+BSON files store legacy HamHam structs with `nothing` for bohr_freqs/bohr_dict/gibbs.
+This function uses `BSON.parse` to load the raw field data and reconstructs the HamHam
+with the new fully-initialized struct definition.
+"""
+function load_hamiltonian(type::String, num_qubits::Int; beta::Float64)
     project_root = Pkg.project().path |> dirname
     data_dir = joinpath(project_root, "hamiltonians")
     output_filename = join([type, "disordered", "periodic", "n$num_qubits"], "_") * ".bson"
     ham_path = joinpath(data_dir, output_filename)
-    bson_hamiltonian_data = BSON.load(ham_path)
-    return bson_hamiltonian_data[:hamiltonian]
+    return _load_hamiltonian_bson(ham_path, beta)
+end
+
+"""
+    _load_hamiltonian_bson(path, beta) -> HamHam
+
+Low-level BSON loader that handles legacy HamHam serialization format.
+Extracts raw fields from BSON and constructs a new HamHam via HamHam(NamedTuple, beta).
+"""
+function _load_hamiltonian_bson(path::String, beta::Float64)
+    raw = open(path) do io
+        BSON.parse(io)
+    end
+
+    ham_raw = raw[:hamiltonian]
+    fields = ham_raw[:data]
+
+    # Legacy HamHam field order (14 fields):
+    #   1:data, 2:bohr_freqs(nothing), 3:bohr_dict(nothing), 4:base_terms,
+    #   5:base_coeffs, 6:disordering_term, 7:disordering_coeffs,
+    #   8:eigvals, 9:eigvecs, 10:nu_min, 11:shift, 12:rescaling_factor,
+    #   13:periodic, 14:gibbs
+    cache = IdDict()
+    init = @__MODULE__
+
+    data_matrix = BSON.raise_recursive(fields[1], cache, init)::Matrix{ComplexF64}
+    base_terms = Vector{Vector{Matrix{ComplexF64}}}(BSON.raise_recursive(fields[4], cache, init))
+    base_coeffs = BSON.raise_recursive(fields[5], cache, init)::Vector{Float64}
+    disordering_term = let dt = BSON.raise_recursive(fields[6], cache, init)
+        dt === nothing ? nothing : Vector{Matrix{ComplexF64}}(dt)
+    end
+    disordering_coeffs = let dc = BSON.raise_recursive(fields[7], cache, init)
+        dc === nothing ? nothing : Vector{Float64}(dc)
+    end
+    eigvals_vec = BSON.raise_recursive(fields[8], cache, init)::Vector{Float64}
+    eigvecs_mat = BSON.raise_recursive(fields[9], cache, init)::Matrix{ComplexF64}
+    nu_min = Float64(fields[10])
+    shift = Float64(fields[11])
+    rescaling_factor = Float64(fields[12])
+    periodic = Bool(fields[13])
+
+    raw_nt = (
+        matrix = data_matrix,
+        terms = base_terms,
+        base_coeffs = base_coeffs,
+        disordering_term = disordering_term,
+        disordering_coeffs = disordering_coeffs,
+        eigvals = eigvals_vec,
+        eigvecs = eigvecs_mat,
+        nu_min = nu_min,
+        shift = shift,
+        rescaling_factor = rescaling_factor,
+        periodic = periodic,
+    )
+
+    return HamHam(raw_nt, beta)
 end
 
 function generate_filename(config::AbstractLiouvConfig)
@@ -89,7 +155,7 @@ function validate_config!(config::AbstractConfig)
         if config.b != 0.0
             push!(errors, "For linear combinations with b != 0, a must also be non-zero.")
         end
-        if config.domain isa Union{TimeDomain, TrotterDomain} && config.with_coherent && config.eta <= 0.0
+        if config.domain isa Union{TimeDomain, TrotterDomain} && config.with_coherent && (isnothing(config.eta) || config.eta <= 0.0)
             push!(errors, "For linear combinations in the KMS DB case with a=0 in TIME or TROTTER domain, eta must be > 0.")
         end
     end
@@ -108,43 +174,45 @@ function _collect_config_errors!(errors::Vector{String}, ::BohrDomain, config)
 end
 
 function _collect_config_errors!(errors::Vector{String}, ::EnergyDomain, config)
-    if config.num_energy_bits <= 0
+    if isnothing(config.num_energy_bits) || config.num_energy_bits <= 0
         push!(errors, "For EnergyDomain, num_energy_bits must be > 0.")
     end
-    if config.w0 <= 0.0
+    if isnothing(config.w0) || config.w0 <= 0.0
         push!(errors, "For EnergyDomain, w0 must be > 0.")
     end
 end
 
 function _collect_config_errors!(errors::Vector{String}, ::TimeDomain, config)
-    if config.num_energy_bits <= 0
+    if isnothing(config.num_energy_bits) || config.num_energy_bits <= 0
         push!(errors, "For TimeDomain, num_energy_bits must be > 0.")
     end
-    if config.t0 <= 0.0
+    if isnothing(config.t0) || config.t0 <= 0.0
         push!(errors, "For TimeDomain, t0 must be > 0.")
     end
-    if config.w0 <= 0.0
+    if isnothing(config.w0) || config.w0 <= 0.0
         push!(errors, "For TimeDomain, w0 must be > 0.")
     end
-    if !isapprox(config.t0 * config.w0, 2pi / 2^config.num_energy_bits)
+    if !isnothing(config.t0) && !isnothing(config.w0) && !isnothing(config.num_energy_bits) &&
+       !isapprox(config.t0 * config.w0, 2pi / 2^config.num_energy_bits)
         push!(errors, "For TimeDomain, the relation t0 * w0 ≈ 2π / 2^N must hold.")
     end
 end
 
 function _collect_config_errors!(errors::Vector{String}, ::TrotterDomain, config)
-    if config.num_energy_bits <= 0
+    if isnothing(config.num_energy_bits) || config.num_energy_bits <= 0
         push!(errors, "For TrotterDomain, num_energy_bits must be > 0.")
     end
-    if config.t0 <= 0.0
+    if isnothing(config.t0) || config.t0 <= 0.0
         push!(errors, "For TrotterDomain, t0 must be > 0.")
     end
-    if config.w0 <= 0.0
+    if isnothing(config.w0) || config.w0 <= 0.0
         push!(errors, "For TrotterDomain, w0 must be > 0.")
     end
-    if config.num_trotter_steps_per_t0 <= 0
+    if isnothing(config.num_trotter_steps_per_t0) || config.num_trotter_steps_per_t0 <= 0
         push!(errors, "For TrotterDomain, num_trotter_steps_per_t0 must be > 0.")
     end
-    if !isapprox(config.t0 * config.w0, 2pi / 2^config.num_energy_bits)
+    if !isnothing(config.t0) && !isnothing(config.w0) && !isnothing(config.num_energy_bits) &&
+       !isapprox(config.t0 * config.w0, 2pi / 2^config.num_energy_bits)
         push!(errors, "For TrotterDomain, the relation t0 * w0 ≈ 2π / 2^N must hold.")
     end
 end
@@ -168,7 +236,7 @@ function print_press(config::AbstractLiouvConfig)
         ("with_linear_combination", config.with_linear_combination),
         ("num_trotter_steps_per_t0", config.num_trotter_steps_per_t0)
     ]
-    provided = filter(p -> p[2] != -1.0, params)
+    provided = filter(p -> p[2] !== nothing, params)
     if isempty(provided)
         return
     end
@@ -200,7 +268,7 @@ function print_press(config::AbstractThermalizeConfig)
         ("mixing time", config.mixing_time),
         ("delta", config.delta),
     ]
-    provided = filter(p -> p[2] != -1.0, params)
+    provided = filter(p -> p[2] !== nothing, params)
     if isempty(provided)
         return
     end

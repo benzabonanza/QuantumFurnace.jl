@@ -9,6 +9,64 @@ using LinearAlgebra
 using BSON
 
 # ---------------------------------------------------------------------------
+# BSON legacy loader (test-only)
+# ---------------------------------------------------------------------------
+"""
+    _load_test_hamiltonian(ham_path, beta) -> HamHam
+
+Load a legacy BSON-serialized HamHam and reconstruct it with the new fully-initialized
+struct definition. Uses BSON.parse to avoid deserialization failure from the changed
+HamHam field types (bohr_freqs, bohr_dict, gibbs are no longer Union{..., Nothing}).
+"""
+function _load_test_hamiltonian(ham_path::String, beta::Float64)
+    raw = open(ham_path) do io
+        BSON.parse(io)
+    end
+    ham_raw = raw[:hamiltonian]
+    fields = ham_raw[:data]
+
+    # Legacy HamHam field order (14 fields):
+    #   1:data, 2:bohr_freqs(nothing), 3:bohr_dict(nothing), 4:base_terms,
+    #   5:base_coeffs, 6:disordering_term, 7:disordering_coeffs,
+    #   8:eigvals, 9:eigvecs, 10:nu_min, 11:shift, 12:rescaling_factor,
+    #   13:periodic, 14:gibbs
+    cache = IdDict()
+    init = QuantumFurnace
+
+    data_matrix = BSON.raise_recursive(fields[1], cache, init)::Matrix{ComplexF64}
+    base_terms = Vector{Vector{Matrix{ComplexF64}}}(BSON.raise_recursive(fields[4], cache, init))
+    base_coeffs = BSON.raise_recursive(fields[5], cache, init)::Vector{Float64}
+    disordering_term = let dt = BSON.raise_recursive(fields[6], cache, init)
+        dt === nothing ? nothing : Vector{Matrix{ComplexF64}}(dt)
+    end
+    disordering_coeffs = let dc = BSON.raise_recursive(fields[7], cache, init)
+        dc === nothing ? nothing : Vector{Float64}(dc)
+    end
+    eigvals_vec = BSON.raise_recursive(fields[8], cache, init)::Vector{Float64}
+    eigvecs_mat = BSON.raise_recursive(fields[9], cache, init)::Matrix{ComplexF64}
+    nu_min = Float64(fields[10])
+    shift = Float64(fields[11])
+    rescaling_factor = Float64(fields[12])
+    periodic = Bool(fields[13])
+
+    raw_nt = (
+        matrix = data_matrix,
+        terms = base_terms,
+        base_coeffs = base_coeffs,
+        disordering_term = disordering_term,
+        disordering_coeffs = disordering_coeffs,
+        eigvals = eigvals_vec,
+        eigvecs = eigvecs_mat,
+        nu_min = nu_min,
+        shift = shift,
+        rescaling_factor = rescaling_factor,
+        periodic = periodic,
+    )
+
+    return HamHam(raw_nt, beta)
+end
+
+# ---------------------------------------------------------------------------
 # Physical parameters (LOCKED decisions)
 # ---------------------------------------------------------------------------
 const NUM_QUBITS = 4
@@ -42,12 +100,12 @@ const NUM_TROTTER_STEPS_PER_T0 = 10
 """
     make_test_system() -> (; hamiltonian, jumps, gibbs)
 
-Loads the 4-qubit disordered Heisenberg Hamiltonian, finalizes it at inverse
-temperature BETA, and creates 12 single-site Pauli jump operators (X, Y, Z
-on each of 4 sites), normalized by sqrt(3 * NUM_QUBITS).
+Loads the 4-qubit disordered Heisenberg Hamiltonian at inverse temperature BETA
+and creates 12 single-site Pauli jump operators (X, Y, Z on each of 4 sites),
+normalized by sqrt(3 * NUM_QUBITS).
 
 Returns a named tuple with:
-- `hamiltonian`: finalized HamHam with bohr_dict and gibbs populated
+- `hamiltonian`: fully-initialized HamHam with bohr_dict and gibbs populated
 - `jumps`: Vector{JumpOp} of 12 jump operators
 - `gibbs`: the Gibbs state matrix (Hermitian, trace 1)
 """
@@ -56,9 +114,7 @@ function make_test_system()
     # (load_hamiltonian uses Pkg.project().path which points to a temp dir during Pkg.test())
     source_root = dirname(@__DIR__)
     ham_path = joinpath(source_root, "hamiltonians", "heis_disordered_periodic_n$(NUM_QUBITS).bson")
-    bson_data = BSON.load(ham_path)
-    hamiltonian = bson_data[:hamiltonian]
-    hamiltonian = finalize_hamham(hamiltonian, BETA)
+    hamiltonian = _load_test_hamiltonian(ham_path, BETA)
 
     # Create jump operators: single-site Paulis (X, Y, Z) on each site
     jump_paulis = [[X], [Y], [Z]]
@@ -95,12 +151,12 @@ const TEST_GIBBS = TEST_SYSTEM.gibbs
 """
     make_small_test_system() -> (; hamiltonian, jumps, gibbs)
 
-Loads the 3-qubit disordered Heisenberg Hamiltonian, finalizes it at inverse
-temperature BETA, and creates 9 single-site Pauli jump operators (X, Y, Z
-on each of 3 sites), normalized by sqrt(9).
+Loads the 3-qubit disordered Heisenberg Hamiltonian at inverse temperature BETA
+and creates 9 single-site Pauli jump operators (X, Y, Z on each of 3 sites),
+normalized by sqrt(9).
 
 Returns a named tuple with:
-- `hamiltonian`: finalized HamHam with bohr_dict and gibbs populated
+- `hamiltonian`: fully-initialized HamHam with bohr_dict and gibbs populated
 - `jumps`: Vector{JumpOp} of 9 jump operators
 - `gibbs`: the Gibbs state matrix (Hermitian, trace 1)
 """
@@ -108,9 +164,7 @@ function make_small_test_system()
     small_num_qubits = 3
     source_root = dirname(@__DIR__)
     ham_path = joinpath(source_root, "hamiltonians", "heis_disordered_periodic_n$(small_num_qubits).bson")
-    bson_data = BSON.load(ham_path)
-    hamiltonian = bson_data[:hamiltonian]
-    hamiltonian = finalize_hamham(hamiltonian, BETA)
+    hamiltonian = _load_test_hamiltonian(ham_path, BETA)
 
     # Create jump operators: single-site Paulis (X, Y, Z) on each site
     jump_paulis = [[X], [Y], [Z]]

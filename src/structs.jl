@@ -53,6 +53,33 @@ abstract type AbstractConfig{D<:AbstractDomain} end
 abstract type AbstractLiouvConfig{D<:AbstractDomain} <: AbstractConfig{D} end
 abstract type AbstractThermalizeConfig{D<:AbstractDomain} <: AbstractConfig{D} end
 
+"""
+    _build_common_fields(; kwargs...) -> NamedTuple
+
+Shared constructor helper for all 4 config types. Validates and returns
+the common fields as a NamedTuple. Centralizes default logic so that
+individual struct definitions stay DRY in construction.
+"""
+function _build_common_fields(;
+    num_qubits::Int64,
+    with_coherent::Bool,
+    with_linear_combination::Bool,
+    beta::Float64,
+    sigma::Float64,
+    gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}} = (nothing, nothing),
+    a::Union{Float64, Nothing} = nothing,
+    b::Union{Float64, Nothing} = nothing,
+    num_energy_bits::Union{Int, Nothing} = nothing,
+    t0::Union{Float64, Nothing} = nothing,
+    w0::Union{Float64, Nothing} = nothing,
+    eta::Union{Float64, Nothing} = nothing,
+    num_trotter_steps_per_t0::Union{Int, Nothing} = nothing,
+)
+    return (; num_qubits, with_coherent, with_linear_combination,
+            beta, sigma, gaussian_parameters, a, b,
+            num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0)
+end
+
 # Let's keep this structure, and have the "give w0 for desired energy integral error" type of config optimization
 # before the construct_liouvillian function
 """
@@ -72,7 +99,7 @@ abstract type AbstractThermalizeConfig{D<:AbstractDomain} <: AbstractConfig{D} e
     - `num_trotter_steps_per_t0`: The number of Trotter steps used for a unit of time t₀.
 
     ## Currently possible linear combinations:
-    (a, b) = 
+    (a, b) =
     - (0, 0) - no linear combination, simple Gaussian
     - (>0, 0) - linear combination that results in Metropolis-like transition
     - (>0, >0) - linear combination that results in Glauber transition (smoother)
@@ -85,7 +112,7 @@ abstract type AbstractThermalizeConfig{D<:AbstractDomain} <: AbstractConfig{D} e
     - **`TrotterDomain()`**: The lowest level, thus also the only one implementable on a quantum computer, in which all time evolutions are replaced via their Trotter series.
 """
 @kwdef struct LiouvConfig{D <: AbstractDomain} <: AbstractLiouvConfig{D}
-    num_qubits::Int64 
+    num_qubits::Int64
     with_coherent::Bool
     with_linear_combination::Bool
     domain::D
@@ -94,11 +121,11 @@ abstract type AbstractThermalizeConfig{D<:AbstractDomain} <: AbstractConfig{D} e
     gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}} = (nothing, nothing)  # (ω_γ, σ_γ)
     a::Union{Float64, Nothing} = nothing
     b::Union{Float64, Nothing} = nothing
-    num_energy_bits::Int64 = -1
-    t0::Float64 = -1.
-    w0::Float64 = -1.
-    eta::Float64 = -1.
-    num_trotter_steps_per_t0::Int64 = -1
+    num_energy_bits::Union{Int, Nothing} = nothing
+    t0::Union{Float64, Nothing} = nothing
+    w0::Union{Float64, Nothing} = nothing
+    eta::Union{Float64, Nothing} = nothing
+    num_trotter_steps_per_t0::Union{Int, Nothing} = nothing
 end
 """
     LiouvConfigGNS
@@ -110,21 +137,58 @@ end
 
     Fields are shared with `LiouvConfig`.
 """
-@kwdef struct LiouvConfigGNS{D <: AbstractDomain} <: AbstractLiouvConfig{D}
+struct LiouvConfigGNS{D <: AbstractDomain} <: AbstractLiouvConfig{D}
     num_qubits::Int64
-    with_coherent::Bool = false  # No coherent term in approx GNS case.
+    with_coherent::Bool
     with_linear_combination::Bool
     domain::D
     beta::Float64
     sigma::Float64
-    gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}} = (nothing, nothing)  # (ω_γ, σ_γ)
-    a::Union{Float64, Nothing} = nothing
-    b::Union{Float64, Nothing} = nothing
-    num_energy_bits::Int64 = -1
-    t0::Float64 = -1.
-    w0::Float64 = -1.
-    eta::Float64 = -1.
-    num_trotter_steps_per_t0::Int64 = -1
+    gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}}
+    a::Union{Float64, Nothing}
+    b::Union{Float64, Nothing}
+    num_energy_bits::Union{Int, Nothing}
+    t0::Union{Float64, Nothing}
+    w0::Union{Float64, Nothing}
+    eta::Union{Float64, Nothing}
+    num_trotter_steps_per_t0::Union{Int, Nothing}
+
+    function LiouvConfigGNS{D}(
+        num_qubits::Int64, with_coherent::Bool, with_linear_combination::Bool, domain::D,
+        beta::Float64, sigma::Float64,
+        gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}},
+        a::Union{Float64, Nothing}, b::Union{Float64, Nothing},
+        num_energy_bits::Union{Int, Nothing}, t0::Union{Float64, Nothing},
+        w0::Union{Float64, Nothing}, eta::Union{Float64, Nothing},
+        num_trotter_steps_per_t0::Union{Int, Nothing}
+    ) where {D}
+        with_coherent && error("GNS configs must have with_coherent=false")
+        new{D}(num_qubits, with_coherent, with_linear_combination, domain,
+               beta, sigma, gaussian_parameters, a, b,
+               num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0)
+    end
+end
+
+# Keyword constructor for LiouvConfigGNS (replaces @kwdef)
+function LiouvConfigGNS(;
+    num_qubits::Int64,
+    with_coherent::Bool = false,
+    with_linear_combination::Bool,
+    domain::D,
+    beta::Float64,
+    sigma::Float64,
+    gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}} = (nothing, nothing),
+    a::Union{Float64, Nothing} = nothing,
+    b::Union{Float64, Nothing} = nothing,
+    num_energy_bits::Union{Int, Nothing} = nothing,
+    t0::Union{Float64, Nothing} = nothing,
+    w0::Union{Float64, Nothing} = nothing,
+    eta::Union{Float64, Nothing} = nothing,
+    num_trotter_steps_per_t0::Union{Int, Nothing} = nothing,
+) where {D <: AbstractDomain}
+    LiouvConfigGNS{D}(num_qubits, with_coherent, with_linear_combination, domain,
+                      beta, sigma, gaussian_parameters, a, b,
+                      num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0)
 end
 
 """
@@ -132,7 +196,7 @@ end
 
     Configuration for the thermalization process, that emulates the quantum algorithm step-by-step.
 
-    Inherits core physical parameters from the logic in [`LiouvConfig`](@ref), but includes 
+    Inherits core physical parameters from the logic in [`LiouvConfig`](@ref), but includes
     simulation-specific settings, e.g. `mixing_time` and `delta`
 
     # Specific Fields
@@ -140,20 +204,20 @@ end
     - `delta`: Time step size for the weak-measurement emulation.
     """
 @kwdef struct ThermalizeConfig{D <: AbstractDomain}  <: AbstractThermalizeConfig{D}
-    num_qubits::Int64 
+    num_qubits::Int64
     with_coherent::Bool
     with_linear_combination::Bool
     domain::D
     beta::Float64
     sigma::Float64
-    gaussian_parameters::Tuple{Union{Float64, Nothing}, Union{Float64, Nothing}} = (nothing, nothing)  # (ω_γ, σ_γ)
+    gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}} = (nothing, nothing)  # (ω_γ, σ_γ)
     a::Union{Float64, Nothing} = nothing
     b::Union{Float64, Nothing} = nothing
-    num_energy_bits::Int64 = -1
-    t0::Float64 = -1.
-    w0::Float64 = -1.
-    eta::Float64 = -1.
-    num_trotter_steps_per_t0::Int64 = -1
+    num_energy_bits::Union{Int, Nothing} = nothing
+    t0::Union{Float64, Nothing} = nothing
+    w0::Union{Float64, Nothing} = nothing
+    eta::Union{Float64, Nothing} = nothing
+    num_trotter_steps_per_t0::Union{Int, Nothing} = nothing
 
     # For thermalization the configs:
     mixing_time::Float64
@@ -170,24 +234,66 @@ end
 
     Fields are shared with `ThermalizeConfig`.
 """
-@kwdef struct ThermalizeConfigGNS{D <: AbstractDomain} <: AbstractThermalizeConfig{D}
+struct ThermalizeConfigGNS{D <: AbstractDomain} <: AbstractThermalizeConfig{D}
     num_qubits::Int64
-    with_coherent::Bool = false
+    with_coherent::Bool
     with_linear_combination::Bool
     domain::D
     beta::Float64
     sigma::Float64
-    gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}} = (nothing, nothing)  # (ω_γ, σ_γ)
-    a::Union{Float64, Nothing} = nothing
-    b::Union{Float64, Nothing} = nothing
-    num_energy_bits::Int64 = -1
-    t0::Float64 = -1.
-    w0::Float64 = -1.
-    eta::Float64 = -1.
-    num_trotter_steps_per_t0::Int64 = -1
+    gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}}
+    a::Union{Float64, Nothing}
+    b::Union{Float64, Nothing}
+    num_energy_bits::Union{Int, Nothing}
+    t0::Union{Float64, Nothing}
+    w0::Union{Float64, Nothing}
+    eta::Union{Float64, Nothing}
+    num_trotter_steps_per_t0::Union{Int, Nothing}
 
     mixing_time::Float64
     delta::Float64
+
+    function ThermalizeConfigGNS{D}(
+        num_qubits::Int64, with_coherent::Bool, with_linear_combination::Bool, domain::D,
+        beta::Float64, sigma::Float64,
+        gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}},
+        a::Union{Float64, Nothing}, b::Union{Float64, Nothing},
+        num_energy_bits::Union{Int, Nothing}, t0::Union{Float64, Nothing},
+        w0::Union{Float64, Nothing}, eta::Union{Float64, Nothing},
+        num_trotter_steps_per_t0::Union{Int, Nothing},
+        mixing_time::Float64, delta::Float64
+    ) where {D}
+        with_coherent && error("GNS configs must have with_coherent=false")
+        new{D}(num_qubits, with_coherent, with_linear_combination, domain,
+               beta, sigma, gaussian_parameters, a, b,
+               num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0,
+               mixing_time, delta)
+    end
+end
+
+# Keyword constructor for ThermalizeConfigGNS (replaces @kwdef)
+function ThermalizeConfigGNS(;
+    num_qubits::Int64,
+    with_coherent::Bool = false,
+    with_linear_combination::Bool,
+    domain::D,
+    beta::Float64,
+    sigma::Float64,
+    gaussian_parameters::Union{Tuple{Float64, Float64}, Tuple{Nothing, Nothing}} = (nothing, nothing),
+    a::Union{Float64, Nothing} = nothing,
+    b::Union{Float64, Nothing} = nothing,
+    num_energy_bits::Union{Int, Nothing} = nothing,
+    t0::Union{Float64, Nothing} = nothing,
+    w0::Union{Float64, Nothing} = nothing,
+    eta::Union{Float64, Nothing} = nothing,
+    num_trotter_steps_per_t0::Union{Int, Nothing} = nothing,
+    mixing_time::Float64,
+    delta::Float64,
+) where {D <: AbstractDomain}
+    ThermalizeConfigGNS{D}(num_qubits, with_coherent, with_linear_combination, domain,
+                           beta, sigma, gaussian_parameters, a, b,
+                           num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0,
+                           mixing_time, delta)
 end
 
 """
