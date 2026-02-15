@@ -10,12 +10,17 @@ function B_bohr(hamiltonian::HamHam{T}, jump::JumpOp, config::Union{LiouvConfig,
     B = zeros(CT, dim, dim)
     f_A_nu_1 = zeros(CT, dim, dim)
     for nu_2 in unique_freqs
-        A_nu_2 = spzeros(CT, dim, dim)
         indices = hamiltonian.bohr_dict[nu_2]
-        A_nu_2[indices] .= jump.in_eigenbasis[indices]
         @. f_A_nu_1 = f(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
-
-        B .+= A_nu_2' * f_A_nu_1
+        # B += A_nu_2' * f_A_nu_1 expanded per-index:
+        # A_nu_2'[j,i] = conj(jump.in_eigenbasis[i,j]) for (i,j) in indices
+        @inbounds for idx in indices
+            i, j = idx[1], idx[2]
+            val = conj(jump.in_eigenbasis[i, j])
+            @inbounds for col in 1:dim
+                B[j, col] += val * f_A_nu_1[i, col]
+            end
+        end
     end
     return B
 end
@@ -32,12 +37,17 @@ function B_bohr(hamiltonian::HamHam{T}, jumps::Vector{JumpOp}, config::Union{Lio
     for jump in jumps
         f_A_nu_1 = zeros(CT, dim, dim)
         for nu_2 in unique_freqs
-            A_nu_2 = spzeros(CT, dim, dim)
             indices = hamiltonian.bohr_dict[nu_2]
-            A_nu_2[indices] .= jump.in_eigenbasis[indices]
             @. f_A_nu_1 = f(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
-
-            B .+= A_nu_2' * f_A_nu_1
+            # B += A_nu_2' * f_A_nu_1 expanded per-index:
+            # A_nu_2'[j,i] = conj(jump.in_eigenbasis[i,j]) for (i,j) in indices
+            @inbounds for idx in indices
+                i, j = idx[1], idx[2]
+                val = conj(jump.in_eigenbasis[i, j])
+                @inbounds for col in 1:dim
+                    B[j, col] += val * f_A_nu_1[i, col]
+                end
+            end
         end
     end
     return B
