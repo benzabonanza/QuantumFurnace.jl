@@ -21,24 +21,57 @@ using SharedArrays
 using FINUFFT
 
 # --- Public API ---
+
+# Types: Simulation
 export AbstractConfig, AbstractLiouvConfig, AbstractThermalizeConfig,
-       LiouvConfig, LiouvConfigGNS, ThermalizeConfig, ThermalizeConfigGNS, HamHam, TrottTrott, HotAlgorithmResults, HotSpectralResults, JumpOp,
-       BohrDomain, EnergyDomain, TimeDomain, TrotterDomain, LSIFramework,
-       OFTCaches, NUFFTPrefactors
-export run_lindbladian, run_thermalization, construct_lindbladian, B_time, B_trotter, coherent_bohr
-export generate_filename, validate_config!, compute_trotter_error, gibbs_state, gibbs_state_in_eigen,
-       create_bohr_dict, pad_term, pick_transition, find_ideal_heisenberg, create_alpha,
-       expm_pauli_padded, load_hamiltonian, oft!, prepare_oft_nufft_prefactors, prefactor_view,
-       precompute_coherent_terms, precompute_coherent_total_B
-export create_alpha_gns
-# Quantum Trajectory
-export TrajectoryFramework, TrajectoryWorkspace, build_trajectoryframework, step_along_trajectory!,
-       run_trajectories, precompute_R,
-       precompute_data
-export KrausScratch, jump_contribution!
-# Log Sobolev bound
+       LiouvConfig, LiouvConfigGNS, ThermalizeConfig, ThermalizeConfigGNS,
+       HamHam, TrottTrott,
+       HotAlgorithmResults, HotSpectralResults,
+       JumpOp
+
+# Types: Domains
+export BohrDomain, EnergyDomain, TimeDomain, TrotterDomain
+
+# Types: Trajectory
+export TrajectoryFramework
+
+# Types: Log-Sobolev
+export LSIFramework
+
+# Simulation
+export run_lindbladian, run_thermalization, construct_lindbladian,
+       run_trajectories, build_trajectoryframework, step_along_trajectory!
+
+# QI Tools
+export trace_distance_h, trace_distance_nh, trace_norm_h, trace_norm_nh,
+       fidelity, frobenius_norm, is_density_matrix, random_density_matrix,
+       hermitianize!, transform_jumps_to_basis
+
+# Gibbs & Hamiltonian
+export gibbs_state, gibbs_state_in_eigen,
+       find_ideal_heisenberg, load_hamiltonian,
+       create_bohr_dict, compute_trotter_error
+
+# Transition functions & Kossakowski matrix
+export pick_transition, create_alpha, create_alpha_gns, create_alpha_gauss,
+       create_f, create_f_gauss, check_alpha_skew_symmetry
+
+# Coherent terms (B operators)
+export B_time, B_trotter, coherent_bohr
+
+# Pauli & Trotter building blocks
+export X, Y, Z, Had,
+       pad_term, expm_pauli_padded, pauli_string_to_matrix,
+       trotterize, group_hamiltonian_terms
+
+# Config validation
+export validate_config!
+
+# Log-Sobolev bound
 export compute_LSI_alpha2
-export X, Y, Z, Had
+
+# OFT (kept for debugging / pedagogy)
+export oft!
 
 # --- Internal Implementation ---
 include("constants.jl")

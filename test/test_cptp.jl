@@ -18,8 +18,8 @@ using LinearAlgebra
 
     @testset "EnergyDomain" begin
         config = make_thermalize_config(EnergyDomain(); delta=TEST_DELTA)
-        precomputed = precompute_data(config, TEST_HAM)
-        scratch = KrausScratch(ComplexF64, DIM)
+        precomputed = QuantumFurnace.precompute_data(config, TEST_HAM)
+        scratch = QuantumFurnace.KrausScratch(ComplexF64, DIM)
         fw = build_trajectoryframework(
             TEST_JUMPS, TEST_HAM, config, precomputed, scratch, TEST_DELTA
         )
@@ -34,8 +34,8 @@ using LinearAlgebra
 
     @testset "TimeDomain" begin
         config = make_thermalize_config(TimeDomain(); delta=TEST_DELTA)
-        precomputed = precompute_data(config, TEST_HAM)
-        scratch = KrausScratch(ComplexF64, DIM)
+        precomputed = QuantumFurnace.precompute_data(config, TEST_HAM)
+        scratch = QuantumFurnace.KrausScratch(ComplexF64, DIM)
         fw = build_trajectoryframework(
             TEST_JUMPS, TEST_HAM, config, precomputed, scratch, TEST_DELTA
         )
@@ -50,8 +50,8 @@ using LinearAlgebra
 
     @testset "TrotterDomain" begin
         config = make_thermalize_config(TrotterDomain(); delta=TEST_DELTA)
-        precomputed = precompute_data(config, TEST_TROTTER)
-        scratch = KrausScratch(ComplexF64, DIM)
+        precomputed = QuantumFurnace.precompute_data(config, TEST_TROTTER)
+        scratch = QuantumFurnace.KrausScratch(ComplexF64, DIM)
         fw = build_trajectoryframework(
             TEST_JUMPS, TEST_TROTTER, config, precomputed, scratch, TEST_DELTA
         )
