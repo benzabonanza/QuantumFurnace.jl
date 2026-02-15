@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-14)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.1 Reduce -- Phase 10: API Surface Cleanup (in progress)
+**Current focus:** v1.1 Reduce -- Phase 11: Allocation Optimization (in progress)
 
 ## Current Position
 
-Phase: 10 of 11 (API Surface Cleanup) -- COMPLETE
-Plan: 3 of 3 in current phase -- COMPLETE
-Status: Phase 10 complete
-Last activity: 2026-02-15 - Completed quick task 18: Fix OFTCaches constructor calls in test file
+Phase: 11 of 11 (Allocation Optimization)
+Plan: 1 of 3 in current phase -- COMPLETE
+Status: Executing phase 11
+Last activity: 2026-02-15 - Completed 11-01: Hot-loop allocation elimination
 
-Progress: [####################] 100% (v1.0 complete, v1.1 8/8 phases)
+Progress: [######              ] 33% (Phase 11: 1/3 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 28 (v1.0: 10, v1.1: 13, quick: 5)
+- Total plans completed: 29 (v1.0: 10, v1.1: 14, quick: 5)
 - Average duration: --
 - Total execution time: --
 
@@ -37,6 +37,8 @@ Progress: [####################] 100% (v1.0 complete, v1.1 8/8 phases)
 | quick-16 | 1 | 2min | 2min |
 | 10-api-surface-cleanup | 3/3 | 21min | 7min |
 | quick-17 | 1 | 1min | 1min |
+| quick-18 | 1 | 1min | 1min |
+| 11-allocation-optimization | 1/3 | 6min | 6min |
 
 *Updated after each plan completion*
 
@@ -86,6 +88,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - 10-02: pick_transition kept un-renamed (exported function, public physics building block)
 - 10-03: Updated docstrings in coherent.jl to match _-prefixed function names
 - 10-03: Fixed trajectory_validation scripts from obsolete 3-arg to 2-arg _precompute_data call
+- 11-01: No SparseArrays import changes needed -- spzeros was only SparseArrays usage in bohr_domain.jl
 
 ### Pending Todos
 
@@ -108,5 +111,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed quick-18 (Fix OFTCaches constructor calls)
+Stopped at: Completed 11-01-PLAN.md (Hot-loop allocation elimination)
 Resume file: None
