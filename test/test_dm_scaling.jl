@@ -154,7 +154,7 @@ end
     oft_time_labels = QuantumFurnace._truncate_time_labels_for_oft(time_labels_full, SIGMA)
 
     time_oft_prefactor = T0 * sqrt(SIGMA * sqrt(2 / pi) / (2 * pi))
-    caches = QuantumFurnace.OFTCaches(DIM)
+    caches = QuantumFurnace.OFTCaches{Float64}(DIM)
     A_time = Matrix{ComplexF64}(undef, DIM, DIM)
     QuantumFurnace.time_oft!(A_time, caches, jump, w, TEST_HAM, oft_time_labels, SIGMA)
     A_time .*= time_oft_prefactor
@@ -204,7 +204,7 @@ end
     time_labels_full = energy_labels .* (T0 / W0)
     oft_time_labels = QuantumFurnace._truncate_time_labels_for_oft(time_labels_full, SIGMA)
     time_oft_prefactor = T0 * sqrt(SIGMA * sqrt(2 / pi) / (2 * pi))
-    caches = QuantumFurnace.OFTCaches(DIM)
+    caches = QuantumFurnace.OFTCaches{Float64}(DIM)
 
     # === Time NUFFT OFT ===
     config_time = make_liouv_config(TimeDomain())
