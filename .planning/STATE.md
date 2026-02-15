@@ -9,17 +9,17 @@ See: .planning/PROJECT.md (updated 2026-02-14)
 
 ## Current Position
 
-Phase: 8 of 11 (Struct Simplification) -- IN PROGRESS
-Plan: 2 of 3 in current phase
-Status: Executing phase 08
-Last activity: 2026-02-15 - Completed 08-02: HamHam initialization redesign
+Phase: 8 of 11 (Struct Simplification) -- COMPLETE
+Plan: 3 of 3 in current phase
+Status: Phase 08 complete
+Last activity: 2026-02-15 - Completed 08-03: TrajectoryFramework simplification and domain dispatch refactor
 
-Progress: [##############......] 70% (v1.0 complete, v1.1 4/6 phases in progress)
+Progress: [################....] 80% (v1.0 complete, v1.1 5/6 phases complete)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 18 (v1.0: 10, v1.1: 7, quick: 1)
+- Total plans completed: 19 (v1.0: 10, v1.1: 8, quick: 1)
 - Average duration: --
 - Total execution time: --
 
@@ -31,7 +31,7 @@ Progress: [##############......] 70% (v1.0 complete, v1.1 4/6 phases in progress
 | 06-dead-code-pruning | 2 | 16min | 8min |
 | 07-dry-refactoring | 2 | 8min | 4min |
 | quick-13 | 1 | 2min | 2min |
-| 08-struct-simplification | 3 | 24min | 8min |
+| 08-struct-simplification | 3 | 36min | 12min |
 
 *Updated after each plan completion*
 
@@ -59,6 +59,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - 08-02: BSON.parse + raise_recursive for legacy deserialization (no BSON file re-saving)
 - 08-02: load_hamiltonian requires beta kwarg (breaking change, clean break per CONTEXT.md)
 - 08-02: find_ideal_heisenberg returns NamedTuple for composable HamHam construction
+- 08-03: TrajectoryFramework reduced from {T,C,H,PD,D} to {T,D} -- only dispatch-relevant params kept
+- 08-03: Domain dispatch via config type param: f(config::AbstractConfig{D}) instead of f(::DomainType, config)
+- 08-03: Config domain::D field retained for runtime isa checks and display
 
 ### Pending Todos
 
@@ -77,5 +80,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 08-02-PLAN.md (HamHam initialization redesign)
+Stopped at: Completed 08-03-PLAN.md (TrajectoryFramework simplification and domain dispatch refactor) -- Phase 08 complete
 Resume file: None
