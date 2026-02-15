@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-14)
 Phase: 9 of 11 (Type Parameterization) -- COMPLETE
 Plan: 3 of 3 in current phase -- COMPLETE
 Status: Phase 09 complete
-Last activity: 2026-02-15 - Completed 09-03 (Simulation function generic type propagation)
+Last activity: 2026-02-15 - Completed quick task 16: Defer LindbladianWorkspace construction
 
 Progress: [##################..] 90% (v1.0 complete, v1.1 6/6 phases)
 
