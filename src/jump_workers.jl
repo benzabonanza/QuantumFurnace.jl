@@ -412,34 +412,44 @@ function _jump_contribution!(
     fill!(scratch.R, 0)
     fill!(scratch.rho_jump, 0)
 
-    energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
-    for w in energies
-        nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
+    if jump.hermitian
+        @inbounds for w_raw in energy_labels
+            w_raw > 1e-12 && continue
+            w = abs(w_raw)
 
-        # Aω := A .* nufft_prefactor_matrix(ω)
-        @. scratch.jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
+            nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
+            @. scratch.jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
 
-        # rate^2(ω)
-        rate2_pos = base_prefactor * transition(w)
+            rate2_pos = base_prefactor * transition(w)
 
-        # R += rate^2 * (Aω† Aω)
-        mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)
-        @. scratch.R += rate2_pos * scratch.LdagL
+            mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)
+            @. scratch.R += rate2_pos * scratch.LdagL
 
-        # rho_jump += delta * rate^2 * (Aω ρ Aω†)
-        mul!(scratch.tmp1, evolving_dm, scratch.jump_oft')  # ρ Aω†
-        mul!(scratch.rho_jump, scratch.jump_oft, scratch.tmp1, config.delta*rate2_pos, 1.0)
+            mul!(scratch.tmp1, evolving_dm, scratch.jump_oft')
+            mul!(scratch.rho_jump, scratch.jump_oft, scratch.tmp1, config.delta*rate2_pos, 1.0)
 
-        if jump.hermitian && w > 1e-12
-            rate2_neg = base_prefactor * transition(-w)
+            if w > 1e-12
+                rate2_neg = base_prefactor * transition(-w)
 
-            # For the negative-frequency partner, the Lindblad operator is (Aω)†.
-            # Then L†L = Aω Aω†, and jump term is Aω† ρ Aω.
-            mul!(scratch.LdagL, scratch.jump_oft, scratch.jump_oft')
-            @. scratch.R += rate2_neg * scratch.LdagL
+                mul!(scratch.LdagL, scratch.jump_oft, scratch.jump_oft')
+                @. scratch.R += rate2_neg * scratch.LdagL
 
-            mul!(scratch.tmp1, evolving_dm, scratch.jump_oft)              # ρ Aω
-            mul!(scratch.rho_jump, scratch.jump_oft', scratch.tmp1, config.delta*rate2_neg, 1.0)
+                mul!(scratch.tmp1, evolving_dm, scratch.jump_oft)
+                mul!(scratch.rho_jump, scratch.jump_oft', scratch.tmp1, config.delta*rate2_neg, 1.0)
+            end
+        end
+    else
+        for w in energy_labels
+            nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
+            @. scratch.jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
+
+            rate2_pos = base_prefactor * transition(w)
+
+            mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)
+            @. scratch.R += rate2_pos * scratch.LdagL
+
+            mul!(scratch.tmp1, evolving_dm, scratch.jump_oft')
+            mul!(scratch.rho_jump, scratch.jump_oft, scratch.tmp1, config.delta*rate2_pos, 1.0)
         end
     end
 
