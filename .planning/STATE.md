@@ -19,7 +19,7 @@ Progress: [################....] 80% (v1.0 complete, v1.1 5/6 phases complete)
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 19 (v1.0: 10, v1.1: 8, quick: 1)
+- Total plans completed: 20 (v1.0: 10, v1.1: 8, quick: 2)
 - Average duration: --
 - Total execution time: --
 
@@ -31,6 +31,7 @@ Progress: [################....] 80% (v1.0 complete, v1.1 5/6 phases complete)
 | 06-dead-code-pruning | 2 | 16min | 8min |
 | 07-dry-refactoring | 2 | 8min | 4min |
 | quick-13 | 1 | 2min | 2min |
+| quick-15 | 1 | 2min | 2min |
 | 08-struct-simplification | 3 | 36min | 12min |
 
 *Updated after each plan completion*
@@ -76,9 +77,10 @@ None
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 13 | Unify residual Cholesky computation: compare cholesky() vs eigendecomposition approaches and use the more robust one in both DM and trajectory simulators | 2026-02-15 | 5bd9dbe | [13-unify-residual-cholesky-computation-comp](./quick/13-unify-residual-cholesky-computation-comp/) |
+| 15 | Remove unused _build_common_fields() helper from src/structs.jl | 2026-02-15 | adf5398 | [15-remove-unused-build-common-fields-helper](./quick/15-remove-unused-build-common-fields-helper/) |
 
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 08-03-PLAN.md (TrajectoryFramework simplification and domain dispatch refactor) -- Phase 08 complete
+Stopped at: Completed quick-15 (remove unused _build_common_fields helper)
 Resume file: None
