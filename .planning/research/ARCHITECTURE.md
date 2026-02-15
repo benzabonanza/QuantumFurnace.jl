@@ -1,836 +1,786 @@
-# Architecture Research: Trajectory Validation and Test Suite Integration
+# Architecture: Multi-Threaded Trajectory Engine, GNS Path, Adaptive Sampling, Experiments
 
-**Domain:** Trajectory simulation validation + comprehensive test suite for QuantumFurnace.jl
-**Researched:** 2026-02-13
-**Confidence:** HIGH (direct codebase analysis -- every source file read in full)
+**Domain:** Multi-threaded trajectory sampling + GNS trajectory path + convergence experiments for QuantumFurnace.jl
+**Researched:** 2026-02-15
+**Confidence:** HIGH (direct codebase analysis of all source files + Julia threading documentation)
 
-## System Overview: How New Components Fit the Existing Architecture
-
-```
-EXISTING (working)                          NEW / MODIFIED (this milestone)
-=================                          ================================
-
-+-- furnace.jl --------------------------------+   +-- test/runtests.jl --------------------+
-|  run_lindbladian() [DM spectral, KNOWN GOOD] |   |  @testset "QuantumFurnace" begin       |
-|  run_thermalization() [DM stepping, KNOWN G.] |   |    include("test_helpers.jl")           |
-|  construct_lindbladian()                      |   |    include("test_detailed_balance.jl")  |
-+-------+--------------------------+-----------+   |    include("test_coherent_term.jl")     |
-        |                          |               |    include("test_oft_consistency.jl")   |
-        v                          v               |    include("test_dm_step_errors.jl")    |
-+-- jump_workers.jl ---+  +-- trajectories.jl -+   |    include("test_trajectory.jl")        |
-|  jump_contribution!  |  |  TrajectoryFW      |   |    include("test_traj_vs_dm.jl")        |
-|  (Liouv + Kraus DM)  |  |  step_along_traj!  |   |  end                                   |
-|  precompute_R()      |  |  run_trajectories() |   +------------------------------------------+
-|  [KNOWN GOOD]        |  |  [NEEDS FIX+VALID.] |
-+----------------------+  +----+----------------+   +-- test/test_helpers.jl -----------------+
-                               |                    |  make_test_system(nq, beta, domain)     |
-                               |                    |  Known-good parameter configs            |
-                       FIX: two-stage sampling      |  Tolerance constants per error tier      |
-                       in step_along_trajectory!     +------------------------------------------+
-```
-
-### What Exists vs What Needs to Change
-
-| Component | File | Status | Action |
-|-----------|------|--------|--------|
-| **HamHam + finalize** | `hamiltonian.jl` | WORKING | No changes. Used by tests as-is. |
-| **Domain types** | `structs.jl` | WORKING | No changes. |
-| **Config structs** | `structs.jl` | WORKING | No changes. |
-| **JumpOp construction** | `hamiltonian.jl` + scripts | WORKING | Extract into helper for tests. |
-| **precompute_data()** | `furnace_utensils.jl` | WORKING | No changes. |
-| **coherent_bohr()** | `bohr_domain.jl` | WORKING | Test target (reference for B comparisons). |
-| **B_time(), B_trotter()** | `coherent.jl` | WORKING | Test target (compare against coherent_bohr). |
-| **oft!()** | `ofts.jl` | WORKING | Test target (reference for OFT comparisons). |
-| **time_oft!(), trotter_oft!()** | `ofts.jl` | WORKING | Test target (compare against oft!). |
-| **jump_contribution!(Liouv)** | `jump_workers.jl` | WORKING | Test target (Liouvillian construction). |
-| **jump_contribution!(Kraus DM)** | `jump_workers.jl` | WORKING | Test target (DM stepping). |
-| **run_lindbladian()** | `furnace.jl` | WORKING | Used by tests as reference oracle. |
-| **run_thermalization()** | `furnace.jl` | WORKING | Used by tests as DM reference. |
-| **build_trajectoryframework()** | `trajectories.jl` | **BUG** | Fix: `trotter` var not in scope (line 53). |
-| **precompute_R()** | `trajectories.jl` | WORKING | No changes needed. |
-| **step_along_trajectory!()** | `trajectories.jl` | **NEEDS FIX** | Two-stage jump sampling restructure. |
-| **run_trajectories()** | `trajectories.jl` | WORKING (modulo step bug) | No structural changes. |
-| **test/*.jl** | `test/` | INTERACTIVE ONLY | Convert to @testset, add runtests.jl. |
-| **~200 lines commented code** | `jump_workers.jl`, `trajectories.jl` | DEAD CODE | Clean up after validation. |
-
-## The Two-Stage Jump Sampling Fix
-
-### Current Architecture (Flat Sampling -- Incorrect)
-
-The current `step_along_trajectory!` iterates over all `(jump, omega)` pairs in a flat scan:
+## System Overview: New Components Integrated With Existing Architecture
 
 ```
-for jump in fw.jumps           # outer: iterate over Lindblad operators A^a
-    for w in energy_labels     # inner: iterate over frequencies omega
-        # Compute A_{a,omega} and its probability
-        p = delta * rate(omega) * ||A_{a,omega} psi||^2
-        csum += p
-        if csum >= target: pick this (a, omega)
+EXISTING (unchanged)                        NEW / MODIFIED (this milestone)
+=================                           ================================
+
++-- structs.jl ----------------------------+
+|  HamHam{T}, TrottTrott{T}               |   READ-ONLY by all threads
+|  Config{D,T}: ThermalizeConfig,          |
+|    ThermalizeConfigGNS                   |
+|  JumpOp, HotAlgorithmResults             |
++------------------------------------------+
+
++-- furnace_utensils.jl --------------------+
+|  _precompute_data(config, ham_or_trott)  |   Called ONCE before spawning threads
+|  NUFFTPrefactors, transition functions   |   Result is READ-ONLY shared data
++------------------------------------------+
+
++-- trajectories.jl ------------------------+   +-- NEW: parallel_trajectories.jl --------+
+|  TrajectoryFramework{T,D}                |   |  run_trajectories_parallel(...)         |
+|  build_trajectoryframework(...)          |   |    - Builds ONE framework               |
+|  step_along_trajectory!(psi, fw)         |   |    - Clones per-thread workspace        |
+|  run_trajectories(...)  [single-thread]  |   |    - Spawns @threads loop               |
+|  _evolve_along_trajectory!(psi, fw, t)   |   |    - Reduces rho_mean + observables     |
++------------------------------------------+   |    - Returns TrajectoryResults          |
+                                               +----------------------------------------+
+
++-- energy_domain.jl -----------------------+
+|  pick_transition(ThermalizeConfigGNS)    |   Already dispatches correctly for GNS
+|    -> _pick_transition_gns(config)       |   No changes needed
++------------------------------------------+
+
++-- coherent.jl ----------------------------+   +-- NEW: adaptive_sampling.jl -------------+
+|  _precompute_coherent_total_B(...)       |   |  AdaptiveBatchManager                   |
+|  with_coherent enforced false for GNS    |   |    - Runs batches of N_batch trajs      |
+|  -> B term naturally skipped             |   |    - Evaluates convergence criteria      |
++------------------------------------------+   |    - Decides continue/stop               |
+                                               |  Convergence criteria:                   |
+                                               |    - Trace distance variance             |
+                                               |    - Observable variance                 |
+                                               +------------------------------------------+
+
+                                               +-- NEW: experiment_runner.jl --------------+
+                                               |  ExperimentSpec (parameter grid)         |
+                                               |  ExperimentResult (config+data+metadata) |
+                                               |  run_kms_vs_gns_experiment(...)          |
+                                               |  save/load via JLD2                      |
+                                               +------------------------------------------+
 ```
 
-This is a flat cumulative-probability scan over the Cartesian product `{A^a} x {omega}`. The probability of picking jump `a` at frequency `omega` is:
+## Question 1: Thread-Safe Read-Only Access to Precomputed Data
 
-```
-P(a, omega) = delta * rate(omega) * ||A_{a,omega} |psi>||^2 / p_jump_total
-```
+### The Problem
 
-The problem: `p_jump_total = delta * <psi|R|psi>` where `R = sum_{a,omega} rate(omega) * A_{a,omega}^dag A_{a,omega}`. This means the probability of picking operator `a` depends on the *state-dependent* norms `||A_{a,omega} psi||^2` rather than on the mathematical structure of the Lindbladian. The theory (Chen et al.) requires a specific factorization.
+`TrajectoryFramework` currently bundles read-only precomputed data (per-operator Kraus matrices, precomputed_data NamedTuple, config, jumps) with mutable per-trajectory workspace (`TrajectoryWorkspace` containing `jump_oft`, `psi_tmp`, `Rpsi`). Multiple threads cannot share a single `TrajectoryWorkspace` because `step_along_trajectory!` mutates it in-place.
 
-### Required Architecture (Two-Stage Sampling -- Correct)
-
-The Chen construction decomposes the CPTP map as a sum over Lindblad operator indices `a`. The quantum algorithm physically implements:
-
-**Stage 1:** Pick which Lindblad operator `A^a` to apply. In the implementation, this means uniformly sampling a jump index `a` (since all jump operators are weighted equally via `1/sqrt(num_jumps)` normalization).
-
-**Stage 2:** Given `a`, sample a frequency `omega` from the conditional distribution:
-
-```
-P(omega | a) proportional to rate(omega) * ||A_{a,omega} |psi>||^2
-```
-
-Then apply the corresponding Kraus operator `sqrt(rate(omega)) * A_{a,omega}` to `|psi>`.
-
-### Implementation Plan
-
-The fix modifies `step_along_trajectory!` in `trajectories.jl`. The key change is in the dissipative-jump branch (the `else` block after no-jump and residual):
+### Recommended Architecture: Immutable Framework + Per-Thread Workspace
 
 ```julia
-# CURRENT: flat scan over all (a, omega) pairs
-# PROPOSED: two-stage
-
-# Stage 1: Pick jump operator index uniformly
-a_idx = rand(1:length(fw.jumps))
-jump = fw.jumps[a_idx]
-
-# Stage 2: Sample omega from conditional distribution for this a
-# (cumulative probability scan over energy_labels only, not over all jumps)
-target_omega = rand() * p_jump_a  # p_jump_a = sum_omega p(a, omega)
-csum = 0.0
-for w in energy_labels
-    # build A_{a,omega}, compute ||A_{a,omega} psi||^2
-    p = delta * rate(omega) * n2  # contribution from this omega
-    csum += p
-    if csum >= target_omega: apply A_{a,omega} and break
+# EXISTING (no changes):
+struct TrajectoryFramework{T,D<:AbstractDomain}
+    domain::D
+    jumps::Vector{JumpOp}
+    ham_or_trott::Union{HamHam, TrottTrott}
+    config::AbstractThermalizeConfig{D}
+    precomputed_data::Any
+    per_operator::Vector{PerOperatorKraus{T}}
+    n_jumps::Int
+    delta::Float64
+    delta_eff::Float64
+    alpha::Float64
+    ws::TrajectoryWorkspace{T}  # <-- This is the problem for threading
 end
 ```
 
-**Critical subtlety:** The `p_jump_total` and `p_nojump` computations use the *total* `R = sum_a sum_omega ...`, which is already correct and does not change. What changes is only the *selection* of which jump operator to apply when a dissipative jump occurs.
-
-**What does NOT change:**
-- `precompute_R()` -- still computes the full R summed over all jumps and frequencies
-- `K0 = I - alpha*R` -- unchanged
-- `U_residual` -- unchanged
-- `p_nojump`, `p_res`, `p_jump_total` -- unchanged
-- The coherent unitary `U_B` -- unchanged
-
-**What changes:**
-- The dissipative-jump branch in `step_along_trajectory!` (both EnergyDomain and Time/TrotterDomain variants)
-- Need per-jump `R_a` or per-jump `p_jump_a = delta * <psi|R_a|psi>` for Stage 1 weighting (not uniform -- proportional to `<psi|R_a|psi>`)
-
-### Detailed Changes to `step_along_trajectory!`
+The cleanest approach: **separate the mutable workspace from the immutable framework**.
 
 ```julia
-# In the dissipative-jump branch:
+# NEW: Thread-local workspace, allocated per thread
+struct ThreadTrajectoryState{T}
+    ws::TrajectoryWorkspace{T}   # jump_oft, psi_tmp, Rpsi buffers
+    psi::Vector{T}               # Current state vector (reused across trajectories)
+    rho_local::Matrix{T}         # Thread-local density matrix accumulator
+    obs_local::Union{Nothing, Matrix{Float64}}  # Thread-local observable accumulator
+    rng::Random.AbstractRNG      # Per-thread RNG for reproducibility
+end
 
-# Stage 1: Sample jump index a, weighted by <psi|R_a|psi>
-# Need: for each a, compute p_a = <psi| R_a |psi> where
-#   R_a = sum_omega rate(omega) * A_{a,omega}^dag A_{a,omega}
-# This can be done without precomputing per-jump R matrices by
-# computing A_{a,omega}|psi> on the fly (we already do this in the flat scan).
-
-# Option A (recommended): Precompute per-jump R_a matrices in TrajectoryFramework
-# Then p_a = dot(psi, R_a * psi) is cheap (one matvec per jump).
-# Total: num_jumps matvecs for Stage 1, then ~num_energies matvecs for Stage 2.
-# vs current: num_jumps * num_energies matvecs worst case (same or better).
-
-# Option B: Two-pass scan. First pass: scan all (a,omega) to compute cumulative
-# per-jump probabilities. Second pass: scan only the selected a's frequencies.
-# More complex, same cost.
-
-# Recommendation: Option A. Add R_a::Vector{Matrix{ComplexF64}} to TrajectoryFramework.
-```
-
-### TrajectoryFramework Modifications
-
-```julia
-struct TrajectoryFramework{T,C,H,PD,D<:AbstractDomain}
-    # ... existing fields ...
-
-    # NEW: Per-jump R_a matrices for two-stage sampling
-    R_per_jump::Vector{Matrix{T}}   # R_a = sum_omega rate(omega) A_{a,omega}^dag A_{a,omega}
-
-    # ... existing fields ...
+function ThreadTrajectoryState(::Type{T}, dim::Int, n_obs::Int, seed::Int) where {T}
+    ThreadTrajectoryState{T}(
+        TrajectoryWorkspace(T, dim),
+        zeros(T, dim),
+        zeros(T, dim, dim),
+        n_obs > 0 ? zeros(Float64, n_obs, num_saves) : nothing,
+        Random.MersenneTwister(seed),
+    )
 end
 ```
 
-The `build_trajectoryframework` function needs a new loop that computes `R_a` for each jump, analogous to the existing `precompute_R` but without summing across jumps. This is straightforward -- extract the per-jump inner loop of `precompute_R` into a helper.
+### Why This Works
 
-### Memory and Performance Impact
+1. **`TrajectoryFramework` fields are all immutable or read-only after construction:**
+   - `per_operator::Vector{PerOperatorKraus{T}}` -- Kraus matrices R, K0, U_residual, U_B are precomputed and never mutated during stepping
+   - `precomputed_data` -- NUFFTPrefactors, transition function, energy_labels are read-only
+   - `jumps` -- JumpOp data and in_eigenbasis are read-only
+   - `config` -- immutable struct
+   - `ham_or_trott` -- immutable after construction
 
-| Metric | Current | After Fix |
-|--------|---------|-----------|
-| TrajectoryFramework memory | R (dim x dim) + K0 + U_res + U_B | + num_jumps * (dim x dim) for R_per_jump |
-| Per-step cost (expected) | O(num_jumps * num_energies * dim^2) worst case | O(num_jumps * dim^2) for Stage 1 + O(num_energies * dim^2) for Stage 2 |
-| Per-step cost (3n Pauli jumps, 4 qubits) | ~12 * ~100 * 256 = 307K mul ops worst case | ~12 * 256 + ~100 * 256 = 28.7K mul ops |
+2. **`TrajectoryWorkspace` fields are the ONLY mutable state:**
+   - `jump_oft` -- scratch buffer overwritten each step
+   - `psi_tmp` -- scratch buffer overwritten each step
+   - `Rpsi` -- scratch buffer overwritten each step
 
-For 4 qubits with 12 Pauli jumps and ~100 energy labels, the two-stage approach is ~10x fewer matrix-vector multiplications per step, because Stage 1 is just `num_jumps` matvecs (using precomputed R_a), not `num_jumps * num_energies`.
+3. **Julia's memory model guarantees**: Read-only access to shared immutable data across threads requires no synchronization. The `NUFFTPrefactors.data` (3D array) and `per_operator` Kraus matrices are allocated once and only read during `step_along_trajectory!`.
 
-## Test Suite Architecture
+### BLAS Thread Management
 
-### Test File Organization
-
-```
-test/
-+-- runtests.jl                    # Central test runner
-+-- test_helpers.jl                # Shared fixtures, reference system construction
-+-- test_detailed_balance.jl       # Tier 1: Gibbs fixed point (BohrDomain + B)
-+-- test_coherent_term.jl          # Tier 2: B operator consistency across domains
-+-- test_oft_consistency.jl        # Tier 3: OFT consistency across domains
-+-- test_dm_step_errors.jl         # Tier 4: DM step error scaling (delta)
-+-- test_trajectory.jl             # Tier 5: Trajectory correctness (after fix)
-+-- test_traj_vs_dm.jl             # Tier 6: Trajectory vs DM cross-validation
-```
-
-### Test Helpers: The Shared Fixture Pattern
-
-All tests need the same setup: Hamiltonian, jumps, configs, precomputed data. Extract this into `test_helpers.jl`:
+Critical: `step_along_trajectory!` calls `mul!` (BLAS gemv/gemm) inside each trajectory step. If Julia threads > 1 AND BLAS threads > 1, nested parallelism causes thread oversubscription and performance collapse.
 
 ```julia
-# test/test_helpers.jl
+# At the start of run_trajectories_parallel:
+BLAS.set_num_threads(1)  # Disable BLAS multithreading
+# ... run @threads loop ...
+# Optionally restore after: BLAS.set_num_threads(n_blas_original)
+```
 
-using QuantumFurnace
-using LinearAlgebra, Random, Test
+This is standard practice for Julia multi-threaded scientific computing. The existing codebase already imports `Base.Threads` (line 18 of `QuantumFurnace.jl`).
 
-"""Standard 3-qubit Heisenberg test system with known parameters."""
-function make_test_system(;
-    num_qubits::Int = 3,
-    beta::Float64 = 10.0,
-    sigma_factor::Float64 = 0.8,  # sigma = sigma_factor / beta
-    num_energy_bits::Int = 10,
-    w0::Float64 = 0.05,
-    a::Float64 = 1/10,
-    b::Float64 = 0.4,
-    with_coherent::Bool = true,
+### Per-Thread RNG Strategy
+
+Julia's `TaskLocalRNG` (default since Julia 1.7) is per-task, not per-thread, which is suitable for `@spawn` but not ideal for `@threads` reproducibility. For reproducible parallel Monte Carlo:
+
+```julia
+# Create independent RNGs with jump-ahead (guaranteed non-overlapping streams)
+rngs = [Random.MersenneTwister(seed + i) for i in 1:nthreads()]
+```
+
+Then pass `rngs[threadid()]` into the trajectory loop. The existing codebase uses `rand()` directly in `step_along_trajectory!`, so thread-local RNG requires either:
+
+- **Option A (recommended):** Modify `step_along_trajectory!` to accept an `rng` argument: `rand(rng, 1:fw.n_jumps)` instead of `rand(1:fw.n_jumps)`. This is a small signature change with big payoff for reproducibility.
+- **Option B:** Use `@threads :static` scheduling (guarantees thread IDs are stable) and seed task-local RNG per thread before the loop.
+
+**Recommendation: Option A.** It is explicit, testable, and matches the pattern already used in `run_thermalization` (which already accepts `rng::AbstractRNG`).
+
+## Question 2: GNS Trajectory Path Integration
+
+### Current GNS Dispatch Architecture
+
+The existing code already has a clean KMS-vs-GNS dispatch via config type:
+
+```
+Config type hierarchy:
+  AbstractThermalizeConfig{D,T}
+    |-- ThermalizeConfig{D,T}      (KMS line)
+    |-- ThermalizeConfigGNS{D,T}   (GNS line)
+
+Dispatch points (already working):
+  1. pick_transition(config::ThermalizeConfigGNS)  -> _pick_transition_gns(config)
+     Returns UNSHIFTED gamma_tilde(w) satisfying KMS condition directly
+  2. _pick_alpha(config::ThermalizeConfigGNS)      -> _pick_alpha_gns(config)
+     Returns GNS alpha function for BohrDomain
+  3. validate_config!(config): enforces with_coherent=false for GNS
+  4. _precompute_data(config, ham_or_trott): uses pick_transition(config),
+     so GNS transition weight flows automatically via dispatch
+  5. Coherent B term: _precompute_coherent_total_B returns nothing when
+     config.with_coherent==false (enforced for GNS configs)
+```
+
+### What Needs to Change for GNS Trajectory Path
+
+**Almost nothing.** The trajectory code in `trajectories.jl` dispatches on `AbstractThermalizeConfig{D}` for the domain type, and the GNS-specific behavior flows through `_precompute_data` and `pick_transition` which already handle `ThermalizeConfigGNS` correctly.
+
+Here is the exhaustive list of functions that must accept `ThermalizeConfigGNS`:
+
+| Function | File | Current Dispatch | GNS Status |
+|----------|------|-----------------|------------|
+| `run_trajectories()` | `trajectories.jl` | `config::AbstractThermalizeConfig` | **Already works** -- accepts any subtype |
+| `build_trajectoryframework()` | `trajectories.jl` | `config::AbstractThermalizeConfig` | **Already works** |
+| `_precompute_data()` | `furnace_utensils.jl` | Dispatches on domain `D` | **Already works** -- calls `pick_transition(config)` which dispatches on GNS |
+| `pick_transition()` | `energy_domain.jl` | Has explicit `ThermalizeConfigGNS` method | **Already works** |
+| `_precompute_R()` | `trajectories.jl` | `config::AbstractThermalizeConfig{D}` | **Already works** -- uses `precomputed_data.transition` |
+| `step_along_trajectory!()` | `trajectories.jl` | `fw::TrajectoryFramework{T,D}` | **Already works** -- uses `fw.precomputed_data.transition` |
+| `_precompute_coherent_total_B()` | `coherent.jl` | `config::AbstractConfig` | **Already works** -- returns `nothing` when `with_coherent==false` |
+| `validate_config!()` | `misc_tools.jl` | `config::AbstractConfig` | **Already works** -- enforces `with_coherent=false` for GNS |
+| `_select_b_plus_calculator()` | `furnace_utensils.jl` | `config::Union{LiouvConfig, ThermalizeConfig}` | **N/A** -- only called when `with_coherent==true`, which GNS configs cannot be |
+
+### The One Required Change
+
+The `_select_b_plus_calculator` function only dispatches on `Union{LiouvConfig, ThermalizeConfig}` (KMS types). If someone bypasses validation and passes a GNS config with `with_coherent=true` (which the inner constructor blocks), it would error. **This is NOT a bug -- the inner constructor prevents it.** No code change needed.
+
+### Verification Strategy for GNS Trajectory Path
+
+The right way to verify GNS trajectories work is:
+
+1. Create a `ThermalizeConfigGNS` with valid parameters
+2. Run `run_trajectories(jumps, config_gns, psi0, ham; ntraj=N)`
+3. Compare trajectory-averaged rho against:
+   - The GNS Liouvillian fixed point (from `run_lindbladian` with `LiouvConfigGNS`)
+   - The Gibbs state (with expected domain approximation error)
+4. Confirm that `per_op.U_B === nothing` for all operators (no coherent term)
+
+```julia
+# Smoke test for GNS trajectory path:
+gns_config = ThermalizeConfigGNS(
+    num_qubits=4, with_coherent=false,
+    with_linear_combination=true, domain=EnergyDomain(),
+    beta=10.0, sigma=0.1, a=1/30, b=0.4,
+    num_energy_bits=12, w0=0.05, t0=T0,
+    num_trotter_steps_per_t0=10,
+    mixing_time=10.0, delta=0.01
 )
-    dim = 2^num_qubits
-    sigma = sigma_factor / beta
-    w_gamma = 1 / beta
-    sigma_gamma = sqrt(2 * w_gamma / beta - sigma^2)
-    t0 = 2pi / (2^num_energy_bits * w0)
-    num_trotter_steps_per_t0 = 10
+result = run_trajectories(jumps, gns_config, psi0, ham; ntraj=1000)
+# result.framework.per_operator[1].U_B === nothing  # Confirm no B term
+```
 
-    hamiltonian = load_hamiltonian("heis", num_qubits)
-    hamiltonian = finalize_hamham(hamiltonian, beta)
+## Question 3: Adaptive Sampling Architecture
 
-    # Jump operators: X, Y, Z on each site
-    jump_paulis = [[X], [Y], [Z]]
-    num_of_jumps = length(jump_paulis) * num_qubits
-    jump_normalization = sqrt(num_of_jumps)
-    jumps = JumpOp[]
-    for pauli in jump_paulis
-        for site in 1:num_qubits
-            jump_op = pad_term(pauli, num_qubits, site) / jump_normalization
-            jump_op_in_eigenbasis = hamiltonian.eigvecs' * jump_op * hamiltonian.eigvecs
-            orthogonal = (jump_op == transpose(jump_op))
-            hermitian = (jump_op == jump_op')
-            push!(jumps, JumpOp(jump_op, jump_op_in_eigenbasis, orthogonal, hermitian))
+### Design: Batch-Based Convergence Testing
+
+Adaptive sampling means "keep running trajectories until convergence criteria are met." The architecture should separate three concerns:
+
+1. **Batch execution** -- run N trajectories in parallel and accumulate results
+2. **Convergence evaluation** -- assess whether current results are converged
+3. **Decision logic** -- continue, stop, or adjust batch size
+
+```julia
+"""
+Manages adaptive trajectory sampling with convergence detection.
+
+Usage:
+    manager = AdaptiveBatchManager(fw, psi0;
+        batch_size=100, max_trajectories=100_000,
+        convergence_criterion=TraceDistanceVariance(rtol=0.01))
+
+    while !is_converged(manager)
+        run_batch!(manager)
+    end
+
+    result = finalize(manager)
+"""
+mutable struct AdaptiveBatchManager{T, C<:ConvergenceCriterion}
+    # Immutable setup
+    fw::TrajectoryFramework{T}
+    psi0::Vector{T}
+    gibbs::Union{Nothing, Hermitian}  # Target state (if known, for convergence check)
+    observables::Union{Nothing, Vector{Matrix{T}}}
+
+    # Mutable state
+    rho_running::Matrix{T}              # Running sum of |psi><psi| across all trajectories
+    obs_running::Union{Nothing, Matrix{Float64}}  # Running sum of <O_i> per trajectory
+    n_completed::Int                     # Total trajectories completed so far
+
+    # Convergence tracking
+    criterion::C
+    convergence_history::Vector{Float64}  # Value of criterion after each batch
+    batch_size::Int
+    max_trajectories::Int
+
+    # Thread-local state (created lazily on first batch)
+    thread_states::Union{Nothing, Vector{ThreadTrajectoryState{T}}}
+end
+```
+
+### Convergence Criteria (Trait Pattern)
+
+```julia
+abstract type ConvergenceCriterion end
+
+"""Stop when trace distance between consecutive batch-averages is below rtol."""
+struct TraceDistanceStability <: ConvergenceCriterion
+    rtol::Float64       # Relative tolerance
+    window::Int         # Number of consecutive batches that must be stable
+end
+
+"""Stop when standard error of per-observable means is below atol."""
+struct ObservableVariance <: ConvergenceCriterion
+    atol::Float64       # Absolute tolerance on standard error
+end
+
+"""Stop when batch-averaged rho is within threshold of target Gibbs state."""
+struct GibbsProximity <: ConvergenceCriterion
+    threshold::Float64  # Trace distance threshold
+end
+
+# Evaluate convergence after each batch
+function evaluate_convergence(
+    crit::TraceDistanceStability,
+    manager::AdaptiveBatchManager,
+)::Bool
+    length(manager.convergence_history) < crit.window && return false
+    recent = manager.convergence_history[end-crit.window+1:end]
+    return all(v -> v < crit.rtol, recent)
+end
+```
+
+### Thread Coordination for Adaptive Batches
+
+Each batch runs a fixed number of trajectories in parallel, then synchronizes to evaluate convergence:
+
+```
+Batch 1:  Thread1[N/nthreads trajs] | Thread2[...] | ... | ThreadK[...]
+          |                          |                     |
+          +--- reduce into rho_running (atomic add or per-thread + merge) ---+
+          |
+          Evaluate convergence criterion
+          |
+Batch 2:  Thread1[...] | Thread2[...] | ... | ThreadK[...]
+          |
+          ...
+          |
+Done:     Return averaged rho_mean = rho_running / n_completed
+```
+
+The reduction after each batch can use a simple sequential merge of per-thread accumulators (cost: K * dim^2 additions, negligible compared to trajectory cost).
+
+### Online Mean Computation
+
+For numerical stability, use the Welford online algorithm for the running mean:
+
+```julia
+function accumulate_batch!(manager::AdaptiveBatchManager, batch_rho::Matrix)
+    manager.n_completed += batch_size
+    # Simple running sum (divide by n_completed at query time)
+    manager.rho_running .+= batch_rho
+end
+
+function current_mean(manager::AdaptiveBatchManager)
+    return manager.rho_running ./ manager.n_completed
+end
+```
+
+For variance tracking (needed by `TraceDistanceStability`), track batch-level means:
+
+```julia
+# After each batch:
+batch_mean = batch_rho ./ batch_size
+overall_mean = current_mean(manager)
+# Convergence metric: trace_distance(batch_mean, overall_mean)
+push!(manager.convergence_history, trace_distance_h(
+    Hermitian(batch_mean), Hermitian(overall_mean)))
+```
+
+## Question 4: Per-Observable Tracking
+
+### During Trajectory vs Post-Average
+
+**During trajectory (recommended).** Per-observable expectation values must be computed on the pure state `psi` within each trajectory step, then averaged. You cannot compute `<O>` from the averaged `rho_mean` after the fact if you want time-resolved observable curves, because the trajectory-average of `<psi|O|psi>` at intermediate times gives the time-resolved expectation, while `tr(O * rho_mean)` only gives the final-time expectation.
+
+The existing `run_trajectories` already implements this correctly via `_accumulate_measurements!`:
+
+```julia
+# FROM trajectories.jl (existing, lines 405-437):
+for _ in 1:ntraj
+    copyto!(psi, psi0)
+    # normalize once per trajectory
+    save_idx = 1
+    for step in 1:num_steps
+        step_along_trajectory!(psi, fw)
+        if step % save_every == 0
+            save_idx += 1
+            _accumulate_measurements!(mean_data, save_idx, psi, observables, tmp_meas)
         end
     end
-
-    trotter = TrottTrott(hamiltonian, t0, num_trotter_steps_per_t0)
-
-    # Return everything tests might need
-    return (; num_qubits, dim, beta, sigma, w_gamma, sigma_gamma,
-             w0, t0, a, b, num_energy_bits, num_trotter_steps_per_t0,
-             hamiltonian, trotter, jumps, with_coherent, jump_normalization)
 end
-
-"""Create a LiouvConfig from the test system parameters."""
-function make_liouv_config(sys, domain::AbstractDomain)
-    LiouvConfig(
-        num_qubits = sys.num_qubits,
-        with_coherent = sys.with_coherent,
-        with_linear_combination = true,
-        domain = domain,
-        beta = sys.beta,
-        sigma = sys.sigma,
-        gaussian_parameters = (sys.w_gamma, sys.sigma_gamma),
-        a = sys.a,
-        b = sys.b,
-        num_energy_bits = sys.num_energy_bits,
-        w0 = sys.w0,
-        t0 = sys.t0,
-        eta = 0.0,
-        num_trotter_steps_per_t0 = sys.num_trotter_steps_per_t0,
-    )
-end
-
-"""Create a ThermalizeConfig from the test system parameters."""
-function make_therm_config(sys, domain::AbstractDomain; delta=0.01, mixing_time=10.0)
-    ThermalizeConfig(
-        num_qubits = sys.num_qubits,
-        with_coherent = sys.with_coherent,
-        with_linear_combination = true,
-        domain = domain,
-        beta = sys.beta,
-        sigma = sys.sigma,
-        gaussian_parameters = (sys.w_gamma, sys.sigma_gamma),
-        a = sys.a,
-        b = sys.b,
-        num_energy_bits = sys.num_energy_bits,
-        w0 = sys.w0,
-        t0 = sys.t0,
-        eta = 0.0,
-        num_trotter_steps_per_t0 = sys.num_trotter_steps_per_t0,
-        mixing_time = mixing_time,
-        delta = delta,
-    )
-end
-
-# --- Tolerance tiers ---
-# These map to the error hierarchy
-const TOL_MACHINE = 1e-12    # Machine precision (exact operations)
-const TOL_BOHR_EXACT = 1e-10 # Bohr+B should give Gibbs to near machine precision
-const TOL_ENERGY_QUAD = 1e-4 # Energy domain introduces Gaussian quadrature error
-const TOL_TIME_QUAD = 1e-3   # Time domain adds Riemann sum quadrature error
-const TOL_TROTTER = 1e-2     # Trotter adds time discretization error
-const TOL_DELTA_SINGLE = 0.1 # Single delta-step error (O(delta^2))
-const TOL_TRAJECTORY_STAT = 0.05  # Trajectory statistical error (1/sqrt(ntraj))
+mean_data ./= ntraj  # Average over trajectories
 ```
 
-### Test Tier 1: Detailed Balance (Gibbs Fixed Point)
+### Thread-Safe Observable Accumulation
 
-**Tests:** BohrDomain with coherent term B gives Gibbs state as exact fixed point.
-
-**What this validates:** The fundamental mathematical property -- the Lindbladian with exact KMS detailed balance has the Gibbs state as its kernel.
+Each thread accumulates into its own `obs_local::Matrix{Float64}` (dimensions: `n_observables x num_saves`). After the `@threads` loop, merge:
 
 ```julia
-# test/test_detailed_balance.jl
-@testset "Detailed Balance: Gibbs Fixed Point" begin
-    sys = make_test_system(num_qubits=3)
+# Merge thread-local accumulators
+for state in thread_states
+    mean_data .+= state.obs_local
+end
+mean_data ./= ntraj
+```
 
-    @testset "Bohr+B: Liouvillian kernel is Gibbs" begin
-        config = make_liouv_config(sys, BohrDomain())
-        result = run_lindbladian(sys.jumps, config, sys.hamiltonian)
+This avoids any atomic operations or locks during the hot loop. The merge cost is `O(nthreads * n_obs * num_saves)`, which is negligible.
 
-        @test trace_distance_h(
-            Hermitian(result.fixed_point),
-            sys.hamiltonian.gibbs
-        ) < TOL_BOHR_EXACT
-    end
+### Observable Choice for KMS-vs-GNS Experiments
 
-    @testset "Bohr+B: DM thermalization converges to Gibbs" begin
-        config = make_therm_config(sys, BohrDomain(); delta=0.005, mixing_time=50.0)
-        dm0 = Matrix{ComplexF64}(I(sys.dim) / sys.dim)
-        result = run_thermalization(sys.jumps, config, dm0, sys.hamiltonian)
+For the paper experiments, the relevant observables are:
+1. **Trace distance to Gibbs**: `trace_distance_h(Hermitian(rho_traj), gibbs)` -- computed post-average from `rho_mean`
+2. **Per-site magnetization**: `<Z_i>` for each qubit site -- measured per-trajectory at each save point
+3. **Energy**: `<H>` -- measured per-trajectory, tracks thermalization
+4. **Purity**: `tr(rho^2)` -- computed post-average from `rho_mean`
 
-        @test result.distances_to_gibbs[end] < TOL_BOHR_EXACT
-    end
+Items 2-3 require during-trajectory measurement. Items 1 and 4 can be computed from the final `rho_mean`.
 
-    @testset "Energy domain: fixed point near Gibbs (quadrature error)" begin
-        config = make_liouv_config(sys, EnergyDomain())
-        result = run_lindbladian(sys.jumps, config, sys.hamiltonian)
+## Question 5: Experiment Results Data Model
 
-        dist = trace_distance_h(Hermitian(result.fixed_point), sys.hamiltonian.gibbs)
-        @test dist < TOL_ENERGY_QUAD
-        @test dist > TOL_BOHR_EXACT  # Should NOT be exact -- verifies error is real
-    end
+### Recommended Structure
 
-    @testset "Error hierarchy: Bohr < Energy < Time < Trotter" begin
-        distances = Float64[]
-        for domain in [BohrDomain(), EnergyDomain(), TimeDomain(), TrotterDomain()]
-            config = make_liouv_config(sys, domain)
-            trotter_arg = domain isa TrotterDomain ? sys.trotter : nothing
-            result = run_lindbladian(sys.jumps, config, sys.hamiltonian; trotter=trotter_arg)
-            push!(distances, trace_distance_h(
-                Hermitian(result.fixed_point), sys.hamiltonian.gibbs))
-        end
+```julia
+"""
+Complete record of a single experiment run: configuration + results + metadata.
+Designed for serialization via JLD2.
+"""
+struct ExperimentResult{D, T<:AbstractFloat}
+    # --- Configuration (what was run) ---
+    config::AbstractThermalizeConfig{D,T}
+    hamiltonian_id::String          # e.g. "heis_disordered_periodic_n4"
+    db_type::Symbol                 # :KMS or :GNS
+    num_qubits::Int
+    beta::T
+    domain::D
 
-        @test distances[1] < distances[2]  # Bohr < Energy
-        @test distances[2] < distances[3]  # Energy < Time
-        @test distances[3] < distances[4]  # Time < Trotter
-    end
+    # --- Trajectory results ---
+    rho_mean::Matrix{Complex{T}}    # Trajectory-averaged density matrix
+    n_trajectories::Int             # Number of trajectories used
+    wall_time_seconds::Float64      # Total wall-clock time
+
+    # --- Observable time series (if measured) ---
+    times::Union{Nothing, Vector{Float64}}
+    observable_means::Union{Nothing, Matrix{Float64}}  # (n_obs x n_times)
+    observable_names::Union{Nothing, Vector{String}}
+
+    # --- Convergence diagnostics ---
+    trace_dist_to_gibbs::T          # Final trace distance to Gibbs
+    trace_dist_to_fixed_point::Union{Nothing, T}  # If Liouvillian FP was computed
+    convergence_history::Union{Nothing, Vector{Float64}}  # Batch convergence values
+
+    # --- Metadata ---
+    timestamp::String               # ISO 8601
+    julia_version::String
+    n_threads::Int
+    git_commit::Union{Nothing, String}
+    seed::Int
 end
 ```
 
-### Test Tier 2: Coherent Term Consistency
+### Serialization Strategy
 
-**Tests:** `coherent_bohr()` equals `B_time()` up to time quadrature error, equals `B_trotter()` up to Trotter error.
+Use **JLD2** (already HDF5-compatible, pure Julia, handles arbitrary Julia types):
 
 ```julia
-# test/test_coherent_term.jl
-@testset "Coherent Term B Consistency" begin
-    sys = make_test_system(num_qubits=3)
-    jump = sys.jumps[1]
+using JLD2
 
-    @testset "B_bohr vs B_time (time quadrature error)" begin
-        config_bohr = make_liouv_config(sys, BohrDomain())
-        config_time = make_liouv_config(sys, TimeDomain())
+function save_experiment(result::ExperimentResult, path::String)
+    jldsave(path; result=result)
+end
 
-        pd_bohr = precompute_data(BohrDomain(), config_bohr, sys.hamiltonian)
-        pd_time = precompute_data(TimeDomain(), config_time, sys.hamiltonian)
-
-        B_bohr = coherent_bohr(sys.hamiltonian, jump, config_bohr)
-        rmul!(B_bohr, pd_bohr.gamma_norm_factor)
-
-        B_t = B_time(jump, sys.hamiltonian, pd_time.b_minus, pd_time.b_plus,
-                     sys.t0, sys.beta, sys.sigma)
-        rmul!(B_t, pd_time.gamma_norm_factor)
-
-        @test norm(B_bohr - B_t) < TOL_TIME_QUAD
-        @test norm(B_bohr - B_t) > TOL_MACHINE  # Not exact (verifies error is real)
-    end
-
-    @testset "B_time vs B_trotter (Trotter error)" begin
-        config_time = make_liouv_config(sys, TimeDomain())
-        config_trotter = make_liouv_config(sys, TrotterDomain())
-
-        pd_time = precompute_data(TimeDomain(), config_time, sys.hamiltonian)
-        pd_trotter = precompute_data(TrotterDomain(), config_trotter, sys.trotter)
-
-        B_t = B_time(jump, sys.hamiltonian, pd_time.b_minus, pd_time.b_plus,
-                     sys.t0, sys.beta, sys.sigma)
-        rmul!(B_t, pd_time.gamma_norm_factor)
-
-        B_tr = B_trotter(jump, sys.trotter, pd_trotter.b_minus, pd_trotter.b_plus,
-                         sys.beta, sys.sigma)
-        rmul!(B_tr, pd_trotter.gamma_norm_factor)
-
-        # Transform B_trotter to eigenbasis for comparison
-        V = sys.hamiltonian.eigvecs' * sys.trotter.eigvecs
-        B_tr_in_eigen = V * B_tr * V'
-
-        @test norm(B_t - B_tr_in_eigen) < TOL_TROTTER
-    end
-
-    @testset "B is Hermitian" begin
-        config = make_liouv_config(sys, BohrDomain())
-        pd = precompute_data(BohrDomain(), config, sys.hamiltonian)
-        B = coherent_bohr(sys.hamiltonian, jump, config)
-        @test norm(B - B') < TOL_MACHINE
-    end
+function load_experiment(path::String)::ExperimentResult
+    return load(path, "result")
 end
 ```
 
-### Test Tier 3: OFT Consistency
+JLD2 natively serializes complex Julia types including parametric structs, so `ExperimentResult{EnergyDomain, Float64}` round-trips correctly. The existing codebase uses BSON for Hamiltonian serialization (which has known fragility with struct evolution -- see `_load_hamiltonian_bson`), so JLD2 is a deliberate upgrade.
 
-**Tests:** `oft!()` (Bohr-exact Gaussian filter) matches `time_oft!()` (Riemann sum) up to time quadrature, matches `trotter_oft!()` up to Trotter error.
+### File Organization for Experiments
+
+```
+experiments/
+  kms_vs_gns/
+    n4_beta10_energy/
+      kms_ntraj10000_seed42.jld2
+      gns_ntraj10000_seed42.jld2
+    n6_beta10_energy/
+      kms_ntraj10000_seed42.jld2
+      gns_ntraj10000_seed42.jld2
+    summary.jld2  # Aggregated comparison data
+```
+
+### Separation from Source
+
+Experiment scripts should live in `experiments/` (not `src/`), with the new source components (`parallel_trajectories.jl`, `adaptive_sampling.jl`) in `src/`. The experiment runner uses the library API:
+
+```
+src/                        experiments/
+  parallel_trajectories.jl    kms_vs_gns.jl  (script: defines grid, calls library)
+  adaptive_sampling.jl        analyze_results.jl  (script: loads JLD2, makes plots)
+  experiment_types.jl         plot_convergence.jl
+```
+
+## Question 6: Parameter Sweep Organization (n=4,6,8)
+
+### Recommended: Flat Parameter Grid with Job Specification
 
 ```julia
-# test/test_oft_consistency.jl
-@testset "OFT Consistency Across Domains" begin
-    sys = make_test_system(num_qubits=3)
-    jump = sys.jumps[1]
+"""
+Specification for a single experiment point in a parameter sweep.
+"""
+struct ExperimentSpec{D<:AbstractDomain, T<:AbstractFloat}
+    num_qubits::Int
+    beta::T
+    domain::D
+    db_type::Symbol   # :KMS or :GNS
+    with_coherent::Bool
+    n_trajectories::Int
+    seed::Int
+    # ... other parameters from ThermalizeConfig
+end
 
-    @testset "oft! vs NUFFT prefactors (Time domain)" begin
-        config = make_liouv_config(sys, TimeDomain())
-        pd = precompute_data(TimeDomain(), config, sys.hamiltonian)
+"""
+Generate the full parameter grid for KMS-vs-GNS experiments.
+"""
+function kms_vs_gns_grid(;
+    qubit_counts = [4, 6, 8],
+    betas = [10.0],
+    domains = [EnergyDomain()],
+    db_types = [:KMS, :GNS],
+    n_trajectories = 10_000,
+    base_seed = 42,
+)::Vector{ExperimentSpec}
+    specs = ExperimentSpec[]
+    seed_counter = base_seed
 
-        test_energies = [0.0, 0.1, -0.1]
-        for w in test_energies
-            if haskey(pd.oft_nufft_prefactors.energy_to_index, w)
-                A_exact = oft(jump, w, sys.hamiltonian, sys.sigma)
-                pref = prefactor_view(pd.oft_nufft_prefactors, w)
-                A_nufft = jump.in_eigenbasis .* pref
-
-                @test norm(A_exact - A_nufft) < TOL_TIME_QUAD
+    for n in qubit_counts
+        for beta in betas
+            for domain in domains
+                for db in db_types
+                    with_coh = (db == :KMS)  # KMS can have B; GNS cannot
+                    push!(specs, ExperimentSpec(
+                        n, beta, domain, db, with_coh,
+                        n_trajectories, seed_counter))
+                    seed_counter += 1
+                end
             end
         end
     end
+    return specs
 end
 ```
 
-### Test Tier 4: DM Step Error Scaling
+### Why Flat Grid, Not Nested Loops
 
-**Tests:** Single delta-step error is O(delta^2), multi-step error is O(delta). This corresponds to Chen Theorem III.1.
+A flat grid of `ExperimentSpec` objects has several advantages over nested `for n in [4,6,8]; for db in [:KMS,:GNS]; ...`:
+
+1. **Resumability:** Each spec has a unique identity. If the experiment crashes at spec 7/12, you can resume from spec 8.
+2. **Progress tracking:** `ProgressMeter` over a flat vector gives clear ETA.
+3. **Selective re-running:** Failed or suspicious specs can be re-run individually.
+4. **Parallelism flexibility:** The grid can be split across multiple Julia processes (Distributed) or run serially.
+
+### Execution Pattern
 
 ```julia
-# test/test_dm_step_errors.jl
-@testset "DM Step Error Scaling (Chen Theorem III.1)" begin
-    sys = make_test_system(num_qubits=3)
+function run_experiment_grid(specs::Vector{ExperimentSpec}, output_dir::String)
+    results = ExperimentResult[]
 
-    @testset "Single step: error ~ O(delta^2)" begin
-        domain = EnergyDomain()
-        deltas = [0.1, 0.05, 0.025]
-        errors = Float64[]
+    for (i, spec) in enumerate(specs)
+        @info "Running experiment $i/$(length(specs))" spec.num_qubits spec.db_type
 
-        for delta in deltas
-            config = make_therm_config(sys, domain; delta=delta, mixing_time=delta)
-            dm0 = Matrix{ComplexF64}(I(sys.dim) / sys.dim)
-            result = run_thermalization(sys.jumps, config, copy(dm0), sys.hamiltonian)
+        # Build Hamiltonian (expensive for n=8, dim=256)
+        ham = load_hamiltonian("heis", spec.num_qubits; beta=spec.beta)
+        jumps = build_standard_jumps(ham, spec.num_qubits)
+        psi0 = fill(ComplexF64(1.0), 2^spec.num_qubits) / sqrt(2^spec.num_qubits)
 
-            # Compare single-step DM output against exact channel
-            # (exact channel = exp(delta * L) applied to dm0)
-            liouv_config = make_liouv_config(sys, domain)
-            liouv = construct_lindbladian(sys.jumps, liouv_config, sys.hamiltonian)
-            exact_dm_vec = exp(delta * liouv) * vec(dm0)
-            exact_dm = reshape(exact_dm_vec, sys.dim, sys.dim)
+        # Build config (KMS or GNS)
+        config = build_config(spec)
 
-            push!(errors, norm(result.evolved_dm - exact_dm))
-        end
+        # Run with parallel trajectories + adaptive sampling
+        t0 = time()
+        result_data = run_trajectories_parallel(
+            jumps, config, psi0, ham;
+            ntraj=spec.n_trajectories,
+            seed=spec.seed,
+        )
+        wall_time = time() - t0
 
-        # Check quadratic scaling: error(delta/2) / error(delta) ~ 1/4
-        for i in 1:(length(errors)-1)
-            ratio = errors[i+1] / errors[i]
-            @test ratio < 0.35  # Should be ~0.25 for O(delta^2)
-        end
+        # Package result
+        result = ExperimentResult(
+            config=config,
+            hamiltonian_id="heis_disordered_periodic_n$(spec.num_qubits)",
+            db_type=spec.db_type,
+            # ... fill remaining fields ...
+        )
+
+        # Save immediately (crash resilience)
+        save_experiment(result, joinpath(output_dir, filename(spec)))
+        push!(results, result)
     end
+    return results
 end
 ```
 
-### Test Tier 5: Trajectory Correctness (Post-Fix)
+### Scaling Considerations for n=4,6,8
 
-**Tests:** After the two-stage sampling fix, trajectory-averaged density matrix matches DM simulation.
+| n | dim | Precompute cost | Per-trajectory step cost | Memory per thread |
+|---|-----|----------------|------------------------|-------------------|
+| 4 | 16  | ~1s (NUFFT)    | ~100us (12 jumps, ~200 energies) | ~50 KB |
+| 6 | 64  | ~10s (NUFFT)   | ~1ms (18 jumps, ~200 energies) | ~800 KB |
+| 8 | 256 | ~100s (NUFFT)  | ~20ms (24 jumps, ~200 energies) | ~12 MB |
 
-```julia
-# test/test_trajectory.jl
-@testset "Trajectory Simulation" begin
-    sys = make_test_system(num_qubits=3)
+For n=8, each trajectory step involves `mul!` on 256x256 matrices. With 10K trajectories at 1000 steps each, that is 10M steps * 20ms = ~55 hours single-threaded. With 8 threads: ~7 hours. With adaptive sampling stopping early: potentially much less.
 
-    @testset "Trajectory average matches DM (EnergyDomain)" begin
-        domain = EnergyDomain()
-        delta = 0.01
-        mixing_time = 20.0
-        ntraj = 500  # Enough for statistical convergence
+**Implication:** n=8 experiments should:
+1. Use adaptive sampling aggressively (stop when converged)
+2. Use the largest reasonable batch size (amortize reduction overhead)
+3. Consider fewer trajectories if convergence is fast
+4. Save intermediate results after each batch
 
-        config = make_therm_config(sys, domain; delta=delta, mixing_time=mixing_time)
-
-        # DM reference
-        dm0 = Matrix{ComplexF64}(I(sys.dim) / sys.dim)
-        dm_result = run_thermalization(sys.jumps, config, copy(dm0), sys.hamiltonian)
-
-        # Trajectory average
-        psi0 = ones(ComplexF64, sys.dim) / sqrt(sys.dim)
-        traj_result = run_trajectories(sys.jumps, config, psi0, sys.hamiltonian;
-                                       ntraj=ntraj, delta=delta, total_time=mixing_time)
-
-        @test trace_distance_h(
-            Hermitian(traj_result.rho_mean),
-            Hermitian(dm_result.evolved_dm)
-        ) < TOL_TRAJECTORY_STAT
-    end
-
-    @testset "Trajectory converges to Gibbs (EnergyDomain)" begin
-        domain = EnergyDomain()
-        delta = 0.005
-        mixing_time = 100.0
-        ntraj = 1000
-
-        config = make_therm_config(sys, domain; delta=delta, mixing_time=mixing_time)
-        psi0 = ones(ComplexF64, sys.dim) / sqrt(sys.dim)
-
-        result = run_trajectories(sys.jumps, config, psi0, sys.hamiltonian;
-                                  ntraj=ntraj, delta=delta, total_time=mixing_time)
-
-        dist = trace_distance_h(Hermitian(result.rho_mean), sys.hamiltonian.gibbs)
-        @test dist < TOL_ENERGY_QUAD + TOL_TRAJECTORY_STAT
-    end
-end
-```
-
-### Test Tier 6: Trajectory vs DM Cross-Validation
-
-**Tests:** Same error hierarchy structure in trajectories as in DM mode.
-
-```julia
-# test/test_traj_vs_dm.jl
-@testset "Trajectory vs DM Cross-Validation" begin
-    sys = make_test_system(num_qubits=3)
-
-    @testset "Error hierarchy preserved in trajectories" begin
-        # Same test as Tier 1 error hierarchy, but using trajectories
-        delta = 0.005
-        mixing_time = 100.0
-        ntraj = 500
-        psi0 = ones(ComplexF64, sys.dim) / sqrt(sys.dim)
-
-        distances = Float64[]
-        for domain in [EnergyDomain(), TimeDomain(), TrotterDomain()]
-            config = make_therm_config(sys, domain; delta=delta, mixing_time=mixing_time)
-            trotter_arg = domain isa TrotterDomain ? sys.trotter : nothing
-            result = run_trajectories(sys.jumps, config, psi0, sys.hamiltonian;
-                                      ntraj=ntraj, delta=delta, total_time=mixing_time,
-                                      trotter=trotter_arg)
-            push!(distances, trace_distance_h(
-                Hermitian(result.rho_mean), sys.hamiltonian.gibbs))
-        end
-
-        @test distances[1] < distances[2] + TOL_TRAJECTORY_STAT  # Energy < Time
-        @test distances[2] < distances[3] + TOL_TRAJECTORY_STAT  # Time < Trotter
-    end
-end
-```
-
-## Data Flow: Trajectory Validation Pipeline
-
-### Full Validation Data Flow
-
-```
-[make_test_system()]
-    |
-    +----> HamHam, JumpOps, TrottTrott, parameters
-    |
-    +----> [make_liouv_config(domain)]
-    |         |
-    |         v
-    |     [run_lindbladian()] ----------> HotSpectralResults
-    |         |                              |
-    |         v                              v
-    |     fixed_point (Liouv kernel)    spectral_gap
-    |         |
-    |         +----> REFERENCE: trace_distance(fixed_point, gibbs)
-    |
-    +----> [make_therm_config(domain, delta)]
-              |
-              +----> [run_thermalization()] --> HotAlgorithmResults
-              |         |                          |
-              |         v                          v
-              |     evolved_dm               distances_to_gibbs[]
-              |         |
-              |         +----> DM REFERENCE for trajectory comparison
-              |
-              +----> [run_trajectories()] --> (rho_mean, ...)
-                        |                        |
-                        v                        v
-                    rho_mean (traj avg)     [optional: measurements]
-                        |
-                        +----> CROSS-VALIDATE: trace_distance(rho_mean, evolved_dm)
-                        +----> GIBBS CHECK:    trace_distance(rho_mean, gibbs)
-```
-
-### Error Budget Propagation
-
-```
-Gibbs state (exact target)
-    |
-    v
-BohrDomain + B          error_1 ~ 0 (machine precision)
-    |
-    v  + Gaussian filter quadrature (w0 discretization)
-EnergyDomain + B        error_2 = error_1 + O(w0 * exp(-sigma^2))
-    |
-    v  + Riemann sum time quadrature (t0 discretization)
-TimeDomain + B           error_3 = error_2 + O(t0 * exp(-sigma^2 * t_max^2))
-    |
-    v  + Trotter time evolution approximation
-TrotterDomain + B        error_4 = error_3 + O(t0 / num_trotter_steps)
-    |
-    v  + delta-stepping error (weak measurement discretization)
-DM step simulation       error_5 = error_4 + O(delta) per mixing time
-    |
-    v  + statistical sampling error
-Trajectory simulation    error_6 = error_5 + O(1/sqrt(ntraj))
-```
-
-Each test tier validates one layer of this error budget.
-
-## Component Boundaries for New vs Existing Code
+## Component Boundaries: New vs Modified
 
 ### New Files
 
-| File | Purpose | Dependencies |
-|------|---------|--------------|
-| `test/runtests.jl` | Central test runner | All test files |
-| `test/test_helpers.jl` | Shared fixtures, configs, tolerances | QuantumFurnace module |
-| `test/test_detailed_balance.jl` | Tier 1: Gibbs fixed point tests | test_helpers, run_lindbladian, run_thermalization |
-| `test/test_coherent_term.jl` | Tier 2: B operator cross-domain tests | test_helpers, coherent_bohr, B_time, B_trotter |
-| `test/test_oft_consistency.jl` | Tier 3: OFT cross-domain tests | test_helpers, oft!, nufft prefactors |
-| `test/test_dm_step_errors.jl` | Tier 4: DM step error scaling | test_helpers, run_thermalization, construct_lindbladian |
-| `test/test_trajectory.jl` | Tier 5: Trajectory correctness | test_helpers, run_trajectories |
-| `test/test_traj_vs_dm.jl` | Tier 6: Cross-validation | test_helpers, run_trajectories, run_thermalization |
+| File | Purpose | Key Types/Functions |
+|------|---------|-------------------|
+| `src/parallel_trajectories.jl` | Multi-threaded trajectory runner | `ThreadTrajectoryState`, `run_trajectories_parallel`, `step_along_trajectory!(psi, fw, rng)` |
+| `src/adaptive_sampling.jl` | Adaptive batch manager + convergence criteria | `AdaptiveBatchManager`, `ConvergenceCriterion`, `run_batch!`, `is_converged` |
+| `src/experiment_types.jl` | Data model for experiment results | `ExperimentResult`, `ExperimentSpec`, `save_experiment`, `load_experiment` |
+| `experiments/kms_vs_gns.jl` | Experiment script (not in module) | `kms_vs_gns_grid`, `run_experiment_grid` |
 
 ### Modified Files
 
 | File | What Changes | Why |
 |------|-------------|-----|
-| `trajectories.jl` | Fix `build_trajectoryframework` scope bug (line 53: `trotter` undefined). Add `R_per_jump` field to `TrajectoryFramework`. Restructure dissipative-jump branch in `step_along_trajectory!` for two-stage sampling. | Core sampling fix. |
-| `structs.jl` | No changes needed (TrajectoryFramework is in trajectories.jl, not structs.jl) | -- |
+| `src/trajectories.jl` | Add `rng::AbstractRNG` parameter to `step_along_trajectory!` (default: `Random.default_rng()`) | Thread-safe RNG for parallel execution |
+| `src/QuantumFurnace.jl` | Add `include` for new files, export new public API | Module registration |
+| `Project.toml` | Add `JLD2` dependency | Experiment result serialization |
 
-### Unchanged Files (Used As-Is by Tests)
+### Unchanged Files
 
-All other source files remain unchanged. Tests exercise them as black boxes through the existing public API.
+Every other source file remains unchanged. The GNS trajectory path works through existing dispatch without modification. The key insight is that `ThermalizeConfigGNS <: AbstractThermalizeConfig`, so all trajectory functions that dispatch on `AbstractThermalizeConfig` already accept GNS configs. The GNS-specific behavior (unshifted transition, no B term) is delivered by:
+1. `pick_transition(config::ThermalizeConfigGNS)` returning the unshifted gamma
+2. `config.with_coherent == false` causing B term precomputation to be skipped
 
-## Build Order: Dependency-Aware Sequencing
-
-The dependency between the trajectory fix and the test suite determines build order:
+## Data Flow: End-to-End for a KMS-vs-GNS Experiment
 
 ```
-Phase 0: Test infrastructure (no dependency on trajectory fix)
+[ExperimentSpec(n=4, db=:KMS)]
     |
-    +-- test/runtests.jl
-    +-- test/test_helpers.jl
-    +-- test/test_detailed_balance.jl   (uses only DM / Liouvillian)
-    +-- test/test_coherent_term.jl      (uses only B computation)
-    +-- test/test_oft_consistency.jl    (uses only OFT)
-    +-- test/test_dm_step_errors.jl     (uses only DM stepping)
+    v
+[load_hamiltonian("heis", 4; beta=10.0)]  -->  HamHam{Float64}
     |
-    All of these can be written and run BEFORE fixing trajectories.
-    They validate the known-good DM path and establish reference values.
-
-Phase 1: Fix trajectory sampling (depends on understanding from Phase 0 tests)
+    v
+[build_standard_jumps(ham, 4)]  -->  Vector{JumpOp} (12 jumps)
     |
-    +-- Fix build_trajectoryframework scope bug
-    +-- Add R_per_jump precomputation
-    +-- Restructure step_along_trajectory! for two-stage sampling
-    +-- Quick smoke test: single trajectory doesn't crash
+    v
+[build_config(spec)]  -->  ThermalizeConfig{EnergyDomain, Float64}
+    |                       (with_coherent=true for KMS)
+    v
+[_precompute_data(config, ham)]  -->  NamedTuple (transition, energy_labels, gamma_norm_factor)
     |
-    Run Phase 0 tests to verify nothing is broken.
-
-Phase 2: Trajectory validation tests (depends on Phase 1)
+    v
+[build_trajectoryframework(jumps, ham, config, precomputed, scratch, delta)]
+    |                       -->  TrajectoryFramework (per_operator with U_B matrices)
+    v
+[run_trajectories_parallel(jumps, config, psi0, ham; ntraj=10000)]
     |
-    +-- test/test_trajectory.jl         (trajectory average matches DM)
-    +-- test/test_traj_vs_dm.jl         (error hierarchy in trajectories)
+    |  BLAS.set_num_threads(1)
     |
-    These can only be written after the sampling fix.
-
-Phase 3: Cleanup
+    |  Create nthreads() ThreadTrajectoryState instances
     |
-    +-- Remove ~200 lines of commented-out code in jump_workers.jl, trajectories.jl
-    +-- Remove old KrausFramework, precompute_kraus_jumps, etc.
+    |  @threads for batch in 1:ntraj
+    |      state = thread_states[threadid()]
+    |      copyto!(state.psi, psi0)
+    |      _evolve_along_trajectory!(state.psi, fw, total_time, state.rng)
+    |      _accumulate_density_matrix!(state.rho_local, state.psi)
+    |      (optional: _accumulate_measurements!(...))
+    |  end
+    |
+    |  Reduce: rho_mean = sum(state.rho_local for state in thread_states) / ntraj
+    |
+    v
+[ExperimentResult(config, rho_mean, trace_dist_to_gibbs, ...)]
+    |
+    v
+[save_experiment(result, "kms_n4_beta10.jld2")]
+
+
+[ExperimentSpec(n=4, db=:GNS)]
+    |
+    v
+... same pipeline but with ThermalizeConfigGNS ...
+    |
+    |  pick_transition dispatches to _pick_transition_gns (unshifted gamma)
+    |  config.with_coherent=false -> per_op.U_B === nothing (no B term)
+    |
+    v
+[ExperimentResult(config_gns, rho_mean_gns, ...)]
+    |
+    v
+[save_experiment(result, "gns_n4_beta10.jld2")]
+
+
+COMPARISON:
+    load both results
+    compare trace_dist_to_gibbs: KMS vs GNS
+    compare observable time series
+    compare convergence rates
 ```
 
-**Why this order:**
-1. Phase 0 establishes the DM reference values that Phase 2 will compare against. If DM tests fail, we know the bug is in DM code (not trajectories), which saves debugging time.
-2. Phase 1 cannot be properly tested without the DM reference oracle from Phase 0.
-3. Phase 2 depends on Phase 1 (fixed sampling) and Phase 0 (reference values).
-4. Phase 3 is cosmetic and should only happen after validation confirms correctness.
+## Suggested Build Order
 
-## Known Bugs to Fix Before Validation
+Based on dependency analysis:
 
-### Bug 1: `build_trajectoryframework` Scope Error (trajectories.jl:53)
+### Phase 1: RNG Signature Change (enables all subsequent work)
 
-```julia
-# Line 48: function signature has `where T` but T is not used
-function build_trajectoryframework(
-    jumps::AbstractVector{<:JumpOp},
-    ham_or_trott::Union{HamHam, TrottTrott},
-    config::AbstractThermalizeConfig,
-    precomputed_data,
-    scratch::KrausScratch{ComplexF64},
-    delta::Float64) where T    # <-- T is unused, remove `where T`
+**Modify:** `step_along_trajectory!` to accept `rng::AbstractRNG = Random.default_rng()`.
 
-# Line 53: `trotter` variable is not defined in this scope
-    B_total = precompute_coherent_total_B(jumps, ham_or_trott, config, precomputed_data; trotter=trotter)
-    #                                                                                    ^^^^^^^
-    # `trotter` was never passed in. Should be removed or derived from ham_or_trott.
-```
+This is a 2-line change per domain variant (replace `rand()` -> `rand(rng)`, `rand(1:fw.n_jumps)` -> `rand(rng, 1:fw.n_jumps)`). No behavioral change for existing callers.
 
-**Fix:** Remove `where T` from the signature. Remove `; trotter=trotter` from the `precompute_coherent_total_B` call -- this function already receives `ham_or_trott` which is either `HamHam` or `TrottTrott`, and `precompute_coherent_total_B` already handles both cases via its domain dispatch (line 23-36 of coherent.jl).
+**Files modified:** `trajectories.jl`
+**Depends on:** Nothing
+**Enables:** Phase 2 (parallel execution)
 
-### Bug 2: Coherent Unitary Applied AFTER Branching (trajectories.jl:472-477)
+### Phase 2: Multi-Threaded Trajectory Engine
 
-In `step_along_trajectory!`, the coherent unitary `U_B` is applied **after** computing `K0*psi` and the branch probabilities, but **before** the branch is taken. This means the branching probabilities are computed on the pre-U_B state, but the post-branch state includes U_B. The DM version (`jump_contribution!` in jump_workers.jl line 163-169) applies U_B **before** everything else, which is the correct order.
+**New:** `parallel_trajectories.jl` with `ThreadTrajectoryState` and `run_trajectories_parallel`.
 
-**Fix:** Move the U_B application block to the very beginning of `step_along_trajectory!`, before computing `Rpsi` and `K0*psi`. This matches the DM code.
+**Files new:** `src/parallel_trajectories.jl`
+**Depends on:** Phase 1 (RNG parameter)
+**Enables:** Phase 4 (experiments)
 
-```julia
-# CORRECT ORDER:
-# 1. Apply U_B (coherent unitary)
-# 2. Compute R*psi, K0*psi, p_nojump, p_res, p_jump_total
-# 3. Branch
-```
+### Phase 3: GNS Trajectory Verification
 
-### Bug 3: Coherent Term Variable Name Mismatch (trajectories.jl:96)
+**New:** Tests confirming GNS trajectory path works. No source changes needed.
 
-```julia
-# Line 96: passes B_total but the variable was defined on line 54 as B_total
-return TrajectoryFramework(
-    ...
-    B_total,    # This is the B matrix
-    U_B,        # exp(-i delta B_total) -- correct
-    ...
-)
-```
+**Files new:** `test/test_gns_trajectory.jl` or section in existing test file
+**Depends on:** Nothing (GNS dispatch already works)
+**Enables:** Phase 4 (experiments need both KMS and GNS)
 
-When `config.with_coherent == false`, `B_total` is never assigned (the `if` block is skipped). The `TrajectoryFramework` constructor would receive an undefined variable. Need to add `B_total = nothing` before the `if` block, or restructure.
+### Phase 4: Experiment Data Model + Serialization
 
-**Fix:**
-```julia
-B_total = nothing
-if config.with_coherent
-    B_total = precompute_coherent_total_B(jumps, ham_or_trott, config, precomputed_data)
-    B_total .= 0.5 .* (B_total .+ B_total')
-    U_B = exp(-1im * delta * Hermitian(B_total))
-else
-    U_B = nothing
-end
-```
+**New:** `experiment_types.jl` with `ExperimentResult`, `ExperimentSpec`, save/load.
 
-## Patterns for This Milestone
+**Files new:** `src/experiment_types.jl`
+**Depends on:** Nothing (pure data types)
+**Enables:** Phase 5 (adaptive sampling), Phase 6 (experiments)
 
-### Pattern: Reference Oracle Testing
+### Phase 5: Adaptive Sampling
 
-**What:** Test correctness by comparing a new computation against an established reference implementation at a coarser approximation level.
+**New:** `adaptive_sampling.jl` with `AdaptiveBatchManager`, convergence criteria.
 
-**When to use:** Every layer of the error hierarchy.
+**Files new:** `src/adaptive_sampling.jl`
+**Depends on:** Phase 2 (parallel trajectories), Phase 4 (result types)
+**Enables:** Phase 6 (experiments use adaptive sampling)
 
-**How it works in QuantumFurnace:**
+### Phase 6: KMS-vs-GNS Experiment Runner
 
-```
-Bohr (exact) --reference-for--> Energy (check: ||Bohr - Energy|| < tol_quadrature)
-Energy       --reference-for--> Time   (check: ||Energy - Time||  < tol_time)
-Time         --reference-for--> Trotter(check: ||Time - Trotter|| < tol_trotter)
-DM mode      --reference-for--> Trajectory (check: ||DM_rho - Traj_rho|| < tol_stat)
-```
+**New:** `experiments/kms_vs_gns.jl` script.
 
-Each test uses the next-higher level as an oracle. This is possible because the higher-level computations are already validated and working.
-
-### Pattern: Statistical Tolerance with Confidence Bounds
-
-**What:** Trajectory tests are inherently statistical. Use `ntraj` large enough that the standard error `~1/sqrt(ntraj)` is well below the tolerance.
-
-**Rule of thumb:** For tolerance `tol`, use `ntraj >= 4 / tol^2`. For `tol = 0.05`, need `ntraj >= 1600`. For `tol = 0.1`, need `ntraj >= 400`.
-
-**Trade-off:** More trajectories = slower tests. Use smaller `ntraj` (100-500) for quick CI, larger (1000-5000) for thorough validation runs.
-
-### Pattern: Error Monotonicity Assertion
-
-**What:** Assert that errors increase monotonically along the approximation hierarchy. If `error(Energy) > error(Time)`, something is wrong -- the extra approximation in Time should make things worse, not better.
-
-**Implementation:**
-```julia
-@test dist_bohr < dist_energy < dist_time < dist_trotter
-```
-
-This is a powerful diagnostic: it catches both bugs in individual domains AND bugs in the error analysis.
+**Files new:** `experiments/kms_vs_gns.jl`, `experiments/analyze_results.jl`
+**Depends on:** All previous phases
+**Enables:** Paper results
 
 ## Anti-Patterns to Avoid
 
-### Anti-Pattern: Testing Against Hardcoded Numerical Values
+### Anti-Pattern: Shared Mutable State in @threads Loop
 
-**What people do:** `@test norm(B_bohr) == 0.0023456789` (hardcoded from a previous run).
+**What goes wrong:** Two threads write to the same `rho_mean` accumulator matrix without synchronization. Data race produces incorrect results silently (no crash, just wrong numbers).
 
-**Why it's wrong:** Numerical values depend on the specific Hamiltonian realization (which uses random disorder coefficients via `find_ideal_heisenberg`). If the BSON file changes or the random seed differs, all tests break even though the code is correct.
+**Prevention:** Each thread has its own `rho_local` accumulator. Merge after the loop completes. Never use `@threads` with a shared mutable accumulator unless using `Threads.Atomic` or locks.
 
-**Do this instead:** Test *relationships* (e.g., `||B_bohr - B_time|| < tolerance`) and *properties* (e.g., `B == B'` for Hermiticity). Use the deterministic `load_hamiltonian("heis", n)` which loads from a fixed BSON file, not random generation.
+### Anti-Pattern: Global RNG in Parallel Code
 
-### Anti-Pattern: Single Tolerance for All Tests
+**What goes wrong:** All threads share `Random.default_rng()`, producing correlated random streams and non-reproducible results. In Julia >= 1.7, TaskLocalRNG is per-task, but `@threads` tasks may share RNG state depending on scheduler.
 
-**What people do:** `const TOL = 1e-8` used everywhere.
+**Prevention:** Explicitly construct per-thread RNGs with independent seeds. Pass as argument to `step_along_trajectory!`.
 
-**Why it's wrong:** The error hierarchy spans 10+ orders of magnitude. A tolerance tight enough for Bohr (1e-12) will fail for Trotter (1e-2). A tolerance loose enough for Trotter (1e-2) won't catch bugs in Bohr.
+### Anti-Pattern: Saving Results Only at the End
 
-**Do this instead:** Use tiered tolerances as shown in `test_helpers.jl` above. Each test tier has a tolerance that matches its expected error level.
+**What goes wrong:** A 10-hour n=8 experiment crashes at hour 9. All results lost.
 
-### Anti-Pattern: Testing Only Convergence to Gibbs
+**Prevention:** Save after each experiment point. Use `jldsave` with unique filenames per spec. Implement resume logic (check if output file exists, skip if so).
 
-**What people do:** Only test `trace_distance(rho, gibbs) < tolerance` at the end of a long simulation.
+### Anti-Pattern: Monolithic Experiment Script
 
-**Why it's wrong:** This is a weak test -- many bugs still converge to something near Gibbs. It doesn't catch: wrong convergence rate, wrong spectral gap, transient errors, or sampling bias that averages out over long time.
+**What goes wrong:** Experiment logic, trajectory engine, data types, and analysis all in one 500-line script. Cannot test components independently. Cannot reuse trajectory engine without experiment boilerplate.
 
-**Do this instead:** Test intermediate properties too: error scaling with delta, DM vs trajectory agreement at intermediate times, convergence rate consistency with spectral gap.
+**Prevention:** Library code in `src/` (importable, testable), experiment scripts in `experiments/` (use the library).
 
 ## Sources
 
-- Direct codebase analysis of all 23 source files in `src/`
-- Direct analysis of all 7 test files in `test/`
-- Direct analysis of simulation scripts in `simulations/`
-- Direct analysis of playground scripts (especially `unraveling.jl`)
-- Chen, Kastoryano, Gilyen (2025) -- KMS detailed balance construction, Theorem III.1 on delta-step errors
-- Chen, Kastoryano, Brandao, Gilyen (2023) -- approximate GNS construction, error hierarchy
-- Julia Test module documentation -- `@testset`, `@test`, `runtests.jl` standard
-- QuantumOptics.jl `test/` structure -- pattern for quantum simulation test suites
+- Direct codebase analysis of all 23 source files in QuantumFurnace.jl `src/`
+- Direct analysis of all test files in `test/`
+- [Julia Multi-Threading Documentation](https://docs.julialang.org/en/v1/manual/multi-threading/)
+- [Julia for HPC: Multithreading](https://enccs.github.io/julia-for-hpc/multithreading/) -- BLAS thread management patterns
+- [JLD2.jl Documentation](https://juliaio.github.io/JLD2.jl/stable/) -- struct serialization, HDF5 compatibility
+- [Julia Random Numbers Documentation](https://docs.julialang.org/en/v1/stdlib/Random/) -- TaskLocalRNG, per-thread RNG
+- [Reproducible Multithreaded Monte Carlo Discussion](https://discourse.julialang.org/t/reproducible-multithreaded-monte-carlo-task-local-random/35269) -- per-task RNG patterns
+- [BLAS Thread Overhead Issue](https://github.com/JuliaLang/julia/issues/43292) -- BLAS.set_num_threads(1) for multi-threaded code
+- [ITensors.jl Multithreading Guide](https://itensor.github.io/ITensors.jl/dev/Multithreading.html) -- BLAS thread disabling pattern
+- [Carlo.jl Framework (2025)](https://arxiv.org/abs/2408.03386) -- Monte Carlo simulation framework design patterns
+- [DifferentialEquations.jl Parallel Monte Carlo](https://docs.sciml.ai/release-4.6/features/monte_carlo.html) -- multi-threaded trajectory patterns
 
 ---
-*Architecture research for: Trajectory validation and test suite integration (v1.0 Trajectories milestone)*
-*Researched: 2026-02-13*
+*Architecture research for: Multi-threaded trajectory engine + GNS path + adaptive sampling + experiments (v1.1 milestone)*
+*Researched: 2026-02-15*

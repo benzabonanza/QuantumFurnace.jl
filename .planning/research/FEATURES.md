@@ -1,12 +1,12 @@
-# Feature Research: Trajectory Simulation Validation and Testing
+# Feature Research: v1.2 Multi-threaded Trajectory Engine and KMS-vs-GNS Experiments
 
-**Domain:** Quantum trajectory (MCWF) validation for Gibbs sampling Lindbladians
-**Researched:** 2026-02-13
-**Confidence:** HIGH (codebase analysis + Chen et al. papers + established MCWF literature + QuantumOptics.jl/QuantumToolbox.jl reference implementations)
+**Domain:** Multi-threaded quantum trajectory sampling, GNS trajectory path, adaptive convergence, per-observable tracking, KMS-vs-GNS comparison experiments for quantum Gibbs samplers
+**Researched:** 2026-02-15
+**Confidence:** HIGH (codebase analysis + Chen 2023/2025 papers + established MCWF literature + condensed matter physics of Heisenberg chains)
 
 ## Scope
 
-This research covers features needed for the **v1.0 Trajectories milestone**: fixing the trajectory sampling bug, validating trajectory averages against density matrix evolution, and building a comprehensive correctness test suite. It does NOT cover general package features (CI, docs, Hamiltonians, circuit generation) already addressed in previous project-level research.
+This research covers features needed for the **v1.2 Multi-threading milestone**: multi-threaded trajectory engine with shared precomputed data, GNS trajectory path (approximate, no B term), adaptive sampling until convergence, per-observable convergence tracking, data architecture for saving experiments, and KMS-vs-GNS comparison experiments. It builds on the validated trajectory infrastructure from v1.0 and the cleaned codebase from v1.1.
 
 ---
 
@@ -14,335 +14,533 @@ This research covers features needed for the **v1.0 Trajectories milestone**: fi
 
 ### Table Stakes (Must Have for Milestone Completion)
 
-Features without which the trajectory implementation cannot be trusted or published.
+Features without which the milestone goals cannot be met.
 
 | Feature | Why Expected | Complexity | Dependencies |
 |---------|--------------|------------|--------------|
-| **Two-stage jump sampling fix** | Current code samples flat from (a, omega) Kraus pair pool. Physically, one must first pick Lindblad operator A^a with probability proportional to its total jump rate, then sample omega within that operator. Flat sampling produces incorrect jump statistics -- the density matrix average will not converge to the master equation solution. | MEDIUM | Existing `step_along_trajectory!` in `trajectories.jl` |
-| **Single-step CPTP verification** | Each delta-step must be a valid CPTP map. The weak measurement scheme (Chen CKBG23 Theorem III.1) guarantees that sum(K_i^dag K_i) = I to O(delta^2). Must verify: `K0^dag K0 + delta*R + U_res^dag U_res = I` numerically. Without this, accumulating steps amplifies unitarity violations. | LOW | `build_trajectoryframework`, `precompute_R` |
-| **Trajectory-averaged rho vs DM evolution** | The defining correctness criterion: rho_traj = (1/N) sum_n psi_n psi_n^dag must converge to rho_DM from `run_thermalize()` for the same parameters. Statistical error scales as 1/sqrt(N_traj). This is what "validation" means for trajectory simulation. | MEDIUM-HIGH | Two-stage sampling fix, `run_thermalize()`, `run_trajectories()` |
-| **Trace distance and fidelity between trajectory rho and DM rho** | Standard metrics for comparing quantum states. Trace distance T(rho, sigma) = 0.5 * ||rho - sigma||_1 and fidelity F(rho, sigma) = (tr sqrt(sqrt(rho) sigma sqrt(rho)))^2. Both are needed to quantify agreement. `qi_tools.jl` already has `trace_distance_h` and `fidelity`. | LOW | Existing `qi_tools.jl` functions |
-| **Detailed balance preservation test (DM)** | For the KMS construction (with_coherent=true), the Lindbladian satisfies exact detailed balance: L_beta^dag[.] = rho_beta^(1/4) L_beta[rho_beta^(-1/4) . rho_beta^(-1/4)] rho_beta^(1/4). The fixed point of the Liouvillian must be exactly the Gibbs state. Test: `trace_distance(fixed_point, gibbs) < tol` for BohrDomain. For approximate domains, the error should match the predicted error budget. | LOW | `run_lindbladian`, `gibbs_state` |
-| **Domain error hierarchy test** | The core theoretical structure: Bohr (exact DB) -> Energy (+quadrature error) -> Time (+time quadrature error) -> Trotter (+Trotter error). Must verify that errors are monotonically non-decreasing along this chain: `dist_bohr <= dist_energy <= dist_time <= dist_trotter`. | MEDIUM | All four domains working, `run_lindbladian` or `run_thermalize` for each |
-| **Single-step DM error scaling test** | Per Chen CKBG23 Theorem III.1: the single-step weak measurement scheme produces a channel O(delta^2)-close to (I + delta*L) in diamond norm. Must verify empirically that single-step DM error scales as delta^2 (not delta). | LOW | `jump_contribution!` for thermalize configs, single step application |
-| **Multi-step DM error scaling test** | Over M = t/delta steps, the accumulated error is O(delta) = O(t^2/M) in diamond norm. Chen Theorem III.1 gives t^2/epsilon cost. Verify: doubling steps (halving delta) at fixed total_time halves the total DM error to Gibbs. | LOW-MEDIUM | `run_thermalize` with varying delta |
-| **Statistical convergence test** | Verify that the standard error of the trajectory ensemble mean decreases as 1/sqrt(N_traj). Run N trajectories, compute trace distance to DM result, check that doubling N halves the standard error. | MEDIUM | Fixed trajectory sampling, multiple runs |
-| **Coherent term (U_B) correctness for trajectories** | The deterministic coherent unitary U_B = exp(-i delta B_total) must be applied at each step. For with_coherent=true, omitting U_B breaks detailed balance. Test: with_coherent=true TrotterDomain should reach <= 1e-6 distance to Gibbs; without coherent term, it should be much worse. | LOW | `build_trajectoryframework`, coherent term computation |
-| **build_trajectoryframework bug fixes** | The current `build_trajectoryframework` has a bug: the `trotter` variable is referenced but not in scope (line 53: `trotter=trotter`). Also, `B_total` is used before being assigned when `with_coherent=false`. These are compilation errors that prevent any trajectory simulation. | LOW | Direct code fixes in `trajectories.jl` |
+| **Multi-threaded trajectory sampling** | Thousands of trajectories needed for statistics at n=8 (dim=256); serial execution impractical. Each trajectory is independent -- embarrassingly parallel. Must share precomputed data (R, K0, U_res, NUFFT prefactors) read-only across threads. | MEDIUM | Existing `run_trajectories`, `TrajectoryFramework`, `TrajectoryWorkspace` |
+| **Per-thread TrajectoryWorkspace** | The `TrajectoryWorkspace` contains mutable scratch buffers (`jump_oft`, `psi_tmp`, `Rpsi`). Cannot be shared across threads. Each thread needs its own workspace; the `TrajectoryFramework` minus workspace can be shared read-only. | LOW | `TrajectoryWorkspace` struct refactor |
+| **Per-thread RNG** | `rand()` in `step_along_trajectory!` must use thread-local RNG to avoid contention and ensure reproducibility. Julia's default `TaskLocalRNG` is already thread-safe since Julia 1.7, but explicit seeding per thread is needed for reproducibility. | LOW | Julia Base.Threads, StableRNGs or TaskLocalRNG |
+| **GNS trajectory path** | GNS (approximate detailed balance, no B term) trajectories are the comparison baseline for the paper. The `ThermalizeConfigGNS` struct already exists and `pick_transition` dispatches correctly, but `build_trajectoryframework` and `step_along_trajectory!` currently only handle `ThermalizeConfig` (KMS). Must extend to `ThermalizeConfigGNS`. | MEDIUM | `ThermalizeConfigGNS`, existing trajectory machinery, `_pick_transition_gns` |
+| **Density matrix accumulation from trajectories** | Average rho = (1/N) sum |psi><psi| across all trajectories. Already exists in `run_trajectories` (serial). Must be thread-safe: each thread accumulates locally, then reduce. | LOW | Multi-threaded trajectory sampling |
+| **Trace distance to Gibbs tracking** | The primary convergence metric: `trace_distance_h(rho_avg, gibbs)` at periodic intervals during the sampling. Existing `trace_distance_h` works on Hermitian matrices. Need to compute the running average and measure periodically. | LOW | `trace_distance_h`, density matrix accumulation |
+| **Per-observable convergence tracking** | Track expectation values `<O_i>` from trajectory averages. Essential for the paper: shows which physical quantities converge fastest, and where KMS advantage is most visible. `run_trajectories` already has `observables` parameter and `_accumulate_measurements!` -- needs multi-threaded extension and batch-level tracking. | MEDIUM | Observable definitions, multi-threaded trajectory, density matrix accumulation |
+| **Adaptive sampling (run batches until converged)** | Run trajectory batches until a convergence criterion is met, rather than pre-specifying N_traj. Criterion: standard error of the mean trace distance (or observable) falls below a threshold. | MEDIUM | Trace distance tracking, per-observable tracking |
+| **Data architecture for experiment results** | Save convergence curves, configs, final density matrices, per-observable time series. Must support parameter sweeps (beta, n, KMS vs GNS). Serialization format: BSON (already a dependency) or JLD2. | MEDIUM | All convergence tracking features |
+| **KMS-vs-GNS experiment driver** | Script that runs matched experiments: same Hamiltonian, same beta, same delta, same N_traj -- one with KMS (with_coherent=true, ThermalizeConfig) and one with GNS (ThermalizeConfigGNS). Compares final trace distances, convergence rates, per-observable errors. | LOW-MEDIUM | All above features, GNS trajectory path |
 
 ### Differentiators (Valuable but Not Blocking)
 
-Features that strengthen the validation but are not strictly required for milestone sign-off.
+Features that strengthen the paper results but are not strictly required for milestone sign-off.
 
 | Feature | Value Proposition | Complexity | Dependencies |
 |---------|-------------------|------------|--------------|
-| **OFT consistency check across domains** | Verify that the operator Fourier transform A_omega computed via Gaussian filter (EnergyDomain) and via NUFFT prefactors (Time/TrotterDomain) agree to quadrature precision for each jump operator. This catches NUFFT bugs early. | LOW | `oft!`, `prefactor_view`, OFT NUFFT machinery |
-| **R matrix consistency check** | The reflection operator R = sum_k L_k^dag L_k must be the same whether computed by the Liouvillian pathway or the trajectory pathway (`precompute_R`). Cross-validate for each domain. | LOW | `precompute_R` in `trajectories.jl`, R computation in `jump_workers.jl` |
-| **Per-observable trajectory convergence** | Beyond the full density matrix comparison: track individual observable expectations <O_i>(t) from trajectories vs DM, e.g. local magnetization <Z_i>. The `run_trajectories` function already supports `observables` parameter but it is untested. | LOW-MEDIUM | Observable measurement machinery in `run_trajectories` |
-| **Jump statistics histogram** | Record which (a, omega) outcomes are selected across many trajectories. Verify that the empirical distribution matches the theoretical rates: P(a, omega) proportional to delta * rate^2(omega) * ||A_omega psi||^2. This directly tests the two-stage sampling correctness. | MEDIUM | Two-stage sampling fix, histogram analysis code |
-| **Regression test with frozen reference data** | Compute trajectory-averaged rho for a fixed (seed, parameters, system) and store the result. Future code changes must reproduce this within tolerance. Catches silent regressions. | LOW | One successful trajectory validation run |
-| **Normalization drift monitoring** | Track ||psi||^2 across trajectory steps. After each step, psi is re-normalized, but the pre-normalization norm reveals whether the CPTP map is well-conditioned. Large deviations (||psi||^2 far from 1) indicate numerical issues. | LOW | Minor instrumentation in `step_along_trajectory!` |
-| **Multi-threaded trajectory validation** | Verify that multi-threaded trajectory accumulation produces the same rho_mean as serial execution (up to statistical noise). Catches race conditions in shared workspace. | MEDIUM | Thread-safe trajectory framework, `Base.Threads` |
-| **Diamond norm channel comparison** | The strongest metric: compare the DM channel E_DM (one thermalization step) to the trajectory-averaged channel E_traj as superoperators using diamond norm. More rigorous than comparing output states for a single input. But diamond norm computation is expensive (SDP). | HIGH | Channel tomography (run DM step on basis states), SDP solver (SCS.jl or similar) |
-| **Confidence interval for trace distance** | Report statistical uncertainty on the trajectory-vs-DM comparison. Use bootstrap resampling or the analytic 1/sqrt(N) bound on the ensemble mean. Enables quantitative statements like "trajectory rho agrees with DM rho to trace distance 0.01 +/- 0.003". | LOW-MEDIUM | Multiple trajectory runs, basic statistics |
+| **Convergence curve plotting** | Paper-ready convergence plots: trace distance vs. N_traj for KMS and GNS on same axes. Shows the advantage visually. | LOW-MEDIUM | Data architecture, Plots.jl or Makie.jl |
+| **Bootstrap confidence intervals on trace distance** | Report error bars on convergence curves. Standard bootstrap from trajectory sub-batches. Makes paper results quantitative rather than visual. | LOW-MEDIUM | Multi-threaded trajectory, batch accumulation |
+| **Hamiltonian simulation cost accounting** | Count total Hamiltonian simulation time (sum of all t0 * num_trotter_steps used) per Gibbs sample. The paper theory predicts O_tilde(beta) cost per unit Lindbladian evolution; empirical verification strengthens the paper. | MEDIUM | Instrumentation in step_along_trajectory! |
+| **Spectral gap measurement for mixing time** | Compute the Liouvillian spectral gap for each (n, beta, KMS/GNS) configuration. Predicts mixing time = O(1/gap). For n=4,6 this is feasible via full Liouvillian; for n=8, only trajectory-based mixing time estimation works. | MEDIUM-HIGH | `run_lindbladian` (n<=6), trajectory convergence rate fitting (n=8) |
+| **Multiple initial states** | Run from maximally mixed state (standard) and from random pure states. Convergence from different initial states strengthens claims about mixing. | LOW | Initial state selection in experiment driver |
 
 ### Anti-Features (Do Not Build for This Milestone)
 
-| Feature | Why It Seems Useful | Why Problematic for This Milestone | What to Do Instead |
-|---------|--------------------|------------------------------------|-------------------|
-| **Continuous-time MCWF (adaptive timestep)** | Standard in QuantumOptics.jl and QuantumToolbox.jl. Detects jump times exactly instead of using fixed delta steps. | QuantumFurnace's algorithm is inherently discrete-time: the CPTP map is designed for fixed delta-steps per Chen's weak measurement scheme. Adaptive timestep would require a fundamentally different formulation (continuous H_eff propagation + jump detection), which contradicts the theoretical framework. | Keep the fixed-delta-step structure. It is the physically correct unraveling of the Chen channel, not an approximation of continuous dynamics. |
-| **Bohr domain trajectories** | "Why not validate trajectories in the exact (Bohr) domain too?" | The BohrDomain Lindbladian uses a non-standard dissipative structure (the alpha(bohr_freqs, nu) weighting creates cross-frequency coupling). Diagonalizing the resulting Kossakowski matrix to extract independent Kraus operators is computationally prohibitive for >3 qubits. The project context explicitly excludes Bohr for trajectories. | Validate Bohr only via DM methods (`run_lindbladian`, `run_thermalize`). Use Energy/Time/Trotter for trajectory validation. |
-| **Quantum state tomography from trajectories** | "Reconstruct rho from measurement outcomes, not from psi*psi^dag averaging." | This conflates two different things. Trajectory averaging of |psi><psi| is the exact unraveling -- it should give rho directly. Tomography from measurement outcomes is a much harder problem (needs many measurement bases, maximum likelihood estimation). It is a different validation target. | Use direct psi*psi^dag averaging. It is both correct and computationally cheaper. |
-| **Large system trajectory benchmarks (>6 qubits)** | "Show it works at scale." | Validation requires comparing against DM results, which means computing the full density matrix anyway. For >6 qubits the DM is 64x64 to 4096x4096 -- still feasible but slow. The point of this milestone is correctness, not performance. Use small systems (2-4 qubits) where exact comparison is fast. | Validate on 2-4 qubit Heisenberg. Add 5-6 qubit tests as regression tests with looser tolerances. Performance benchmarks belong in a later milestone. |
-| **Non-Hermitian jump operator support in trajectories** | The JumpOp struct has a `hermitian` flag. Non-Hermitian jumps follow a different code path. | The Heisenberg model with single-site Pauli jump operators (X, Y, Z) uses exclusively Hermitian jumps. Testing non-Hermitian paths requires constructing artificial systems. It is lower priority than validating the Hermitian path that all target systems use. | Test Hermitian path thoroughly first. Add non-Hermitian tests in a follow-up if needed for Ding et al. (2024) extensions. |
+| Feature | Why Requested | Why Problematic | Alternative |
+|---------|---------------|-----------------|-------------|
+| **GPU acceleration for trajectories** | "Matrix-vector products would be faster on GPU for dim=256" | dim=256 is far too small for GPU advantage; GPU kernel launch overhead dominates. GPU is only worthwhile at dim > ~4096 (n >= 12). All current targets are n <= 8. | Use multi-threaded CPU. Profile first; BLAS threading with MKL/OpenBLAS handles dim=256 matrix-vector products in microseconds. |
+| **Distributed (MPI) trajectory sampling** | "Use cluster nodes for more parallelism" | Single-node multi-core is sufficient for N_traj ~ 10^4-10^5. MPI adds serialization overhead for precomputed data. The precomputed data (NUFFT prefactors, per-operator Kraus) is read-only and fits in single-node memory. | Use `Threads.@threads` or `Threads.@spawn` on a single node with 16-64 cores. For parameter sweeps, launch independent Julia processes per (n, beta) point. |
+| **Automatic Hamiltonian generation for n=6,8** | "Generate Heisenberg Hamiltonians on the fly" | For publication-quality results, Hamiltonians should be pre-generated with `find_ideal_heisenberg` (optimized disorder) and saved via BSON. On-the-fly generation adds variability across runs and makes results non-reproducible. | Pre-generate and save n=4,6,8 Hamiltonians once. Load them for all experiments. Already done for n=3,4 in `hamiltonians/` directory. |
+| **Continuous-time adaptive timestep** | "Adaptive delta for faster convergence" | QuantumFurnace implements Chen's discrete-time CPTP map unraveling, not continuous-time MCWF. Adaptive timestep would require a fundamentally different formulation. The convergence rate is determined by the Lindbladian gap, not the timestep. | Keep fixed delta. Use small enough delta (~1e-3) to keep discretization error negligible, then rely on number of steps for convergence. |
+| **Float32 trajectories for speed** | "Half the memory, twice the throughput" | Float32 gives only ~7 decimal digits of precision. The PSD guard in TrajectoryFramework clamps eigenvalues near zero; at Float32 precision, floating-point noise could create negative probabilities. The trace distance to Gibbs at high beta is ~1e-6 for KMS -- below Float32 noise floor. | Keep Float64. The type parameterization from v1.1 enables Float32 paths in the future if someone needs them for very large systems, but the current paper targets do not benefit. |
 
 ---
 
 ## Feature Details
 
-### Two-Stage Jump Sampling (Critical Bug Fix)
+### Multi-threaded Trajectory Sampling
 
-**Current behavior (WRONG):** The `step_along_trajectory!` function iterates over all `(jump, omega)` pairs in a flat cumulative scan:
+**Architecture:** The key insight is that trajectories are embarrassingly parallel. Each trajectory is a sequence of independent `step_along_trajectory!` calls on a private `psi` vector, using a private `TrajectoryWorkspace` for scratch buffers and a private RNG.
+
+The shared read-only data is:
+- `TrajectoryFramework` fields: `per_operator` (Vector of PerOperatorKraus -- R, K0, U_residual, U_B matrices), `jumps`, `precomputed_data` (NUFFT prefactors, transition function, energy labels), `delta`, `delta_eff`, `alpha`, `n_jumps`
+- These are all immutable or read-only during trajectory stepping
+
+The per-thread mutable data is:
+- `psi`: Vector{ComplexF64} (dim,) -- the evolving state
+- `TrajectoryWorkspace`: `jump_oft` (dim x dim), `psi_tmp` (dim,), `Rpsi` (dim,)
+- RNG state
+
+**Implementation pattern:**
+```julia
+# Build framework once (shared across threads)
+fw = build_trajectoryframework(...)
+
+# Each thread gets its own workspace and psi
+Threads.@threads for traj_id in 1:ntraj
+    ws = TrajectoryWorkspace(ComplexF64, dim)  # per-thread
+    psi = copy(psi0)
+    rng = StableRNG(seed + traj_id)  # per-thread deterministic
+
+    for step in 1:num_steps
+        step_along_trajectory!(psi, fw, ws, rng)  # pass workspace explicitly
+    end
+
+    # Thread-local accumulation
+    lock(acc_lock) do
+        rho_acc .+= psi * psi'
+    end
+    # OR: accumulate into thread-local buffer, reduce after
+end
 ```
-for jump in fw.jumps
-    for w in energy_labels
-        p = delta * rate2(w) * ||A_omega psi||^2
-        csum += p
-        if csum >= target: select this outcome
+
+**Refactoring needed:** Currently `TrajectoryFramework` embeds a single `TrajectoryWorkspace` (`fw.ws`). For multi-threading, the workspace must be passed separately or cloned per thread. Two options:
+1. **Separate workspace from framework:** `step_along_trajectory!(psi, fw, ws)` -- cleanest, requires signature change
+2. **Clone framework per thread:** Each thread gets a full copy -- wasteful because the immutable data (per_operator matrices) would be duplicated
+
+Recommendation: Option 1 (separate workspace). The workspace is tiny (3 buffers totaling ~3*dim^2 + 2*dim complex numbers = ~600 KB for n=8). The per-operator Kraus data is large (12 operators x 4 matrices x dim^2 = ~18 MB for n=8) and should not be duplicated.
+
+**BLAS threading interaction:** When using multi-threaded trajectories, BLAS should use single-threaded mode (`BLAS.set_num_threads(1)`) to avoid oversubscription. Each trajectory step involves small matrix-vector products (dim=256 for n=8) -- single-threaded BLAS is faster for these sizes anyway.
+
+**Confidence:** HIGH. This is the standard pattern used by QuantumOptics.jl and QuTiP for parallel MCWF trajectories. The pattern is well-established and the codebase is designed for it (workspace caching pattern from v1.1).
+
+### GNS Trajectory Path
+
+**What needs to change:** The GNS construction differs from KMS in two ways:
+1. **Transition function:** `_pick_transition_gns` returns the unshifted gamma-tilde(omega) instead of the shifted gamma(omega) = gamma-tilde(omega + beta*sigma^2/2) used by KMS
+2. **No coherent B term:** GNS configs have `with_coherent=false`, so `U_B = nothing` in PerOperatorKraus
+
+The trajectory machinery (`build_trajectoryframework`, `step_along_trajectory!`, `_precompute_R`) already handles `with_coherent=false` correctly. The only missing piece is that `build_trajectoryframework` takes `AbstractThermalizeConfig` but the concrete dispatch for `_precompute_data` and `_precompute_R` may not handle `ThermalizeConfigGNS` correctly through the type hierarchy.
+
+**Verification needed:** Check that `ThermalizeConfigGNS` dispatches correctly through:
+- `pick_transition(config::ThermalizeConfigGNS)` -> already defined, returns `_pick_transition_gns`
+- `_precompute_data(config::ThermalizeConfigGNS, ham_or_trott)` -> needs to verify: `ThermalizeConfigGNS <: AbstractThermalizeConfig <: AbstractConfig`, so the existing `_precompute_data(config::AbstractConfig{D}, ...)` methods should apply
+- `_precompute_R(jumps, ham_or_trott, config::AbstractThermalizeConfig{D}, ...)` -> should work via supertype dispatch
+
+**GNS sigma parameter space for the paper:** The GNS construction from Chen 2023 uses energy uncertainty sigma_E (the `sigma` parameter in configs). The standard choice is `sigma = 1/beta` (used in all existing tests and simulations). For GNS, the approximation error to the true Gibbs state depends on sigma:
+- `sigma = 1/beta`: Standard. The energy resolution sigma_E = 1/beta means the Gaussian filter has width comparable to the thermal energy scale. The GNS fixed point deviates from Gibbs by an amount controlled by beta*sigma = 1.
+- `sigma = c/beta` with `c < 1`: Better Gibbs approximation (narrower energy filter), but higher Hamiltonian simulation cost (longer t0 needed for the Fourier transform). Cost scales as O(1/sigma).
+- `sigma = c/beta` with `c > 1`: Worse Gibbs approximation but cheaper. Interesting for showing the cost-accuracy tradeoff.
+
+**Interesting sigma values for GNS in the paper:**
+- `sigma = 1/beta` (standard, `c=1`): The baseline comparison point
+- `sigma = 0.5/beta` (`c=0.5`): Twice the simulation cost, significantly better Gibbs approximation. Shows what GNS could achieve if willing to pay more.
+- `sigma = 0.8/beta` (`c=0.8`): Used in the existing `main_thermalize.jl` script. Moderate improvement.
+
+For the KMS construction, sigma affects only the Trotter/quadrature errors (not the detailed balance error, which is zero by construction). So KMS at `sigma = 1/beta` already achieves exact detailed balance, while GNS at `sigma = 1/beta` has an intrinsic approximation gap. This is the core message of the paper.
+
+**Confidence:** HIGH for the trajectory path implementation. The GNS configs are already well-defined in the codebase. MEDIUM for the exact sigma values that make the most compelling comparison -- this depends on empirical results.
+
+### Observable Selection for Convergence Tracking
+
+**The question:** For 1D Heisenberg chains (n=4,6,8) at inverse temperatures beta=5,10,20, which observables are most informative for tracking convergence to the Gibbs state?
+
+**Analysis of candidates:**
+
+1. **Local magnetization Z_i (single-site Pauli Z on site i):**
+   - The 1D isotropic Heisenberg Hamiltonian `H = sum_i (X_iX_{i+1} + Y_iY_{i+1} + Z_iZ_{i+1})` has SU(2) symmetry. For periodic boundary conditions and no disorder field, `<Z_i>_gibbs = 0` for all sites by symmetry. This makes Z_i uninformative as a convergence metric for the clean Heisenberg chain.
+   - However, with the disordering Z-field (which QuantumFurnace uses -- see `find_ideal_heisenberg`), the SU(2) symmetry is broken. Local magnetization `<Z_i>` will be nonzero and site-dependent, making it a useful observable.
+   - **Verdict: Use it.** The disordered Hamiltonian breaks symmetry, so `<Z_i>` is site-specific and nonzero.
+
+2. **Total magnetization M_z = sum_i Z_i:**
+   - For the disordered Heisenberg chain, `<M_z>_gibbs` is nonzero but small (the disorder breaks symmetry but doesn't create large net magnetization).
+   - Low sensitivity: being a sum of N terms, the central limit theorem means trajectory fluctuations in M_z are sqrt(N) times larger than for single-site Z_i, but the signal is only sqrt(N) times larger. Signal-to-noise is the same.
+   - **Verdict: Include as a global check, not primary.**
+
+3. **Nearest-neighbor correlations Z_iZ_{i+1}:**
+   - This is the most physically informative observable for the Heisenberg chain. The ground state has strong antiferromagnetic correlations (`<Z_iZ_{i+1}>` negative for antiferromagnetic coupling). At finite temperature, these correlations weaken.
+   - For the isotropic Heisenberg model with J=1, the ground state correlation `<Z_iZ_{i+1}>` is approximately -0.44 for the infinite chain (Bethe ansatz result).
+   - At high beta (low temperature), the Gibbs state is dominated by the ground state, so `<Z_iZ_{i+1}>` approaches the ground state value. This provides a nontrivial target that differs from the maximally mixed value (0).
+   - Convergence of `<Z_iZ_{i+1}>` from 0 (maximally mixed initial state) to the Gibbs value is a clear signal.
+   - **Verdict: Primary observable. Use it.**
+
+4. **Energy <H> = sum_i J(X_iX_{i+1} + Y_iY_{i+1} + Z_iZ_{i+1}):**
+   - The average energy `<H>_gibbs` has a known value from the partition function: `<H> = -d/d(beta) ln(Z)`. For the finite chain, this is computed exactly from the eigenvalues.
+   - Energy convergence is a global check -- if the trajectory-averaged energy matches the Gibbs energy, the trajectory sampling is working.
+   - The energy has a clear physical interpretation and connects to thermodynamic quantities (specific heat).
+   - **Verdict: Include. Good global convergence check.**
+
+5. **Staggered magnetization M_s = sum_i (-1)^i Z_i:**
+   - The staggered magnetization is the order parameter for antiferromagnetic order. For the 1D spin-1/2 Heisenberg antiferromagnet, there is NO long-range order at any temperature (Mermin-Wagner theorem in 1D). However, for finite chains, `<M_s^2>` is nonzero and tracks short-range antiferromagnetic correlations.
+   - For the disordered Heisenberg chain, `<M_s>` is generally nonzero due to symmetry breaking.
+   - Less directly informative than Z_iZ_{i+1} for tracking convergence.
+   - **Verdict: Skip. Correlations Z_iZ_{i+1} capture the same physics more directly.**
+
+**Recommended observable set for the paper:**
+
+| Observable | Formula | Why | Computational Cost |
+|------------|---------|-----|-------------------|
+| **Nearest-neighbor Z_iZ_{i+1}** (all pairs) | `Z_i tensor Z_{i+1}` padded to n qubits | Primary convergence signal; nontrivial Gibbs value; directly probes antiferromagnetic correlations | LOW -- single matrix-vector product per observable per step |
+| **Local magnetization Z_i** (all sites) | `Z_i` padded to n qubits | Site-resolved convergence; nonzero due to disorder; catches localization effects | LOW |
+| **Energy <H>** | The full Hamiltonian matrix | Global convergence check; connects to thermodynamics | LOW -- already have H as a matrix |
+| **Trace distance to Gibbs** | `trace_distance_h(rho_avg, gibbs)` | The definitive convergence metric; requires full density matrix | MEDIUM -- requires eigendecomposition of rho_avg - gibbs every measurement interval |
+
+Total observables for n=8: 8 (nearest-neighbor correlations, periodic) + 8 (local Z) + 1 (energy) = 17 observables. Each requires one matrix-vector product (O(dim^2) = O(65536) operations for n=8). Negligible compared to the trajectory step cost.
+
+**Confidence:** HIGH for the observable selection. The physics is well-understood from decades of Heisenberg chain studies.
+
+### Gibbs State Peakedness at High Beta
+
+**The question:** For the 1D Heisenberg chain at n=8 and beta=5,10,20, how peaked is the Gibbs state? Is beta=30 reasonable?
+
+**Analysis:**
+
+The Gibbs state in the energy eigenbasis is diagonal: `rho_gibbs = diag(exp(-beta * E_i) / Z)` where `E_i` are the eigenvalues and `Z = sum exp(-beta * E_i)`.
+
+The peakedness is determined by the ratio `exp(-beta * (E_1 - E_0))` where `E_0` is the ground state energy and `E_1` is the first excited state energy. If `beta * (E_1 - E_0)` is large, the Gibbs state is heavily concentrated on the ground state.
+
+For the 1D isotropic Heisenberg chain with n sites and periodic boundary conditions:
+- The spectrum is rescaled by QuantumFurnace to fit in [0, 0.45]. The eigenvalue spread is `E_max - E_min`, mapped to approximately 0.45.
+- The rescaling factor for n=8 is approximately `(E_max - E_min) / 0.45`. For the isotropic Heisenberg chain with J=1, `E_max - E_min` scales linearly with n (extensive). For n=8, `E_max - E_min ~ 8J = 8`.
+- The rescaling factor is approximately `8 / 0.45 ~ 17.8`.
+- The effective beta in the rescaled spectrum is `beta_eff = beta / rescaling_factor`.
+- The gap `Delta = E_1 - E_0` in the rescaled spectrum corresponds to `nu_min` (the smallest Bohr frequency, which QuantumFurnace optimizes via `find_ideal_heisenberg`).
+
+For the disordered Heisenberg chain (which breaks degeneracies), typical values are:
+- n=4: `nu_min ~ 0.01-0.05` (after rescaling). With beta=10, `beta * nu_min ~ 0.1-0.5`. The Gibbs state is not very peaked.
+- n=6: `nu_min ~ 0.005-0.02`. With beta=10, `beta * nu_min ~ 0.05-0.2`. Moderately peaked.
+- n=8: `nu_min ~ 0.002-0.01`. With beta=20, `beta * nu_min ~ 0.04-0.2`. The ground state population is `p_0 ~ 1/(1 + exp(-beta*nu_min) + ...) ~ 1/(1 + 0.96 + ...) ~ 0.03-0.1` depending on degeneracies.
+
+**Key consideration:** The unrescaled Heisenberg chain Hamiltonian has extensive bandwidth. The rescaling maps the spectrum to [0, 0.45], making the effective `beta_eff = beta / rescaling_factor` much smaller. For n=8:
+- `rescaling_factor ~ 18` (typical)
+- `beta_eff(beta=5) ~ 0.28` -- warm, Gibbs state well spread
+- `beta_eff(beta=10) ~ 0.56` -- moderately peaked
+- `beta_eff(beta=20) ~ 1.1` -- ground state dominant but not degenerate
+- `beta_eff(beta=30) ~ 1.67` -- ground state very dominant, higher levels negligible
+
+**Practical assessment for beta=30, n=8:**
+- The ground state population will be `p_0 ~ exp(-0) / Z ~ 1 - sum(exp(-30/18 * (E_i - E_0)))`. For the rescaled gap of ~0.005, `exp(-30*0.005) ~ exp(-0.15) ~ 0.86`, so the first excited state still has ~86% of the ground state weight. With the disorder lifting degeneracies, the effective number of significantly populated states might be ~10-30 (out of 256).
+- beta=30 IS reasonable. The Gibbs state is peaked but not degenerate. There are enough populated states to make the convergence problem nontrivial.
+- However, beta=30 will have SLOWER mixing (longer convergence time) due to the larger spectral gap being smaller relative to the thermal energy. More trajectories and more steps will be needed.
+
+**Recommendation for the paper:**
+- **beta=5**: Easy case. Fast mixing, well-spread Gibbs state. Shows that both KMS and GNS work.
+- **beta=10**: Medium case. The standard test temperature used in existing code. Good data point.
+- **beta=20**: Hard case. Ground state dominant. This is where KMS advantage should be most visible -- the exact detailed balance prevents trajectory drift away from the ground state sector.
+- **beta=30**: Optional stretch. If beta=20 already shows a clear advantage, beta=30 adds a data point but may require very long runs. Include if computational budget allows.
+
+**Confidence:** MEDIUM. The exact peakedness depends on the specific disordered Hamiltonian instance (which eigenvalues the disorder lifts, how large nu_min is). The rescaling factor is the key quantity -- the estimates above use typical values but the actual number depends on the pre-generated n=8 Hamiltonian. Must generate the Hamiltonian and inspect the spectrum empirically to get exact numbers.
+
+### Adaptive Sampling Protocol
+
+**The question:** How should adaptive sampling work -- run batches until convergence criterion is met?
+
+**Protocol design:**
+
+The standard approach for Monte Carlo convergence estimation is:
+
+1. **Batch structure:** Run trajectory batches of fixed size B (e.g., B=1000). After each batch, compute the cumulative trace distance to Gibbs and per-observable estimates.
+
+2. **Running estimates:** Maintain:
+   - `rho_running = (1/N_total) * sum_{all trajectories} |psi><psi|`
+   - `obs_running[i] = (1/N_total) * sum_{all trajectories} <psi|O_i|psi>`
+   - `trace_dist_running = trace_distance_h(rho_running, gibbs)`
+
+3. **Convergence criterion for trace distance:**
+   - After each batch, record `trace_dist_running`. The convergence curve should plateau.
+   - Criterion: the standard deviation of the last K batch-to-batch changes in trace distance is below a threshold.
+   - Alternative: the relative change in trace distance between consecutive batch completions is below epsilon (e.g., 1%): `|d_new - d_old| / d_old < 0.01` for the last 3 consecutive batches.
+
+4. **Standard error estimation for observables:**
+   - Partition trajectories into M sub-batches of size B/M.
+   - Compute the observable estimate from each sub-batch independently.
+   - The standard error is `std(sub_batch_estimates) / sqrt(M)`.
+   - Convergence criterion: `SE / |mean| < threshold` (e.g., 1% relative error) for all tracked observables.
+
+5. **Practical convergence criterion:**
+   ```
+   CONVERGED when ALL of:
+     (a) N_total >= N_min (e.g., 1000) -- minimum sample size
+     (b) trace_dist stabilized: relative change < 1% for last 3 batches
+     (c) SE(trace_dist) < epsilon_td (e.g., 0.001)
+     (d) SE(<O_i>) / |<O_i>_gibbs| < epsilon_obs (e.g., 5%) for all observables
+   ```
+
+6. **Maximum budget:** Always set a hard cap `N_max` (e.g., 100,000) to prevent infinite loops if convergence is slow.
+
+**Implementation pattern:**
+```julia
+function run_adaptive_trajectories(fw, psi0, gibbs, observables;
+    batch_size=1000, N_min=1000, N_max=100_000,
+    td_threshold=0.001, td_rel_change=0.01, obs_rel_se=0.05,
+    num_stable_batches=3)
+
+    N_total = 0
+    rho_acc = zeros(ComplexF64, dim, dim)
+    td_history = Float64[]
+
+    while N_total < N_max
+        # Run a batch
+        rho_batch = run_batch(fw, psi0, batch_size)
+        rho_acc .+= rho_batch .* batch_size
+        N_total += batch_size
+
+        # Update running average
+        rho_avg = rho_acc ./ N_total
+        td = trace_distance_h(Hermitian(rho_avg), gibbs)
+        push!(td_history, td)
+
+        # Check convergence
+        if N_total >= N_min && is_converged(td_history, ...)
+            break
+        end
+    end
+end
 ```
-This samples from the joint distribution P(a, omega) = delta * rate2(omega) * ||A^a_omega psi||^2 with a single flat scan. While this may appear correct at first glance, it conflates the hierarchical structure.
 
-**Required behavior (CORRECT):** The Chen algorithm defines Lindblad operators {sqrt(gamma(omega)) * A^a(omega)} indexed by both `a` and `omega`. The theoretically correct unraveling samples:
-1. **Stage 1:** Pick which Lindblad operator class fires, weighted by total rate per operator:
-   P(a) = sum_omega [delta * rate2(omega) * ||A^a_omega psi||^2] / p_jump_total
-2. **Stage 2:** Given the selected operator A^a, pick omega with probability:
-   P(omega | a) = rate2(omega) * ||A^a_omega psi||^2 / sum_omega' [rate2(omega') * ||A^a_omega' psi||^2]
+**Confidence:** HIGH. This is standard Monte Carlo methodology. The specific thresholds (1%, 5%) are reasonable defaults that can be tuned based on the desired paper precision.
 
-**Why flat scan is actually equivalent:** After careful analysis, the flat cumulative scan IS mathematically correct for sampling from the joint distribution. The joint probability P(a, omega) = delta * rate2(omega) * ||A^a_omega psi||^2 can be sampled either hierarchically (two-stage) or via a single flat scan -- both produce the same distribution. The cumulative scan in the current code correctly weights each outcome.
+### KMS-vs-GNS Comparison Experiment Structure
 
-**The ACTUAL bug:** The real sampling bug is more subtle. Looking at the code carefully:
-- The code samples a single random number `r = rand() * total_weight` to decide between no-jump/residual/dissipative-jump
-- For the dissipative-jump branch, it uses `target = r - p_nojump - p_res` and does a cumulative scan
-- This is correct IF the probabilities sum correctly to `p_jump_total`
+**Experiment design:**
 
-The bug may instead be in the probability normalization: `total_weight = p_nojump + p_res + p_jump_total` should equal 1.0 for a proper CPTP map (up to O(delta^2) from the residual). If it does not, the sampling is biased. **This must be verified numerically as the first validation step.**
+The paper's core claim is: "KMS (exact detailed balance with coherent B term) produces trajectories that converge closer to the Gibbs state than GNS (approximate detailed balance without B)."
 
-**Confidence:** HIGH that a bug exists (project context states it explicitly), MEDIUM on the exact nature of the bug. The first task must be numerical CPTP verification.
+**Experiment matrix:**
 
-### CPTP Verification Tests
+| Dimension | n=4 (dim=16) | n=6 (dim=64) | n=8 (dim=256) |
+|-----------|--------------|--------------|---------------|
+| beta=5    | KMS, GNS(sigma=1/beta) | KMS, GNS(sigma=1/beta) | KMS, GNS(sigma=1/beta) |
+| beta=10   | KMS, GNS(sigma=1/beta) | KMS, GNS(sigma=1/beta) | KMS, GNS(sigma=1/beta) |
+| beta=20   | KMS, GNS(sigma=1/beta) | KMS, GNS(sigma=1/beta) | KMS, GNS(sigma=1/beta) |
 
-The weak measurement scheme produces a CPTP map with Kraus operators:
-- **K0** = I - alpha * R, where alpha = 1 - sqrt(1 - delta)
-- **K_{a,omega}** = sqrt(delta * rate2(omega)) * A^a_omega (jump Kraus operators)
-- **K_res** = U_residual (Cholesky factor of residual S = I - K0^dag K0 - delta*R)
+Total: 18 experiment runs (3 n values x 3 beta values x 2 methods). Each run requires adaptive sampling until convergence.
 
-The CPTP condition requires: K0^dag K0 + sum_{a,omega} K_{a,omega}^dag K_{a,omega} + K_res^dag K_res = I
+**Additional GNS sigma sweep (for one (n, beta) point):**
 
-This decomposes as:
-- K0^dag K0 = I - 2*alpha*R + alpha^2 * R^2
-- sum K_{a,omega}^dag K_{a,omega} = delta * R (by construction of R)
-- K_res^dag K_res = S = (2*alpha - delta)*R - alpha^2 * R^2
+To show the cost-accuracy tradeoff of GNS, run GNS at sigma = {0.5, 0.8, 1.0, 1.5, 2.0}/beta for a fixed (n, beta) point, e.g., (n=6, beta=10). This produces a Pareto front: better Gibbs approximation costs more Hamiltonian simulation time.
 
-Sum = I - 2*alpha*R + alpha^2*R^2 + delta*R + (2*alpha - delta)*R - alpha^2*R^2 = I
+| sigma | sigma * beta | GNS approximation quality | Relative Hamiltonian simulation cost |
+|-------|-------------|--------------------------|--------------------------------------|
+| 0.5/beta | 0.5 | Very good (narrow filter) | ~2x baseline |
+| 0.8/beta | 0.8 | Good | ~1.25x baseline |
+| 1.0/beta | 1.0 | Standard (baseline) | 1x baseline |
+| 1.5/beta | 1.5 | Moderate | ~0.67x baseline |
+| 2.0/beta | 2.0 | Poor (very broad filter) | ~0.5x baseline |
 
-This is exact algebraically. Numerical deviations come from:
-1. Cholesky factorization of S (S may have tiny negative eigenvalues from roundoff)
-2. The epsilon shift applied to S before Cholesky (10*eps(Float64) per diagonal element)
-3. Hermitianization of R
+The KMS result serves as the "unbeatable" reference: exact detailed balance at sigma = 1/beta cost. If GNS at sigma = 0.5/beta (twice the cost) still does not match KMS at sigma = 1/beta, that is a strong argument for KMS.
 
-**Test:** Compute K0^dag K0 + delta*R + U_res^dag U_res and verify ||result - I|| < tolerance (expect < 1e-12 for well-conditioned systems).
+**Per-experiment data to collect:**
 
-### Trajectory vs DM Convergence Protocol
+1. **Convergence curve:** trace distance to Gibbs vs. N_traj (log-log scale)
+2. **Final trace distance:** at convergence (or at N_max)
+3. **Per-observable convergence:** `<Z_iZ_{i+1}>` and `<Z_i>` vs. N_traj
+4. **Error of per-observable vs. Gibbs:** `|<O>_traj - <O>_gibbs|` at convergence
+5. **Config snapshot:** all parameters (beta, sigma, delta, n, domain, with_coherent)
+6. **Wall clock time:** total computation time per experiment
 
-**Standard MCWF validation procedure** (verified across QuantumOptics.jl, QuantumToolbox.jl, QDYN):
+**Expected results (predictions based on theory):**
 
-1. **Fix parameters:** system (Heisenberg 3-4 qubit), domain (Energy or Time), delta, total_time, initial state (e.g., |0...0> or maximally mixed)
-2. **Run DM evolution:** `run_thermalize()` to get rho_DM at final time
-3. **Run N trajectories:** `run_trajectories(ntraj=N)` to get rho_traj = (1/N) sum |psi_n><psi_n|
-4. **Compute discrepancy:** D = trace_distance(rho_traj, rho_DM)
-5. **Verify scaling:** Repeat for N = 100, 500, 1000, 5000. Verify D decreases as approximately 1/sqrt(N).
+- **At all (n, beta):** KMS trace distance at convergence should be limited only by Trotter error (~1e-6 to 1e-8 depending on delta and Trotter parameters) plus statistical noise (~1e-3 at N=10^4).
+- **GNS at sigma=1/beta:** The trace distance at convergence should plateau at a value determined by the GNS approximation gap, which grows with beta. At beta=5, the gap is small (~1e-2 to 1e-3). At beta=20, the gap is larger (~1e-1 to 1e-2).
+- **KMS advantage:** Most visible at high beta (beta=20), where the GNS approximation gap is largest. At low beta (beta=5), both methods may perform similarly.
+- **Per-observable:** The correlations `<Z_iZ_{i+1}>` should show the KMS advantage most clearly, because these are directly related to the energy structure that the detailed balance condition controls.
 
-**Expected tolerances** (based on domain and parameters):
+**Confidence:** HIGH for the experiment design. MEDIUM for the specific numerical predictions -- these depend on the Hamiltonian spectrum and the interaction between Trotter error, quadrature error, and the GNS approximation gap.
 
-| Domain | with_coherent | Expected trace_distance to Gibbs | Trajectory tolerance (N=1000) |
-|--------|--------------|----------------------------------|-------------------------------|
-| Energy | false (GNS) | O(quadrature error) ~ 1e-3 to 1e-5 | Should match DM to within ~0.03 |
-| Energy | true (KMS) | O(quadrature error) ~ 1e-3 to 1e-5 | Should match DM to within ~0.03 |
-| Time | true (KMS) | O(quad + time quad) ~ 1e-3 to 1e-4 | Should match DM to within ~0.03 |
-| Trotter | true (KMS) | <= 1e-6 (with good Trotter params) | Should match DM to within ~0.03 |
+### Data Architecture
 
-The trajectory vs DM discrepancy should be dominated by statistical noise (1/sqrt(N)), NOT by systematic bias. If a systematic bias remains as N grows, the sampling or CPTP construction is wrong.
+**What to save per experiment:**
 
-### Error Budget Decomposition
+```julia
+struct ExperimentResult
+    # Identity
+    experiment_id::String      # e.g., "kms_n8_beta10_sigma0.1"
+    method::Symbol             # :KMS or :GNS
+    timestamp::DateTime
 
-The total error from the Gibbs state has five independent contributions:
+    # Configuration
+    config::AbstractThermalizeConfig
+    num_qubits::Int
+    hamiltonian_file::String   # path to BSON
 
-| Error Source | Scaling | Controlled By | How to Isolate |
-|-------------|---------|---------------|----------------|
-| **Detailed balance violation** (GNS only) | depends on sigma_E | sigma parameter | Compare KMS (with_coherent=true) vs GNS: only difference is B term |
-| **Energy quadrature error** | O(1/N_omega) ~ O(w0) | w0, num_energy_bits | Compare Bohr vs Energy at same parameters |
-| **Time quadrature error** | O(1/N_t) ~ O(t0) | t0, num_energy_bits | Compare Energy vs Time at same parameters |
-| **Trotter error** | O(t0/num_trotter_steps)^2 | num_trotter_steps_per_t0 | Compare Time vs Trotter at same parameters |
-| **Delta-step discretization** | O(delta) per total evolution | delta | Fix system, vary delta, measure distance to continuous-time Gibbs |
-| **Trajectory sampling noise** | O(1/sqrt(N_traj)) | N_traj | Fix everything else, vary N_traj |
+    # Convergence data
+    n_traj_total::Int
+    trace_distances::Vector{Float64}           # td at each batch checkpoint
+    n_traj_at_checkpoint::Vector{Int}           # N_traj at each checkpoint
+    converged::Bool
+    convergence_n_traj::Int                    # N at convergence (or N_max)
 
-**Key insight for testing:** To isolate the trajectory sampling correctness, compare trajectory-averaged rho against the DM-evolved rho (not against the Gibbs state directly). Both DM and trajectory share the same quadrature/Trotter/delta errors. The only difference should be statistical noise from trajectory sampling.
+    # Observable data
+    observable_names::Vector{String}
+    observable_gibbs_values::Vector{Float64}    # <O_i>_gibbs
+    observable_estimates::Matrix{Float64}       # obs x checkpoints
+    observable_std_errors::Matrix{Float64}      # obs x checkpoints
 
-### Statistical Methods for Validation
+    # Final state
+    rho_final::Matrix{ComplexF64}              # trajectory-averaged density matrix
+    trace_distance_final::Float64
 
-**Confidence:** HIGH -- these are standard methods from quantum state estimation literature.
+    # Timing
+    wall_time_seconds::Float64
+end
+```
 
-| Method | What It Tests | When to Use | Implementation Cost |
-|--------|-------------|-------------|---------------------|
-| **Trace distance D(rho_traj, rho_DM)** | Overall state agreement | Primary metric for every validation test | LOW (already in `qi_tools.jl`) |
-| **Fidelity F(rho_traj, rho_DM)** | Overlap between states; more sensitive near pure states | Complementary to trace distance | LOW (already in `qi_tools.jl`) |
-| **Frobenius norm ||rho_traj - rho_DM||_F** | Cheap proxy for trace distance; faster to compute (no eigendecomposition) | Quick sanity checks, per-step monitoring | LOW (trivial with `norm()`) |
-| **1/sqrt(N) convergence fit** | Verifies trajectory averaging is unbiased | After fixing sampling bug -- confirms fix is correct | LOW (run at several N values, fit power law) |
-| **Bootstrap confidence intervals** | Uncertainty quantification on trace distance | When reporting quantitative agreement numbers | MEDIUM (resample subsets of trajectories, compute CI) |
-| **Per-element comparison max_ij |rho_traj_ij - rho_DM_ij|** | Catches localized errors that global metrics might average out | Debugging when global metrics look fine but physics is wrong | LOW |
-| **Eigenvalue spectrum comparison** | Verifies correct population distribution | Confirms Gibbs-like population ordering | LOW |
-| **Chi-squared goodness of fit** | Tests if observed jump statistics match predicted rates | Validating two-stage sampling correctness | MEDIUM (requires collecting jump histograms) |
+**Serialization:** Use BSON (already a dependency) for consistency with existing Hamiltonian storage. JLD2 is an alternative with better compression, but adding a dependency for this alone is not justified.
+
+**Directory structure:**
+```
+results/
+  v1.2_kms_vs_gns/
+    hamiltonians/
+      heis_n4.bson
+      heis_n6.bson
+      heis_n8.bson
+    experiments/
+      kms_n4_beta5.bson
+      gns_n4_beta5.bson
+      ...
+    analysis/
+      convergence_plots/
+      comparison_tables/
+```
+
+**Confidence:** HIGH. Standard data management pattern.
 
 ---
 
 ## Feature Dependencies
 
 ```
-[build_trajectoryframework bug fix]
+[Pre-generate n=6,8 Hamiltonians]
     |
     v
-[CPTP verification test]
+[Refactor TrajectoryWorkspace out of TrajectoryFramework]
     |
     v
-[Two-stage sampling fix (or verification that flat scan is correct)]
+[Multi-threaded trajectory sampling]
+    |               |
+    v               v
+[GNS trajectory path]    [Per-observable convergence tracking]
+    |               |
+    v               v
+[Trace distance to Gibbs tracking]
     |
     v
-[Single-step DM error scaling test (delta^2)]
+[Adaptive sampling (batch until converged)]
     |
     v
-[Trajectory vs DM convergence] ----requires----> [run_thermalize() working for Energy/Time/Trotter]
-    |                                                      |
-    |                                                      v
-    |                                             [Detailed balance test (DM only)]
-    v                                                      |
-[Statistical convergence test (1/sqrt(N))]                 v
-    |                                             [Domain error hierarchy test]
-    v                                                      |
-[Per-observable trajectory convergence]                    v
-    |                                             [Multi-step DM error scaling test]
-    v
-[Regression tests with frozen data]
+[Data architecture for saving results]
     |
     v
-[OFT consistency check]  [R matrix consistency check]  [Jump statistics histogram]
+[KMS-vs-GNS experiment driver]
+    |
+    v
+[Convergence curve plotting] (differentiator)
 ```
 
 ### Dependency Notes
 
-- **build_trajectoryframework fix is the gate:** Nothing trajectory-related works until compilation errors in `build_trajectoryframework` are fixed (undefined `trotter` variable on line 53, `B_total` referenced when `with_coherent=false`).
-- **CPTP verification before trajectory runs:** Must confirm the Kraus map is trace-preserving before trusting any trajectory output. Otherwise, non-unit total probability will bias all downstream results.
-- **DM tests are independent of trajectory tests:** Detailed balance, domain hierarchy, and DM error scaling tests depend only on `run_lindbladian` and `run_thermalize`, which already work. These can proceed in parallel with trajectory bug fixes.
-- **Trajectory vs DM is the milestone gate:** The entire milestone succeeds or fails on whether rho_traj matches rho_DM. Everything else supports this.
-- **Statistical convergence proves the fix:** If the 1/sqrt(N) scaling holds, the sampling is provably unbiased. If it plateaus, there is a systematic error.
+- **Workspace refactor is the gate:** Multi-threading requires per-thread workspaces. This must be done before any parallel trajectory work.
+- **GNS path and observables are independent of each other:** Both depend on multi-threading but not on each other. Can be built in parallel.
+- **Adaptive sampling requires convergence tracking:** Must have trace distance and observable tracking before implementing the adaptive loop.
+- **Experiment driver requires everything:** It is the integration point that ties all features together. Build last.
+- **Data architecture must precede experiments:** Need the serialization format defined before running experiments that produce data.
+- **Hamiltonian generation is a prerequisite:** n=6 and n=8 Hamiltonians must be generated and saved before experiments can run at those sizes. Currently only n=3 and n=4 exist in `hamiltonians/`.
 
 ---
 
-## MVP Definition (Milestone v1.0 Trajectories)
+## MVP Definition (v1.2 Milestone)
 
 ### Must Complete
 
-- [ ] **Fix `build_trajectoryframework` compilation bugs** -- Cannot run any trajectory code without this.
-- [ ] **CPTP verification test** -- Confirm K0^dag K0 + delta*R + U_res^dag U_res = I to machine precision.
-- [ ] **Fix or verify two-stage jump sampling** -- Either implement proper two-stage sampling or prove the flat scan is equivalent and find the actual bug.
-- [ ] **Trajectory vs DM validation for EnergyDomain** -- rho_traj matches rho_DM to within statistical noise for 3-qubit Heisenberg.
-- [ ] **Trajectory vs DM validation for TimeDomain** -- Same test for TimeDomain.
-- [ ] **Trajectory vs DM validation for TrotterDomain** -- Same test for TrotterDomain (with_coherent=true).
-- [ ] **Domain error hierarchy test (DM)** -- Bohr <= Energy <= Time <= Trotter error chain verified.
-- [ ] **Single-step delta^2 error scaling test** -- Empirical verification of Chen Theorem III.1.
-- [ ] **Multi-step delta error scaling test** -- Verify error accumulation is O(delta) over full evolution.
-- [ ] **Detailed balance test** -- BohrDomain fixed point is Gibbs to machine precision; TrotterDomain with_coherent=true reaches <= 1e-6.
-- [ ] **Coherent term correctness test** -- With vs without coherent term: with_coherent=true must be dramatically closer to Gibbs.
-- [ ] **Statistical 1/sqrt(N) convergence test** -- Trajectory averaging error decreases as expected with N.
+- [ ] **Pre-generate n=6,8 Hamiltonians** -- Cannot run paper experiments without them. Use `find_ideal_heisenberg` with batch_size=1000 or more for good nu_min.
+- [ ] **Refactor workspace out of TrajectoryFramework** -- Gate for multi-threading. Change `step_along_trajectory!` signature to accept workspace explicitly.
+- [ ] **Multi-threaded trajectory sampling** -- Core performance feature. Use `Threads.@threads` with per-thread workspace and RNG.
+- [ ] **GNS trajectory path** -- Extend `build_trajectoryframework` to accept `ThermalizeConfigGNS`. Verify correct dispatch through precompute and stepping.
+- [ ] **Per-observable convergence tracking** -- Track `<Z_iZ_{i+1}>` and `<Z_i>` across trajectory batches.
+- [ ] **Trace distance to Gibbs tracking** -- Compute running trace distance at batch checkpoints.
+- [ ] **Adaptive sampling** -- Run batches until convergence criterion met.
+- [ ] **Data architecture** -- Define result struct and BSON serialization.
+- [ ] **KMS-vs-GNS experiment driver** -- Script for running the full experiment matrix.
 
-### Add After Core Validation
+### Add After Core Implementation
 
-- [ ] **Per-observable trajectory convergence** -- <Z_i>(t) from trajectories matches DM.
-- [ ] **Jump statistics histogram** -- Empirical jump rates match theoretical predictions.
-- [ ] **OFT consistency across domains** -- Energy OFT matches Time/Trotter NUFFT OFT.
-- [ ] **R matrix cross-validation** -- Trajectory R matches Liouvillian R.
-- [ ] **Regression tests with frozen data** -- Lock down a reference result.
-- [ ] **Confidence interval reporting** -- Bootstrap CIs on trajectory-vs-DM trace distance.
-- [ ] **Normalization drift monitoring** -- Track pre-normalization ||psi||^2 per step.
+- [ ] **Bootstrap confidence intervals** -- Error bars on convergence curves for paper quality.
+- [ ] **Convergence curve plotting** -- Paper-ready plots with KMS and GNS on same axes.
+- [ ] **GNS sigma sweep** -- Multiple sigma values for the Pareto front analysis.
+- [ ] **Hamiltonian simulation cost accounting** -- Track total simulation time for cost comparison.
+- [ ] **Multiple initial states** -- Verify convergence from different starting points.
 
 ### Defer
 
-- [ ] **Diamond norm channel comparison** -- Expensive (SDP), only needed for publication rigor.
-- [ ] **Multi-threaded trajectory validation** -- Correctness first, performance later.
-- [ ] **Non-Hermitian jump operator tests** -- All target systems use Hermitian jumps.
-- [ ] **Large system benchmarks (>6 qubits)** -- Validation is about correctness, not scale.
+- [ ] **Spectral gap measurement for n=8** -- Requires O(dim^4) = O(4 billion) Liouvillian construction. Only feasible for n<=6. For n=8, estimate mixing time from trajectory convergence curves.
+- [ ] **GPU acceleration** -- Not needed at current system sizes.
+- [ ] **Distributed (MPI) trajectories** -- Not needed for single-node execution.
 
 ---
 
 ## Feature Prioritization Matrix
 
-| Feature | Correctness Value | Implementation Cost | Priority |
-|---------|------------------|---------------------|----------|
-| build_trajectoryframework fix | CRITICAL | LOW | P0 |
-| CPTP verification test | CRITICAL | LOW | P0 |
-| Two-stage sampling fix/verify | CRITICAL | MEDIUM | P0 |
-| Trajectory vs DM (Energy) | CRITICAL | MEDIUM | P1 |
-| Trajectory vs DM (Time) | CRITICAL | MEDIUM | P1 |
-| Trajectory vs DM (Trotter) | CRITICAL | MEDIUM | P1 |
-| Domain error hierarchy test | HIGH | LOW | P1 |
-| Single-step delta^2 test | HIGH | LOW | P1 |
-| Multi-step delta test | HIGH | LOW | P1 |
-| Detailed balance test | HIGH | LOW | P1 |
-| Coherent term test | HIGH | LOW | P1 |
-| 1/sqrt(N) convergence test | HIGH | LOW-MEDIUM | P1 |
-| Per-observable convergence | MEDIUM | LOW-MEDIUM | P2 |
-| Jump statistics histogram | MEDIUM | MEDIUM | P2 |
-| OFT consistency check | MEDIUM | LOW | P2 |
-| R matrix cross-validation | MEDIUM | LOW | P2 |
-| Regression tests | MEDIUM | LOW | P2 |
-| Confidence intervals | LOW-MEDIUM | LOW-MEDIUM | P2 |
-| Normalization drift | LOW | LOW | P2 |
-| Diamond norm comparison | LOW | HIGH | P3 |
-| Multi-threaded validation | LOW | MEDIUM | P3 |
-| Non-Hermitian jump tests | LOW | MEDIUM | P3 |
+| Feature | Paper Value | Implementation Cost | Priority |
+|---------|------------|---------------------|----------|
+| Pre-generate n=6,8 Hamiltonians | CRITICAL | LOW | P0 |
+| Workspace refactor | CRITICAL | LOW | P0 |
+| Multi-threaded trajectories | CRITICAL | MEDIUM | P1 |
+| GNS trajectory path | CRITICAL | LOW-MEDIUM | P1 |
+| Trace distance tracking | CRITICAL | LOW | P1 |
+| Per-observable tracking | HIGH | MEDIUM | P1 |
+| Adaptive sampling | HIGH | MEDIUM | P1 |
+| Data architecture | HIGH | MEDIUM | P1 |
+| KMS-vs-GNS experiment driver | CRITICAL | LOW-MEDIUM | P2 |
+| Bootstrap confidence intervals | MEDIUM | LOW-MEDIUM | P2 |
+| Convergence plotting | MEDIUM | LOW-MEDIUM | P2 |
+| GNS sigma sweep | MEDIUM | LOW | P2 |
+| Hamiltonian simulation cost | LOW-MEDIUM | MEDIUM | P3 |
+| Multiple initial states | LOW | LOW | P3 |
+| Spectral gap (n<=6) | LOW | MEDIUM-HIGH | P3 |
 
 **Priority key:**
-- P0: Blocks all other work; fix immediately
-- P1: Core validation; milestone success criteria
-- P2: Strengthens validation; add once core passes
-- P3: Nice to have; defer to later milestone
+- P0: Blocks all other work; do first
+- P1: Core milestone features
+- P2: Paper-quality enhancements; add once core works
+- P3: Nice to have; defer if time-constrained
 
 ---
 
-## Test System Specifications
+## Physics Reference: Heisenberg Chain Observables
 
-### Recommended Test Systems
+### Observable Expectations at Different Temperatures
 
-| System | Qubits | Hilbert Space dim | DM size | Why Use It |
-|--------|--------|-------------------|---------|------------|
-| **1D Heisenberg, n=2** | 2 | 4 | 4x4 | Fastest, good for debugging. Known exact spectrum. |
-| **1D Heisenberg, n=3** | 3 | 8 | 8x8 | Primary validation target. Rich enough spectrum, fast enough for many trajectories. |
-| **1D Heisenberg, n=4** | 4 | 16 | 16x16 | Secondary validation. Approaches "real" system complexity. 12 jump operators (3 Paulis x 4 sites). |
-| **1D Heisenberg, n=4 + Z-disorder** | 4 | 16 | 16x16 | Breaks symmetries. Non-degenerate spectrum ensures cleaner Bohr frequencies. |
+For the 1D spin-1/2 Heisenberg antiferromagnet (J=1, periodic) with n sites, key observable values:
 
-### Recommended Parameters
+| Observable | Maximally mixed (beta=0) | Low T (beta>>1) | Notes |
+|------------|--------------------------|-----------------|-------|
+| `<Z_i>` (clean) | 0 | 0 | SU(2) symmetry |
+| `<Z_i>` (disordered) | 0 | ~disorder strength | Symmetry broken |
+| `<Z_iZ_{i+1}>` | 0 | ~-0.44 (infinite chain) | Bethe ansatz result |
+| `<H>/n` | 0 (rescaled) | E_0/n | Ground state energy density |
+| `<M_s^2>/n` | 1/3 | depends on n | Finite-size AFM correlations |
 
-| Parameter | Value | Rationale |
-|-----------|-------|-----------|
-| beta | 1.0, 5.0, 10.0 | Low/medium/high temperature. High beta = harder thermalization, tests convergence. |
-| sigma | 1/beta | Standard choice from Chen papers. |
-| delta | 0.01, 0.05, 0.1 | Small enough for O(delta^2) per step to be negligible. 0.1 is aggressive; 0.01 is safe. |
-| num_energy_bits | 10-12 | 2^10 = 1024 to 2^12 = 4096 energy grid points. Sufficient for 4-qubit systems. |
-| w0 | 0.05 | Fine enough energy resolution for Heisenberg spectrum. |
-| N_traj | 100, 500, 1000, 5000 | For convergence scaling tests. 1000 is the sweet spot for validation. |
-| total_time | 5-20 * (1/spectral_gap) | Must be long enough to reach steady state. |
-| with_coherent | true | Primary interest is KMS-DB. Test both true/false for comparison. |
-| with_linear_combination | true | Metropolis-style transition weight for faster mixing. |
-| a, b | beta/30, 0.4 | From existing test configs in codebase. |
+### Why Nearest-Neighbor Correlations Win
 
----
-
-## Comparison: Trajectory Validation Approaches
-
-| Approach | QuantumOptics.jl | QuantumToolbox.jl | QuantumFurnace Needs |
-|----------|-----------------|-------------------|---------------------|
-| **Trajectory method** | Continuous-time MCWF with adaptive timestep | Continuous-time MCWF (mcsolve) | Fixed-delta discrete CPTP map unraveling |
-| **Jump detection** | Detect when norm drops below random threshold | Same as QuantumOptics.jl | No detection needed -- fixed timestep with probability branching |
-| **Jump selection** | P(L_n) ~ <psi|L_n^dag L_n|psi> | Same | P(a, omega) ~ delta * rate2(omega) * ||A^a_omega psi||^2 |
-| **Ensemble averaging** | Direct psi*psi^dag sum | Direct psi*psi^dag sum | Same (already in `_accumulate_density_matrix!`) |
-| **Validation target** | master equation rho(t) | master equation rho(t) | `run_thermalize` DM rho(t) |
-| **Error metric** | Visual comparison, no automated tests | Visual comparison (plot convergence) | Automated trace distance + fidelity tests with tolerances |
-| **Unique challenge** | None (standard Lindbladian) | None | Residual Kraus K_res for CPTP completion; coherent U_B unitary; error budget with four domain levels |
-
-The key difference: QuantumOptics.jl and QuantumToolbox.jl validate continuous-time MCWF against continuous-time master equation. QuantumFurnace validates a discrete-CPTP-map unraveling against the same discrete-CPTP-map applied to the density matrix. This is simpler in some ways (no ODE solver needed) but more complex in others (the CPTP map itself has internal structure with K0, K_res, and many jump Kraus operators).
+The convergence of `<Z_iZ_{i+1}>` from 0 (maximally mixed) to its Gibbs value (~-0.3 to -0.4 at high beta) provides:
+1. **Large signal:** The change from 0 to -0.4 is O(1), easily detectable above noise.
+2. **Physical meaning:** Directly probes the antiferromagnetic ordering that the Gibbs state captures.
+3. **Sensitivity to detailed balance:** The correlation is determined by the low-energy sector of the spectrum, which is exactly where KMS (exact detailed balance) differs from GNS (approximate).
 
 ---
 
 ## Sources
 
 ### Verified (HIGH confidence)
-- Chen, Kastoryano, Brandao, Gilyen (2023) "Quantum Thermal State Preparation" [arXiv:2303.18224](https://arxiv.org/abs/2303.18224) -- Theorem III.1 (weak measurement scheme, O(delta^2) per step, O(t^2/epsilon) cost), Corollary III.1 (random jump selection). Direct reading of paper text.
-- Chen, Kastoryano, Gilyen (2025) "An efficient and exact noncommutative quantum Gibbs sampler" [arXiv:2311.09207](https://arxiv.org/abs/2311.09207) -- KMS detailed balance construction, coherent term B, Lindbladian fixed point stationarity. Direct reading.
-- [QDYN documentation: Quantum Jump Method](https://ag-koch.gitpages.physik.fu-berlin.de/qdyn/main/concepts/mcwf.html) -- Ensemble averaging rho = (1/N) sum |psi_n><psi_n|, statistical error 1/sqrt(N), jump operator selection probabilities.
-- [QuantumOptics.jl: Quantum trajectories](https://docs.qojulia.org/timeevolution/mcwf/) -- Standard MCWF validation methodology.
-- [QuantumToolbox.jl: Monte Carlo Solver](https://qutip.org/QuantumToolbox.jl/stable/users_guide/time_evolution/mcsolve) -- Jump selection via cumulative probability, convergence with trajectory count.
-- QuantumFurnace.jl codebase -- Direct analysis of `trajectories.jl`, `jump_workers.jl`, `furnace.jl`, `qi_tools.jl`, `structs.jl`, `errors.jl`.
+- QuantumFurnace.jl codebase -- Direct analysis of `trajectories.jl`, `furnace.jl`, `structs.jl`, `energy_domain.jl`, `coherent.jl`, `qi_tools.jl`, `test_helpers.jl`, `main_thermalize.jl`, `main_liouv.jl`
+- Chen, Kastoryano, Brandao, Gilyen (2023) "Quantum Thermal State Preparation" [arXiv:2303.18224](https://arxiv.org/abs/2303.18224) -- GNS construction, sigma parameter, energy uncertainty
+- Chen, Kastoryano, Gilyen (2025) "An efficient and exact noncommutative quantum Gibbs sampler" [arXiv:2311.09207](https://arxiv.org/abs/2311.09207) -- KMS construction, coherent B term, exact detailed balance
+- Ding, Li, Lin (2024) "Efficient quantum Gibbs samplers with KMS detailed balance" [arXiv:2404.05998](https://arxiv.org/abs/2404.05998) -- Alternative KMS construction, comparison framework
+- [Julia Multi-Threading Documentation](https://docs.julialang.org/en/v1/manual/multi-threading/) -- Threads.@threads, TaskLocalRNG, thread safety
+- [QuantumToolbox.jl Monte Carlo Solver](https://qutip.org/QuantumToolbox.jl/stable/users_guide/time_evolution/mcsolve) -- Parallel trajectory methodology
+- [QuantumOptics.jl Quantum Trajectories](https://docs.qojulia.org/timeevolution/mcwf/) -- MCWF ensemble averaging
 
 ### Partially verified (MEDIUM confidence)
-- [Abdelhafez et al. (2019) "The Monte Carlo wave-function method: A robust adaptive algorithm and a study in convergence"](https://arxiv.org/abs/1803.08589) -- Convergence properties, discretization error analysis, adaptive timestep (not directly applicable but informs error understanding).
-- [Rall et al. (2025) "A Randomized Method for Simulating Lindblad Equations and Thermal State Preparation"](https://arxiv.org/html/2407.06594) -- Per-step O(lambda^2 tau^2) error, multi-step O(T^2/M) average error, O(T/sqrt(M)) random channel error, exponential convergence to thermal state preservation.
-- [Ding, Li, Lin (2024) "Efficient quantum Gibbs samplers with KMS detailed balance"](https://arxiv.org/abs/2404.05998) -- Alternative KMS construction with discrete jump operators, simplified error analysis.
+- [Abdelhafez et al. (2019)](https://arxiv.org/abs/1803.08589) -- Adaptive MCWF convergence study
+- 1D Heisenberg chain ground state correlations -- Bethe ansatz results (standard condensed matter textbook knowledge)
+- [Heisenberg chain Wikipedia](https://en.wikipedia.org/wiki/Quantum_Heisenberg_model) -- General properties
 
-### Domain knowledge (HIGH confidence, not web-verified)
-- Trace distance and fidelity as standard quantum state comparison metrics: Fuchs-van de Graaf inequalities relating them.
-- 1/sqrt(N) convergence of Monte Carlo ensemble averages: standard Central Limit Theorem result.
-- CPTP map completeness relation sum K_i^dag K_i = I: fundamental requirement for physical quantum channels.
-- Bootstrap confidence interval methodology: standard statistical technique.
+### Domain knowledge (HIGH confidence, established physics)
+- SU(2) symmetry of isotropic Heisenberg chain implies `<Z_i> = 0` without disorder
+- Nearest-neighbor correlations `<Z_iZ_{i+1}>` are the natural order parameter for antiferromagnetic Heisenberg models
+- 1D spin-1/2 Heisenberg antiferromagnet is gapless (Haldane conjecture, proven by Bethe ansatz)
+- Monte Carlo ensemble averaging: standard error scales as 1/sqrt(N)
+- Batch-based adaptive sampling is standard methodology in computational physics
 
 ---
-*Feature research for: Trajectory simulation validation and testing (v1.0 Trajectories milestone)*
-*Researched: 2026-02-13*
+*Feature research for: v1.2 Multi-threaded trajectory engine and KMS-vs-GNS experiments*
+*Researched: 2026-02-15*

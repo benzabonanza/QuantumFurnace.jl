@@ -1,301 +1,209 @@
 # Project Research Summary
 
-**Project:** QuantumFurnace.jl v1.0 Trajectories Milestone
-**Domain:** Quantum trajectory simulation validation and correctness testing
-**Researched:** 2026-02-13
-**Confidence:** HIGH (direct codebase analysis + verified quantum simulation literature)
+**Project:** QuantumFurnace.jl v1.2 Multi-Threaded Trajectory Engine & KMS-vs-GNS Experiments
+**Domain:** High-performance quantum Monte Carlo trajectory sampling for Gibbs state preparation
+**Researched:** 2026-02-15
+**Confidence:** HIGH
 
 ## Executive Summary
 
-The v1.0 Trajectories milestone is about fixing trajectory sampling bugs and building a comprehensive test suite to validate quantum Monte Carlo wave function (MCWF) simulation against density matrix (DM) evolution. Research reveals that the current trajectory implementation has three specific compilation bugs in `build_trajectoryframework` and a coherent term ordering issue in `step_along_trajectory!`. The "flat vs two-stage sampling" question is a red herring for the uniform Heisenberg case — the real bugs are code errors that prevent execution.
+QuantumFurnace.jl implements quantum trajectory sampling for Gibbs state preparation using the Monte Carlo wave function (MCWF) method with Chen et al.'s KMS and GNS detailed balance constructions. The v1.2 milestone adds multi-threaded trajectory parallelism, the GNS trajectory path (approximate detailed balance), adaptive convergence monitoring, and comparison experiments to validate that KMS (exact detailed balance with coherent correction) outperforms GNS.
 
-The recommended validation strategy follows a strict hierarchy: CPTP verification must come first (before any trajectory runs), then DM-only tests establish reference values, and only then can trajectory-vs-DM cross-validation proceed. The error hierarchy (Bohr → Energy → Time → Trotter → delta-stepping → trajectory sampling) provides natural test tiers. The DM simulation (`run_thermalization`) is the ground truth oracle — no external validation libraries needed.
+The recommended approach is straightforward: use Julia's stdlib threading (`Threads.@spawn`) with per-thread workspaces and explicit RNG seeding for reproducibility. No new production dependencies are needed for threading — only JLD2 for experiment data serialization and optionally DataFrames/CSV for parameter sweep tables. The architecture separates the immutable read-only precomputed data (NUFFT prefactors, Kraus matrices) from mutable per-thread scratch buffers (TrajectoryWorkspace), enabling embarrassingly parallel execution across thousands of independent trajectories.
 
-Critical insight: compare trajectory-averaged rho against DM rho, not against Gibbs. Both share the same discretization errors (quadrature, Trotter, delta-step); the only difference should be statistical sampling noise O(1/sqrt(N_traj)). Testing against Gibbs conflates multiple error sources and leads to false failures or false confidence. The stack needs only 4 test-only dependencies (StableRNGs, HypothesisTests, StatsBase, Aqua) — no production dependencies required.
+The critical risk is BLAS thread oversubscription: Julia threads calling OpenBLAS-threaded `mul!` creates nested parallelism that destroys performance. The fix is trivial (`BLAS.set_num_threads(1)` before spawning threads) but must be applied from the start. Secondary risks include false RNG seeding (breaking reproducibility), data races from shared mutable workspace, and conflating fixed-point approximation error with mixing rate when comparing KMS vs GNS.
 
 ## Key Findings
 
 ### Recommended Stack
 
-**No new production dependencies needed.** The trajectory fix is code correction, not dependency addition. All numerical tools (LinearAlgebra, Random, Statistics, BLAS) are already present.
+Julia's standard library threading is sufficient for this milestone. The trajectory sampling is embarrassingly parallel: each trajectory is an independent sequence of CPTP map applications with its own state vector, workspace buffers, and RNG. Shared read-only data (precomputed NUFFT prefactors, per-operator Kraus matrices R/K0/U_residual/U_B) is safely accessed by all threads via a single `TrajectoryFramework` instance.
 
-**Four test-only dependencies recommended:**
-- **StableRNGs**: Reproducible RNG for regression tests — Julia's default RNG is not version-stable
-- **HypothesisTests**: Statistical significance tests (OneSampleTTest) for trajectory vs DM comparison
-- **StatsBase**: Standard error of mean, distribution distance metrics (L2dist, kldivergence)
-- **Aqua**: Automated package quality checks (ambiguities, stale deps, method piracy)
+**Core technologies:**
+- **Base.Threads (stdlib)** — `@spawn`/`@sync` pattern for parallel trajectories. TaskLocalRNG provides per-task thread-safe random streams. Already imported in the codebase.
+- **JLD2.jl (new dependency)** — Experiment result serialization. Preserves Julia types exactly (nested NamedTuples, ComplexF64 matrices, parametric structs). HDF5-compatible for Python/MATLAB interop. Replaces BSON for new data.
+- **DataFrames.jl + CSV.jl (optional)** — Parameter sweep result tables if sweep API lives in the package. Use JLD2 for full results + CSV for human-readable summary tables.
+- **BLAS.set_num_threads(1)** — Critical for avoiding thread oversubscription. At dim=256 (n=8), single-threaded BLAS per trajectory + Julia thread-level parallelism across trajectories is optimal.
 
-These go in `[extras]` section of Project.toml, not `[deps]`. They do not increase dependency burden for users.
-
-**What NOT to add:**
-- OrdinaryDiffEq — overkill; DM simulation already provides reference
-- ExponentialUtilities — trajectory code uses discrete Kraus maps, not matrix exponentials
-- KrylovKit — eigendecomposition is a separate concern, defer to later
-- QuantumOptics.jl / QuantumToolbox.jl — third-party frameworks with different type systems; DM simulation is the reference
-- Distributions.jl — heavyweight (~15 deps); HypothesisTests already provides needed statistical tests
+**No new packages needed for:**
+- Adaptive convergence: Welford's online mean/variance algorithm is 10 lines of code. OnlineStats.jl is overkill.
+- Thread-safe RNG: Julia 1.7+ TaskLocalRNG is built-in. Use explicit `Xoshiro(seed + trajectory_id)` for reproducibility.
+- Observable tracking: Existing `_accumulate_measurements!` pattern extends naturally to per-thread buffers.
 
 ### Expected Features
 
-**Must have (table stakes for milestone completion):**
-- Fix `build_trajectoryframework` compilation bugs — `trotter` variable undefined, `B_total` used when unassigned
-- CPTP verification test — verify K0†K0 + delta*R + U_res†U_res = I
-- Trajectory-averaged rho vs DM evolution — primary correctness criterion for three domains (Energy, Time, Trotter)
-- Domain error hierarchy test — Bohr < Energy < Time < Trotter
-- Single-step delta^2 error scaling — empirical verification of Chen Theorem III.1
-- Multi-step delta error scaling — O(delta) accumulation over full evolution
-- Detailed balance test — BohrDomain fixed point = Gibbs to machine precision
-- Coherent term correctness — with_coherent=true dramatically closer to Gibbs than false
-- Statistical 1/sqrt(N) convergence test — trajectory averaging error decreases as expected
+**Must have (table stakes for v1.2):**
+- **Multi-threaded trajectory sampling** — Thousands of trajectories at n=8 require parallelism. Each trajectory is independent. Share precomputed data (R, K0, NUFFT prefactors) read-only; clone workspace per thread.
+- **Per-thread workspace** — TrajectoryWorkspace (jump_oft, psi_tmp, Rpsi buffers) is mutable. Cannot be shared. Each thread allocates its own.
+- **GNS trajectory path** — ThermalizeConfigGNS already exists. Dispatches correctly through `pick_transition` to `_pick_transition_gns` (unshifted gamma). No coherent B term (`with_coherent=false` enforced). Verify correct integration.
+- **Density matrix accumulation** — Thread-safe: each thread accumulates `rho_local`, final reduction merges all. Avoids contention.
+- **Trace distance to Gibbs tracking** — Primary convergence metric. Compute `trace_distance_h(rho_avg, gibbs)` at batch intervals.
+- **Per-observable convergence** — Track `<Z_iZ_{i+1}>` (nearest-neighbor correlations), `<Z_i>` (local magnetization), `<H>` (energy) per trajectory batch. Most informative for Heisenberg chains.
+- **Adaptive sampling** — Run trajectory batches until convergence criterion met (trace distance stabilized, observable standard error below threshold). Maximum budget cap prevents infinite loops.
+- **Experiment data architecture** — Serialize ExperimentResult (config + rho_mean + convergence curves + metadata) via JLD2. Enables parameter sweeps over (n, beta, KMS/GNS).
+- **KMS-vs-GNS experiment driver** — Script running matched experiments: same Hamiltonian, same beta, same delta, different detailed balance construction. Compares final trace distances and convergence rates.
 
-**Should have (strengthens validation):**
-- OFT consistency across domains — Energy OFT matches Time/Trotter NUFFT OFT
-- R matrix cross-validation — trajectory R matches Liouvillian R
-- Per-observable trajectory convergence — individual expectation values match DM
-- Jump statistics histogram — empirical jump rates match theoretical predictions
-- Regression tests with frozen data — lock down reference results
+**Should have (differentiators):**
+- **Convergence curve plotting** — Paper-ready plots of trace distance vs N_traj for KMS and GNS on same axes.
+- **Bootstrap confidence intervals** — Error bars on trace distance from trajectory sub-batches.
+- **Spectral gap measurement** — For n<=6, compute Liouvillian gap. For n=8, estimate from trajectory convergence rate.
+- **Multiple initial states** — Verify convergence from maximally mixed and random pure states.
 
-**Defer (v2+):**
-- Diamond norm channel comparison — expensive (SDP), only needed for publication rigor
-- Multi-threaded trajectory validation — correctness first, performance later
-- Non-Hermitian jump operator tests — all target systems use Hermitian jumps
-- Large system benchmarks (>6 qubits) — validation is about correctness, not scale
-- Bohr domain trajectories — diagonalizing Kossakowski matrix is prohibitive
+**Defer (v2+ or anti-features):**
+- **GPU acceleration** — dim=256 is far too small for GPU advantage. GPU kernel launch overhead dominates.
+- **Distributed (MPI) trajectories** — Single-node multi-core sufficient for N_traj ~ 10^4-10^5. MPI adds serialization overhead.
+- **Float32 trajectories** — Trace distance to Gibbs at high beta is ~1e-6, below Float32 noise floor.
+- **Adaptive timestep** — QuantumFurnace uses discrete-time CPTP unraveling, not continuous-time MCWF. Timestep is fixed.
 
 ### Architecture Approach
 
-The validation architecture uses a **reference oracle pattern**: each approximation layer (Energy, Time, Trotter) is tested against the next-higher-fidelity layer. DM simulation is known-good and working; trajectory code is the new component being validated. Tests follow a six-tier structure that mirrors the error hierarchy.
+The architecture cleanly separates immutable shared data from mutable per-thread state. The current single-threaded design embeds a `TrajectoryWorkspace` in `TrajectoryFramework`, which blocks sharing. The fix: pass workspace as a separate argument to `step_along_trajectory!`, allowing one framework to serve many threads.
 
-**Major components and their roles:**
+**Major components:**
 
-1. **Test helpers** (`test/test_helpers.jl`) — Shared fixtures: `make_test_system()` creates standard Heisenberg systems, `make_liouv_config()` / `make_therm_config()` generate configs, tiered tolerance constants match error levels (TOL_BOHR_EXACT, TOL_ENERGY_QUAD, etc.)
+1. **TrajectoryFramework (immutable, shared read-only)** — Contains per-operator Kraus matrices (R, K0, U_residual, U_B), precomputed NUFFT prefactors, transition function, config, jumps. Built once before spawning threads. All fields are read-only during trajectory stepping.
 
-2. **DM reference tests** (Tiers 1-4) — Validate DM path first: detailed balance (Gibbs fixed point), coherent term consistency (B_bohr vs B_time vs B_trotter), OFT consistency (exact vs NUFFT), DM step error scaling (delta^2 per step, delta total). These establish the ground truth before any trajectory code runs.
+2. **ThreadTrajectoryState (mutable, per-thread)** — Contains TrajectoryWorkspace (scratch buffers), per-thread psi vector, per-thread rho accumulator, per-thread observable accumulator, per-thread RNG. Allocated per spawned thread/task. Merged after `@sync`.
 
-3. **Trajectory core** (`trajectories.jl`) — Needs three bug fixes: (a) remove `where T` and `trotter=trotter` kwarg from `build_trajectoryframework`, (b) initialize `B_total = nothing` before conditional, (c) move U_B application to after branch selection (matches DM ordering). The two-stage sampling question is resolved: flat scan is mathematically correct for uniform jump operators, which is the current case.
+3. **AdaptiveBatchManager (convergence control)** — Runs trajectory batches of fixed size, evaluates convergence criteria (trace distance stability, observable standard error), decides continue/stop. Maintains running mean and convergence history. Maximum budget prevents infinite loops.
 
-4. **Trajectory validation tests** (Tiers 5-6) — After fixes: trajectory average matches DM (primary test), trajectory converges to Gibbs with correct error budget, error hierarchy preserved in trajectories, 1/sqrt(N) convergence verified.
+4. **ExperimentResult (data model)** — Contains config, rho_mean, trace distance, observable time series, convergence history, metadata (timestamp, Julia version, thread count, seed). Serialized via JLD2 per experiment point.
 
-**Critical architectural insight:** `run_thermalization` uses randomized jump selection (pick one jump per step, rescale by 1/p_jump). Trajectory code uses deterministic full map (all jumps contribute to R). These are different CPTP channels. For validation, compare both to the exact Lindbladian channel or create a `run_thermalization_deterministic` that matches the trajectory channel structure.
+5. **GNS dispatch (existing, no changes)** — ThermalizeConfigGNS <: AbstractThermalizeConfig. `pick_transition(config::ThermalizeConfigGNS)` returns unshifted gamma. `with_coherent=false` enforced, so B term is skipped. All trajectory machinery already handles this via polymorphic dispatch.
+
+**Key patterns:**
+- **Thread coordination:** `@spawn` per batch or chunk, each task allocates workspace in closure, reduces locally, returns result. Main thread sums batch results. No locks or atomics needed.
+- **BLAS thread management:** Set `BLAS.set_num_threads(1)` before trajectory loop, restore after. Critical for n=4-8 (dim=16-256) where BLAS threading overhead exceeds computation time.
+- **Reproducible RNG:** Seed per-trajectory RNGs deterministically: `rng_i = Xoshiro(master_seed + trajectory_id)`. Pass to `step_along_trajectory!(psi, fw, rng)`. Results reproducible within Julia version at fixed thread count.
 
 ### Critical Pitfalls
 
-1. **Comparing trajectory to Gibbs instead of to DM** — The error budget has 6+ sources (sampling, delta-step, quadrature, Trotter, coherent approx). DM shares all except sampling. Test `||rho_traj - rho_DM|| < C/sqrt(N_traj)` isolates trajectory correctness. Testing against Gibbs conflates errors and leads to false failures or false confidence. **Mitigation:** Primary test is always trajectory-vs-DM; secondary test compares both to Gibbs separately.
+1. **BLAS thread oversubscription (CRITICAL)** — OpenBLAS uses multiple threads for `mul!`. Julia threads + BLAS threads = 64 OS threads on 8 cores. Performance collapse (73% slower than serial in documented cases). **Prevention:** `BLAS.set_num_threads(1)` at entry point of parallel trajectory engine. The codebase already has a TODO comment flagging this issue.
 
-2. **Wrong delta-step error scaling expectation** — Chen Theorem III.1: O(delta^2) per step, O(delta) total over T/delta steps. Developers may expect either O(delta) per step (too pessimistic) or O(delta^2) total (too optimistic). **Mitigation:** Delta-scaling test verifies empirical O(delta) total error. Document "per step: O(delta^2), total: O(delta)" in all relevant tests.
+2. **Shared mutable TrajectoryWorkspace data race (CRITICAL)** — The current TrajectoryFramework embeds a single `ws::TrajectoryWorkspace{T}` with shared buffers (jump_oft, psi_tmp, Rpsi). Naive parallelization of the trajectory loop causes all threads to write to the same buffers concurrently. Silently wrong results. **Prevention:** Separate workspace from framework. Pass `ws` as explicit argument to `step_along_trajectory!`. Each thread allocates its own workspace.
 
-3. **Stochastic test flakiness from fixed seeds hiding bugs** — Fixed seed may avoid code paths where bugs exist (e.g., fallback branch never triggered). **Mitigation:** Two-tier testing: (1) deterministic property tests (CPTP, normalization), (2) statistical convergence tests (many trajectories, no fixed seed, 3-sigma bounds).
+3. **Global RNG breaks reproducibility (CRITICAL)** — `step_along_trajectory!` currently calls `rand()` (implicit global RNG). TaskLocalRNG is thread-safe but NOT reproducible across different thread counts (task seeding depends on spawn order). **Prevention:** Modify `step_along_trajectory!` to accept `rng::AbstractRNG` parameter. Seed per-trajectory RNGs independently: `Xoshiro(seed + i)`.
 
-4. **Probability normalization sum drift masked by fallback** — `p_nojump + p_res + p_jump_total` should equal 1.0. If `base_prefactor` formula differs between `precompute_R` and `step_along_trajectory!`, cumulative scan fails to reach target or overshoots, triggering silent fallback. **Mitigation:** Add debug assertion `|csum - p_jump_total| / p_jump_total < 1e-10`, extract `base_prefactor` to shared function.
+4. **KMS-vs-GNS comparison at same sigma conflates physics (MODERATE)** — KMS uses shifted gamma `(w + beta*sigma^2/2)`, GNS uses unshifted gamma `w`. Same sigma parameter produces different Lindbladians with different spectral gaps and fixed-point errors. **Prevention:** Define comparison protocol upfront (same sigma vs matched gap vs same compute budget). Document which protocol is used. Separate fixed-point error from mixing rate in analysis.
 
-5. **Coherent unitary applied to wrong state** — Current code applies U_B after computing branch probabilities but before selection, then branches use pre-U_B cached quantities (K0*psi, R*psi). Correct order: apply Kraus map first, then U_B. **Mitigation:** Move U_B application to after branch selection, matching DM code ordering (U_B applied to entire Kraus output).
+5. **Adaptive sampling stops prematurely from autocorrelation (MODERATE)** — Consecutive trajectories from same initial state produce correlated final states if mixing time is not much longer than total evolution time. Standard error estimate assumes i.i.d., underestimates uncertainty. **Prevention:** Use observable-based convergence (track `||rho(t) - rho(t-Delta)||`) rather than pure statistical criterion. Batch means with proper batch size (20-30 batches minimum).
 
 ## Implications for Roadmap
 
-Based on research, the milestone requires **three sequential phases** with clear dependencies:
+Based on research, the milestone naturally decomposes into sequential phases due to strong dependencies. The workspace refactor is a gate for all parallelism. GNS path verification and experiment data model can proceed in parallel after that. Adaptive sampling requires convergence tracking. Experiments integrate everything.
 
-### Phase 1: Fix Trajectory Code and Add CPTP Guards
-**Rationale:** Nothing trajectory-related works until compilation errors are fixed. CPTP verification must come before any trajectory runs — without it, non-unit total probability will bias all downstream results.
+### Phase 1: Workspace Refactor (Gate for Parallelism)
+**Rationale:** The embedded mutable workspace in TrajectoryFramework is the single blocker for thread safety. This refactor enables all subsequent parallel work.
+**Delivers:** `step_along_trajectory!(psi, fw, ws, rng)` signature with explicit workspace and RNG arguments. Backward compatibility wrapper for existing code.
+**Addresses:** Pitfall 2 (shared mutable workspace), Pitfall 3 (global RNG). Prerequisite for multi-threading.
+**Complexity:** LOW — signature change to 2-3 functions, add workspace parameter.
 
-**Delivers:**
-- `build_trajectoryframework` bugs fixed (undefined `trotter`, uninitialized `B_total`, remove `where T`)
-- Coherent unitary ordering corrected (move U_B after branch selection)
-- S matrix PSD check added (`issuccess(cholesky)` or eigenvalue guard)
-- Probability normalization assertion added to `step_along_trajectory!`
+### Phase 2: Multi-Threaded Trajectory Engine
+**Rationale:** Thousands of trajectories at n=8 require parallelism. Embarrassingly parallel once workspace is separated.
+**Delivers:** `run_trajectories_parallel(jumps, config, psi0, ham; ntraj, seed, nthreads)` using `@spawn`-per-batch pattern. Per-thread workspace allocation, per-thread partial rho accumulation, final reduction. BLAS thread management (`BLAS.set_num_threads(1)`).
+**Addresses:** Core feature (multi-threaded sampling), Pitfall 1 (BLAS oversubscription), Pitfall 4 (false sharing via per-thread buffers), Pitfall 9 (GC pressure via allocation audit).
+**Complexity:** MEDIUM — threading coordination, per-thread state management, RNG reproducibility testing.
+**Depends on:** Phase 1 (workspace refactor).
 
-**Addresses features:**
-- build_trajectoryframework bug fix (must-have P0)
-- Coherent term correctness (must-have)
-- CPTP verification test (must-have P0)
+### Phase 3: GNS Trajectory Path Verification
+**Rationale:** GNS dispatch already exists but needs integration testing. Can proceed in parallel with Phase 2 (no code changes needed, only verification).
+**Delivers:** Tests confirming GNS trajectory path produces correct fixed point. Verification that `per_op.U_B === nothing` for GNS configs. Documentation of sigma parameter space for paper experiments.
+**Addresses:** Core feature (GNS path), prerequisite for KMS-vs-GNS experiments.
+**Complexity:** LOW — test harness, no source changes.
+**Depends on:** Nothing (GNS dispatch already works).
 
-**Avoids pitfalls:**
-- Pitfall 5 (coherent unitary ordering)
-- Pitfall 6 (normalization drift)
-- Pitfall 9 (Cholesky non-PSD silent failure)
+### Phase 4: Experiment Data Model + Serialization
+**Rationale:** Need concrete data structures and persistence before building convergence tracking or experiments. JLD2 preserves Julia types, enabling clean round-trip of nested configs and matrices.
+**Delivers:** `ExperimentResult` struct, `ExperimentSpec` for parameter grid, `save_experiment`/`load_experiment` via JLD2. Directory structure for experiment organization.
+**Addresses:** Core feature (data architecture). Enables Phase 5 (adaptive sampling) and Phase 6 (experiments).
+**Complexity:** MEDIUM — data model design, JLD2 integration, file organization.
+**Depends on:** Nothing (pure data types).
 
-**Estimated effort:** LOW-MEDIUM (4 specific bugs, well-characterized)
+### Phase 5: Convergence Tracking & Adaptive Sampling
+**Rationale:** Adaptive sampling requires trace distance tracking, per-observable tracking, and batch-based convergence evaluation. Builds on multi-threading and data model.
+**Delivers:** `AdaptiveBatchManager` with convergence criteria (trace distance stability, observable variance, Gibbs proximity). Batch execution with convergence evaluation. Welford online mean/variance for numerical stability.
+**Addresses:** Core features (trace distance tracking, per-observable convergence, adaptive sampling). Pitfall 7 (premature stopping via observable-based convergence), Pitfall 11 (memory via scalar metrics), Pitfall 12 (batch size effects).
+**Complexity:** MEDIUM — convergence criteria design, batch coordination, statistical methodology.
+**Depends on:** Phase 2 (multi-threading), Phase 4 (data model).
 
-### Phase 2: Build DM-Only Test Suite (Reference Establishment)
-**Rationale:** The DM simulation path is known-good and working. Establishing reference values from DM tests first enables trajectory validation in Phase 3. If DM tests fail, the bug is in DM code (not trajectories), saving debugging time.
-
-**Delivers:**
-- `test/runtests.jl` — central test runner
-- `test/test_helpers.jl` — shared fixtures (make_test_system, configs, tolerances)
-- `test/test_detailed_balance.jl` — Gibbs fixed point for Bohr/Energy/Time/Trotter
-- `test/test_coherent_term.jl` — B operator cross-domain consistency
-- `test/test_oft_consistency.jl` — OFT consistency (exact vs NUFFT)
-- `test/test_dm_step_errors.jl` — delta^2 per step, delta total scaling
-
-**Addresses features:**
-- Detailed balance test (must-have)
-- Domain error hierarchy test (must-have)
-- Single/multi-step DM error scaling (must-have)
-- OFT consistency (should-have)
-- R matrix cross-validation (should-have)
-
-**Uses stack:**
-- Test stdlib (already present)
-- StableRNGs (for any deterministic regression tests)
-- HypothesisTests (for statistical comparisons if needed)
-
-**Avoids pitfalls:**
-- Pitfall 2 (error budget confusion) — establishes DM-only error floor
-- Pitfall 3 (wrong scaling expectation) — verifies empirical O(delta) total
-- Pitfall 4 (seed flakiness) — uses two-tier pattern
-
-**Estimated effort:** MEDIUM (6 test files, ~300-500 LOC total, well-structured)
-
-### Phase 3: Trajectory Validation and Cross-Validation
-**Rationale:** After DM reference is established (Phase 2) and trajectory bugs are fixed (Phase 1), this phase validates that trajectory-averaged rho matches DM rho within statistical noise. This is the milestone success criterion.
-
-**Delivers:**
-- `test/test_trajectory.jl` — trajectory average matches DM for Energy/Time/Trotter
-- `test/test_traj_vs_dm.jl` — error hierarchy preserved in trajectories
-- Statistical convergence verification (1/sqrt(N) scaling)
-- Per-observable convergence tests (should-have)
-- Jump statistics histogram (should-have)
-- Regression tests with frozen data (should-have)
-
-**Addresses features:**
-- Trajectory-averaged rho vs DM evolution (must-have, CRITICAL)
-- Statistical 1/sqrt(N) convergence test (must-have)
-- Per-observable trajectory convergence (should-have)
-- Jump statistics histogram (should-have)
-- Regression tests (should-have)
-
-**Uses stack:**
-- StableRNGs (reproducible seeds for regression tests)
-- HypothesisTests (OneSampleTTest for trajectory mean vs DM value)
-- StatsBase (sem for standard error, distribution distances)
-
-**Avoids pitfalls:**
-- Pitfall 1 (flat vs two-stage) — research resolved: flat scan is correct for uniform jumps
-- Pitfall 2 (error budget) — compares trajectory-vs-DM, not trajectory-vs-Gibbs
-- Pitfall 8 (insufficient trajectories) — power analysis determines N_traj (500-2000 depending on system size)
-
-**Estimated effort:** MEDIUM-HIGH (~400 LOC, requires multiple trajectory runs for convergence tests)
+### Phase 6: KMS-vs-GNS Experiment Driver
+**Rationale:** Integration point tying all features together. Runs matched experiments across parameter grid (n=4,6,8; beta=5,10,20; KMS vs GNS). Produces paper-ready comparison data.
+**Delivers:** `kms_vs_gns_grid()` parameter sweep specification. `run_experiment_grid()` driver script. Convergence curve plotting. Matched comparison protocol definition (same sigma, same initial state, separate fixed-point error from mixing rate).
+**Addresses:** Core feature (KMS-vs-GNS experiments). Pitfall 5 (comparison protocol), Pitfall 6 (fixed-point vs mixing), Pitfall 15 (initial state control).
+**Complexity:** MEDIUM — parameter sweep logic, experiment orchestration, result aggregation.
+**Depends on:** All previous phases.
 
 ### Phase Ordering Rationale
 
-**Sequential dependencies:**
-- Phase 2 and Phase 3 both depend on Phase 1 (trajectory code must compile and run)
-- Phase 3 depends on Phase 2 (DM reference values needed for comparison)
-- Within Phase 2, tests are independent (can be written in any order)
-- Within Phase 3, basic trajectory test must pass before statistical convergence tests
-
-**Why this grouping:**
-- Phase 1 is pure code fixes (no tests, but enables everything)
-- Phase 2 validates the known-good path (DM) and establishes oracle
-- Phase 3 validates the new path (trajectories) against oracle
-
-**Parallelization opportunities:**
-- Phase 2 test files can be written in parallel (they share only test_helpers.jl)
-- Phase 3 cannot start until Phase 1 and Phase 2 complete
-
-**Cleanup after validation:**
-- Delete ~200 lines of commented code in jump_workers.jl, trajectories.jl
-- Remove old KrausFramework references
-- Project.toml cleanup (move Revise, Debugger, BenchmarkTools to proper sections) — can happen during Phase 2
+- **Workspace refactor gates everything:** Cannot parallelize until workspace is separated from framework. Small change, large enabling effect. Do first.
+- **GNS verification is independent:** Dispatches through existing polymorphic code. Can happen in parallel with Phase 2. No changes needed, only tests.
+- **Data model before adaptive sampling:** Need concrete result types before building convergence manager. Data model is pure (no behavioral logic), can define early.
+- **Adaptive sampling integrates threading + tracking:** Requires multi-threaded trajectory execution and data persistence. Must come after Phase 2 and Phase 4.
+- **Experiments integrate everything:** Cannot run comparison experiments until all components (threading, GNS path, data model, adaptive sampling) are complete. Natural final phase.
 
 ### Research Flags
 
-**No phases need deeper research during planning.** This is a bug-fix and validation milestone for existing code, not new feature development. All research is complete.
+**Phases with standard patterns (skip research-phase):**
+- **Phase 1 (Workspace refactor):** Straightforward signature change. No external research needed.
+- **Phase 2 (Multi-threading):** Julia threading documentation is comprehensive. Pattern is well-established in QuantumOptics.jl, ITensors.jl. BLAS thread management is documented.
+- **Phase 3 (GNS verification):** Physics is known (Chen 2023 paper). Implementation already exists. Testing only.
+- **Phase 4 (Data model):** Standard serialization problem. JLD2 docs are sufficient.
 
-**Standard patterns (research done):**
-- CPTP channel validation — well-understood quantum information pattern
-- Monte Carlo convergence testing — standard statistical pattern (1/sqrt(N))
-- Error hierarchy testing — reference oracle pattern, well-documented
-- Julia Test.jl patterns — standard Julia testing practices
+**Phases needing validation during execution:**
+- **Phase 5 (Adaptive sampling):** Convergence criteria tuning is empirical. Threshold values (rtol=0.01, batch_size=100) are reasonable defaults but may need adjustment based on pilot runs at n=4,6,8. Not a research issue — a parameter tuning issue.
+- **Phase 6 (Experiments):** Sigma parameter space for fair KMS-vs-GNS comparison needs empirical validation. Initial proposal (sigma=1/beta for both) is defensible but may need refinement based on spectral gap measurements. This is experimental science, not software architecture research.
 
-**Phase-specific notes:**
-- Phase 1: All four bugs are characterized (file, line number, fix known)
-- Phase 2: Test structure follows QuantumOptics.jl and Julia community standards
-- Phase 3: Validation methodology follows MCWF literature (QDYN, QuantumOptics, QuantumToolbox)
+**No phases require `/gsd:research-phase`:** The architecture, stack, and pitfalls are well-understood from this research. Phase planning should focus on implementation details, not additional domain research.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | 4 test-only deps verified via official docs and GitHub repos; all are JuliaStats/JuliaTesting org packages with stable APIs |
-| Features | HIGH | Codebase analysis identified specific bugs; validation methodology verified across QuantumOptics.jl, QuantumToolbox.jl, QDYN docs |
-| Architecture | HIGH | Direct analysis of all 23 source files, 7 test files, simulation scripts; error hierarchy from Chen papers (2023, 2025) |
-| Pitfalls | HIGH | 9 critical/moderate pitfalls identified from codebase bugs + MCWF literature + Julia testing patterns |
+| Stack | HIGH | Julia stdlib threading is verified sufficient. JLD2 is actively maintained, pure Julia. No speculative dependencies. |
+| Features | HIGH | Codebase analysis shows GNS dispatch already works. Multi-threading pattern is standard MCWF methodology. Observable selection grounded in Heisenberg chain physics. |
+| Architecture | HIGH | Direct source code analysis of all 23 src files. Workspace separation pattern is proven in Julia HPC community. Thread coordination matches established Monte Carlo patterns. |
+| Pitfalls | HIGH | BLAS oversubscription, RNG reproducibility, and workspace data races are documented Julia issues with known solutions. KMS-vs-GNS comparison subtleties grounded in Chen et al. papers. |
 
 **Overall confidence:** HIGH
 
 ### Gaps to Address
 
-**No gaps requiring resolution during planning.** All technical questions are answered:
+**Empirical validation needed:**
+- **BLAS thread count crossover at n=12:** For dim=4096, benchmark `BLAS.set_num_threads(1)` with `julia -t 64` vs `BLAS.set_num_threads(4)` with `julia -t 16`. Optimal split is system-dependent. Current recommendation (BLAS=1 for n<=8) is safe but may be suboptimal at n=12.
+- **Sigma parameter space for GNS:** The approximation error `||rho_fixedpoint_GNS - gibbs||` vs sigma needs empirical measurement for the specific Heisenberg Hamiltonians used. Chen 2023 theory gives asymptotic bounds but practical values depend on the spectrum.
+- **Adaptive convergence threshold tuning:** The proposed rtol=0.01 for trace distance stability is reasonable but may need adjustment based on pilot runs. Too tight wastes computation; too loose gives false convergence.
 
-- Two-stage sampling question: RESOLVED — flat scan is mathematically correct for uniform jump operators (current case); implement normalization check, not restructure
-- CPTP verification approach: RESOLVED — check sum of K†K, use S matrix eigenvalue guard
-- DM vs trajectory channel difference: RESOLVED — both channels converge to same Lindbladian in delta→0 limit; test at matched delta or compare both to expm(L*delta)
-- Error scaling expectations: RESOLVED — O(delta^2) per step, O(delta) total; test with delta-sweep
-- Test infrastructure pattern: RESOLVED — two-tier (deterministic property + statistical convergence)
+**Implementation decisions deferred to planning:**
+- **DataFrames in package vs experiment scripts:** If parameter sweep API (`sweep_kms_vs_gns(...)` returning DataFrame) lives in the package, add DataFrames to `[deps]`. If experiments are standalone scripts outside the package, keep it script-local. Decision depends on whether the package is a library (defer DataFrames) or includes experiment tooling.
+- **Batch size formula:** Recommended `B = max(ntraj_min / 30, 100)` for 20-30 batches. Actual optimal value depends on convergence speed (fast convergence allows larger batches; slow convergence needs more checkpoints). Tune empirically.
+- **Workspace allocation strategy:** Current recommendation is `@spawn`-per-batch with closure-captured workspace. Alternative: `@threads :static` with `threadid()` indexing into pre-allocated workspace pool. Both work; choose based on allocation profiling results.
 
-**Only validation needed:** Run the tests after Phase 1 fixes to confirm bugs are resolved.
-
-## Test System Specifications
-
-**Recommended test systems:**
-- 2-qubit Heisenberg: dim=4, for large-N_traj statistical tests (fast)
-- 3-qubit Heisenberg: dim=8, primary validation target (rich spectrum, still fast)
-- 4-qubit Heisenberg: dim=16, secondary validation (approaching "real" complexity)
-
-**Recommended parameters:**
-- beta: 1.0, 5.0, 10.0 (low/medium/high temperature)
-- sigma: 1/beta (standard Chen choice)
-- delta: 0.01, 0.05, 0.1 (0.01 is safe, 0.1 is aggressive)
-- num_energy_bits: 10-12 (1024-4096 energy grid points)
-- N_traj: 100 (smoke test), 500 (validation), 1000-2000 (statistical convergence)
-- total_time: 5-20 * (1/spectral_gap) (long enough for steady state)
-
-**Error tolerance hierarchy:**
-- TOL_MACHINE = 1e-12 (exact operations)
-- TOL_BOHR_EXACT = 1e-10 (Bohr+B → Gibbs)
-- TOL_ENERGY_QUAD = 1e-4 (Energy domain quadrature error)
-- TOL_TIME_QUAD = 1e-3 (Time domain adds time quadrature)
-- TOL_TROTTER = 1e-2 (Trotter discretization)
-- TOL_TRAJECTORY_STAT = 0.05 (1/sqrt(N_traj) sampling noise)
+**No major gaps:** The research is comprehensive for milestone planning. Remaining questions are tuning parameters and empirical validation during execution, not architecture uncertainties.
 
 ## Sources
 
-### Primary (HIGH confidence — direct verification)
+### Primary (HIGH confidence)
+- **QuantumFurnace.jl codebase** — Direct analysis of all 23 source files, all tests, and existing trajectory infrastructure. Verified workspace structure, GNS dispatch, and RNG usage.
+- **Julia Multi-Threading Documentation** (https://docs.julialang.org/en/v1/manual/multi-threading/) — `@spawn`, `@sync`, TaskLocalRNG, thread safety.
+- **Julia Random stdlib** (https://docs.julialang.org/en/v1/stdlib/Random/) — TaskLocalRNG per-task seeding, deterministic child RNG derivation.
+- **JLD2.jl official documentation** (https://juliaio.github.io/JLD2.jl/stable/) — API, type preservation, HDF5 compatibility.
+- **ITensors.jl Multithreading Guide** (https://itensor.github.io/ITensors.jl/dev/Multithreading.html) — BLAS.set_num_threads(1) pattern.
+- **Chen, Kastoryano, Gilyen (2025)** "An efficient and exact noncommutative quantum Gibbs sampler" (arXiv:2311.09207) — KMS construction, coherent B term, exact detailed balance.
+- **Chen, Kastoryano, Brandao, Gilyen (2023)** "Quantum Thermal State Preparation" (arXiv:2303.18224) — GNS construction, sigma parameter, energy uncertainty.
 
-**Codebase analysis:**
-- `/Users/bence/code/QuantumFurnace.jl/src/trajectories.jl` — identified 3 bugs (lines 53, 96, 472-477)
-- `/Users/bence/code/QuantumFurnace.jl/src/jump_workers.jl` — DM reference implementation
-- `/Users/bence/code/QuantumFurnace.jl/src/furnace.jl` — run_lindbladian, run_thermalization APIs
-- `/Users/bence/code/QuantumFurnace.jl/src/coherent.jl` — B operator computation
-- `/Users/bence/code/QuantumFurnace.jl/src/qi_tools.jl` — trace_distance, fidelity metrics
+### Secondary (MEDIUM confidence)
+- **Julia Discourse: BLAS vs Julia threads** (https://discourse.julialang.org/t/julia-threads-vs-blas-threads/8914) — Thread oversubscription problem and solutions.
+- **Julia Discourse: Reproducible multithreaded Monte Carlo** (https://discourse.julialang.org/t/reproducible-multithreaded-monte-carlo-task-local-random/35269) — Per-task RNG patterns.
+- **Julia issue #49455** (https://github.com/JuliaLang/julia/issues/49455) — Multi-threaded `mul!` 73% slower than serial due to oversubscription.
+- **Julia issue #49522** (https://github.com/JuliaLang/julia/issues/49522) — `Random.seed!` reproducibility across thread counts.
+- **QuantumToolbox.jl Monte Carlo Solver** (https://qutip.org/QuantumToolbox.jl/stable/users_guide/time_evolution/mcsolve) — EnsembleThreads() pattern for parallel trajectories.
+- **1D Heisenberg chain physics** — Bethe ansatz ground state correlations (~-0.44 for infinite chain), SU(2) symmetry, antiferromagnetic order. Standard condensed matter textbook knowledge.
 
-**Papers (direct reading):**
-- Chen, Kastoryano, Brandao, Gilyen (2023) "Quantum Thermal State Preparation" [arXiv:2303.18224] — Theorem III.1 (O(delta^2) per step, O(T^2/epsilon) cost), weak measurement scheme
-- Chen, Kastoryano, Gilyen (2025) "An efficient and exact noncommutative quantum Gibbs sampler" [arXiv:2311.09207] — KMS detailed balance, coherent term B, Lindbladian stationarity
-
-**Documentation:**
-- [QDYN: Quantum Jump Method](https://ag-koch.gitpages.physik.fu-berlin.de/qdyn/main/concepts/mcwf.html) — ensemble averaging, statistical error, jump selection
-- [QuantumOptics.jl: Quantum trajectories](https://docs.qojulia.org/timeevolution/mcwf/) — MCWF validation methodology
-- [QuantumToolbox.jl: Monte Carlo Solver](https://qutip.org/QuantumToolbox.jl/stable/users_guide/time_evolution/mcsolve) — jump selection, convergence patterns
-
-**Stack verification:**
-- [StableRNGs.jl GitHub](https://github.com/JuliaRandom/StableRNGs.jl) — v1.0.1, LehmerRNG, Big Crush passed
-- [HypothesisTests.jl docs](https://juliastats.org/HypothesisTests.jl/stable/parametric/) — OneSampleTTest, ChisqTest APIs
-- [StatsBase.jl docs](https://juliastats.org/StatsBase.jl/stable/) — sem(), L2dist, kldivergence
-- [Aqua.jl docs](https://juliatesting.github.io/Aqua.jl/dev/) — test_all() API
-- [Julia 1.12 Test stdlib](https://docs.julialang.org/en/v1/stdlib/Test/) — @testset rng= keyword
-
-### Secondary (MEDIUM confidence — community consensus)
-
-- Abdelhafez et al. (2019) "The Monte Carlo wave-function method: A robust adaptive algorithm and a study in convergence" [arXiv:1803.08589] — convergence properties, discretization error analysis
-- Rall et al. (2025) "A Randomized Method for Simulating Lindblad Equations and Thermal State Preparation" [arXiv:2407.06594] — per-step O(λ²τ²) error, multi-step O(T²/M) error
-- Ding, Li, Lin (2024) "Efficient quantum Gibbs samplers with KMS detailed balance" [arXiv:2404.05998] — alternative KMS construction with discrete jumps
-
-### Tertiary (Domain knowledge — standard quantum information)
-
-- CPTP map completeness: sum K_i† K_i = I (fundamental quantum channels requirement)
-- 1/sqrt(N) convergence of Monte Carlo ensemble averages (Central Limit Theorem)
-- Trace distance and fidelity as state comparison metrics (Fuchs-van de Graaf inequalities)
+### Tertiary (domain knowledge, established methodology)
+- **Welford's online algorithm** — Numerically stable streaming variance. Used by NumPy, Rust statistical crates, OnlineStats.jl internally.
+- **Monte Carlo ensemble averaging** — Standard error scales as 1/sqrt(N). Batch means with proper batch size for variance estimation.
+- **MCWF trajectory methodology** — Established in quantum optics since 1990s. QuantumOptics.jl and QuTiP use same patterns.
 
 ---
-*Research completed: 2026-02-13*
-*Ready for roadmap: yes*
+*Research completed: 2026-02-15*
+*Ready for roadmap: YES*
