@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-14)
 Phase: 7 of 11 (DRY Refactoring) -- COMPLETE
 Plan: 2 of 2 in current phase
 Status: Phase 07 complete
-Last activity: 2026-02-15 -- Completed 07-02 (CPTP channel and coherent unitary helpers)
+Last activity: 2026-02-15 - Completed quick task 13: Unify residual Cholesky computation
 
 Progress: [#############.......] 64% (v1.0 complete, v1.1 3/6 phases complete)
 
@@ -59,6 +59,12 @@ None
 ### Blockers/Concerns
 
 None
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 13 | Unify residual Cholesky computation: compare cholesky() vs eigendecomposition approaches and use the more robust one in both DM and trajectory simulators | 2026-02-15 | 5bd9dbe | [13-unify-residual-cholesky-computation-comp](./quick/13-unify-residual-cholesky-computation-comp/) |
 
 ## Session Continuity
 
