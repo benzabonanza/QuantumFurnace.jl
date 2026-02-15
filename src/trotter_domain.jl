@@ -8,9 +8,9 @@
     - `num_trotter_steps_per_t0`: Self-explanatory. Usually `t0` is small enough to just use 1 Trotter step for it. 
     - `eigvals_t0`, `eigvecs`: Eigenvalues of the evolution operator for one time unit `t0`, and corresponding eigenvectors.
 """
-mutable struct TrottTrott
+struct TrottTrott
     t0::Float64
-    num_trotter_steps_per_t0::Float64
+    num_trotter_steps_per_t0::Int
     eigvals_t0::Vector{ComplexF64}
     eigvecs::Matrix{ComplexF64}
     bohr_freqs::Matrix{Float64}
