@@ -12,14 +12,14 @@ See: .planning/PROJECT.md (updated 2026-02-14)
 Phase: 10 of 11 (API Surface Cleanup) -- COMPLETE
 Plan: 3 of 3 in current phase -- COMPLETE
 Status: Phase 10 complete
-Last activity: 2026-02-15 - Completed quick task 17: Simplify config constructors in structs.jl to use single @kwdef pattern
+Last activity: 2026-02-15 - Completed quick task 18: Fix OFTCaches constructor calls in test file
 
 Progress: [####################] 100% (v1.0 complete, v1.1 8/8 phases)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 27 (v1.0: 10, v1.1: 13, quick: 4)
+- Total plans completed: 28 (v1.0: 10, v1.1: 13, quick: 5)
 - Average duration: --
 - Total execution time: --
 
@@ -103,9 +103,10 @@ None
 | 15 | Remove unused _build_common_fields() helper from src/structs.jl | 2026-02-15 | adf5398 | [15-remove-unused-build-common-fields-helper](./quick/15-remove-unused-build-common-fields-helper/) |
 | 16 | Remove LindbladianWorkspace default Float64 convenience constructor | 2026-02-15 | 1dba871 | [16-defer-lindbladianworkspace-construction-](./quick/16-defer-lindbladianworkspace-construction-/) |
 | 17 | Simplify GNS config constructors to @kwdef pattern | 2026-02-15 | be8597b | [17-simplify-config-constructors-in-structs-](./quick/17-simplify-config-constructors-in-structs-/) |
+| 18 | Fix OFTCaches constructor calls in test file to use explicit type parameter | 2026-02-15 | 31bbfac | [18-fix-test-oftcaches-constructor-calls-to-](./quick/18-fix-test-oftcaches-constructor-calls-to-/) |
 
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed quick-17 (Simplify GNS config constructors to @kwdef)
+Stopped at: Completed quick-18 (Fix OFTCaches constructor calls)
 Resume file: None
