@@ -167,3 +167,6 @@ function create_bohr_dict(bohr_freqs::Matrix{Float64})
     return bohr_dict
 end
 
+function check_alpha_skew_symmetry(alpha::Function, nu_1::Float64, nu_2::Float64, beta::Float64)
+    @assert norm(alpha(nu_1, nu_2) - alpha(-nu_2, -nu_1) * exp(-beta * (nu_1 + nu_2) / 2)) < 1e-14
+end

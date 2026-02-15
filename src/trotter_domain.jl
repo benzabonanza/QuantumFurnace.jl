@@ -168,4 +168,32 @@ function compute_U_group(terms::Vector{Vector{Matrix{ComplexF64}}}, couplings::V
     return U_group
 end
 
+function trotterize(hamiltonian::HamHam, T::Float64, num_trotter_steps::Int64)
+    """1st order Trotter, periodic"""
+
+    timestep::Float64 = T / num_trotter_steps
+    num_qubits::Int64 = Int(log2(size(hamiltonian.data)[1]))
+
+    U::Matrix{ComplexF64} = exp(im * T * hamiltonian.shift) * I(2^num_qubits)  # Shift
+    p = Progress(num_trotter_steps)
+    @showprogress dt=1 desc="Trotterizing (1st order)..." for step in 1:num_trotter_steps
+        # Base Hamiltonian
+        for q in 1:num_qubits
+            for (i, term) in enumerate(hamiltonian.base_terms)
+                    expm_pauli_term = expm_pauli_padded(term, timestep * hamiltonian.base_coeffs[i], num_qubits, q)
+                    U *= expm_pauli_term
+            end
+
+        # disordering
+            if typeof(hamiltonian.disordering_term) != Nothing
+                expm_disordering_pauli_term = expm_pauli_padded(hamiltonian.disordering_term, 
+                                                            timestep * hamiltonian.disordering_coeffs[q], 
+                                                            num_qubits, q)
+                U *= expm_disordering_pauli_term
+            end
+        end
+    end
+    return U
+end
+
 
