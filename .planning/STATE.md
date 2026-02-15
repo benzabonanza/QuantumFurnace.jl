@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-14)
 Phase: 10 of 11 (API Surface Cleanup) -- COMPLETE
 Plan: 3 of 3 in current phase -- COMPLETE
 Status: Phase 10 complete
-Last activity: 2026-02-15 - Completed 10-03 (Cross-file Call Site Update)
+Last activity: 2026-02-15 - Completed quick task 17: Simplify config constructors in structs.jl to use single @kwdef pattern
 
 Progress: [####################] 100% (v1.0 complete, v1.1 8/8 phases)
 
