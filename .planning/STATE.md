@@ -10,16 +10,16 @@ See: .planning/PROJECT.md (updated 2026-02-14)
 ## Current Position
 
 Phase: 9 of 11 (Type Parameterization)
-Plan: 1 of 3 in current phase -- COMPLETE
+Plan: 2 of 3 in current phase -- COMPLETE
 Status: Executing phase 09
-Last activity: 2026-02-15 - Completed 09-01 (Core struct type parameterization)
+Last activity: 2026-02-15 - Completed 09-02 (Config/Workspace type parameterization)
 
-Progress: [################....] 83% (v1.0 complete, v1.1 5.3/6 phases)
+Progress: [#################...] 86% (v1.0 complete, v1.1 5.7/6 phases)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 21 (v1.0: 10, v1.1: 9, quick: 2)
+- Total plans completed: 22 (v1.0: 10, v1.1: 10, quick: 2)
 - Average duration: --
 - Total execution time: --
 
@@ -33,7 +33,7 @@ Progress: [################....] 83% (v1.0 complete, v1.1 5.3/6 phases)
 | quick-13 | 1 | 2min | 2min |
 | quick-15 | 1 | 2min | 2min |
 | 08-struct-simplification | 3 | 36min | 12min |
-| 09-type-parameterization | 1/3 | 7min | 7min |
+| 09-type-parameterization | 2/3 | 13min | 6.5min |
 
 *Updated after each plan completion*
 
@@ -69,6 +69,10 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - 09-01: group_hamiltonian_terms generalized with Complex{T}/T local variables to match HamHam{T}
 - 09-01: create_bohr_dict generalized with zero(T) key for generic AbstractFloat support
 - 09-01: NamedTuple constructor beta widened to Real for type inference flexibility
+- 09-02: AbstractConfig{D,T} backward compat -- existing AbstractConfig{D} dispatch matches {D,T} where T
+- 09-02: JumpOp widened to AbstractMatrix{<:Complex} rather than adding explicit T parameter
+- 09-02: GNS keyword constructors default beta/sigma to Float64 literals for ergonomic backward compat
+- 09-02: NUFFTPrefactors promotes inputs to Float64 for FINUFFT, converts results back to Complex{T}
 
 ### Pending Todos
 
@@ -88,5 +92,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 09-01-PLAN.md (Core struct type parameterization)
+Stopped at: Completed 09-02-PLAN.md (Config/Workspace type parameterization)
 Resume file: None
