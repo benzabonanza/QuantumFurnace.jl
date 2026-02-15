@@ -69,7 +69,11 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   2. HamHam constructor computes bohr_freqs and gibbs state directly -- no Nothing-typed fields, no two-step initialization pattern
   3. TrottTrott is an immutable struct and num_trotter_steps_per_t0 is typed as Int (not Float64)
   4. All 224 existing tests pass with no regressions
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [ ] 08-01-PLAN.md -- Config struct deduplication + sentinel cleanup + TrottTrott immutability (STRUCT-01, STRUCT-03)
+- [ ] 08-02-PLAN.md -- HamHam initialization redesign (STRUCT-02)
+- [ ] 08-03-PLAN.md -- TrajectoryFramework type param cleanup + domain dispatch refactoring
 
 ### Phase 9: Type Parameterization
 **Goal**: Core structs are parameterized on element type, enabling future Float32 paths without changing calling code
