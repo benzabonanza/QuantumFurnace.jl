@@ -1,7 +1,7 @@
 """
-    load_hamiltonian(type, num_qubits; beta) -> HamHam
+    load_hamiltonian(type, num_qubits; beta) -> HamHam{Float64}
 
-Load a pre-computed Hamiltonian from BSON and construct a fully-initialized HamHam.
+Load a pre-computed Hamiltonian from BSON and construct a fully-initialized HamHam{Float64}.
 
 The `beta` keyword is required -- it is used to compute bohr_freqs, bohr_dict, and gibbs
 via the `HamHam(NamedTuple, beta)` constructor.
@@ -19,10 +19,10 @@ function load_hamiltonian(type::String, num_qubits::Int; beta::Float64)
 end
 
 """
-    _load_hamiltonian_bson(path, beta) -> HamHam
+    _load_hamiltonian_bson(path, beta) -> HamHam{Float64}
 
 Low-level BSON loader that handles legacy HamHam serialization format.
-Extracts raw fields from BSON and constructs a new HamHam via HamHam(NamedTuple, beta).
+Extracts raw fields from BSON and constructs a new HamHam{Float64} via HamHam(NamedTuple, beta).
 """
 function _load_hamiltonian_bson(path::String, beta::Float64)
     raw = open(path) do io

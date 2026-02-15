@@ -1,32 +1,35 @@
 """
-    TrottTrott
+    TrottTrott{T<:AbstractFloat}
 
     Stores precomputed data for Trotterized time evolution.
+    Parameterized on element type `T`, inferred from the HamHam used for construction.
 
     # Fields
     - `t0`: The time unit for the Trotter step.
-    - `num_trotter_steps_per_t0`: Self-explanatory. Usually `t0` is small enough to just use 1 Trotter step for it. 
+    - `num_trotter_steps_per_t0`: Self-explanatory. Usually `t0` is small enough to just use 1 Trotter step for it.
     - `eigvals_t0`, `eigvecs`: Eigenvalues of the evolution operator for one time unit `t0`, and corresponding eigenvectors.
 """
-struct TrottTrott
-    t0::Float64
+struct TrottTrott{T<:AbstractFloat}
+    t0::T
     num_trotter_steps_per_t0::Int
-    eigvals_t0::Vector{ComplexF64}
-    eigvecs::Matrix{ComplexF64}
-    bohr_freqs::Matrix{Float64}
+    eigvals_t0::Vector{Complex{T}}
+    eigvecs::Matrix{Complex{T}}
+    bohr_freqs::Matrix{T}
 end
 
-function TrottTrott(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
-
-    trottU = trotterize2(hamiltonian, t, num_trotter_steps)
+function TrottTrott(hamiltonian::HamHam{T}, t::Real, num_trotter_steps::Int64) where {T<:AbstractFloat}
+    t_f64 = Float64(t)
+    # Trotter computation always in Float64 (Pauli matrices are ComplexF64 constants).
+    # Convert results to T at the end.
+    trottU = trotterize2(hamiltonian, t_f64, num_trotter_steps)
     trottU_eigvals, trottU_eigvecs = eigen(trottU)
-    bohr_freqs = trotter_bohr_freqs(trottU_eigvals, t)  # quasi Bohr frequencies due to Trotterization.
-    return TrottTrott(
-        t,
+    bfreqs = trotter_bohr_freqs(trottU_eigvals, t_f64)  # quasi Bohr frequencies due to Trotterization.
+    return TrottTrott{T}(
+        T(t),
         num_trotter_steps,
-        trottU_eigvals,
-        trottU_eigvecs,
-        bohr_freqs
+        Vector{Complex{T}}(trottU_eigvals),
+        Matrix{Complex{T}}(trottU_eigvecs),
+        Matrix{T}(bfreqs),
         )
 end
 
@@ -36,11 +39,11 @@ function trotter_bohr_freqs(trottU_T_eigvals::Vector{ComplexF64}, t::Float64)
 end
 
 function compute_trotter_error(hamiltonian::HamHam, trotter::TrottTrott, t::Float64)
-    
+
     num_t0_steps = Int(t / trotter.t0)
     exact_time_evolution = Diagonal(exp.(1im * hamiltonian.eigvals * t))  # In energy eigenbasis
     trotter_time_evolution = Diagonal(trotter.eigvals_t0.^num_t0_steps)
-    trotter_time_evolution = (hamiltonian.eigvecs' * trotter.eigvecs 
+    trotter_time_evolution = (hamiltonian.eigvecs' * trotter.eigvecs
                                 * trotter_time_evolution * trotter.eigvecs' * hamiltonian.eigvecs)
     return norm(exact_time_evolution - trotter_time_evolution)
 end
@@ -53,7 +56,7 @@ function trotterize2(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
     odd_system::Bool = (num_qubits % 2 == 1)
     is_bdr_strange::Bool = (odd_system && hamiltonian.periodic)
 
-    U::Matrix{ComplexF64} = exp(im * t * hamiltonian.shift) * I(2^num_qubits)  # Shift
+    U::Matrix{ComplexF64} = exp(im * t * Float64(hamiltonian.shift)) * I(2^num_qubits)  # Shift
 
     groups = group_hamiltonian_terms(hamiltonian)
 
@@ -81,8 +84,10 @@ function trotterize2(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
     U_disordering = Matrix{ComplexF64}(I, dim, dim)
     if hamiltonian.disordering_term !== nothing
         for q in 1:num_qubits
-            expm_disordering_pauli_term = expm_pauli_padded(hamiltonian.disordering_term, 
-                    timestep * hamiltonian.disordering_coeffs[q] / 2, num_qubits, q)
+            disordering_term_f64 = Vector{Matrix{ComplexF64}}(hamiltonian.disordering_term)
+            coeff_f64 = Float64(hamiltonian.disordering_coeffs[q])
+            expm_disordering_pauli_term = expm_pauli_padded(disordering_term_f64,
+                    timestep * coeff_f64 / 2, num_qubits, q)
             U_disordering *= expm_disordering_pauli_term
         end
     end
@@ -92,13 +97,14 @@ function trotterize2(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
     if length(groups.noncommuting[1]) != 0
         for (term, coupling) in (groups.noncommuting[1], groups.noncommuting[2])
             for q in 1:num_qubits
-                expm_pauli_term = expm_pauli_padded(term, timestep * coupling / 2, num_qubits, q)
+                term_f64 = Vector{Matrix{ComplexF64}}(term)
+                expm_pauli_term = expm_pauli_padded(term_f64, timestep * Float64(coupling) / 2, num_qubits, q)
                 push!(sequence_2site_not_commuting, expm_pauli_term)
             end
         end
     end
 
-    # Assemble a δ step
+    # Assemble a delta step
     left_unitary_sequence = Matrix{ComplexF64}[]
     append!(left_unitary_sequence, [U_odd, U_even, U_odd_bdr, U_1site_terms, U_disordering], sequence_2site_not_commuting)
     U_step = foldl(*, left_unitary_sequence) * foldl(*, reverse(left_unitary_sequence))
@@ -108,8 +114,7 @@ function trotterize2(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
     return U
 end
 
-function does_term_differ_at_both_sites(term::Vector{Matrix{ComplexF64}}, 
-    list_to_compare_with::Vector{Vector{Matrix{ComplexF64}}})::Bool
+function does_term_differ_at_both_sites(term, list_to_compare_with)::Bool
 
     if isempty(list_to_compare_with)
         return true
@@ -122,15 +127,16 @@ function does_term_differ_at_both_sites(term::Vector{Matrix{ComplexF64}},
     end
 end
 
-function group_hamiltonian_terms(hamiltonian::HamHam)
-    list_of_kinda_commuting_2site_terms::Vector{Vector{Matrix{ComplexF64}}} = []
-    coeffs_kinda_commuting_2site::Vector{Float64} = []
+function group_hamiltonian_terms(hamiltonian::HamHam{T}) where {T<:AbstractFloat}
+    CT = Complex{T}
+    list_of_kinda_commuting_2site_terms::Vector{Vector{Matrix{CT}}} = []
+    coeffs_kinda_commuting_2site::Vector{T} = []
 
-    list_of_not_commuting_2site_terms::Vector{Vector{Matrix{ComplexF64}}} = []
-    coeffs_not_commuting_2site::Vector{Float64} = []
+    list_of_not_commuting_2site_terms::Vector{Vector{Matrix{CT}}} = []
+    coeffs_not_commuting_2site::Vector{T} = []
 
-    list_of_1site_terms::Vector{Vector{Matrix{ComplexF64}}} = []
-    coeffs_1site::Vector{Float64} = []
+    list_of_1site_terms::Vector{Vector{Matrix{CT}}} = []
+    coeffs_1site::Vector{T} = []
 
     for (i, term) in enumerate(hamiltonian.base_terms)
         if length(term) == 1
@@ -155,13 +161,14 @@ function group_hamiltonian_terms(hamiltonian::HamHam)
     )
 end
 
-function compute_U_group(terms::Vector{Vector{Matrix{ComplexF64}}}, couplings::Vector{Float64}, sites::Vector{Int64},
+function compute_U_group(terms, couplings, sites::Vector{Int64},
     num_qubits::Int64, timestep::Float64)::Matrix{ComplexF64}
 
     U_group = Matrix{ComplexF64}(I, 2^num_qubits, 2^num_qubits)
     for q in sites
         for (term, coupling) in zip(terms, couplings)
-            expm_pauli_term = expm_pauli_padded(term, timestep * coupling / 2, num_qubits, q)
+            term_f64 = Vector{Matrix{ComplexF64}}(term)
+            expm_pauli_term = expm_pauli_padded(term_f64, timestep * Float64(coupling) / 2, num_qubits, q)
             U_group *= expm_pauli_term
         end
     end
@@ -174,20 +181,22 @@ function trotterize(hamiltonian::HamHam, T::Float64, num_trotter_steps::Int64)
     timestep::Float64 = T / num_trotter_steps
     num_qubits::Int64 = Int(log2(size(hamiltonian.data)[1]))
 
-    U::Matrix{ComplexF64} = exp(im * T * hamiltonian.shift) * I(2^num_qubits)  # Shift
+    U::Matrix{ComplexF64} = exp(im * T * Float64(hamiltonian.shift)) * I(2^num_qubits)  # Shift
     p = Progress(num_trotter_steps)
     @showprogress dt=1 desc="Trotterizing (1st order)..." for step in 1:num_trotter_steps
         # Base Hamiltonian
         for q in 1:num_qubits
             for (i, term) in enumerate(hamiltonian.base_terms)
-                    expm_pauli_term = expm_pauli_padded(term, timestep * hamiltonian.base_coeffs[i], num_qubits, q)
+                    term_f64 = Vector{Matrix{ComplexF64}}(term)
+                    expm_pauli_term = expm_pauli_padded(term_f64, timestep * Float64(hamiltonian.base_coeffs[i]), num_qubits, q)
                     U *= expm_pauli_term
             end
 
         # disordering
             if typeof(hamiltonian.disordering_term) != Nothing
-                expm_disordering_pauli_term = expm_pauli_padded(hamiltonian.disordering_term, 
-                                                            timestep * hamiltonian.disordering_coeffs[q], 
+                disordering_term_f64 = Vector{Matrix{ComplexF64}}(hamiltonian.disordering_term)
+                expm_disordering_pauli_term = expm_pauli_padded(disordering_term_f64,
+                                                            timestep * Float64(hamiltonian.disordering_coeffs[q]),
                                                             num_qubits, q)
                 U *= expm_disordering_pauli_term
             end
@@ -195,5 +204,3 @@ function trotterize(hamiltonian::HamHam, T::Float64, num_trotter_steps::Int64)
     end
     return U
 end
-
-
