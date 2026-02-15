@@ -14,4 +14,5 @@ include("test_helpers.jl")
     include("test_dm_scaling.jl")
     include("test_regression.jl")
     include("test_allocation.jl")
+    include("test_workspace_independence.jl")
 end
