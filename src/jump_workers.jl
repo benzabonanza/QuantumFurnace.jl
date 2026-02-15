@@ -157,6 +157,64 @@ No-op if U_B is nothing.
     return nothing
 end
 
+"""
+    apply_cptp_channel!(evolving_dm, delta, scratch) -> evolving_dm
+
+Apply the CPTP weak-measurement channel after R and rho_jump have been accumulated.
+
+Implements Chen Eq. 3.2:
+  K0 = I - alpha * R,  alpha = 1 - sqrt(1 - delta)
+  S  = (2*alpha - delta)*R - alpha^2 * R^2  (residual, O(delta^2))
+  U_residual = cholesky(S + eps*I).U
+  rho_next = K0 * rho * K0' + rho_jump + U_res * rho * U_res'
+
+Expects scratch.R (Hermitianized) and scratch.rho_jump to be pre-filled by the
+domain-specific dissipative accumulation loop.
+"""
+function apply_cptp_channel!(
+    evolving_dm::Matrix{ComplexF64},
+    delta::Float64,
+    scratch::KrausScratch{ComplexF64},
+)
+    dim = size(evolving_dm, 1)
+
+    # Build K0 = I - alpha * R   (Chen Eq. 3.2)
+    delta_factor_for_K0 = 1 - sqrt(1 - delta)
+    copyto!(scratch.K0, scratch.R)
+    scratch.K0 .*= (-delta_factor_for_K0)
+    @inbounds for i in 1:dim
+        scratch.K0[i,i] += 1
+    end
+
+    # Residual TP fix: S := I - K0'K0 - delta*R = (2*alpha - delta)*R - alpha^2 * R^2
+    mul!(scratch.LdagL, scratch.R, scratch.R)  # reuse as R^2
+    s1 = 2 * delta_factor_for_K0 - delta
+    s2 = delta_factor_for_K0 * delta_factor_for_K0
+    @. scratch.tmp2 = s1 * scratch.R - s2 * scratch.LdagL
+
+    # Guard against tiny negative eigenvalues from roundoff (S is O(delta^2))
+    eps_shift = 10 * eps(Float64)
+    @inbounds for i in 1:dim
+        scratch.tmp2[i,i] += eps_shift
+    end
+
+    cholesky_S = cholesky!(Hermitian(scratch.tmp2), check=false)
+    U_residual = cholesky_S.U
+
+    # rho_next = K0 * rho * K0' + rho_jump + U_res * rho * U_res'
+    mul!(scratch.tmp1, scratch.K0, evolving_dm)
+    mul!(scratch.rho_next, scratch.tmp1, scratch.K0')
+    scratch.rho_next .+= scratch.rho_jump
+
+    mul!(scratch.tmp1, U_residual, evolving_dm)
+    mul!(scratch.rho_next, scratch.tmp1, U_residual', 1.0, 1.0)
+
+    # Keep it a density matrix numerically
+    hermitianize!(scratch.rho_next)
+    copyto!(evolving_dm, scratch.rho_next)
+    return evolving_dm
+end
+
 function jump_contribution!(::BohrDomain,
     evolving_dm::Matrix{ComplexF64},
     jump::JumpOp,
@@ -250,38 +308,7 @@ function jump_contribution!(::BohrDomain,
     # Hermitianize R (numerical)
     hermitianize!(scratch.R)
 
-    # Build K0 = I - (1 - sqrt(1 - delta)) R   (Chen Eq. 3.2)
-    delta_factor_for_K0 = 1 - sqrt(1 - config.delta)
-    copyto!(scratch.K0, scratch.R)
-    scratch.K0 .*= (-delta_factor_for_K0)
-    @inbounds for i in 1:dim
-        scratch.K0[i,i] += 1
-    end
-
-    # Residual TP fix: S := I - K0†K0 - δR = (2α-δ)R - α² R²  (O(δ²))
-    mul!(scratch.LdagL, scratch.R, scratch.R)  # reuse as R^2
-    s1 = 2 * delta_factor_for_K0 - config.delta
-    s2 = delta_factor_for_K0 * delta_factor_for_K0
-    @. scratch.tmp2 = s1 * scratch.R - s2 * scratch.LdagL
-
-    eps_shift = 10 * eps(Float64)
-    @inbounds for i in 1:dim
-        scratch.tmp2[i,i] += eps_shift
-    end
-
-    cholesky_S = cholesky!(Hermitian(scratch.tmp2), check=false)
-    U_residual = cholesky_S.U
-
-    # ρ_next = K0 ρ K0† + ρ_jump + Ures ρ Ures†
-    mul!(scratch.tmp1, scratch.K0, evolving_dm)
-    mul!(scratch.rho_next, scratch.tmp1, scratch.K0')
-    scratch.rho_next .+= scratch.rho_jump
-
-    mul!(scratch.tmp1, U_residual, evolving_dm)
-    mul!(scratch.rho_next, scratch.tmp1, U_residual', 1.0, 1.0)
-
-    hermitianize!(scratch.rho_next)
-    copyto!(evolving_dm, scratch.rho_next)
+    apply_cptp_channel!(evolving_dm, config.delta, scratch)
     return evolving_dm
 end
 
@@ -359,40 +386,7 @@ function jump_contribution!(::EnergyDomain,
     # Hermitianize R (numerical)
     hermitianize!(scratch.R)
 
-    # Build K0 = I - (1 - sqrt(1 - delta)) R   (Chen Eq. 3.2)
-    delta_factor_for_K0 = 1 - sqrt(1 - config.delta)
-    copyto!(scratch.K0, scratch.R)
-    scratch.K0 .*= (-delta_factor_for_K0)
-
-    @inbounds for i in 1:dim
-        scratch.K0[i,i] += 1
-    end
-
-    # Residual TP fix: S := I - K0†K0 - δR = (2α-δ)R - α² R²  (O(δ²))
-    mul!(scratch.LdagL, scratch.R, scratch.R)  # reuse as R^2
-    s1 = 2 * delta_factor_for_K0 - config.delta
-    s2 = delta_factor_for_K0 * delta_factor_for_K0
-    @. scratch.tmp2 = s1 * scratch.R - s2 * scratch.LdagL
-
-    eps_shift = 10 * eps(Float64)
-    @inbounds for i in 1:dim
-        scratch.tmp2[i,i] += eps_shift
-    end
-
-    cholesky_S = cholesky!(Hermitian(scratch.tmp2), check=false)
-    U_residual = cholesky_S.U
-
-    # ρ_next = K0 ρ K0† + ρ_jump + Ures ρ Ures†
-    mul!(scratch.tmp1, scratch.K0, evolving_dm)
-    mul!(scratch.rho_next, scratch.tmp1, scratch.K0')
-    scratch.rho_next .+= scratch.rho_jump
-
-    mul!(scratch.tmp1, U_residual, evolving_dm)
-    mul!(scratch.rho_next, scratch.tmp1, U_residual', 1.0, 1.0)
-
-    hermitianize!(scratch.rho_next)
-    copyto!(evolving_dm, scratch.rho_next)
-
+    apply_cptp_channel!(evolving_dm, config.delta, scratch)
     return evolving_dm
 end
 
@@ -454,53 +448,7 @@ function jump_contribution!(::Union{TimeDomain, TrotterDomain},
     # Hermitianize R
     hermitianize!(scratch.R)
 
-    # Build K0 = I - (1 - sqrt(1 - delta)) R
-    delta_factor_for_K0 = 1 - sqrt(1 - config.delta)  # Chen: Eq. 3.2
-    copyto!(scratch.K0, scratch.R)
-    # scratch.K0 .*= (0.5 * config.delta)
-    scratch.K0 .*= (- delta_factor_for_K0)
-
-    # add identity on the diagonal
-    @inbounds for i in 1:dim
-        scratch.K0[i,i] += 1
-    end
-
-    # (Necessary) residual delta^2 trash to have TP channel
-    # S := I - K0†K0 - δ R  = (2α-δ)R - α² R²
-    #     Choose Kres s.t. Kres†Kres = S. Use Cholesky: S = U' U => Kres = U.
-
-    # Reuse LdagL as R^2
-    mul!(scratch.LdagL, scratch.R, scratch.R)
-    s1 = 2 * delta_factor_for_K0 - config.delta
-    s2 = delta_factor_for_K0 * delta_factor_for_K0
-
-    # tmp2 = S
-    @. scratch.tmp2 = s1 * scratch.R - s2 * scratch.LdagL
-
-    # Guard against tiny negative eigenvalues from roundoff (S is O(δ²)):
-    # add a microscopic diagonal shift before Cholesky.
-    eps_shift = 10 * eps(Float64)
-    @inbounds for i in 1:dim
-        scratch.tmp2[i,i] += eps_shift
-    end
-
-    cholesky_S = cholesky!(Hermitian(scratch.tmp2), check=false)  # S ≈ U' U
-    U_residual = cholesky_S.U  
-
-    # Combine into CPTP channel, delta step of weak measurement scheme
-    # ρ_next = K0 ρ K0† + ρ_jump + Ures ρ Ures†
-    mul!(scratch.tmp1, scratch.K0, evolving_dm)
-    mul!(scratch.rho_next, scratch.tmp1, scratch.K0')
-    scratch.rho_next .+= scratch.rho_jump
-
-    # residual CP term
-    mul!(scratch.tmp1, U_residual, evolving_dm)
-    mul!(scratch.rho_next, scratch.tmp1, U_residual', 1.0, 1.0)
-
-    # Keep it a density matrix numerically
-    hermitianize!(scratch.rho_next)
-    copyto!(evolving_dm, scratch.rho_next)
-
+    apply_cptp_channel!(evolving_dm, config.delta, scratch)
     return evolving_dm
 end
 
