@@ -107,9 +107,11 @@ end
     rmul!(B_time_val, precomputed_time.gamma_norm_factor)
 
     # B_trotter (Trotter + time quadrature, in Trotter eigenbasis)
+    # Transform jump to Trotter eigenbasis (B_trotter expects jump.in_eigenbasis in Trotter basis)
     config_trott = make_liouv_config(TrotterDomain())
     precomputed_trott = QuantumFurnace._precompute_data(config_trott, TEST_TROTTER)
-    B_trott = B_trotter(jump, TEST_TROTTER, precomputed_trott.b_minus, precomputed_trott.b_plus,
+    trotter_jump = transform_jumps_to_basis([jump], TEST_TROTTER.eigvecs)[1]
+    B_trott = B_trotter(trotter_jump, TEST_TROTTER, precomputed_trott.b_minus, precomputed_trott.b_plus,
                          BETA, SIGMA)
     rmul!(B_trott, precomputed_trott.gamma_norm_factor)
     # Transform from Trotter eigenbasis to Hamiltonian eigenbasis
