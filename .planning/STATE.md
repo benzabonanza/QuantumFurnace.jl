@@ -10,16 +10,16 @@ See: .planning/PROJECT.md (updated 2026-02-14)
 ## Current Position
 
 Phase: 11 of 11 (Allocation Optimization)
-Plan: 1 of 3 in current phase -- COMPLETE
+Plan: 2 of 3 in current phase -- COMPLETE
 Status: Executing phase 11
-Last activity: 2026-02-15 - Completed 11-01: Hot-loop allocation elimination
+Last activity: 2026-02-15 - Completed 11-02: Diagonal elimination and redundant transform removal
 
-Progress: [######              ] 33% (Phase 11: 1/3 plans)
+Progress: [#############       ] 67% (Phase 11: 2/3 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 29 (v1.0: 10, v1.1: 14, quick: 5)
+- Total plans completed: 30 (v1.0: 10, v1.1: 15, quick: 5)
 - Average duration: --
 - Total execution time: --
 
@@ -38,7 +38,7 @@ Progress: [######              ] 33% (Phase 11: 1/3 plans)
 | 10-api-surface-cleanup | 3/3 | 21min | 7min |
 | quick-17 | 1 | 1min | 1min |
 | quick-18 | 1 | 1min | 1min |
-| 11-allocation-optimization | 1/3 | 6min | 6min |
+| 11-allocation-optimization | 2/3 | 13min | 6.5min |
 
 *Updated after each plan completion*
 
@@ -89,6 +89,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - 10-03: Updated docstrings in coherent.jl to match _-prefixed function names
 - 10-03: Fixed trajectory_validation scripts from obsolete 3-arg to 2-arg _precompute_data call
 - 11-01: No SparseArrays import changes needed -- spzeros was only SparseArrays usage in bohr_domain.jl
+- 11-02: Used explicit .+= .* broadcasting instead of @. to avoid transpose-inside-@. pitfall
+- 11-02: Test DMTST-05 updated to transform jump to Trotter basis before direct B_trotter call
 
 ### Pending Todos
 
@@ -111,5 +113,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 11-01-PLAN.md (Hot-loop allocation elimination)
+Stopped at: Completed 11-02-PLAN.md (Diagonal elimination and redundant transform removal)
 Resume file: None
