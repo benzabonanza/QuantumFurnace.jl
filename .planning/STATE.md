@@ -19,7 +19,7 @@ Progress: [##################..] 90% (v1.0 complete, v1.1 6/6 phases)
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 23 (v1.0: 10, v1.1: 11, quick: 2)
+- Total plans completed: 24 (v1.0: 10, v1.1: 11, quick: 3)
 - Average duration: --
 - Total execution time: --
 
@@ -34,6 +34,7 @@ Progress: [##################..] 90% (v1.0 complete, v1.1 6/6 phases)
 | quick-15 | 1 | 2min | 2min |
 | 08-struct-simplification | 3 | 36min | 12min |
 | 09-type-parameterization | 3/3 | 22min | 7.3min |
+| quick-16 | 1 | 2min | 2min |
 
 *Updated after each plan completion*
 
@@ -77,6 +78,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - 09-03: Cross-struct T mismatch check at run_lindbladian and run_thermalization entry points
 - 09-03: TrajectoryFramework step parameters (delta, delta_eff, alpha) stay Float64 for numerical precision
 - 09-03: Domain helper functions (create_alpha, create_f, etc.) widened from Float64 to Real
+- quick-16: Removed convenience constructor since only construction site already uses explicit {T}
 
 ### Pending Todos
 
@@ -92,9 +94,10 @@ None
 |---|-------------|------|--------|-----------|
 | 13 | Unify residual Cholesky computation: compare cholesky() vs eigendecomposition approaches and use the more robust one in both DM and trajectory simulators | 2026-02-15 | 5bd9dbe | [13-unify-residual-cholesky-computation-comp](./quick/13-unify-residual-cholesky-computation-comp/) |
 | 15 | Remove unused _build_common_fields() helper from src/structs.jl | 2026-02-15 | adf5398 | [15-remove-unused-build-common-fields-helper](./quick/15-remove-unused-build-common-fields-helper/) |
+| 16 | Remove LindbladianWorkspace default Float64 convenience constructor | 2026-02-15 | 1dba871 | [16-defer-lindbladianworkspace-construction-](./quick/16-defer-lindbladianworkspace-construction-/) |
 
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 09-03-PLAN.md (Simulation function generic type propagation) -- Phase 09 complete
+Stopped at: Completed quick-16 (Remove LindbladianWorkspace default constructor)
 Resume file: None
