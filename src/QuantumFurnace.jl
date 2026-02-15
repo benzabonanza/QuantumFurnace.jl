@@ -23,7 +23,7 @@ using FINUFFT
 # --- Public API ---
 export AbstractConfig, AbstractLiouvConfig, AbstractThermalizeConfig,
        LiouvConfig, LiouvConfigGNS, ThermalizeConfig, ThermalizeConfigGNS, HamHam, TrottTrott, HotAlgorithmResults, HotSpectralResults, JumpOp,
-       BohrDomain, EnergyDomain, TimeDomain, TrotterDomain, LindbladWorkspace, LSIFramework,
+       BohrDomain, EnergyDomain, TimeDomain, TrotterDomain, LSIFramework,
        OFTCaches, NUFFTPrefactors
 export run_lindbladian, run_thermalization, construct_lindbladian, B_time, B_trotter, coherent_bohr
 export generate_filename, validate_config!, compute_trotter_error, gibbs_state, gibbs_state_in_eigen,
