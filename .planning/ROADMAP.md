@@ -3,7 +3,7 @@
 ## Milestones
 
 - ✅ **v1.0 Trajectories** -- Phases 1-5 (shipped 2026-02-14)
-- 🚧 **v1.1 Reduce** -- Phases 6-11 (in progress)
+- ✅ **v1.1 Reduce** -- Phases 6-11 (shipped 2026-02-15)
 
 ## Phases
 
@@ -20,7 +20,7 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 
 </details>
 
-### 🚧 v1.1 Reduce (In Progress)
+### ✅ v1.1 Reduce (Complete)
 
 **Milestone Goal:** Refactor and simplify the codebase -- prune dead code, simplify structs, introduce type parameterization, clean up public API, remove duplication, and minimize allocations in core simulation paths. All 224 tests must pass after every phase.
 
@@ -29,7 +29,7 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 - [x] **Phase 8: Struct Simplification** - Reduce config field duplication, fix HamHam initialization, make TrottTrott immutable -- completed 2026-02-15
 - [x] **Phase 9: Type Parameterization** - Parameterize core structs on element type for F64/F32 flexibility -- completed 2026-02-15
 - [x] **Phase 10: API Surface Cleanup** - Remove dead exports, internalize implementation details, export missing public functions -- completed 2026-02-15
-- [ ] **Phase 11: Allocation Optimization** - Eliminate unnecessary allocations in hot paths
+- [x] **Phase 11: Allocation Optimization** - Eliminate unnecessary allocations in hot paths -- completed 2026-02-15
 
 ## Phase Details
 
@@ -118,9 +118,9 @@ Plans:
   5. All 224 existing tests pass with no regressions
 **Plans**: 3 plans
 Plans:
-- [ ] 11-01-PLAN.md -- Eliminate sparse allocations in B_bohr and filter+abs in jump_workers
-- [ ] 11-02-PLAN.md -- Eliminate Diagonal wrappers and redundant basis transforms in B_time/B_trotter
-- [ ] 11-03-PLAN.md -- Add @allocated regression tests for all optimized hot paths
+- [x] 11-01-PLAN.md -- Eliminate sparse allocations in B_bohr and filter+abs in jump_workers
+- [x] 11-02-PLAN.md -- Eliminate Diagonal wrappers and redundant basis transforms in B_time/B_trotter
+- [x] 11-03-PLAN.md -- Add @allocated regression tests for all optimized hot paths
 
 ## Progress
 
@@ -139,4 +139,4 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10 -> 11
 | 8. Struct Simplification | v1.1 | 3/3 | Complete | 2026-02-15 |
 | 9. Type Parameterization | v1.1 | 3/3 | Complete | 2026-02-15 |
 | 10. API Surface Cleanup | v1.1 | 3/3 | Complete | 2026-02-15 |
-| 11. Allocation Optimization | v1.1 | 0/3 | Not started | - |
+| 11. Allocation Optimization | v1.1 | 3/3 | Complete | 2026-02-15 |
