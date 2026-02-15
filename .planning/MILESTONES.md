@@ -21,3 +21,25 @@
 
 ---
 
+
+## v1.1 Reduce (Shipped: 2026-02-15)
+
+**Started:** 2026-02-15 | **Shipped:** 2026-02-15
+**Phases:** 6-11 (16 plans + 5 quick tasks) | **Tests:** 224 → 231 | **Commits:** 93
+**Julia LOC:** 4,422 src + 2,222 test | **Files changed:** 87 (+9,420 / -2,442)
+**Git range:** chore(06-01)..docs(11-03)
+
+**Delivered:** Codebase refactored and simplified — pruned ~987 lines of dead code and ~35 unused functions, extracted 4 DRY helpers, simplified core structs with type parameterization on `{T<:AbstractFloat}`, cleaned public API surface, and eliminated hot-path heap allocations. All 231 tests passing.
+
+**Key accomplishments:**
+1. Pruned ~987 lines of dead commented code and ~35 unused functions/3 dead structs
+2. Extracted 4 DRY helpers: `hermitianize!`, `transform_jumps_to_basis`, `apply_cptp_channel!`, `apply_coherent_unitary!`
+3. Simplified core structs: immutable `TrottTrott`, fully-initialized `HamHam`, deduplicated config constructors
+4. Parameterized all core types on element type `{T<:AbstractFloat}` enabling future Float32 paths
+5. Cleaned API surface: organized exports into labeled groups, internalized ~18 implementation details with `_` prefix
+6. Eliminated hot-path allocations: index-based sparse accumulation, in-place phase rotations, precomputed basis transforms
+
+**Archives:** [v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md) | [v1.1-REQUIREMENTS.md](milestones/v1.1-REQUIREMENTS.md)
+
+---
+

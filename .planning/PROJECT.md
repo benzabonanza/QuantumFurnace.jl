@@ -2,7 +2,7 @@
 
 ## What This Is
 
-A Julia package for simulating quantum Gibbs sampling via Lindbladian evolution. It implements multiple Lindbladian constructions (GNS and KMS detailed balance) across a hierarchy of approximation domains (Bohr, Energy, Time, Trotter), enabling both density matrix and trajectory-based simulation of quantum thermalization. Both simulation modes are validated against each other and against theoretical predictions from Chen et al. (2023, 2025). The package targets researchers and students working on quantum Gibbs sampling, providing both fast numerical simulations and pedagogic documentation grounded in the theoretical literature.
+A Julia package for simulating quantum Gibbs sampling via Lindbladian evolution. It implements multiple Lindbladian constructions (GNS and KMS detailed balance) across a hierarchy of approximation domains (Bohr, Energy, Time, Trotter), enabling both density matrix and trajectory-based simulation of quantum thermalization. Both simulation modes are validated against each other and against theoretical predictions from Chen et al. (2023, 2025). Core structs are parameterized on element type `{T<:AbstractFloat}` for precision flexibility. The package targets researchers and students working on quantum Gibbs sampling, providing both fast numerical simulations and pedagogic documentation grounded in the theoretical literature.
 
 ## Core Value
 
@@ -37,22 +37,14 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 - ✓ DM-based regression tests (portable across Julia versions and platforms) -- v1.0
 - ✓ Aqua.jl package quality gate with compat bounds -- v1.0
 - ✓ Test infrastructure with shared fixtures and tiered tolerances -- v1.0
+- ✓ Dead code pruning: ~987 lines commented code, ~35 unused functions, 3 dead structs removed -- v1.1
+- ✓ DRY helpers: hermitianize!, transform_jumps_to_basis, apply_cptp_channel!, apply_coherent_unitary! -- v1.1
+- ✓ Struct simplification: immutable TrottTrott, fully-initialized HamHam, deduplicated config constructors -- v1.1
+- ✓ Type parameterization: HamHam{T}, TrottTrott{T}, Config{D,T}, LindbladianWorkspace{T} -- v1.1
+- ✓ API surface cleanup: organized exports, ~18 internals _-prefixed, trace_distance_h exported -- v1.1
+- ✓ Allocation optimization: index-based B_bohr, in-place phase rotations, precomputed basis transforms -- v1.1
 
 ### Active
-
-## Current Milestone: v1.1 Reduce
-
-**Goal:** Refactor and simplify the codebase — prune unused code, simplify structs, introduce strategic type parameterization, clean up public API, remove redundant checks, and minimize allocations in core simulation paths.
-
-**Target features:**
-- Prune unused functions and dead comment blocks (keep linearmaps, log-sobolev, errors for future)
-- Simplify struct definitions (reduce config field duplication while keeping separate types for future Ding config extensibility)
-- Strategic type parameterization on main structs (F64/F32 flexibility)
-- Clean up public API surface (expose building blocks for pedagogy, internalize implementation details)
-- Remove redundant checks and normalizations across layers
-- Minimize allocations in core simulation paths
-
-#### Future
 
 - [ ] 1D Ising model Hamiltonian generation
 - [ ] 2D Heisenberg Hamiltonian generation (lattice graph support)
@@ -79,16 +71,18 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 - Non-Markovian dynamics -- all constructions assume Markovian (Lindblad) framework
 - Continuous-time MCWF (adaptive timestep) -- discrete-time CPTP maps per Chen's weak measurement scheme
 - Bohr domain trajectories -- diagonalizing Kossakowski matrix prohibitive for >3 qubits; validate Bohr via DM only
+- Float32 simulation testing -- type params enable it but testing F32 paths is future work
 
 ## Context
 
-**Current State (v1.0 shipped):**
-- 13,082 LOC Julia (2,034 test), 224 tests passing
+**Current State (v1.1 shipped):**
+- 4,422 LOC src + 2,222 LOC test (Julia), 231 tests passing
 - Tech stack: Julia, LinearAlgebra, FINUFFT, Arpack, BSON, StableRNGs
 - Both DM and trajectory simulation validated and cross-checked
-- Trajectory simulation uses per-operator Lie-Trotter splitting matching Chen's algorithm
-- Regression tests use DM-based comparison (not frozen BSON) for cross-platform portability
-- 4 undefined exports removed, comprehensive compat bounds added
+- Core structs parameterized on `{T<:AbstractFloat}` (Float64 default, Float32-ready)
+- API organized: physics building blocks exported, implementation details `_`-prefixed
+- Hot-path allocations eliminated: index-based sparse accumulation, in-place phase rotations
+- 4 DRY helpers replace 24+ duplicated code patterns
 
 **Theoretical Foundation:**
 The package implements quantum Gibbs samplers from three key papers:
@@ -123,8 +117,13 @@ Results needed for publication: convergence curves (trace distance vs. steps), m
 | Per-operator Lie-Trotter splitting for trajectories | Matches paper's algorithm; per-operator branching gives correct delta_eff = delta * N_jumps | ✓ Good -- fixed TrotterDomain Gibbs distance from 0.004 to 9e-9 |
 | Eigendecomposition instead of Cholesky for PSD guard | Silent clamp of negative eigenvalues; more robust than Cholesky fallback | ✓ Good -- handles non-PSD S matrices gracefully |
 | DM-based regression instead of frozen BSON | Frozen trajectories not portable across Julia versions/platforms (BLAS differences) | ✓ Good -- DM comparison with delta=0.01 stays within atol=0.05 |
+| Type parameterization on {T<:AbstractFloat} | Enables Float32 paths for future performance experiments without changing call sites | ✓ Good -- all Float64 tests pass unchanged, Float32 ready |
+| Domain dispatch via config type parameter | AbstractConfig{D,T} replaces separate domain argument; cleaner multiple dispatch | ✓ Good -- eliminated redundant domain arguments across codebase |
+| Immutable TrottTrott + fully-initialized HamHam | Eliminates two-step init patterns and mutable state bugs | ✓ Good -- cleaner construction, BSON backward compat preserved |
+| Internal functions _-prefixed (not unexported) | Visible in qualified access for tests; clear public/internal boundary | ✓ Good -- 18 internals prefixed, tests use QuantumFurnace._name |
+| Index-based sparse accumulation in B_bohr | Avoid per-iteration sparse matrix allocation in hot loop | ✓ Good -- allocation regression tests confirm zero sparse alloc |
 | Qiskit for circuit generation (Python interop) | Qiskit is the standard for quantum circuit representation; Julia quantum circuit ecosystem less mature | -- Pending |
 | Single-node multi-core for trajectories | Shared memory for precomputed data avoids serialization overhead; cluster nodes have enough RAM | -- Pending benchmarks |
 
 ---
-*Last updated: 2026-02-14 after v1.1 Reduce milestone started*
+*Last updated: 2026-02-15 after v1.1 Reduce milestone complete*
