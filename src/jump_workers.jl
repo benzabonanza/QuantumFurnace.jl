@@ -306,6 +306,7 @@ function jump_contribution!(::BohrDomain,
     # Hermitianize R (numerical)
     hermitianize!(scratch.R)
 
+    # Apply R, K0, U_residual
     finalize_kraus_step!(evolving_dm, config.delta, scratch)
     return evolving_dm
 end
@@ -384,6 +385,7 @@ function jump_contribution!(::EnergyDomain,
     # Hermitianize R (numerical)
     hermitianize!(scratch.R)
 
+    # Apply R, K0, U_residual
     finalize_kraus_step!(evolving_dm, config.delta, scratch)
     return evolving_dm
 end
@@ -446,6 +448,7 @@ function jump_contribution!(::Union{TimeDomain, TrotterDomain},
     # Hermitianize R
     hermitianize!(scratch.R)
 
+    # Apply R, K0, U_residual
     finalize_kraus_step!(evolving_dm, config.delta, scratch)
     return evolving_dm
 end
