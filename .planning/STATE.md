@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-14)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.1 Reduce -- Phase 9: Type Parameterization (in progress)
+**Current focus:** v1.1 Reduce -- Phase 10: API Surface Cleanup (in progress)
 
 ## Current Position
 
-Phase: 9 of 11 (Type Parameterization) -- COMPLETE
-Plan: 3 of 3 in current phase -- COMPLETE
-Status: Phase 09 complete
-Last activity: 2026-02-15 - Completed quick task 16: Defer LindbladianWorkspace construction
+Phase: 10 of 11 (API Surface Cleanup) -- IN PROGRESS
+Plan: 1 of 3 in current phase -- COMPLETE
+Status: Executing 10-01
+Last activity: 2026-02-15 - Completed 10-01 (Export Curation)
 
-Progress: [##################..] 90% (v1.0 complete, v1.1 6/6 phases)
+Progress: [##################..] 90% (v1.0 complete, v1.1 7/8 phases)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 24 (v1.0: 10, v1.1: 11, quick: 3)
+- Total plans completed: 25 (v1.0: 10, v1.1: 12, quick: 3)
 - Average duration: --
 - Total execution time: --
 
@@ -35,6 +35,7 @@ Progress: [##################..] 90% (v1.0 complete, v1.1 6/6 phases)
 | 08-struct-simplification | 3 | 36min | 12min |
 | 09-type-parameterization | 3/3 | 22min | 7.3min |
 | quick-16 | 1 | 2min | 2min |
+| 10-api-surface-cleanup | 1/3 | 6min | 6min |
 
 *Updated after each plan completion*
 
@@ -79,6 +80,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - 09-03: TrajectoryFramework step parameters (delta, delta_eff, alpha) stay Float64 for numerical precision
 - 09-03: Domain helper functions (create_alpha, create_f, etc.) widened from Float64 to Real
 - quick-16: Removed convenience constructor since only construction site already uses explicit {T}
+- 10-01: De-exported internal types/functions require qualified QuantumFurnace.name access in tests
 
 ### Pending Todos
 
@@ -99,5 +101,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed quick-16 (Remove LindbladianWorkspace default constructor)
+Stopped at: Completed 10-01-PLAN.md (Export Curation)
 Resume file: None
