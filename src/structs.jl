@@ -193,34 +193,30 @@ end
 
     Fields are shared with `ThermalizeConfig`.
 """
-struct ThermalizeConfigGNS{D <: AbstractDomain, T <: AbstractFloat} <: AbstractThermalizeConfig{D,T}
+@kwdef struct ThermalizeConfigGNS{D <: AbstractDomain, T <: AbstractFloat} <: AbstractThermalizeConfig{D,T}
     num_qubits::Int64
-    with_coherent::Bool
+    with_coherent::Bool = false
     with_linear_combination::Bool
     domain::D
-    beta::T
-    sigma::T
-    gaussian_parameters::Union{Tuple{T, T}, Tuple{Nothing, Nothing}}
-    a::Union{T, Nothing}
-    b::Union{T, Nothing}
-    num_energy_bits::Union{Int, Nothing}
-    t0::Union{T, Nothing}
-    w0::Union{T, Nothing}
-    eta::Union{T, Nothing}
-    num_trotter_steps_per_t0::Union{Int, Nothing}
+    beta::T = 1.0
+    sigma::T = 0.1
+    gaussian_parameters::Union{Tuple{T, T}, Tuple{Nothing, Nothing}} = (nothing, nothing)
+    a::Union{T, Nothing} = nothing
+    b::Union{T, Nothing} = nothing
+    num_energy_bits::Union{Int, Nothing} = nothing
+    t0::Union{T, Nothing} = nothing
+    w0::Union{T, Nothing} = nothing
+    eta::Union{T, Nothing} = nothing
+    num_trotter_steps_per_t0::Union{Int, Nothing} = nothing
 
     mixing_time::T
     delta::T
 
     function ThermalizeConfigGNS{D,T}(
-        num_qubits::Int64, with_coherent::Bool, with_linear_combination::Bool, domain::D,
-        beta::T, sigma::T,
-        gaussian_parameters::Union{Tuple{T, T}, Tuple{Nothing, Nothing}},
-        a::Union{T, Nothing}, b::Union{T, Nothing},
-        num_energy_bits::Union{Int, Nothing}, t0::Union{T, Nothing},
-        w0::Union{T, Nothing}, eta::Union{T, Nothing},
-        num_trotter_steps_per_t0::Union{Int, Nothing},
-        mixing_time::T, delta::T
+        num_qubits, with_coherent, with_linear_combination, domain,
+        beta, sigma, gaussian_parameters, a, b,
+        num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0,
+        mixing_time, delta
     ) where {D, T}
         with_coherent && error("GNS configs must have with_coherent=false")
         new{D,T}(num_qubits, with_coherent, with_linear_combination, domain,
@@ -230,24 +226,12 @@ struct ThermalizeConfigGNS{D <: AbstractDomain, T <: AbstractFloat} <: AbstractT
     end
 end
 
-# Keyword constructor for ThermalizeConfigGNS (replaces @kwdef)
-function ThermalizeConfigGNS(;
-    num_qubits::Int64,
-    with_coherent::Bool = false,
-    with_linear_combination::Bool,
-    domain::D,
-    beta::T = 1.0,
-    sigma::T = 0.1,
-    gaussian_parameters::Union{Tuple{T, T}, Tuple{Nothing, Nothing}} = (nothing, nothing),
-    a::Union{T, Nothing} = nothing,
-    b::Union{T, Nothing} = nothing,
-    num_energy_bits::Union{Int, Nothing} = nothing,
-    t0::Union{T, Nothing} = nothing,
-    w0::Union{T, Nothing} = nothing,
-    eta::Union{T, Nothing} = nothing,
-    num_trotter_steps_per_t0::Union{Int, Nothing} = nothing,
-    mixing_time::T,
-    delta::T,
+# Bridge for @kwdef: unparameterized positional -> parameterized inner constructor
+function ThermalizeConfigGNS(
+    num_qubits::Int64, with_coherent::Bool, with_linear_combination::Bool, domain::D,
+    beta::T, sigma::T, gaussian_parameters, a, b,
+    num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0,
+    mixing_time::T, delta::T
 ) where {D <: AbstractDomain, T <: AbstractFloat}
     ThermalizeConfigGNS{D,T}(num_qubits, with_coherent, with_linear_combination, domain,
                            beta, sigma, gaussian_parameters, a, b,
