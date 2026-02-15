@@ -10,16 +10,16 @@ See: .planning/PROJECT.md (updated 2026-02-14)
 ## Current Position
 
 Phase: 8 of 11 (Struct Simplification) -- IN PROGRESS
-Plan: 1 of 3 in current phase (08-01 complete, 08-02 complete out-of-order)
+Plan: 2 of 3 in current phase
 Status: Executing phase 08
-Last activity: 2026-02-15 - Completed 08-01: config struct deduplication and TrottTrott immutability
+Last activity: 2026-02-15 - Completed 08-02: HamHam initialization redesign
 
 Progress: [##############......] 70% (v1.0 complete, v1.1 4/6 phases in progress)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 17 (v1.0: 10, v1.1: 6, quick: 1)
+- Total plans completed: 18 (v1.0: 10, v1.1: 7, quick: 1)
 - Average duration: --
 - Total execution time: --
 
@@ -31,7 +31,7 @@ Progress: [##############......] 70% (v1.0 complete, v1.1 4/6 phases in progress
 | 06-dead-code-pruning | 2 | 16min | 8min |
 | 07-dry-refactoring | 2 | 8min | 4min |
 | quick-13 | 1 | 2min | 2min |
-| 08-struct-simplification | 2 | 11min | 5.5min |
+| 08-struct-simplification | 3 | 24min | 8min |
 
 *Updated after each plan completion*
 
@@ -55,6 +55,10 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - 08-01: GNS structs use manual keyword constructor + inner constructor (not @kwdef) for with_coherent enforcement
 - 08-01: TrottTrott.bohr_freqs name kept for polymorphic access with HamHam
 - 08-01: Added load_hamiltonian_bson for legacy BSON compat after 08-02 changed HamHam struct
+- 08-02: Inline Gibbs computation via _gibbs_in_eigen helper (avoids circular dependency)
+- 08-02: BSON.parse + raise_recursive for legacy deserialization (no BSON file re-saving)
+- 08-02: load_hamiltonian requires beta kwarg (breaking change, clean break per CONTEXT.md)
+- 08-02: find_ideal_heisenberg returns NamedTuple for composable HamHam construction
 
 ### Pending Todos
 
@@ -73,5 +77,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 08-01-PLAN.md (config deduplication + TrottTrott immutability)
+Stopped at: Completed 08-02-PLAN.md (HamHam initialization redesign)
 Resume file: None
