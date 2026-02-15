@@ -13,7 +13,7 @@ using Random
             @testset "$(typeof(domain))" begin
                 config = make_thermalize_config(domain; with_coherent=true, delta=TEST_DELTA)
                 ham_or_trott = TEST_HAM
-                precomputed = QuantumFurnace.precompute_data(config, ham_or_trott)
+                precomputed = QuantumFurnace._precompute_data(config, ham_or_trott)
                 scratch = QuantumFurnace.KrausScratch(ComplexF64, DIM)
                 fw = build_trajectoryframework(
                     TEST_JUMPS, ham_or_trott, config, precomputed, scratch, TEST_DELTA
@@ -39,7 +39,7 @@ using Random
         # With a properly-built framework and normalized input, total_weight should be ~1.0
         # and NO warning should fire. We verify the code path runs without error.
         config = make_thermalize_config(EnergyDomain(); delta=TEST_DELTA)
-        precomputed = QuantumFurnace.precompute_data(config, TEST_HAM)
+        precomputed = QuantumFurnace._precompute_data(config, TEST_HAM)
         scratch = QuantumFurnace.KrausScratch(ComplexF64, DIM)
         fw = build_trajectoryframework(
             TEST_JUMPS, TEST_HAM, config, precomputed, scratch, TEST_DELTA
@@ -68,7 +68,7 @@ using Random
             @testset "$(typeof(domain))" begin
                 config = make_thermalize_config(domain; delta=TEST_DELTA)
                 ham_or_trott = TEST_HAM
-                precomputed = QuantumFurnace.precompute_data(config, ham_or_trott)
+                precomputed = QuantumFurnace._precompute_data(config, ham_or_trott)
                 scratch = QuantumFurnace.KrausScratch(ComplexF64, DIM)
                 fw = build_trajectoryframework(
                     TEST_JUMPS, ham_or_trott, config, precomputed, scratch, TEST_DELTA
@@ -91,7 +91,7 @@ using Random
         # Verify per-operator channel structure matches Chen 2023 Theorem III.1:
         # p_nojump + p_jump_total + p_res should sum to ~1.0 for any normalized psi
         config = make_thermalize_config(EnergyDomain(); delta=TEST_DELTA)
-        precomputed = QuantumFurnace.precompute_data(config, TEST_HAM)
+        precomputed = QuantumFurnace._precompute_data(config, TEST_HAM)
         scratch = QuantumFurnace.KrausScratch(ComplexF64, DIM)
         fw = build_trajectoryframework(
             TEST_JUMPS, TEST_HAM, config, precomputed, scratch, TEST_DELTA

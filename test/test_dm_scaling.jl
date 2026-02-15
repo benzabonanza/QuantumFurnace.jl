@@ -95,20 +95,20 @@ end
 
     # B_bohr (exact, in Hamiltonian eigenbasis)
     config_bohr = make_liouv_config(BohrDomain())
-    precomputed_bohr = QuantumFurnace.precompute_data(config_bohr, TEST_HAM)
+    precomputed_bohr = QuantumFurnace._precompute_data(config_bohr, TEST_HAM)
     B_bohr = coherent_bohr(TEST_HAM, jump, config_bohr)
     rmul!(B_bohr, precomputed_bohr.gamma_norm_factor)
 
     # B_time (time quadrature, in Hamiltonian eigenbasis)
     config_time = make_liouv_config(TimeDomain())
-    precomputed_time = QuantumFurnace.precompute_data(config_time, TEST_HAM)
+    precomputed_time = QuantumFurnace._precompute_data(config_time, TEST_HAM)
     B_time_val = B_time(jump, TEST_HAM, precomputed_time.b_minus, precomputed_time.b_plus,
                         T0, BETA, SIGMA)
     rmul!(B_time_val, precomputed_time.gamma_norm_factor)
 
     # B_trotter (Trotter + time quadrature, in Trotter eigenbasis)
     config_trott = make_liouv_config(TrotterDomain())
-    precomputed_trott = QuantumFurnace.precompute_data(config_trott, TEST_TROTTER)
+    precomputed_trott = QuantumFurnace._precompute_data(config_trott, TEST_TROTTER)
     B_trott = B_trotter(jump, TEST_TROTTER, precomputed_trott.b_minus, precomputed_trott.b_plus,
                          BETA, SIGMA)
     rmul!(B_trott, precomputed_trott.gamma_norm_factor)
@@ -149,20 +149,20 @@ end
 
     # Time OFT (time domain quadrature)
     # Reconstruct oft_time_labels since they are not stored in precomputed_data
-    energy_labels = QuantumFurnace.create_energy_labels(NUM_ENERGY_BITS, W0)
+    energy_labels = QuantumFurnace._create_energy_labels(NUM_ENERGY_BITS, W0)
     time_labels_full = energy_labels .* (T0 / W0)
-    oft_time_labels = QuantumFurnace.truncate_time_labels_for_oft(time_labels_full, SIGMA)
+    oft_time_labels = QuantumFurnace._truncate_time_labels_for_oft(time_labels_full, SIGMA)
 
     time_oft_prefactor = T0 * sqrt(SIGMA * sqrt(2 / pi) / (2 * pi))
     caches = QuantumFurnace.OFTCaches(DIM)
     A_time = Matrix{ComplexF64}(undef, DIM, DIM)
-    QuantumFurnace.time_oft!(A_time, caches, jump, w, TEST_HAM, oft_time_labels, SIGMA)
+    QuantumFurnace._time_oft!(A_time, caches, jump, w, TEST_HAM, oft_time_labels, SIGMA)
     A_time .*= time_oft_prefactor
 
     # Trotter OFT: trotter_oft! needs jump in Trotter eigenbasis
     jump_trott = JumpOp(jump.data, TEST_TROTTER.eigvecs' * jump.data * TEST_TROTTER.eigvecs, jump.orthogonal, jump.hermitian)
     A_trott = Matrix{ComplexF64}(undef, DIM, DIM)
-    QuantumFurnace.trotter_oft!(A_trott, caches, jump_trott, w, TEST_TROTTER, oft_time_labels, SIGMA)
+    QuantumFurnace._trotter_oft!(A_trott, caches, jump_trott, w, TEST_TROTTER, oft_time_labels, SIGMA)
     A_trott .*= time_oft_prefactor
     # Transform result from Trotter eigenbasis back to H-eigenbasis
     U_t2e = TEST_TROTTER.eigvecs' * TEST_HAM.eigvecs
@@ -200,45 +200,45 @@ end
     A_energy .*= energy_oft_prefactor
 
     # --- Shared setup ---
-    energy_labels = QuantumFurnace.create_energy_labels(NUM_ENERGY_BITS, W0)
+    energy_labels = QuantumFurnace._create_energy_labels(NUM_ENERGY_BITS, W0)
     time_labels_full = energy_labels .* (T0 / W0)
-    oft_time_labels = QuantumFurnace.truncate_time_labels_for_oft(time_labels_full, SIGMA)
+    oft_time_labels = QuantumFurnace._truncate_time_labels_for_oft(time_labels_full, SIGMA)
     time_oft_prefactor = T0 * sqrt(SIGMA * sqrt(2 / pi) / (2 * pi))
     caches = QuantumFurnace.OFTCaches(DIM)
 
     # === Time NUFFT OFT ===
     config_time = make_liouv_config(TimeDomain())
-    precomputed_time = QuantumFurnace.precompute_data(config_time, TEST_HAM)
+    precomputed_time = QuantumFurnace._precompute_data(config_time, TEST_HAM)
 
     # Sanity: test energy must be on the NUFFT grid
     @test haskey(precomputed_time.oft_nufft_prefactors.energy_to_index, w)
 
-    nufft_pf_time = QuantumFurnace.prefactor_view(precomputed_time.oft_nufft_prefactors, w)
+    nufft_pf_time = QuantumFurnace._prefactor_view(precomputed_time.oft_nufft_prefactors, w)
     A_nufft_time = jump.in_eigenbasis .* nufft_pf_time
     A_nufft_time .*= time_oft_prefactor
 
     # Direct time_oft! for comparison
     A_time = Matrix{ComplexF64}(undef, DIM, DIM)
-    QuantumFurnace.time_oft!(A_time, caches, jump, w, TEST_HAM, oft_time_labels, SIGMA)
+    QuantumFurnace._time_oft!(A_time, caches, jump, w, TEST_HAM, oft_time_labels, SIGMA)
     A_time .*= time_oft_prefactor
 
     # === Trotter NUFFT OFT ===
     config_trott = make_liouv_config(TrotterDomain())
-    precomputed_trott = QuantumFurnace.precompute_data(config_trott, TEST_TROTTER)
+    precomputed_trott = QuantumFurnace._precompute_data(config_trott, TEST_TROTTER)
 
     @test haskey(precomputed_trott.oft_nufft_prefactors.energy_to_index, w)
 
     jump_trott = JumpOp(jump.data, TEST_TROTTER.eigvecs' * jump.data * TEST_TROTTER.eigvecs, jump.orthogonal, jump.hermitian)
     U_t2e = TEST_TROTTER.eigvecs' * TEST_HAM.eigvecs
 
-    nufft_pf_trott = QuantumFurnace.prefactor_view(precomputed_trott.oft_nufft_prefactors, w)
+    nufft_pf_trott = QuantumFurnace._prefactor_view(precomputed_trott.oft_nufft_prefactors, w)
     A_nufft_trott = jump_trott.in_eigenbasis .* nufft_pf_trott
     A_nufft_trott .*= time_oft_prefactor
     A_nufft_trott_in_eigen = U_t2e' * A_nufft_trott * U_t2e
 
     # Direct trotter_oft! for comparison
     A_trott = Matrix{ComplexF64}(undef, DIM, DIM)
-    QuantumFurnace.trotter_oft!(A_trott, caches, jump_trott, w, TEST_TROTTER, oft_time_labels, SIGMA)
+    QuantumFurnace._trotter_oft!(A_trott, caches, jump_trott, w, TEST_TROTTER, oft_time_labels, SIGMA)
     A_trott .*= time_oft_prefactor
     A_trott_in_eigen = U_t2e' * A_trott * U_t2e
 
