@@ -20,19 +20,6 @@ struct OFTCaches
     end
 end
 
-struct LindbladianJumpCaches
-    jump_1::Matrix{ComplexF64}
-    jump_2_dag_jump_1::Matrix{ComplexF64}
-    temp1::Matrix{ComplexF64}
-
-    function LindbladianJumpCaches(dim::Int)
-        jump_1 = zeros(ComplexF64, dim, dim)
-        jump_2_dag_jump_1 = zeros(ComplexF64, dim, dim)
-        temp1 = zeros(ComplexF64, dim, dim)
-        new(jump_1, jump_2_dag_jump_1, temp1)
-    end
-end
-
 """Workspace for building a dense Liouvillian matrix with minimal allocations.
 
 Used by `construct_liouvillian` when accumulating the full vectorized Lindbladian
@@ -221,24 +208,6 @@ struct JumpOp{T <: AbstractMatrix{ComplexF64}}
 end
 
 """
-    LiouvLiouv
-
-    Container for the Liouvillian superoperator and its spectral properties.
-
-    # Fields
-    - `data`: The superoperator in matricized representation (Choi-Jaimolkowski).
-    - `steady_state`: The kernel of the Liouvillian (exact / approximate Gibbs state).
-    - `spectral_gap`: Magnitude of the real part of the first non-zero eigenvalue (determines convergence speed).
-    - `mixing_time_bound`: Theoretical bound on mixing time derived from the gap.
-"""
-mutable struct LiouvLiouv
-    data::Matrix{ComplexF64}
-    steady_state::Matrix{ComplexF64}
-    spectral_gap::Float64
-    mixing_time_bound::Float64
-end
-
-"""
         HotAlgorithmResults{D}
 
     Results from the step-by-step quantum algorithm emulation on thermalization.
@@ -282,17 +251,6 @@ end
     hamiltonian::HamHam
     trotter::Union{TrottTrott,Nothing} = nothing
     config::AbstractLiouvConfig{D}
-end
-
-struct LindbladWorkspace{T}
-    temp_buffers::Vector{Matrix{T}} 
-    accumulators::Vector{Matrix{T}} 
-    
-    function LindbladWorkspace(dim::Int, T=ComplexF64)
-        temp = [Matrix{T}(undef, dim, dim) for _ in 1:nthreads()]
-        acc  = [Matrix{T}(undef, dim, dim) for _ in 1:nthreads()]
-        new{T}(temp, acc)
-    end
 end
 
 struct LSIFramework{T}

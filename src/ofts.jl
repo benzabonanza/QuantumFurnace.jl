@@ -1,8 +1,3 @@
-function oft(jump::JumpOp, energy::Float64, hamiltonian::HamHam, sigma::Float64)
-    """Subnormalized, multiply by sqrt(1 / sigma sqrt(2 * pi))"""
-    return @. jump.in_eigenbasis * exp(-(energy - hamiltonian.bohr_freqs)^2 / (4 * sigma^2))
-end
-
 function oft!(out_matrix::Matrix{ComplexF64}, jump::JumpOp, energy::Float64, hamiltonian::HamHam, sigma::Float64)
     """Subnormalized, multiply by sqrt(1 / sigma sqrt(2 * pi))"""
     @. out_matrix = jump.in_eigenbasis * exp(-(energy - hamiltonian.bohr_freqs)^2 / (4 * sigma^2)) 
