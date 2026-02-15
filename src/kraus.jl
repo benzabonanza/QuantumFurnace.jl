@@ -9,7 +9,7 @@ struct KrausScratch{T}
     rho_next::Matrix{T}
 end
 
-function KrausScratch(T::Type{ComplexF64}, dim::Int)
-    Zm() = zeros(T, dim, dim)
-    return KrausScratch(Zm(), Zm(), Zm(), Zm(), Zm(), Zm(), Zm(), Zm())
+function KrausScratch(::Type{CT}, dim::Int) where {CT<:Complex}
+    Zm() = zeros(CT, dim, dim)
+    return KrausScratch{CT}(Zm(), Zm(), Zm(), Zm(), Zm(), Zm(), Zm(), Zm())
 end
