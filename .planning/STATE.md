@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-14)
 Phase: 8 of 11 (Struct Simplification) -- COMPLETE
 Plan: 3 of 3 in current phase
 Status: Phase 08 complete
-Last activity: 2026-02-15 - Completed 08-03: TrajectoryFramework simplification and domain dispatch refactor
+Last activity: 2026-02-15 - Completed quick task 15: Remove unused _build_common_fields() helper
 
 Progress: [################....] 80% (v1.0 complete, v1.1 5/6 phases complete)
 
