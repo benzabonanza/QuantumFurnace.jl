@@ -85,7 +85,11 @@ Plans:
   3. Config structs are parameterized on float type for tolerance and step-size fields
   4. Existing Float64 call sites work without modification (T defaults to or infers Float64)
   5. All 224 existing tests pass with no regressions
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [ ] 09-01-PLAN.md -- Parameterize HamHam{T} and TrottTrott{T} on element type
+- [ ] 09-02-PLAN.md -- Parameterize Config structs, LindbladianWorkspace, JumpOp, KrausScratch, NUFFTPrefactors
+- [ ] 09-03-PLAN.md -- Propagate T through simulation function signatures and verify full pipeline
 
 ### Phase 10: API Surface Cleanup
 **Goal**: Public API exposes exactly what users and researchers need -- building blocks for pedagogy are exported, implementation details are internal
