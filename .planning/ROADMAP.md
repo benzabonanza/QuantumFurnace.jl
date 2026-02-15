@@ -56,7 +56,9 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   3. Coherent unitary application exists as one shared function, called from 3 sites in jump_workers.jl
   4. Trotter basis transform of jumps has one canonical implementation shared between furnace.jl and trajectories.jl
   5. All 224 existing tests pass with no regressions
-**Plans**: TBD
+**Plans**: 2 plans
+- [ ] 07-01-PLAN.md -- Extract hermitianize! helper (DRY-01) and transform_jumps_to_basis helper (DRY-04)
+- [ ] 07-02-PLAN.md -- Extract apply_coherent_unitary! (DRY-03) and apply_cptp_channel! (DRY-02) helpers in jump_workers.jl
 
 ### Phase 8: Struct Simplification
 **Goal**: Core data structures are minimal and correct -- config struct field duplication reduced, HamHam fully initialized in constructor, TrottTrott immutable with correct field types
@@ -117,7 +119,7 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10 -> 11
 | 4. Trajectory Cross-Validation | v1.0 | 2/2 | Complete | 2026-02-14 |
 | 5. Statistical Validation and Regression | v1.0 | 2/2 | Complete | 2026-02-14 |
 | 6. Dead Code Pruning | v1.1 | 2/2 | Complete | 2026-02-15 |
-| 7. DRY Refactoring | v1.1 | 0/? | Not started | - |
+| 7. DRY Refactoring | v1.1 | 0/2 | Not started | - |
 | 8. Struct Simplification | v1.1 | 0/? | Not started | - |
 | 9. Type Parameterization | v1.1 | 0/? | Not started | - |
 | 10. API Surface Cleanup | v1.1 | 0/? | Not started | - |
