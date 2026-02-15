@@ -6,7 +6,7 @@ function run_lindbladian(jumps::Vector{JumpOp}, config::AbstractLiouvConfig{D,Tc
     end
 
     validate_config!(config)
-    print_press(config)
+    _print_press(config)
 
     liouv = construct_lindbladian(jumps, config, hamiltonian, trotter=trotter)
     @printf("Done.\n")
@@ -55,7 +55,7 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::AbstractLiouvConfi
         hamiltonian
     end
 
-    precomputed_data = precompute_data(config, ham_or_trott)
+    precomputed_data = _precompute_data(config, ham_or_trott)
 
     #! uncomment for multi-threads
     # total_lindbladian = @distributed (+) for jump in jumps
@@ -69,9 +69,9 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::AbstractLiouvConfi
     ws = LindbladianWorkspace{T}(dim)
 
     # Precompute all B's for the A's if for KMS DB and with_coherent.
-    Btot = precompute_coherent_total_B(jumps, ham_or_trott, config, precomputed_data)
+    Btot = _precompute_coherent_total_B(jumps, ham_or_trott, config, precomputed_data)
     if Btot !== nothing
-        vectorize_liouvillian_coherent!(total_lindbladian, Btot, ws)
+        _vectorize_liouvillian_coherent!(total_lindbladian, Btot, ws)
     end
 
     # For TrotterDomain, transform jump operators from Hamiltonian eigenbasis
@@ -85,7 +85,7 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::AbstractLiouvConfi
 
     # Accumulate Liouvillian in-place (no per-jump dim^2×dim^2 allocations).
     for (k, jump) in pairs(jumps_for_diss)
-        jump_contribution!(total_lindbladian, jump, ham_or_trott, config, precomputed_data, ws;
+        _jump_contribution!(total_lindbladian, jump, ham_or_trott, config, precomputed_data, ws;
             coherent_term=nothing)
     end
 
@@ -108,7 +108,7 @@ function run_thermalization(
 
     dim = size(hamiltonian.data, 1)
     validate_config!(config)
-    print_press(config)
+    _print_press(config)
 
     if config.domain isa TrotterDomain
         @assert trotter !== nothing
@@ -120,7 +120,7 @@ function run_thermalization(
         gibbs = hamiltonian.gibbs
     end
 
-    precomputed_data = precompute_data(config, ham_or_trott)
+    precomputed_data = _precompute_data(config, ham_or_trott)
 
     # For TrotterDomain, transform jump operators from Hamiltonian eigenbasis
     # to Trotter eigenbasis for the dissipative contribution.
@@ -132,7 +132,7 @@ function run_thermalization(
 
     # precompute coherent U_B = exp(-i delta B(jump)) per jump to avoid allocations
     p_jump = 1.0 / length(jumps)
-    coherent_unitaries = precompute_coherent_unitary_terms(jumps, hamiltonian, config, precomputed_data;
+    coherent_unitaries = _precompute_coherent_unitary_terms(jumps, hamiltonian, config, precomputed_data;
         trotter=trotter, delta_scale = rescale_by_inv_prob ? (1.0 / p_jump) : 1.0)
 
     scratch = KrausScratch(eltype(evolving_dm), dim)
@@ -146,7 +146,7 @@ function run_thermalization(
         idx = rand(rng, 1:length(jumps_for_diss))
         jump = jumps_for_diss[idx]
 
-        jump_contribution!(
+        _jump_contribution!(
             evolving_dm,
             jump,
             ham_or_trott,

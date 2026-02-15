@@ -23,7 +23,7 @@ function _jump_contribution!(
 
     B = coherent_term
     if B !== nothing
-        vectorize_liouvillian_coherent!(L_target, B, ws)
+        _vectorize_liouvillian_coherent!(L_target, B, ws)
     end
 
     alpha_A_nu1 = ws.jump_tmp
@@ -39,7 +39,7 @@ function _jump_contribution!(
 
         A_nu_2_dag = sparse(rows_dag, cols_dag, conj.(A_nu_2_vals), dim, dim)
 
-        vectorize_liouv_diss_and_add!(L_target, alpha_A_nu1, A_nu_2_dag, gamma_norm_factor, ws)
+        _vectorize_liouv_diss_and_add!(L_target, alpha_A_nu1, A_nu_2_dag, gamma_norm_factor, ws)
     end
     return L_target
 end
@@ -58,7 +58,7 @@ function _jump_contribution!(
 
     B = coherent_term
     if B !== nothing
-        vectorize_liouvillian_coherent!(L_target, B, ws)
+        _vectorize_liouvillian_coherent!(L_target, B, ws)
     end
 
     jump_oft = ws.jump_tmp
@@ -71,17 +71,17 @@ function _jump_contribution!(
             w = abs(w_raw)
             oft!(jump_oft, jump, w, hamiltonian, config.sigma)
             scalar_w = prefactor * transition(w)
-            vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
+            _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
             if w > 1e-12
                 scalar_negative_w = prefactor * transition(-w)
-                vectorize_liouv_diss_and_add!(L_target, jump_oft', scalar_negative_w, ws)
+                _vectorize_liouv_diss_and_add!(L_target, jump_oft', scalar_negative_w, ws)
             end
         end
     else
         for w in energy_labels
             oft!(jump_oft, jump, w, hamiltonian, config.sigma)
             scalar_w = prefactor * transition(w)
-            vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
+            _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
         end
     end
 
@@ -102,7 +102,7 @@ function _jump_contribution!(
 
     B = coherent_term
     if B !== nothing
-        vectorize_liouvillian_coherent!(L_target, B, ws)
+        _vectorize_liouvillian_coherent!(L_target, B, ws)
     end
 
     jump_oft = ws.jump_tmp
@@ -112,22 +112,22 @@ function _jump_contribution!(
         for w_raw in energy_labels
             w_raw > 1e-12 && continue
             w = abs(w_raw)
-            nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
+            nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
             @. jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
 
             scalar_w = prefactor * transition(w)
-            vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
+            _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
             if w > 1e-12
                 scalar_negative_w = prefactor * transition(-w)
-                vectorize_liouv_diss_and_add!(L_target, jump_oft', scalar_negative_w, ws)
+                _vectorize_liouv_diss_and_add!(L_target, jump_oft', scalar_negative_w, ws)
             end
         end
     else
         for w in energy_labels
-            nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
+            nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
             @. jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
             scalar_w = prefactor * transition(w)
-            vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
+            _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
         end
     end
 
@@ -414,7 +414,7 @@ function _jump_contribution!(
 
     energies = jump.hermitian ? abs.(filter(w -> w < 1e-12, energy_labels)) : energy_labels
     for w in energies
-        nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
+        nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
 
         # Aω := A .* nufft_prefactor_matrix(ω)
         @. scratch.jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix

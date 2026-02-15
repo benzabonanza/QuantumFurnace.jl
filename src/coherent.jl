@@ -1,6 +1,6 @@
 #* COHERENT TERMS -----------------------------------------------------------------------------------------------------------
 """
-    precompute_coherent_total_B(
+    _precompute_coherent_total_B(
         jumps,
         hamiltonian,
         config,
@@ -40,7 +40,7 @@ function _precompute_coherent_total_B(
 end
 
 """
-    precompute_coherent_unitary_terms(
+    _precompute_coherent_unitary_terms(
         jumps::AbstractVector{<:JumpOp},
         hamiltonian::HamHam,
         config::AbstractThermalizeConfig,

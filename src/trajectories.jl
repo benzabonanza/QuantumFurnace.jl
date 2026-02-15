@@ -80,7 +80,7 @@ function build_trajectoryframework(
     if config.with_coherent
         @inbounds for a in 1:n_jumps
             single_jump = JumpOp[jumps[a]]  # Force Vector{JumpOp} for dispatch compatibility
-            B_a = precompute_coherent_total_B(single_jump, ham_or_trott, config, precomputed_data)
+            B_a = _precompute_coherent_total_B(single_jump, ham_or_trott, config, precomputed_data)
             hermitianize!(B_a)
             per_op_U_B[a] = exp(-1im * delta_eff * Hermitian(B_a))
         end
@@ -228,7 +228,7 @@ function _precompute_R(
                 w_raw > 1e-12 && continue
                 w = abs(w_raw)
 
-                nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
+                nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
 
                 # Aω := A ∘ prefactor_matrix(ω)  (elementwise)
                 @. scratch.jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
@@ -245,7 +245,7 @@ function _precompute_R(
             end
         else
             for w in energy_labels
-                nufft_prefactor_matrix = prefactor_view(oft_nufft_prefactors, w)
+                nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
                 @. scratch.jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
 
                 rate2 = base_prefactor * transition(w)
@@ -342,7 +342,7 @@ function run_trajectories(
 )
 
     validate_config!(config)
-    print_press(config)
+    _print_press(config)
 
     @assert ntraj >= 1
     @assert save_every >= 1
@@ -357,7 +357,7 @@ function run_trajectories(
         hamiltonian
     end
 
-    precomputed_data = precompute_data(config, ham_or_trott)
+    precomputed_data = _precompute_data(config, ham_or_trott)
 
     dim = size(hamiltonian.data, 1)
     rho_mean = zeros(CT, dim, dim)
@@ -539,7 +539,7 @@ function step_along_trajectory!(
                 w_raw > 1e-12 && continue
                 w = abs(w_raw)
 
-                pref = prefactor_view(oft_prefactors, w)
+                pref = _prefactor_view(oft_prefactors, w)
                 @. ws.jump_oft = jump.in_eigenbasis * pref
 
                 # Positive-frequency
@@ -572,7 +572,7 @@ function step_along_trajectory!(
             end
         else
             for w in energy_labels
-                pref = prefactor_view(oft_prefactors, w)
+                pref = _prefactor_view(oft_prefactors, w)
                 @. ws.jump_oft = jump.in_eigenbasis * pref
 
                 mul!(ws.Rpsi, ws.jump_oft, psi)
