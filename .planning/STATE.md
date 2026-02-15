@@ -10,16 +10,16 @@ See: .planning/PROJECT.md (updated 2026-02-15)
 ## Current Position
 
 Phase: 12 of 18 (Workspace Refactor) -- first phase of v1.2
-Plan: 1 of 2 in current phase
-Status: Executing
-Last activity: 2026-02-15 -- Completed 12-01-PLAN.md (workspace separation + explicit RNG)
+Plan: 2 of 2 in current phase (COMPLETE)
+Status: Phase 12 Complete
+Last activity: 2026-02-15 -- Completed 12-02-PLAN.md (test migration + workspace independence)
 
-Progress: [██████████████████████░░░░░░░░] 74% (27/TBD plans -- v1.0: 10, v1.1: 16+5q, v1.2: 1/TBD)
+Progress: [██████████████████████░░░░░░░░] 76% (28/TBD plans -- v1.0: 10, v1.1: 16+5q, v1.2: 2/TBD)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 32 (v1.0: 10, v1.1: 16, quick: 5, v1.2: 1)
+- Total plans completed: 33 (v1.0: 10, v1.1: 16, quick: 5, v1.2: 2)
 
 **By Milestone:**
 
@@ -27,7 +27,7 @@ Progress: [██████████████████████░
 |-----------|--------|-------|----------|
 | v1.0 Trajectories | 1-5 | 10 | 2026-02-13 to 2026-02-14 |
 | v1.1 Reduce | 6-11 | 16 (+5 quick) | 2026-02-15 |
-| v1.2 Multi-threading | 12-18 | 1/TBD | 2026-02-15 to ... |
+| v1.2 Multi-threading | 12-18 | 2/TBD | 2026-02-15 to ... |
 
 ## Accumulated Context
 
@@ -36,6 +36,7 @@ Progress: [██████████████████████░
 All decisions logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- Phase 12 complete: workspace independence verified, all 246 tests pass with explicit ws/rng
 - Workspace refactor (THRD-01) complete: TrajectoryFramework is read-only, workspace passed explicitly
 - TrajectoryResult struct with optional times/measurements_mean fields (single return type)
 - store_states kwarg dropped from run_trajectories (unused, not in TrajectoryResult)
@@ -56,5 +57,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 12-01-PLAN.md
+Stopped at: Completed 12-02-PLAN.md (Phase 12 complete)
 Resume file: None
