@@ -67,9 +67,9 @@ function build_trajectoryframework(
     # to Trotter eigenbasis. The NUFFT prefactors use Trotter quasi-Bohr frequencies,
     # so the element-wise product A .* P requires A in the same basis.
     jumps_for_diss = if config.domain isa TrotterDomain && ham_or_trott isa TrottTrott
-        JumpOp[JumpOp(j.data, ham_or_trott.eigvecs' * j.data * ham_or_trott.eigvecs, j.orthogonal, j.hermitian) for j in jumps]
+        transform_jumps_to_basis(jumps, ham_or_trott.eigvecs)
     else
-        JumpOp[j for j in jumps]
+        collect(JumpOp, jumps)
     end
 
     # Precompute per-operator coherent B terms (one per jump)
@@ -80,7 +80,7 @@ function build_trajectoryframework(
         @inbounds for a in 1:n_jumps
             single_jump = JumpOp[jumps[a]]  # Force Vector{JumpOp} for dispatch compatibility
             B_a = precompute_coherent_total_B(single_jump, ham_or_trott, config, precomputed_data)
-            B_a .= 0.5 .* (B_a .+ B_a')
+            hermitianize!(B_a)
             per_op_U_B[a] = exp(-1im * delta_eff * Hermitian(B_a))
         end
     else
@@ -110,7 +110,8 @@ function build_trajectoryframework(
         @. scratch.tmp2 = s1 * R_a - s2 * scratch.tmp1
 
         # TFIX-04: PSD guard -- clamp negative eigenvalues to zero (silent fallback)
-        S_herm = Hermitian(0.5 .* (scratch.tmp2 .+ scratch.tmp2'))
+        hermitianize!(scratch.tmp2)
+        S_herm = Hermitian(scratch.tmp2)
         eig = eigen(S_herm)
         eig.values .= max.(eig.values, 0.0)
         U_residual_a = Matrix{ComplexF64}(Diagonal(sqrt.(eig.values)) * eig.vectors')
@@ -200,7 +201,7 @@ function precompute_R(
     end
 
     # Numerical Hermitianization (R should be Hermitian PSD by construction).
-    scratch.R .= 0.5 .* (scratch.R .+ scratch.R')
+    hermitianize!(scratch.R)
     return scratch.R
 end
 
@@ -255,7 +256,7 @@ function precompute_R(
         end
     end
 
-    scratch.R .= 0.5 .* (scratch.R .+ scratch.R')
+    hermitianize!(scratch.R)
     return scratch.R
 end
 
@@ -370,7 +371,7 @@ function run_trajectories(
             psi = copy(psi0)
             _evolve_along_trajectory!(psi, fw, total_time)
             _accumulate_density_matrix!(rho_mean, psi)
-            rho_mean .= 0.5 .* (rho_mean .+ rho_mean')
+            hermitianize!(rho_mean)
             return (framework = fw, psi = psi, rho_mean = rho_mean)
         end
 
@@ -387,7 +388,7 @@ function run_trajectories(
         end
 
         rho_mean ./= ntraj
-        rho_mean .= 0.5 .* (rho_mean .+ rho_mean')
+        hermitianize!(rho_mean)
 
         return (framework = fw, states = states, rho_mean = rho_mean)
     end
@@ -435,7 +436,7 @@ function run_trajectories(
 
     mean_data ./= ntraj
     rho_mean ./= ntraj
-    rho_mean .= 0.5 .* (rho_mean .+ rho_mean')
+    hermitianize!(rho_mean)
 
     return (framework = fw, times = times, measurements_mean = mean_data, rho_mean = rho_mean)
 end

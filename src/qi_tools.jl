@@ -4,6 +4,27 @@ using Random
 using Printf
 
 """
+    hermitianize!(A::AbstractMatrix) -> A
+
+In-place Hermitianization: A .= (A + A') / 2.
+Used to enforce Hermiticity after numerical accumulation.
+"""
+function hermitianize!(A::AbstractMatrix)
+    A .= 0.5 .* (A .+ A')
+    return A
+end
+
+"""
+    transform_jumps_to_basis(jumps, eigvecs) -> Vector{JumpOp}
+
+Transform jump operators from computational basis to a new eigenbasis.
+Used for Trotter basis transforms in TrotterDomain simulations.
+"""
+function transform_jumps_to_basis(jumps::AbstractVector{<:JumpOp}, eigvecs::AbstractMatrix)
+    return JumpOp[JumpOp(j.data, eigvecs' * j.data * eigvecs, j.orthogonal, j.hermitian) for j in jumps]
+end
+
+"""
     Computes C .+= alpha .* kron(A, B) completely in-place, without allocating
     the result of the Kronecker product. Speed.
 """

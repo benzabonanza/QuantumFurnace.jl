@@ -235,7 +235,7 @@ function jump_contribution!(::BohrDomain,
     end
 
     # Hermitianize R (numerical)
-    scratch.R .= 0.5 .* (scratch.R .+ scratch.R')
+    hermitianize!(scratch.R)
 
     # Build K0 = I - (1 - sqrt(1 - delta)) R   (Chen Eq. 3.2)
     delta_factor_for_K0 = 1 - sqrt(1 - config.delta)
@@ -267,7 +267,8 @@ function jump_contribution!(::BohrDomain,
     mul!(scratch.tmp1, U_residual, evolving_dm)
     mul!(scratch.rho_next, scratch.tmp1, U_residual', 1.0, 1.0)
 
-    evolving_dm .= 0.5 .* (scratch.rho_next .+ scratch.rho_next')
+    hermitianize!(scratch.rho_next)
+    copyto!(evolving_dm, scratch.rho_next)
     return evolving_dm
 end
 
@@ -349,7 +350,7 @@ function jump_contribution!(::EnergyDomain,
     end
 
     # Hermitianize R (numerical)
-    scratch.R .= 0.5 .* (scratch.R .+ scratch.R')
+    hermitianize!(scratch.R)
 
     # Build K0 = I - (1 - sqrt(1 - delta)) R   (Chen Eq. 3.2)
     delta_factor_for_K0 = 1 - sqrt(1 - config.delta)
@@ -382,7 +383,8 @@ function jump_contribution!(::EnergyDomain,
     mul!(scratch.tmp1, U_residual, evolving_dm)
     mul!(scratch.rho_next, scratch.tmp1, U_residual', 1.0, 1.0)
 
-    evolving_dm .= 0.5 .* (scratch.rho_next .+ scratch.rho_next')
+    hermitianize!(scratch.rho_next)
+    copyto!(evolving_dm, scratch.rho_next)
 
     return evolving_dm
 end
@@ -449,7 +451,7 @@ function jump_contribution!(::Union{TimeDomain, TrotterDomain},
     end
 
     # Hermitianize R
-    scratch.R .= 0.5 .* (scratch.R .+ scratch.R')
+    hermitianize!(scratch.R)
 
     # Build K0 = I - (1 - sqrt(1 - delta)) R
     delta_factor_for_K0 = 1 - sqrt(1 - config.delta)  # Chen: Eq. 3.2
@@ -495,7 +497,8 @@ function jump_contribution!(::Union{TimeDomain, TrotterDomain},
     mul!(scratch.rho_next, scratch.tmp1, U_residual', 1.0, 1.0)
 
     # Keep it a density matrix numerically
-    evolving_dm .= 0.5 .* (scratch.rho_next .+ scratch.rho_next')
+    hermitianize!(scratch.rho_next)
+    copyto!(evolving_dm, scratch.rho_next)
 
     return evolving_dm
 end

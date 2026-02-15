@@ -173,7 +173,8 @@ function compute_LSI_alpha2(result::HotSpectralResults; n_restarts=3, g_tol=1e-5
         # Every random initial state in this convex valley would lead to the same LSI constant.
         if i == 0  
             v2_mat = result.gap_mode
-            v2_hermitian = Hermitian(v2_mat + v2_mat') / 2.0
+            hermitianize!(v2_mat)
+            v2_hermitian = Hermitian(v2_mat)
             v2_normalized = v2_hermitian / opnorm(v2_hermitian)
 
             # X -> A : X = A'A (Cholesky parametrization to avoid constrained optim. with just X)

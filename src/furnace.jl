@@ -19,7 +19,7 @@ function run_lindbladian(jumps::Vector{JumpOp}, config::AbstractLiouvConfig, ham
 
     steady_state_vec = eigvecs_near_zero[:, ss_index]
     steady_state_dm = reshape(steady_state_vec, size(hamiltonian.data))
-    steady_state_dm = (steady_state_dm + steady_state_dm') / 2
+    hermitianize!(steady_state_dm)
     steady_state_dm ./= tr(steady_state_dm) # Normalize
 
     # Gap mode used for LSI
@@ -72,7 +72,7 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::AbstractLiouvConfi
     # to Trotter eigenbasis. The NUFFT prefactors use Trotter quasi-Bohr frequencies,
     # so the element-wise product A .* P requires A in the same basis.
     jumps_for_diss = if config.domain isa TrotterDomain
-        JumpOp[JumpOp(j.data, trotter.eigvecs' * j.data * trotter.eigvecs, j.orthogonal, j.hermitian) for j in jumps]
+        transform_jumps_to_basis(jumps, trotter.eigvecs)
     else
         jumps
     end
@@ -115,7 +115,7 @@ function run_thermalization(
     # For TrotterDomain, transform jump operators from Hamiltonian eigenbasis
     # to Trotter eigenbasis for the dissipative contribution.
     jumps_for_diss = if config.domain isa TrotterDomain
-        JumpOp[JumpOp(j.data, trotter.eigvecs' * j.data * trotter.eigvecs, j.orthogonal, j.hermitian) for j in jumps]
+        transform_jumps_to_basis(jumps, trotter.eigvecs)
     else
         jumps
     end
