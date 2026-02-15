@@ -159,121 +159,186 @@ end
 # Has to be on a symmetric time domain, otherwise it can't be Hermitian.
 function B_time(jump::JumpOp, hamiltonian::HamHam, b_minus, b_plus, t0, beta, sigma)
 
-    dim = size(hamiltonian.data)
+    d = size(hamiltonian.data, 1)
     CT = Complex{eltype(hamiltonian.eigvals)}
-    diag_time_evolve(t) = Diagonal(exp.(1im * hamiltonian.eigvals * t))  # beta factor comes in for b_1,2
+    eigvals = hamiltonian.eigvals
+    jump_eig = jump.in_eigenbasis
+
+    # Pre-allocated diagonal vector buffers (replace Diagonal wrappers)
+    diag_u = Vector{CT}(undef, d)
+    diag_u2 = Vector{CT}(undef, d)
+
+    # Pre-allocated matrix scratch buffers
+    b_plus_summand = zeros(CT, d, d)
+    tmp = Matrix{CT}(undef, d, d)
+    M = Matrix{CT}(undef, d, d)
 
     # Inner summand b_plus
-    b_plus_summand = zeros(CT, dim)
-    U = zeros(CT, dim)
-    U_minus_2 = zeros(CT, dim)
+    # Product: diag(u) * A' * diag(u2) * A * diag(u)
     for s in keys(b_plus)
-        U .= diag_time_evolve(s * beta)
-        U_minus_2 .= diag_time_evolve(-2.0 * s * beta)
-        b_plus_summand .+= b_plus[s] * U * jump.in_eigenbasis' * U_minus_2 * jump.in_eigenbasis * U
+        t_s = s * beta
+        @. diag_u = exp(1im * eigvals * t_s)
+        @. diag_u2 = exp(-2im * eigvals * t_s)
+
+        # tmp = diag(u2) * A  (row-scale A by u2)
+        @. tmp = diag_u2 * jump_eig
+        # M = A' * tmp = A' * diag(u2) * A
+        mul!(M, jump_eig', tmp)
+        # b_plus_summand += b_s * diag(u) * M * diag(u) = b_s * (u .* M .* u')
+        diag_u_row = transpose(diag_u)  # (1,d) row view for column-scaling
+        b_plus_summand .+= b_plus[s] .* diag_u .* M .* diag_u_row
     end
 
     # Outer summand b_minus
-    # A is Hermitian
-    B = zeros(CT, dim)
+    # B += b_t * diag(u)' * b_plus_summand * diag(u) = b_t * conj(u) .* bps .* u'
+    B = zeros(CT, d, d)
     for t in keys(b_minus)
-        U .= diag_time_evolve(t / sigma)
-        B .+= b_minus[t] * U' * b_plus_summand * U
+        @. diag_u = exp(1im * eigvals * (t / sigma))
+        diag_u_row = transpose(diag_u)
+        B .+= b_minus[t] .* conj.(diag_u) .* b_plus_summand .* diag_u_row
     end
 
-    return B * t0^2
+    return B .* t0^2
 end
 
 function B_time(jumps::Vector{JumpOp}, hamiltonian::HamHam, b_minus, b_plus, t0, beta, sigma)
 
-    dim = size(hamiltonian.data)
+    d = size(hamiltonian.data, 1)
     CT = Complex{eltype(hamiltonian.eigvals)}
-    diag_time_evolve(t) = Diagonal(exp.(1im * hamiltonian.eigvals * t))  # beta factor comes in for b_1,2
+    eigvals = hamiltonian.eigvals
 
-    # Inner summand b_plus
-    b_plus_summand = zeros(CT, dim)  # For all jumps A^a
-    U = zeros(CT, dim)
-    U_minus_2 = zeros(CT, dim)
+    # Pre-allocated diagonal vector buffers (replace Diagonal wrappers)
+    diag_u = Vector{CT}(undef, d)
+    diag_u2 = Vector{CT}(undef, d)
+
+    # Pre-allocated matrix scratch buffers
+    b_plus_summand = zeros(CT, d, d)
+    tmp = Matrix{CT}(undef, d, d)
+    M = Matrix{CT}(undef, d, d)
+
+    # Inner summand b_plus (all jumps A^a)
+    # Product per jump: diag(u) * A' * diag(u2) * A * diag(u)
     for s in keys(b_plus)
-        U .= diag_time_evolve(s * beta)
-        U_minus_2 .= diag_time_evolve(-2.0 * s * beta)
+        t_s = s * beta
+        @. diag_u = exp(1im * eigvals * t_s)
+        @. diag_u2 = exp(-2im * eigvals * t_s)
+        diag_u_row = transpose(diag_u)
+
         for jump_a in jumps
-            b_plus_summand .+= b_plus[s] * U * jump_a.in_eigenbasis' * U_minus_2 * jump_a.in_eigenbasis * U
+            jump_eig = jump_a.in_eigenbasis
+            # tmp = diag(u2) * A  (row-scale A by u2)
+            @. tmp = diag_u2 * jump_eig
+            # M = A' * tmp = A' * diag(u2) * A
+            mul!(M, jump_eig', tmp)
+            # b_plus_summand += b_s * diag(u) * M * diag(u)
+            b_plus_summand .+= b_plus[s] .* diag_u .* M .* diag_u_row
         end
     end
 
     # Outer summand b_minus
-    # A is Hermitian
-    B = zeros(CT, dim)
+    # B += b_t * diag(u)' * b_plus_summand * diag(u)
+    B = zeros(CT, d, d)
     for t in keys(b_minus)
-        U .= diag_time_evolve(t / sigma)
-        B .+= b_minus[t] * U' * b_plus_summand * U
+        @. diag_u = exp(1im * eigvals * (t / sigma))
+        diag_u_row = transpose(diag_u)
+        B .+= b_minus[t] .* conj.(diag_u) .* b_plus_summand .* diag_u_row
     end
 
-    return B * t0^2
+    return B .* t0^2
 end
 
 function B_trotter(jump::JumpOp, trotter::TrottTrott, b_minus, b_plus, beta, sigma)
 
-    dim = size(trotter.eigvecs)
+    d = size(trotter.eigvecs, 1)
     CT = Complex{eltype(trotter.bohr_freqs)}
-    trotter_time_evolution(n::Int64) = Diagonal(trotter.eigvals_t0 .^ n)  # n - number of t0 time chunks
 
     # Transform jump operator from computational basis to Trotter eigenbasis
     jump_in_trotter = trotter.eigvecs' * jump.data * trotter.eigvecs
 
-    trott_U = zeros(CT, dim)
-    trott_U_2 = zeros(CT, dim)
-    # Inner summand f_plus
-    b_plus_summand = zeros(CT, dim)
+    # Pre-allocated diagonal vector buffers (replace Diagonal wrappers)
+    diag_u = Vector{CT}(undef, d)
+    diag_u2 = Vector{CT}(undef, d)
+
+    # Pre-allocated matrix scratch buffers
+    b_plus_summand = zeros(CT, d, d)
+    tmp = Matrix{CT}(undef, d, d)
+    M = Matrix{CT}(undef, d, d)
+
+    # Inner summand b_plus
+    # Product: diag(u) * A' * diag(u2) * A * diag(u)
     for (s, b_s) in b_plus
         num_t0_steps = Int(round(s * beta / trotter.t0))
 
-        trott_U .= trotter_time_evolution(num_t0_steps)
-        trott_U_2 .= trotter_time_evolution(-2 * num_t0_steps)
+        @. diag_u = trotter.eigvals_t0 ^ num_t0_steps
+        @. diag_u2 = trotter.eigvals_t0 ^ (-2 * num_t0_steps)
 
-        b_plus_summand .+= (b_s * trott_U * jump_in_trotter' * trott_U_2 * jump_in_trotter * trott_U)
+        # tmp = diag(u2) * A  (row-scale A by u2)
+        @. tmp = diag_u2 * jump_in_trotter
+        # M = A' * tmp = A' * diag(u2) * A
+        mul!(M, jump_in_trotter', tmp)
+        # b_plus_summand += b_s * diag(u) * M * diag(u)
+        diag_u_row = transpose(diag_u)
+        b_plus_summand .+= b_s .* diag_u .* M .* diag_u_row
     end
-    B = zeros(CT, dim)
+
+    B = zeros(CT, d, d)
     for (t, b_t) in b_minus
         num_t0_steps = Int(round(t / (sigma * trotter.t0)))
-        trott_U .= trotter_time_evolution(num_t0_steps)
+        @. diag_u = trotter.eigvals_t0 ^ num_t0_steps
 
-        B .+= b_t * trott_U' * b_plus_summand * trott_U
+        # B += b_t * diag(u)' * b_plus_summand * diag(u)
+        diag_u_row = transpose(diag_u)
+        B .+= b_t .* conj.(diag_u) .* b_plus_summand .* diag_u_row
     end
 
-    return B * trotter.t0^2  # B in Trotter basis
+    return B .* trotter.t0^2  # B in Trotter basis
 end
 
 function B_trotter(jumps::Vector{JumpOp}, trotter::TrottTrott, b_minus, b_plus, beta, sigma)
 
-    dim = size(trotter.eigvecs)
+    d = size(trotter.eigvecs, 1)
     CT = Complex{eltype(trotter.bohr_freqs)}
-    trotter_time_evolution(n::Int64) = Diagonal(trotter.eigvals_t0 .^ n)  # n - number of t0 time chunks
 
-    trott_U = zeros(CT, dim)
-    trott_U_2 = zeros(CT, dim)
-    # Inner summand f_plus
-    b_plus_summand = zeros(CT, dim)
+    # Pre-allocated diagonal vector buffers (replace Diagonal wrappers)
+    diag_u = Vector{CT}(undef, d)
+    diag_u2 = Vector{CT}(undef, d)
+
+    # Pre-allocated matrix scratch buffers
+    b_plus_summand = zeros(CT, d, d)
+    tmp = Matrix{CT}(undef, d, d)
+    M = Matrix{CT}(undef, d, d)
+
+    # Inner summand b_plus
+    # Product per jump: diag(u) * A' * diag(u2) * A * diag(u)
     for (s, b_s) in b_plus
         num_t0_steps = Int(round(s * beta / trotter.t0))
 
-        trott_U .= trotter_time_evolution(num_t0_steps)
-        trott_U_2 .= trotter_time_evolution(-2 * num_t0_steps)
+        @. diag_u = trotter.eigvals_t0 ^ num_t0_steps
+        @. diag_u2 = trotter.eigvals_t0 ^ (-2 * num_t0_steps)
+        diag_u_row = transpose(diag_u)
+
         for jump_a in jumps
             jump_a_trotter = trotter.eigvecs' * jump_a.data * trotter.eigvecs
-            b_plus_summand .+= (b_s * trott_U * jump_a_trotter' * trott_U_2 * jump_a_trotter * trott_U)
+            # tmp = diag(u2) * A  (row-scale A by u2)
+            @. tmp = diag_u2 * jump_a_trotter
+            # M = A' * tmp = A' * diag(u2) * A
+            mul!(M, jump_a_trotter', tmp)
+            # b_plus_summand += b_s * diag(u) * M * diag(u)
+            b_plus_summand .+= b_s .* diag_u .* M .* diag_u_row
         end
     end
-    B = zeros(CT, dim)
+
+    B = zeros(CT, d, d)
     for (t, b_t) in b_minus
         num_t0_steps = Int(round(t / (sigma * trotter.t0)))
-        trott_U .= trotter_time_evolution(num_t0_steps)
+        @. diag_u = trotter.eigvals_t0 ^ num_t0_steps
 
-        B .+= b_t * trott_U' * b_plus_summand * trott_U
+        # B += b_t * diag(u)' * b_plus_summand * diag(u)
+        diag_u_row = transpose(diag_u)
+        B .+= b_t .* conj.(diag_u) .* b_plus_summand .* diag_u_row
     end
 
-    return B * trotter.t0^2  # B in Trotter basis
+    return B .* trotter.t0^2  # B in Trotter basis
 end
 
 #* B1 AND B2 ---------------------------------------------------------------------------------------------------------------
