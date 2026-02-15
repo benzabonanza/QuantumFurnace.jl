@@ -57,7 +57,9 @@ Full details: [milestones/v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
   1. `step_along_trajectory!` accepts explicit `TrajectoryWorkspace` and `AbstractRNG` arguments instead of pulling them from the framework
   2. Two independent workspaces can step trajectories from the same `TrajectoryFramework` without interfering with each other
   3. All existing trajectory tests pass unchanged (backward compatibility preserved)
-**Plans**: TBD
+**Plans**: 2 plans
+  - [ ] 12-01-PLAN.md -- Core struct/function refactor (remove ws from framework, add ws+rng params, TrajectoryResult)
+  - [ ] 12-02-PLAN.md -- Test migration and workspace independence verification
 
 ### Phase 13: Multi-Threaded Trajectory Engine
 **Goal**: Users can run thousands of trajectories in parallel across CPU threads with reproducible results
@@ -142,7 +144,7 @@ Phases execute in numeric order: 12 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18
 | 9. Type Parameterization | v1.1 | 3/3 | Complete | 2026-02-15 |
 | 10. API Surface Cleanup | v1.1 | 3/3 | Complete | 2026-02-15 |
 | 11. Allocation Optimization | v1.1 | 3/3 | Complete | 2026-02-15 |
-| 12. Workspace Refactor | v1.2 | 0/TBD | Not started | - |
+| 12. Workspace Refactor | v1.2 | 0/2 | Not started | - |
 | 13. Multi-Threaded Trajectory Engine | v1.2 | 0/TBD | Not started | - |
 | 14. GNS Trajectory Path | v1.2 | 0/TBD | Not started | - |
 | 15. Data Architecture | v1.2 | 0/TBD | Not started | - |
