@@ -3,12 +3,12 @@ using Optim
 using Printf
 
 """
-    sandwich!(target, middle, bread, cache)
+    _sandwich!(target, middle, bread, cache)
 
-    Computes `target = bread * middle * bread` in-place. 
+    Computes `target = bread * middle * bread` in-place.
     Helps with all the KMS sigma conjugations.
 """
-function sandwich!(target::AbstractMatrix, middle::AbstractMatrix, bread::AbstractMatrix, cache::AbstractMatrix)
+function _sandwich!(target::AbstractMatrix, middle::AbstractMatrix, bread::AbstractMatrix, cache::AbstractMatrix)
     mul!(cache, middle, bread)  # Cache = middle * bread
     mul!(target, bread, cache)  # Target = bread * middle * bread
     return target
@@ -53,7 +53,7 @@ function compute_LSI_alpha2(result::HotSpectralResults; n_restarts=3, g_tol=1e-5
         end
 
         # Gamma2_AdagA = sigma^1/4 * A' A  * sigma^1/4
-        sandwich!(fw.Gamma2_AdagA, fw.AdagA, fw.sigma_quarter, fw.temp1)
+        _sandwich!(fw.Gamma2_AdagA, fw.AdagA, fw.sigma_quarter, fw.temp1)
 
         # Normalize (wlog)
         norm_val = real(dot(fw.Gamma2_AdagA, fw.Gamma2_AdagA))
@@ -87,7 +87,7 @@ function compute_LSI_alpha2(result::HotSpectralResults; n_restarts=3, g_tol=1e-5
         mul!(fw.L_AdagA_vec, L_mat, fw.AdagA_vec)  # L_AdagA_vec = L(A'A)
 
         # <X, L(X)>_sigma := Tr(sigma^1/2 X sigma^1/2 L(X)) : X = A'A
-        sandwich!(fw.temp3, fw.AdagA, fw.sigma_half, fw.temp2)  # temp3 = \sigma^1/2 A'A \sigma^1/2
+        _sandwich!(fw.temp3, fw.AdagA, fw.sigma_half, fw.temp2)  # temp3 = \sigma^1/2 A'A \sigma^1/2
 
         dirichlet = -real(dot(fw.temp3, fw.L_AdagA_vec))
 
@@ -122,11 +122,11 @@ function compute_LSI_alpha2(result::HotSpectralResults; n_restarts=3, g_tol=1e-5
             @. fw.temp2 = fw.temp2 - (fw.temp1 + fw.temp1')  # temp2 = Entropy gradient without sigma sandwich
 
             # Sandwich in sigmas
-            sandwich!(fw.gradient, fw.temp2, fw.sigma_quarter, fw.temp1)  # fw.gradient = Entropy gradient
+            _sandwich!(fw.gradient, fw.temp2, fw.sigma_quarter, fw.temp1)  # fw.gradient = Entropy gradient
 
             # --- Dirichlet gradient = -0.5 * [sigma^1/2 L(X) sigma^1/2 + L'(sigma^1/2 X sigma^1/2)]
             L_AdagA_mat = reshape(fw.L_AdagA_vec, dim, dim)
-            sandwich!(fw.temp2, L_AdagA_mat, fw.sigma_half, fw.temp1)  # temp2 = sigma^1/2 L(X) sigma^1/2
+            _sandwich!(fw.temp2, L_AdagA_mat, fw.sigma_half, fw.temp1)  # temp2 = sigma^1/2 L(X) sigma^1/2
 
             mul!(fw.L_AdagA_vec, L_mat', fw.temp3)  # = L^\dagger(sigma^1/2 A'A sigma^1/2)
             Ldag_AdagA_mat = reshape(fw.L_AdagA_vec, dim, dim)

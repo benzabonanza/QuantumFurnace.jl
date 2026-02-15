@@ -16,7 +16,7 @@ function _unique_with_invmap(v::AbstractVector{<:AbstractFloat})
     return uniq, invmap
 end
 
-function prepare_oft_nufft_prefactors(
+function _prepare_oft_nufft_prefactors(
     bohr_freqs::AbstractMatrix{<:AbstractFloat},
     time_labels::Vector{<:AbstractFloat},
     energy_labels::Vector{<:AbstractFloat},
@@ -90,7 +90,7 @@ function prepare_oft_nufft_prefactors(
 end
 
 """Convenience view: returns prefactor matrix for energy w without allocating."""
-@inline function prefactor_view(nufft_prefactors::NUFFTPrefactors, omega)
+@inline function _prefactor_view(nufft_prefactors::NUFFTPrefactors, omega)
     k = nufft_prefactors.energy_to_index[omega]
     return @view nufft_prefactors.data[:, :, k]
 end

@@ -28,7 +28,7 @@ end
     Computes C .+= alpha .* kron(A, B) completely in-place, without allocating
     the result of the Kronecker product. Speed.
 """
-function kron!(
+function _kron!(
     C::AbstractMatrix,
     A::AbstractMatrix,
     B::AbstractMatrix,
@@ -71,7 +71,7 @@ end
     Note, that since it adds the liouvillian parts one by one to the liouvillian, on large scales
     there is some arithmetic error to an implementation that adds the parts together and then to the liouvillian.
 """
-function vectorize_liouv_diss_and_add!(
+function _vectorize_liouv_diss_and_add!(
     L_target::AbstractMatrix{<:Complex},
     jump::AbstractMatrix{<:Complex},
     scalar::Number,
@@ -84,16 +84,16 @@ function vectorize_liouv_diss_and_add!(
     Id = ws.Id
 
     @. jump_conj = conj(jump)
-    kron!(L_target, jump, jump_conj, scalar)
+    _kron!(L_target, jump, jump_conj, scalar)
     
     mul!(jump_dag_jump, jump', jump)
-    kron!(L_target, jump_dag_jump, Id, -0.5 * scalar)
-    kron!(L_target, Id, transpose(jump_dag_jump), -0.5 * scalar)
+    _kron!(L_target, jump_dag_jump, Id, -0.5 * scalar)
+    _kron!(L_target, Id, transpose(jump_dag_jump), -0.5 * scalar)
     
     return L_target
 end
 
-function vectorize_liouv_diss_and_add!(
+function _vectorize_liouv_diss_and_add!(
     L_target::AbstractMatrix{<:Complex},
     jump_1::AbstractMatrix{<:Complex},
     jump_2::AbstractMatrix{<:Complex},
@@ -103,24 +103,24 @@ function vectorize_liouv_diss_and_add!(
     Id = ws.Id
     jump2_jump1 = ws.jump2_jump1
 
-    kron!(L_target, jump_1, transpose(jump_2), scalar)
+    _kron!(L_target, jump_1, transpose(jump_2), scalar)
 
     mul!(jump2_jump1, jump_2, jump_1)
-    kron!(L_target, jump2_jump1, Id, -0.5 * scalar)
-    kron!(L_target, Id, transpose(jump2_jump1), -0.5 * scalar)
+    _kron!(L_target, jump2_jump1, Id, -0.5 * scalar)
+    _kron!(L_target, Id, transpose(jump2_jump1), -0.5 * scalar)
     
     return L_target
 end
 
-function vectorize_liouvillian_coherent!(
+function _vectorize_liouvillian_coherent!(
     L_target::AbstractMatrix{<:Complex},
     coherent_term::AbstractMatrix{<:Complex},
     ws::LindbladianWorkspace)
 
     Id = ws.Id
 
-    kron!(L_target, coherent_term, Id, -1im)
-    kron!(L_target, Id, transpose(coherent_term), +1im)
+    _kron!(L_target, coherent_term, Id, -1im)
+    _kron!(L_target, Id, transpose(coherent_term), +1im)
     return L_target
 end
 

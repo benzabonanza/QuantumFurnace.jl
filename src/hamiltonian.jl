@@ -68,9 +68,9 @@ function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float6
             "Reconstruct with $(Complex{T}) inputs or use default Float64 precision."))
     end
 
-    hamiltonian_matrix = construct_base_ham(terms, coeffs, num_qubits; periodic=periodic)
+    hamiltonian_matrix = _construct_base_ham(terms, coeffs, num_qubits; periodic=periodic)
 
-    rescaling_factor, shift = rescaling_and_shift_factors(hamiltonian_matrix)
+    rescaling_factor, shift = _rescaling_and_shift_factors(hamiltonian_matrix)
     rescaled_hamiltonian::Hermitian{ComplexF64, Matrix{ComplexF64}} = hamiltonian_matrix / rescaling_factor +
                                                                                     shift * I(2^num_qubits)
 
@@ -118,11 +118,11 @@ function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float6
             "Reconstruct with $(Complex{T}) inputs or use default Float64 precision."))
     end
 
-    base_hamiltonian = construct_base_ham(terms, coeffs, num_qubits)
-    disordering_hamiltonian = construct_disordering_terms(disordering_terms, disordering_coeffs, num_qubits)
+    base_hamiltonian = _construct_base_ham(terms, coeffs, num_qubits)
+    disordering_hamiltonian = _construct_disordering_terms(disordering_terms, disordering_coeffs, num_qubits)
     disordered_ham = base_hamiltonian + disordering_hamiltonian
 
-    rescaling_factor, shift = rescaling_and_shift_factors(disordered_ham)
+    rescaling_factor, shift = _rescaling_and_shift_factors(disordered_ham)
     rescaled_hamiltonian::Hermitian{ComplexF64, Matrix{ComplexF64}} = disordered_ham / rescaling_factor +
                                                                                     shift * I(2^num_qubits)
 
@@ -225,7 +225,7 @@ function find_ideal_heisenberg(num_qubits::Int64,
     terms = [[X, X], [Y, Y], [Z, Z]]
     disordering_term = [Z]
 
-    base_hamiltonian = construct_base_ham(terms, coeffs, num_qubits; periodic=periodic)
+    base_hamiltonian = _construct_base_ham(terms, coeffs, num_qubits; periodic=periodic)
 
     # Find best config for smallest bohr frequency
     best_nu_min = -1.0
@@ -240,10 +240,10 @@ function find_ideal_heisenberg(num_qubits::Int64,
     p = Progress(batch_size; desc="Optimizing Heisenberg Hamiltonian...")
     for _ in 1:batch_size
         rand!(disordering_coeffs)
-        disordering_ham = construct_disordering_terms(disordering_term, disordering_coeffs, num_qubits)
+        disordering_ham = _construct_disordering_terms(disordering_term, disordering_coeffs, num_qubits)
 
         total_ham = base_hamiltonian + disordering_ham
-        rescaling_factor, shift = rescaling_and_shift_factors(total_ham)
+        rescaling_factor, shift = _rescaling_and_shift_factors(total_ham)
 
         rescaled_ham = (total_ham ./ rescaling_factor) + shift * I
 
@@ -284,7 +284,7 @@ function find_ideal_heisenberg(num_qubits::Int64,
     )
 end
 
-function construct_base_ham(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64},
+function _construct_base_ham(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64},
     num_qubits::Int64; periodic::Bool = true)
 
     if length(terms) != length(coeffs)
@@ -302,7 +302,7 @@ function construct_base_ham(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::V
     return Hermitian(Matrix(hamiltonian))
 end
 
-function construct_disordering_terms(term::Vector{Matrix{ComplexF64}},
+function _construct_disordering_terms(term::Vector{Matrix{ComplexF64}},
     coeffs::Vector{Float64}, num_qubits::Int64)
 
     if length(coeffs) != num_qubits
@@ -317,7 +317,7 @@ function construct_disordering_terms(term::Vector{Matrix{ComplexF64}},
     return Hermitian(Matrix(disordering_hamiltonian))
 end
 
-function rescaling_and_shift_factors(hamiltonian::Hermitian)
+function _rescaling_and_shift_factors(hamiltonian::Hermitian)
     """Computes rescaling and shifting factors for a Hamiltonian, s.t. the spectrum is in ``[0, 0.5*(1-ϵ)]`` """
 
     eps = 0.1  # to avoid 0.5 ~ 0.0 in algorithm

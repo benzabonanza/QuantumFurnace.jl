@@ -11,7 +11,7 @@
     Returns the total coherent operator B = sum_k B_k, already scaled by gamma_norm_factor.
     Returns nothing if config.with_coherent == false.
 """
-function precompute_coherent_total_B(
+function _precompute_coherent_total_B(
     jumps::AbstractVector{<:JumpOp},
     ham_or_trott::Union{HamHam, TrottTrott},
     config::AbstractConfig,
@@ -55,7 +55,7 @@ end
     scaled by `gamma_norm_factor` (same convention as Liouvillian construction).
     Returns `nothing` if `config.with_coherent == false`.
 """
-function precompute_coherent_unitary_terms(
+function _precompute_coherent_unitary_terms(
     jumps::AbstractVector{<:JumpOp},
     hamiltonian::HamHam,
     config::AbstractThermalizeConfig,
@@ -112,7 +112,7 @@ end
     Precompute and cache the coherent B term for each `JumpOp`, already scaled by `gamma_norm_factor`.
     Returns `nothing` if `config.with_coherent == false`.
 """
-function precompute_coherent_terms(
+function _precompute_coherent_terms(
     jumps::AbstractVector{<:JumpOp},
     hamiltonian::HamHam,
     config::AbstractConfig,
@@ -278,17 +278,17 @@ end
 
 #* B1 AND B2 ---------------------------------------------------------------------------------------------------------------
 #TODO: Reintroduce sigmas here
-function compute_b_minus(t::Real, beta::Real, sigma::Real)  # 2pi sqrt(pi) * f_minus(t / sigma_E)
+function _compute_b_minus(t::Real, beta::Real, sigma::Real)  # 2pi sqrt(pi) * f_minus(t / sigma_E)
     f1(t) = 1 / cosh(2 * pi * t / (beta * sigma))
     f2(t) = sin(-t * beta * sigma) * exp(-2 * t^2)
-    return 2 * sqrt(pi) * exp(beta^2 * sigma^2 / 8) * convolute(f1, f2, t) / (beta * sigma)
+    return 2 * sqrt(pi) * exp(beta^2 * sigma^2 / 8) * _convolute(f1, f2, t) / (beta * sigma)
 end
 
-function compute_b_plus(t::Real, beta::Real, w_gamma::Real, sigma_gamma::Real)  # f_plus(t * beta) / (2pi sqrt(pi))
+function _compute_b_plus(t::Real, beta::Real, w_gamma::Real, sigma_gamma::Real)  # f_plus(t * beta) / (2pi sqrt(pi))
     return beta * sigma_gamma * exp(- 2 * beta * w_gamma * (2 * t^2 + im * t)) / sqrt(pi^3)
 end
 
-function compute_b_plus_metro(t::Real, beta::Real, sigma::Real, eta::Real)
+function _compute_b_plus_metro(t::Real, beta::Real, sigma::Real, eta::Real)
     if abs(t) < 1e-12  # Handle t=0
         return complex(1 / (2 * sqrt(2) * pi^2))
     elseif abs(t) <= eta
@@ -300,29 +300,29 @@ function compute_b_plus_metro(t::Real, beta::Real, sigma::Real, eta::Real)
     return (1 / (2 * sqrt(2) * pi^2)) * numerator / denominator
 end
 
-function compute_b_plus_smooth(t::Real, beta::Real, sigma::Real, a::Real, b::Real)
+function _compute_b_plus_smooth(t::Real, beta::Real, sigma::Real, a::Real, b::Real)
     b_vals = exp(- a * b / 2) * exp(- sigma^2 * beta^2 * t * (2 * t + 1im) * (1 + b)) / (4 * t^2 + a + 2im * t)
     return sqrt(4 * a + 1) * b_vals / (sqrt(2) * pi^2)
 end
 
-function compute_truncated_func(target_func::Function, time_labels::AbstractVector{<:Real}, fixed_args...; atol::Real = 1e-12)
+function _compute_truncated_func(target_func::Function, time_labels::AbstractVector{<:Real}, fixed_args...; atol::Real = 1e-12)
     f_vals = Vector{ComplexF64}(target_func.(time_labels, fixed_args...))
-    indices_to_keep = get_truncated_indices(f_vals; atol=atol)
+    indices_to_keep = _get_truncated_indices(f_vals; atol=atol)
     return Dict(zip(time_labels[indices_to_keep], f_vals[indices_to_keep]))
 end
 
 #* TOOLS --------------------------------------------------------------------------------------------------------------------
-function get_truncated_indices(fvals::AbstractVector{<:Real}; atol::Real = 1e-12)
+function _get_truncated_indices(fvals::AbstractVector{<:Real}; atol::Real = 1e-12)
    """Find elements in `fvals` that are larger than `atol`"""
     return findall(abs.(fvals) .>= atol)
 end
 
-function get_truncated_indices(fvals::AbstractVector{<:Complex}; atol::Real = 1e-12)
+function _get_truncated_indices(fvals::AbstractVector{<:Complex}; atol::Real = 1e-12)
     """Find elements in `fvals` that are larger than `atol`"""
      return findall(abs.(fvals) .>= atol)
  end
 
-function convolute(f::Function, g::Function, t::Real; atol=1e-12, rtol=1e-12)
+function _convolute(f::Function, g::Function, t::Real; atol=1e-12, rtol=1e-12)
     integrand(s) = f(s) * g(t - s)
     result, _ = quadgk(integrand, -Inf, Inf; atol=atol, rtol=rtol)
     return result

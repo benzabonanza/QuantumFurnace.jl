@@ -21,9 +21,9 @@ function TrottTrott(hamiltonian::HamHam{T}, t::Real, num_trotter_steps::Int64) w
     t_f64 = Float64(t)
     # Trotter computation always in Float64 (Pauli matrices are ComplexF64 constants).
     # Convert results to T at the end.
-    trottU = trotterize2(hamiltonian, t_f64, num_trotter_steps)
+    trottU = _trotterize2(hamiltonian, t_f64, num_trotter_steps)
     trottU_eigvals, trottU_eigvecs = eigen(trottU)
-    bfreqs = trotter_bohr_freqs(trottU_eigvals, t_f64)  # quasi Bohr frequencies due to Trotterization.
+    bfreqs = _trotter_bohr_freqs(trottU_eigvals, t_f64)  # quasi Bohr frequencies due to Trotterization.
     return TrottTrott{T}(
         T(t),
         num_trotter_steps,
@@ -33,7 +33,7 @@ function TrottTrott(hamiltonian::HamHam{T}, t::Real, num_trotter_steps::Int64) w
         )
 end
 
-function trotter_bohr_freqs(trottU_T_eigvals::Vector{ComplexF64}, t::Float64)
+function _trotter_bohr_freqs(trottU_T_eigvals::Vector{ComplexF64}, t::Float64)
     bohr_freqs = angle.(trottU_T_eigvals) ./ t  # quasi Bohr frequencies due to Trotterization.
     return bohr_freqs .- bohr_freqs'  # dim×dim
 end
@@ -48,7 +48,7 @@ function compute_trotter_error(hamiltonian::HamHam, trotter::TrottTrott, t::Floa
     return norm(exact_time_evolution - trotter_time_evolution)
 end
 
-function trotterize2(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
+function _trotterize2(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
     """For 1 and 2 site Hamiltonians"""
     timestep::Float64 = t / num_trotter_steps
     num_qubits::Int64 = Int(log2(size(hamiltonian.data)[1]))
@@ -62,22 +62,22 @@ function trotterize2(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
 
     # Base terms
     odd_sites = collect(1:2:(num_qubits - 1))
-    U_odd = compute_U_group(groups.commuting[1], groups.commuting[2], odd_sites, num_qubits, timestep)
+    U_odd = _compute_U_group(groups.commuting[1], groups.commuting[2], odd_sites, num_qubits, timestep)
 
     even_sites = collect(2:2:num_qubits)
-    U_even = compute_U_group(groups.commuting[1], groups.commuting[2], even_sites, num_qubits, timestep)
+    U_even = _compute_U_group(groups.commuting[1], groups.commuting[2], even_sites, num_qubits, timestep)
 
     U_odd_bdr = Matrix{ComplexF64}(I, dim, dim)
     if is_bdr_strange  # Strange odd boundary
         odd_bdr_site = [num_qubits]
-        U_odd_bdr *= compute_U_group(groups.commuting[1], groups.commuting[2], odd_bdr_site, num_qubits, timestep)
+        U_odd_bdr *= _compute_U_group(groups.commuting[1], groups.commuting[2], odd_bdr_site, num_qubits, timestep)
     end
 
     # 1-site terms in the Hamiltonian (with same coeffs on all sites)
     U_1site_terms = I(2^num_qubits)
     if length(groups.one_sites[1]) != 0
         all_sites = collect(1:num_qubits)
-        U_1site_terms = compute_U_group(groups.one_sites[1], groups.one_sites[2], all_sites, num_qubits, timestep)
+        U_1site_terms = _compute_U_group(groups.one_sites[1], groups.one_sites[2], all_sites, num_qubits, timestep)
     end
 
     # disorderinging part (1-site with different coeffs one each site, i.e. disordered)
@@ -114,7 +114,7 @@ function trotterize2(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
     return U
 end
 
-function does_term_differ_at_both_sites(term, list_to_compare_with)::Bool
+function _does_term_differ_at_both_sites(term, list_to_compare_with)::Bool
 
     if isempty(list_to_compare_with)
         return true
@@ -143,7 +143,7 @@ function group_hamiltonian_terms(hamiltonian::HamHam{T}) where {T<:AbstractFloat
             push!(list_of_1site_terms, term)
             push!(coeffs_1site, hamiltonian.base_coeffs[i])
         elseif length(term) == 2
-            if does_term_differ_at_both_sites(term, list_of_kinda_commuting_2site_terms)
+            if _does_term_differ_at_both_sites(term, list_of_kinda_commuting_2site_terms)
                 push!(list_of_kinda_commuting_2site_terms, term)
                 push!(coeffs_kinda_commuting_2site, hamiltonian.base_coeffs[i])
             else
@@ -161,7 +161,7 @@ function group_hamiltonian_terms(hamiltonian::HamHam{T}) where {T<:AbstractFloat
     )
 end
 
-function compute_U_group(terms, couplings, sites::Vector{Int64},
+function _compute_U_group(terms, couplings, sites::Vector{Int64},
     num_qubits::Int64, timestep::Float64)::Matrix{ComplexF64}
 
     U_group = Matrix{ComplexF64}(I, 2^num_qubits, 2^num_qubits)

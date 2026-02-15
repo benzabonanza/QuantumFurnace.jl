@@ -5,7 +5,7 @@ function coherent_bohr(hamiltonian::HamHam{T}, jump::JumpOp, config::Union{Liouv
     CT = Complex{T}
     unique_freqs = keys(hamiltonian.bohr_dict)
 
-    f = pick_f(config)  # Picks rates for B in Bohr domain
+    f = _pick_f(config)  # Picks rates for B in Bohr domain
 
     B = zeros(CT, dim, dim)
     f_A_nu_1 = zeros(CT, dim, dim)
@@ -26,7 +26,7 @@ function coherent_bohr(hamiltonian::HamHam{T}, jumps::Vector{JumpOp}, config::Un
     CT = Complex{T}
     unique_freqs = keys(hamiltonian.bohr_dict)
 
-    f = pick_f(config)  # Picks rates for B in Bohr domain
+    f = _pick_f(config)  # Picks rates for B in Bohr domain
 
     B = zeros(CT, dim, dim)
     for jump in jumps
@@ -43,7 +43,7 @@ function coherent_bohr(hamiltonian::HamHam{T}, jumps::Vector{JumpOp}, config::Un
     return B
 end
 
-function pick_f(config::Union{LiouvConfig, ThermalizeConfig})
+function _pick_f(config::Union{LiouvConfig, ThermalizeConfig})
 
     beta = config.beta
     sigma = config.sigma
@@ -69,10 +69,10 @@ function create_f_gauss(nu_1::Real, nu_2::Real, beta::Real, sigma::Real,
     return tanh(-beta * (nu_1 - nu_2) / 4) * alpha_nu1_nu2 / (2im)
 end
 
-pick_alpha(config::LiouvConfig) = _pick_alpha_kms(config)
-pick_alpha(config::ThermalizeConfig) = _pick_alpha_kms(config)
-pick_alpha(config::LiouvConfigGNS) = _pick_alpha_gns(config)
-pick_alpha(config::ThermalizeConfigGNS) = _pick_alpha_gns(config)
+_pick_alpha(config::LiouvConfig) = _pick_alpha_kms(config)
+_pick_alpha(config::ThermalizeConfig) = _pick_alpha_kms(config)
+_pick_alpha(config::LiouvConfigGNS) = _pick_alpha_gns(config)
+_pick_alpha(config::ThermalizeConfigGNS) = _pick_alpha_gns(config)
 
 function _pick_alpha_kms(config::Union{LiouvConfig, ThermalizeConfig})
 

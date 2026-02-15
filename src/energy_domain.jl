@@ -104,7 +104,7 @@ function _pick_transition_gns(config::Union{LiouvConfigGNS, ThermalizeConfigGNS}
 end
 
 
-function create_energy_labels(num_energy_bits::Integer, w0::Real)
+function _create_energy_labels(num_energy_bits::Integer, w0::Real)
     N = 2^(num_energy_bits)
     # N_labels = [0:1:Int(N/2)-1; -Int(N/2):1:-1]  twos complement order
     N_labels = [-Int(N/2):1:Int(N/2)-1;]
@@ -113,7 +113,7 @@ function create_energy_labels(num_energy_bits::Integer, w0::Real)
     return energy_labels
 end
 
-function truncate_energy_labels(
+function _truncate_energy_labels(
     energy_labels::AbstractVector{<:Real},
     config::AbstractConfig;
     cutoff::Real=1e-12
