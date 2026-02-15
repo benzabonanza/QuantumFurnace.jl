@@ -138,6 +138,25 @@ function jump_contribution!(
 end
 
 #* Algorithmic jump contributions -------------------------------------------------------------------------------------------
+
+"""
+    apply_coherent_unitary!(evolving_dm, U_B, scratch) -> nothing
+
+Apply coherent unitary evolution: rho -> U_B * rho * U_B'.
+No-op if U_B is nothing.
+"""
+@inline function apply_coherent_unitary!(
+    evolving_dm::Matrix{ComplexF64},
+    U_B::Union{Nothing,Matrix{ComplexF64}},
+    scratch::KrausScratch{ComplexF64},
+)
+    U_B === nothing && return nothing
+    mul!(scratch.tmp1, U_B, evolving_dm)
+    mul!(scratch.rho_next, scratch.tmp1, U_B')
+    copyto!(evolving_dm, scratch.rho_next)
+    return nothing
+end
+
 function jump_contribution!(::BohrDomain,
     evolving_dm::Matrix{ComplexF64},
     jump::JumpOp,
@@ -160,13 +179,7 @@ function jump_contribution!(::BohrDomain,
     jump_weight_scaling = rescale_by_inv_prob ? (gamma_norm_factor / jump_prob) : gamma_norm_factor
     scaled_delta = config.delta * jump_weight_scaling
 
-    # Evolve via exp(-i delta B^a)
-    U_B = coherent_unitary_cache
-    if U_B !== nothing
-        mul!(scratch.tmp1, U_B, evolving_dm)
-        mul!(scratch.rho_next, scratch.tmp1, U_B')
-        copyto!(evolving_dm, scratch.rho_next)
-    end
+    apply_coherent_unitary!(evolving_dm, coherent_unitary_cache, scratch)
 
     fill!(scratch.R, 0)
     fill!(scratch.rho_jump, 0)
@@ -289,13 +302,7 @@ function jump_contribution!(::EnergyDomain,
 
     jump_weight_scaling = rescale_by_inv_prob ? (gamma_norm_factor / jump_prob) : gamma_norm_factor
 
-    # Evolve via exp(-i delta B^a)
-    U_B = coherent_unitary_cache
-    if U_B !== nothing
-        mul!(scratch.tmp1, U_B, evolving_dm)
-        mul!(scratch.rho_next, scratch.tmp1, U_B')
-        copyto!(evolving_dm, scratch.rho_next)
-    end
+    apply_coherent_unitary!(evolving_dm, coherent_unitary_cache, scratch)
 
     # --- Dissipative part ---
     # Matches the Euler prefactor in jump_contribution(::EnergyDomain, ...):
@@ -406,13 +413,7 @@ function jump_contribution!(::Union{TimeDomain, TrotterDomain},
 
     jump_weight_scaling = rescale_by_inv_prob ? (gamma_norm_factor / jump_prob) : gamma_norm_factor
 
-    # Evolve via exp(-i delta B^a)
-    U_B = coherent_unitary_cache
-    if U_B !== nothing
-        mul!(scratch.tmp1, U_B, evolving_dm)
-        mul!(scratch.rho_next, scratch.tmp1, U_B')
-        copyto!(evolving_dm, scratch.rho_next)
-    end
+    apply_coherent_unitary!(evolving_dm, coherent_unitary_cache, scratch)
 
     base_prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * jump_weight_scaling
 
