@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-14)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.1 Reduce -- Phase 8: Struct Simplification (complete)
+**Current focus:** v1.1 Reduce -- Phase 9: Type Parameterization (in progress)
 
 ## Current Position
 
-Phase: 8 of 11 (Struct Simplification) -- COMPLETE
-Plan: 3 of 3 in current phase
-Status: Phase 08 complete
-Last activity: 2026-02-15 - Completed quick task 15: Remove unused _build_common_fields() helper
+Phase: 9 of 11 (Type Parameterization)
+Plan: 1 of 3 in current phase -- COMPLETE
+Status: Executing phase 09
+Last activity: 2026-02-15 - Completed 09-01 (Core struct type parameterization)
 
-Progress: [################....] 80% (v1.0 complete, v1.1 5/6 phases complete)
+Progress: [################....] 83% (v1.0 complete, v1.1 5.3/6 phases)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 20 (v1.0: 10, v1.1: 8, quick: 2)
+- Total plans completed: 21 (v1.0: 10, v1.1: 9, quick: 2)
 - Average duration: --
 - Total execution time: --
 
@@ -33,6 +33,7 @@ Progress: [################....] 80% (v1.0 complete, v1.1 5/6 phases complete)
 | quick-13 | 1 | 2min | 2min |
 | quick-15 | 1 | 2min | 2min |
 | 08-struct-simplification | 3 | 36min | 12min |
+| 09-type-parameterization | 1/3 | 7min | 7min |
 
 *Updated after each plan completion*
 
@@ -63,6 +64,11 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - 08-03: TrajectoryFramework reduced from {T,C,H,PD,D} to {T,D} -- only dispatch-relevant params kept
 - 08-03: Domain dispatch via config type param: f(config::AbstractConfig{D}) instead of f(::DomainType, config)
 - 08-03: Config domain::D field retained for runtime isa checks and display
+- 09-01: HamHam.data kept as Matrix{Complex{T}} (not Hermitian wrapper) for downstream compatibility
+- 09-01: TrottTrott Trotter computation stays Float64 internally, converts to T at constructor level
+- 09-01: group_hamiltonian_terms generalized with Complex{T}/T local variables to match HamHam{T}
+- 09-01: create_bohr_dict generalized with zero(T) key for generic AbstractFloat support
+- 09-01: NamedTuple constructor beta widened to Real for type inference flexibility
 
 ### Pending Todos
 
@@ -82,5 +88,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed quick-15 (remove unused _build_common_fields helper)
+Stopped at: Completed 09-01-PLAN.md (Core struct type parameterization)
 Resume file: None
