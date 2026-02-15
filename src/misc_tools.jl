@@ -48,44 +48,6 @@ function riemann_sum(fvals::Vector{ComplexF64}, d0::Float64)
     return d0 * sum(fvals)
 end
 
-#! Old validation before GNS:
-# function validate_config!(config::AbstractConfig)
-#     errors = String[]
-
-#     # --- Domain-Specific Validation ---
-#     _collect_config_errors!(errors, config.domain, config)
-
-#     # --- Common Validation Logic ---
-#     if !(config.with_linear_combination) && config.gaussian_parameters == (nothing, nothing)
-#         push!(errors, "If with_linear_combination is false, gaussian_parameters must be set.")
-#     end
-
-#     if !(config.with_linear_combination)
-#         parameter_relation_holds = isapprox(config.beta,
-#                                     2 * config.gaussian_parameters[1] / (config.sigma^2 + config.gaussian_parameters[2]^2))
-#         if !(parameter_relation_holds)
-#             push!(errors, "For Gaussian transitions the parameters have to relate as beta = 2 w_gamma / (sigma^2 + sigma_gamma^2)")
-#         end
-#     end
-
-#     if config.with_linear_combination && config.a == 0.0
-#         if config.b != 0.0
-#             push!(errors, "For linear combinations with b != 0, a must also be non-zero.")
-#         end
-#         if config.domain isa Union{TimeDomain, TrotterDomain} && config.eta <= 0.0
-#             push!(errors, "For linear combinations with a=0 in TIME or TROTTER domain, eta must be > 0.")
-#         end
-#     end
-
-#     # --- Error Throwing ---
-#     if !isempty(errors)
-#         error_message = "Invalid configuration found:\n" * join(["  - " * err for err in errors], "\n")
-#         throw(ArgumentError(error_message))
-#     end
-
-#     return nothing
-# end
-
 function validate_config!(config::AbstractConfig)
     errors = String[]
 

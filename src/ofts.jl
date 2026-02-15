@@ -113,26 +113,3 @@ function trotter_oft!(
     
     return out_matrix
 end
-
-
-# function time_oft_integrated(energy::Float64, jump::JumpOp, hamiltonian::HamHam, beta::Float64)
-
-#     diag_exponentiate(t) = Diagonal(exp.(1im * hamiltonian.eigvals * t))
-#     integrand(t) = exp(-t^2 / beta^2 - 1im * energy * t) * diag_exponentiate(t) * jump.in_eigenbasis * diag_exponentiate(-t)
-#     jump_oft = quadgk(integrand, -Inf, Inf)[1] / sqrt(2 * pi) * sqrt(sqrt(2 / pi) / beta)
-#     return jump_oft
-# end
-
-
-#* Trotter OFT check
-# energy_labels, time_labels = precompute_labels(config.domain, config)
-# truncated_energy_labels = truncate_energy_labels(energy_labels, beta,
-# a, b, with_linear_combination)
-# time_labels = energy_labels .* (t0 / w0)
-# w = -0.12
-# oft_time_labels = truncate_time_labels_for_oft(time_labels, beta)
-# jump = jumps[6]
-# oft_trott = trotter_oft(jump, w, trotter, oft_time_labels, beta) * t0 * sqrt((sqrt(2 / pi)/beta) / (2 * pi))
-# To compare trotter OFT with energy OFT: transform via trotter.eigvecs and hamiltonian.eigvecs
-# oft_w = oft(jump, w, hamiltonian, beta) * sqrt(beta / sqrt(2 * pi))
-# norm(oft_w - oft_trott)

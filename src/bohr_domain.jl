@@ -325,42 +325,4 @@ function find_all_nu1s_to_nu2(nu_2::Float64, nu::Float64, unique_freqs::Set{Floa
     return good_nu1s
 end
 #* --------------------------------------------------------------------------------------------------------------------------
-#* --------------------------------------------------------------------------------------------------------------------------
-
-#* Some good code techniques to remember, but are not used
-# function exact_mask(bohr_freqs::Matrix{Float64}, nu_2::Float64, unique_freqs::Set{Float64})
-#     nu1s_minus_nu_2 = bohr_freqs .- nu_2
-#     return in.(nu1s_minus_nu_2, Ref(unique_freqs)) .+ 0
-# end
-
-# function approx_mask(bohr_freqs::Matrix{Float64}, nu_2::Float64, unique_freqs::Set{Float64})
-#     eps = 1e-14
-#     nu1s_minus_nu_2 = bohr_freqs .- nu_2
-#     return map(x -> any(abs.(unique_freqs .- x) .< eps), nu1s_minus_nu_2) .+ 0
-# end
-
-# function transition_bohr_metro_gibbsed(jumps::Vector{JumpOp}, hamiltonian::HamHam, beta::Float64)
-
-#     dim = size(hamiltonian.data, 1)
-#     gibbs = gibbs_state_in_eigen(hamiltonian, beta)
-#     bohr_dict::Dict{Float64, Vector{CartesianIndex{2}}} = create_bohr_dict(hamiltonian)
-#     unique_freqs = keys(bohr_dict)
-
-#     T = zeros(ComplexF64, dim^2, dim^2)
-#     for jump in jumps
-#         for nu_2 in unique_freqs
-#             alpha_nu1_matrix = create_alpha_nu1_matrix_metro(hamiltonian.bohr_freqs, nu_2, beta)
-
-#             A_nu_2::SparseMatrixCSC{ComplexF64} = spzeros(dim, dim)
-#             A_nu_2[bohr_dict[nu_2]] .= jump.in_eigenbasis[bohr_dict[nu_2]]
-#             A_nu_2_dagger::SparseMatrixCSC{ComplexF64} = A_nu_2'
-
-#             A_nu1s_gibbsed = gibbs^(-1/2) * (alpha_nu1_matrix .* jump.in_eigenbasis) * gibbs^(1/2)
-#             A_nu_2_dagger_gibbsed = gibbs^(1/2) * A_nu_2_dagger * gibbs^(-1/2)
-
-#             T .+= kron(A_nu1s_gibbsed, transpose(A_nu_2_dagger_gibbsed))
-#         end
-#     end
-#     return T
-# end
 
