@@ -9,17 +9,17 @@ See: .planning/PROJECT.md (updated 2026-02-14)
 
 ## Current Position
 
-Phase: 9 of 11 (Type Parameterization)
-Plan: 2 of 3 in current phase -- COMPLETE
-Status: Executing phase 09
-Last activity: 2026-02-15 - Completed 09-02 (Config/Workspace type parameterization)
+Phase: 9 of 11 (Type Parameterization) -- COMPLETE
+Plan: 3 of 3 in current phase -- COMPLETE
+Status: Phase 09 complete
+Last activity: 2026-02-15 - Completed 09-03 (Simulation function generic type propagation)
 
-Progress: [#################...] 86% (v1.0 complete, v1.1 5.7/6 phases)
+Progress: [##################..] 90% (v1.0 complete, v1.1 6/6 phases)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 22 (v1.0: 10, v1.1: 10, quick: 2)
+- Total plans completed: 23 (v1.0: 10, v1.1: 11, quick: 2)
 - Average duration: --
 - Total execution time: --
 
@@ -33,7 +33,7 @@ Progress: [#################...] 86% (v1.0 complete, v1.1 5.7/6 phases)
 | quick-13 | 1 | 2min | 2min |
 | quick-15 | 1 | 2min | 2min |
 | 08-struct-simplification | 3 | 36min | 12min |
-| 09-type-parameterization | 2/3 | 13min | 6.5min |
+| 09-type-parameterization | 3/3 | 22min | 7.3min |
 
 *Updated after each plan completion*
 
@@ -73,6 +73,10 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - 09-02: JumpOp widened to AbstractMatrix{<:Complex} rather than adding explicit T parameter
 - 09-02: GNS keyword constructors default beta/sigma to Float64 literals for ergonomic backward compat
 - 09-02: NUFFTPrefactors promotes inputs to Float64 for FINUFFT, converts results back to Complex{T}
+- 09-03: Function signatures use <:Complex for dispatch, eltype() for internal allocations
+- 09-03: Cross-struct T mismatch check at run_lindbladian and run_thermalization entry points
+- 09-03: TrajectoryFramework step parameters (delta, delta_eff, alpha) stay Float64 for numerical precision
+- 09-03: Domain helper functions (create_alpha, create_f, etc.) widened from Float64 to Real
 
 ### Pending Todos
 
@@ -92,5 +96,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 09-02-PLAN.md (Config/Workspace type parameterization)
+Stopped at: Completed 09-03-PLAN.md (Simulation function generic type propagation) -- Phase 09 complete
 Resume file: None
