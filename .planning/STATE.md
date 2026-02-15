@@ -19,7 +19,7 @@ Progress: [####################] 100% (v1.0 complete, v1.1 8/8 phases)
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 26 (v1.0: 10, v1.1: 13, quick: 3)
+- Total plans completed: 27 (v1.0: 10, v1.1: 13, quick: 4)
 - Average duration: --
 - Total execution time: --
 
@@ -36,6 +36,7 @@ Progress: [####################] 100% (v1.0 complete, v1.1 8/8 phases)
 | 09-type-parameterization | 3/3 | 22min | 7.3min |
 | quick-16 | 1 | 2min | 2min |
 | 10-api-surface-cleanup | 3/3 | 21min | 7min |
+| quick-17 | 1 | 1min | 1min |
 
 *Updated after each plan completion*
 
@@ -56,7 +57,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - 07-02: apply_cptp_channel! expects scratch.R pre-Hermitianized; hermitianize! remains at call site
 - 07-02: apply_coherent_unitary! marked @inline for zero-overhead nothing dispatch
 - quick-13: hermitianize!(scratch.tmp2) added before eigen to handle floating-point asymmetry in S matrix
-- 08-01: GNS structs use manual keyword constructor + inner constructor (not @kwdef) for with_coherent enforcement
+- 08-01: GNS structs use manual keyword constructor + inner constructor (not @kwdef) for with_coherent enforcement (superseded by quick-17)
+- quick-17: Bridge outer constructor needed for @kwdef with inner-constructor-only parameterized structs
 - 08-01: TrottTrott.bohr_freqs name kept for polymorphic access with HamHam
 - 08-01: Added load_hamiltonian_bson for legacy BSON compat after 08-02 changed HamHam struct
 - 08-02: Inline Gibbs computation via _gibbs_in_eigen helper (avoids circular dependency)
@@ -100,9 +102,10 @@ None
 | 13 | Unify residual Cholesky computation: compare cholesky() vs eigendecomposition approaches and use the more robust one in both DM and trajectory simulators | 2026-02-15 | 5bd9dbe | [13-unify-residual-cholesky-computation-comp](./quick/13-unify-residual-cholesky-computation-comp/) |
 | 15 | Remove unused _build_common_fields() helper from src/structs.jl | 2026-02-15 | adf5398 | [15-remove-unused-build-common-fields-helper](./quick/15-remove-unused-build-common-fields-helper/) |
 | 16 | Remove LindbladianWorkspace default Float64 convenience constructor | 2026-02-15 | 1dba871 | [16-defer-lindbladianworkspace-construction-](./quick/16-defer-lindbladianworkspace-construction-/) |
+| 17 | Simplify GNS config constructors to @kwdef pattern | 2026-02-15 | be8597b | [17-simplify-config-constructors-in-structs-](./quick/17-simplify-config-constructors-in-structs-/) |
 
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 10-03-PLAN.md (Cross-file Call Site Update) -- Phase 10 complete
+Stopped at: Completed quick-17 (Simplify GNS config constructors to @kwdef)
 Resume file: None
