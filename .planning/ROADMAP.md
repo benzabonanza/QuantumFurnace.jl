@@ -25,7 +25,7 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 **Milestone Goal:** Refactor and simplify the codebase -- prune dead code, simplify structs, introduce type parameterization, clean up public API, remove duplication, and minimize allocations in core simulation paths. All 224 tests must pass after every phase.
 
 - [x] **Phase 6: Dead Code Pruning** - Remove ~930 lines of commented code, ~35 unused functions, and dead structs -- completed 2026-02-15
-- [ ] **Phase 7: DRY Refactoring** - Extract shared patterns into reusable helpers
+- [x] **Phase 7: DRY Refactoring** - Extract shared patterns into reusable helpers -- completed 2026-02-15
 - [ ] **Phase 8: Struct Simplification** - Reduce config field duplication, fix HamHam initialization, make TrottTrott immutable
 - [ ] **Phase 9: Type Parameterization** - Parameterize core structs on element type for F64/F32 flexibility
 - [ ] **Phase 10: API Surface Cleanup** - Remove dead exports, internalize implementation details, export missing public functions
@@ -57,8 +57,8 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   4. Trotter basis transform of jumps has one canonical implementation shared between furnace.jl and trajectories.jl
   5. All 224 existing tests pass with no regressions
 **Plans**: 2 plans
-- [ ] 07-01-PLAN.md -- Extract hermitianize! helper (DRY-01) and transform_jumps_to_basis helper (DRY-04)
-- [ ] 07-02-PLAN.md -- Extract apply_coherent_unitary! (DRY-03) and apply_cptp_channel! (DRY-02) helpers in jump_workers.jl
+- [x] 07-01-PLAN.md -- Extract hermitianize! helper (DRY-01) and transform_jumps_to_basis helper (DRY-04)
+- [x] 07-02-PLAN.md -- Extract apply_coherent_unitary! (DRY-03) and apply_cptp_channel! (DRY-02) helpers in jump_workers.jl
 
 ### Phase 8: Struct Simplification
 **Goal**: Core data structures are minimal and correct -- config struct field duplication reduced, HamHam fully initialized in constructor, TrottTrott immutable with correct field types
@@ -119,7 +119,7 @@ Phases execute in numeric order: 6 -> 7 -> 8 -> 9 -> 10 -> 11
 | 4. Trajectory Cross-Validation | v1.0 | 2/2 | Complete | 2026-02-14 |
 | 5. Statistical Validation and Regression | v1.0 | 2/2 | Complete | 2026-02-14 |
 | 6. Dead Code Pruning | v1.1 | 2/2 | Complete | 2026-02-15 |
-| 7. DRY Refactoring | v1.1 | 0/2 | Not started | - |
+| 7. DRY Refactoring | v1.1 | 2/2 | Complete | 2026-02-15 |
 | 8. Struct Simplification | v1.1 | 0/? | Not started | - |
 | 9. Type Parameterization | v1.1 | 0/? | Not started | - |
 | 10. API Surface Cleanup | v1.1 | 0/? | Not started | - |
