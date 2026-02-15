@@ -36,7 +36,7 @@ export BohrDomain, EnergyDomain, TimeDomain, TrotterDomain
 export LSIFramework, compute_LSI_alpha2
 
 # Trajectory
-export TrajectoryFramework, build_trajectoryframework, step_along_trajectory!
+export TrajectoryFramework, TrajectoryResult, build_trajectoryframework, step_along_trajectory!
 
 # Simulation
 export run_lindbladian, run_thermalization, construct_lindbladian,
