@@ -107,10 +107,10 @@ end
     rmul!(B_time_val, precomputed_time.gamma_norm_factor)
 
     # B_trotter (Trotter + time quadrature, in Trotter eigenbasis)
-    # Transform jump to Trotter eigenbasis (B_trotter expects jump.in_eigenbasis in Trotter basis)
+    # Use pre-built trotter-basis jump (TEST_TROTTER_JUMPS[1] corresponds to TEST_JUMPS[1])
     config_trott = make_liouv_config(TrotterDomain())
     precomputed_trott = QuantumFurnace._precompute_data(config_trott, TEST_TROTTER)
-    trotter_jump = transform_jumps_to_basis([jump], TEST_TROTTER.eigvecs)[1]
+    trotter_jump = TEST_TROTTER_JUMPS[1]
     B_trott = B_trotter(trotter_jump, TEST_TROTTER, precomputed_trott.b_minus, precomputed_trott.b_plus,
                          BETA, SIGMA)
     rmul!(B_trott, precomputed_trott.gamma_norm_factor)
@@ -162,7 +162,7 @@ end
     A_time .*= time_oft_prefactor
 
     # Trotter OFT: trotter_oft! needs jump in Trotter eigenbasis
-    jump_trott = JumpOp(jump.data, TEST_TROTTER.eigvecs' * jump.data * TEST_TROTTER.eigvecs, jump.orthogonal, jump.hermitian)
+    jump_trott = TEST_TROTTER_JUMPS[1]
     A_trott = Matrix{ComplexF64}(undef, DIM, DIM)
     QuantumFurnace.trotter_oft!(A_trott, caches, jump_trott, w, TEST_TROTTER, oft_time_labels, SIGMA)
     A_trott .*= time_oft_prefactor
@@ -230,7 +230,7 @@ end
 
     @test haskey(precomputed_trott.oft_nufft_prefactors.energy_to_index, w)
 
-    jump_trott = JumpOp(jump.data, TEST_TROTTER.eigvecs' * jump.data * TEST_TROTTER.eigvecs, jump.orthogonal, jump.hermitian)
+    jump_trott = TEST_TROTTER_JUMPS[1]
     U_t2e = TEST_TROTTER.eigvecs' * TEST_HAM.eigvecs
 
     nufft_pf_trott = QuantumFurnace._prefactor_view(precomputed_trott.oft_nufft_prefactors, w)

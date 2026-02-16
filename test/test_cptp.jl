@@ -53,7 +53,7 @@ using LinearAlgebra
         precomputed = QuantumFurnace._precompute_data(config, TEST_TROTTER)
         scratch = QuantumFurnace.KrausScratch(ComplexF64, DIM)
         fw = build_trajectoryframework(
-            TEST_JUMPS, TEST_TROTTER, config, precomputed, scratch, TEST_DELTA
+            TEST_TROTTER_JUMPS, TEST_TROTTER, config, precomputed, scratch, TEST_DELTA
         )
 
         @test fw.n_jumps == length(TEST_JUMPS)

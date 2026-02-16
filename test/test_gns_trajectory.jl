@@ -15,7 +15,7 @@ using Random
 
 @testset "GNS-01: Lindbladian fixed point (TrotterDomain)" begin
     config = make_small_liouv_config_gns(TrotterDomain())
-    liouv = construct_lindbladian(SMALL_JUMPS, config, SMALL_HAM; trotter=SMALL_TROTTER)
+    liouv = construct_lindbladian(SMALL_TROTTER_JUMPS, config, SMALL_HAM; trotter=SMALL_TROTTER)
 
     # Full eigendecomposition (64x64 dense matrix)
     eig = eigen(liouv)
@@ -49,7 +49,7 @@ end
     precomputed = QuantumFurnace._precompute_data(config, SMALL_TROTTER)
     scratch = QuantumFurnace.KrausScratch(ComplexF64, SMALL_DIM)
     fw = build_trajectoryframework(
-        SMALL_JUMPS, SMALL_TROTTER, config, precomputed, scratch, config.delta
+        SMALL_TROTTER_JUMPS, SMALL_TROTTER, config, precomputed, scratch, config.delta
     )
 
     @test fw.n_jumps == length(SMALL_JUMPS)
@@ -65,7 +65,7 @@ end
 @testset "GNS-02: Trajectory convergence to GNS fixed point (TrotterDomain)" begin
     # Compute the GNS reference fixed point
     liouv_config = make_small_liouv_config_gns(TrotterDomain())
-    liouv = construct_lindbladian(SMALL_JUMPS, liouv_config, SMALL_HAM; trotter=SMALL_TROTTER)
+    liouv = construct_lindbladian(SMALL_TROTTER_JUMPS, liouv_config, SMALL_HAM; trotter=SMALL_TROTTER)
     eig = eigen(liouv)
     ss_idx = argmin(abs.(real.(eig.values)))
     ss_vec = eig.vectors[:, ss_idx]
@@ -78,7 +78,7 @@ end
     psi0 = zeros(ComplexF64, SMALL_DIM)
     psi0[1] = 1.0  # computational basis |0>
 
-    result = run_trajectories(SMALL_JUMPS, config, psi0, SMALL_HAM; trotter=SMALL_TROTTER, ntraj=1000, seed=42)
+    result = run_trajectories(SMALL_TROTTER_JUMPS, config, psi0, SMALL_HAM; trotter=SMALL_TROTTER, ntraj=1000, seed=42)
 
     # Convergence to GNS fixed point (NOT Gibbs)
     dist = trace_distance_h(Hermitian(result.rho_mean), Hermitian(gns_fp))

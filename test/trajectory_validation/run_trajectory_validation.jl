@@ -39,7 +39,8 @@ function single_step_crossval(domain, delta::Float64;
     # 1. Build Liouvillian and compute exact DM reference
     liouv_config = make_small_liouv_config(domain; with_coherent=with_coherent)
     trotter_kw = domain isa TrotterDomain ? (; trotter=SMALL_TROTTER) : (;)
-    L = construct_lindbladian(SMALL_JUMPS, liouv_config, SMALL_HAM; trotter_kw...)
+    jumps = domain isa TrotterDomain ? SMALL_TROTTER_JUMPS : SMALL_JUMPS
+    L = construct_lindbladian(jumps, liouv_config, SMALL_HAM; trotter_kw...)
 
     psi0 = fill(ComplexF64(1.0), dim) / sqrt(dim)
     rho0 = psi0 * psi0'
@@ -52,7 +53,7 @@ function single_step_crossval(domain, delta::Float64;
     ham_or_trott = domain isa TrotterDomain ? SMALL_TROTTER : SMALL_HAM
     precomputed = QuantumFurnace._precompute_data(therm_config, ham_or_trott)
     scratch = QuantumFurnace.KrausScratch(ComplexF64, dim)
-    fw = build_trajectoryframework(SMALL_JUMPS, ham_or_trott, therm_config,
+    fw = build_trajectoryframework(jumps, ham_or_trott, therm_config,
         precomputed, scratch, delta)
 
     # 3. Run trajectories and accumulate rho
@@ -171,7 +172,7 @@ end
 
     # Liouvillian for TrotterDomain + coherent
     liouv_config = make_small_liouv_config(TrotterDomain(); with_coherent=true)
-    L = construct_lindbladian(SMALL_JUMPS, liouv_config, SMALL_HAM; trotter=SMALL_TROTTER)
+    L = construct_lindbladian(SMALL_TROTTER_JUMPS, liouv_config, SMALL_HAM; trotter=SMALL_TROTTER)
     exp_L = exp(delta * L)  # Compute once, apply repeatedly
 
     # Gibbs state in Trotter eigenbasis (following DMTST-02 pattern)
@@ -220,7 +221,7 @@ end
     therm_config = make_small_thermalize_config(TrotterDomain();
         with_coherent=true, delta=delta, mixing_time=total_time)
 
-    result = run_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+    result = run_trajectories(SMALL_TROTTER_JUMPS, therm_config, psi0, SMALL_HAM;
         trotter=SMALL_TROTTER, total_time=total_time, delta=delta, ntraj=10_000, seed=42)
     rho_traj = result.rho_mean
 

@@ -52,7 +52,8 @@ end
                             (:time, TimeDomain()), (:trotter, TrotterDomain())]
         config = make_liouv_config(domain)
         trotter_obj = (domain isa TrotterDomain) ? TEST_TROTTER : nothing
-        liouv = construct_lindbladian(TEST_JUMPS, config, TEST_HAM; trotter=trotter_obj)
+        domain_jumps = (domain isa TrotterDomain) ? TEST_TROTTER_JUMPS : TEST_JUMPS
+        liouv = construct_lindbladian(domain_jumps, config, TEST_HAM; trotter=trotter_obj)
 
         # Full eigendecomposition (256x256 dense matrix -- fast enough)
         eig = eigen(liouv)
