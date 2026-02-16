@@ -53,7 +53,7 @@ export run_lindbladian, run_thermalization, construct_lindbladian,
 # QI Tools
 export trace_distance_h, trace_distance_nh, trace_norm_h, trace_norm_nh,
        fidelity, frobenius_norm, is_density_matrix, random_density_matrix,
-       hermitianize!, transform_jumps_to_basis
+       hermitianize!
 
 # Gibbs & Hamiltonian & Trotter
 export gibbs_state, gibbs_state_in_eigen,

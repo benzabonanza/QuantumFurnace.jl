@@ -15,7 +15,7 @@ Eliminated patterns that these tests guard against:
 
 using QuantumFurnace: B_bohr, B_time, B_trotter,
                       _precompute_data, _jump_contribution!,
-                      KrausScratch, transform_jumps_to_basis,
+                      KrausScratch,
                       TrajectoryWorkspace
 using Random
 
@@ -82,8 +82,8 @@ using Random
         precomputed = _precompute_data(config, TEST_TROTTER)
         (; b_minus, b_plus) = precomputed
 
-        # Need Trotter-basis jumps (callers now transform before calling B_trotter)
-        trotter_jumps = transform_jumps_to_basis(TEST_JUMPS, TEST_TROTTER.eigvecs)
+        # Use pre-built Trotter-basis jumps from test_helpers.jl
+        trotter_jumps = TEST_TROTTER_JUMPS
         jump = trotter_jumps[1]
 
         # Single-jump warmup + measure
