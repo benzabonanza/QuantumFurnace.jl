@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.2 Multi-threading -- Phase 16 complete, ready for Phase 17
+**Current focus:** v1.2 Multi-threading -- Phase 17 in progress (Plan 01 complete)
 
 ## Current Position
 
-Phase: 16 of 18 (Convergence Tracking) -- COMPLETE
-Plan: 2/2 complete
-Status: Phase 16 complete. Convergence tracking infrastructure + comprehensive tests (470 total). Ready for Phase 17 (Adaptive Stopping).
-Last activity: 2026-02-16 - Completed 16-02: Convergence tracking tests
+Phase: 17 of 18 (Adaptive Sampling) -- IN PROGRESS
+Plan: 1/2 complete
+Status: Phase 17 Plan 01 complete. Adaptive sampling implementation (ConvergenceData extended, run_trajectories_adaptive, serialization updated). Ready for Plan 02 (tests).
+Last activity: 2026-02-16 - Completed 17-01: Adaptive sampling implementation
 
-Progress: [████████████████████████████░░] 89% (40/TBD plans -- v1.0: 10, v1.1: 16+5q, v1.2: 9/TBD)
+Progress: [█████████████████████████████░] 91% (41/TBD plans -- v1.0: 10, v1.1: 16+5q, v1.2: 10/TBD)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 40 (v1.0: 10, v1.1: 16, quick: 5, v1.2: 9)
+- Total plans completed: 41 (v1.0: 10, v1.1: 16, quick: 5, v1.2: 10)
 
 **By Milestone:**
 
@@ -27,7 +27,7 @@ Progress: [███████████████████████
 |-----------|--------|-------|----------|
 | v1.0 Trajectories | 1-5 | 10 | 2026-02-13 to 2026-02-14 |
 | v1.1 Reduce | 6-11 | 16 (+5 quick) | 2026-02-15 |
-| v1.2 Multi-threading | 12-18 | 9/TBD | 2026-02-15 to ... |
+| v1.2 Multi-threading | 12-18 | 10/TBD | 2026-02-15 to ... |
 
 ## Accumulated Context
 
@@ -36,6 +36,9 @@ Progress: [███████████████████████
 All decisions logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- Phase 17 Plan 01: Broad-typed outer constructor for ConvergenceData to accept BSON-deserialized Vector{Any}
+- Phase 17 Plan 01: Ceiling division (cld) for max_batches, accepting slight n_max overshoot to maintain fixed batch size
+- Phase 17 Plan 01: effective_min = max(min_batches, 2*window_size) silently clamps for windowed comparison safety
 - Phase 16 Plan 02: 470 total tests (364 existing + 106 new convergence tests), 10 testsets
 - Phase 16 Plan 02: Integration test uses 1000 trajectories (200x5 batches) with mixing_time=5.0 for convergence proof
 - Phase 16 Plan 02: Convergence assertion uses generous "last < first" tolerance (not strict monotonic)
@@ -87,5 +90,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Completed 16-02-PLAN.md. Phase 16 complete (both plans). Ready for Phase 17 (Adaptive Stopping).
+Stopped at: Completed 17-01-PLAN.md. Adaptive sampling implementation done. Ready for 17-02 (adaptive sampling tests).
 Resume file: None
