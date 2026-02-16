@@ -97,13 +97,17 @@ end
 Serialize TrajectoryResult to a Dict. Unwraps Hermitian to Matrix for BSON safety.
 """
 function _trajectory_to_dict(traj::TrajectoryResult)
-    return Dict{Symbol, Any}(
+    d = Dict{Symbol, Any}(
         :rho_mean          => Matrix(traj.rho_mean),
         :n_trajectories    => traj.n_trajectories,
         :seed              => traj.seed,
         :times             => traj.times,
         :measurements_mean => traj.measurements_mean,
     )
+    if traj.convergence !== nothing
+        d[:convergence] = _convergence_to_dict(traj.convergence)
+    end
+    return d
 end
 
 # ---------------------------------------------------------------------------
@@ -122,12 +126,18 @@ function _dict_to_experiment(d::Dict)
 
     # Reconstruct TrajectoryResult
     traj_d = d[:trajectory]
+    conv = if haskey(traj_d, :convergence) && traj_d[:convergence] !== nothing
+        _dict_to_convergence(traj_d[:convergence])
+    else
+        nothing
+    end
     traj = TrajectoryResult(
         traj_d[:rho_mean],
         traj_d[:n_trajectories],
         traj_d[:seed],
         get(traj_d, :times, nothing),
         get(traj_d, :measurements_mean, nothing),
+        conv,
     )
 
     # Forward-compatible metadata and hamiltonian_params

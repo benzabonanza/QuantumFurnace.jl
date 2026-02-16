@@ -278,6 +278,54 @@ end
     spectral_gap::Complex{T}
 end
 
+"""
+    ConvergenceData
+
+Stores convergence metrics at batch checkpoints during trajectory sampling.
+Scalars only (no density matrix snapshots) to keep memory O(n_batches).
+
+# Fields (Phase 16 -- core convergence tracking)
+- `batch_sizes`: Number of trajectories in each batch.
+- `cumulative_n_traj`: Running total of trajectories after each batch.
+- `trace_distances`: Trace distance to Gibbs state at each checkpoint.
+- `observable_names`: Names of the tracked observables (e.g. "ZZ_12", "H").
+- `observable_values`: Observable expectation values, n_obs x n_checkpoints.
+- `observable_gibbs_values`: Reference Gibbs expectation values for each observable.
+
+# Fields (Phase 17 -- adaptive diagnostics)
+- `converged`: Did adaptive stopping trigger? (false for fixed-count runs)
+- `final_relative_change`: Windowed relative change at termination (NaN for fixed-count runs).
+- `consecutive_stable_batches`: How many consecutive stable checks achieved at termination.
+- `total_batches`: Number of batches actually run.
+"""
+struct ConvergenceData
+    # Phase 16: core convergence tracking
+    batch_sizes::Vector{Int}
+    cumulative_n_traj::Vector{Int}
+    trace_distances::Vector{Float64}
+    observable_names::Vector{String}
+    observable_values::Matrix{Float64}      # n_obs x n_checkpoints
+    observable_gibbs_values::Vector{Float64} # <O_i>_gibbs reference values
+    # Phase 17: adaptive diagnostics
+    converged::Bool
+    final_relative_change::Float64
+    consecutive_stable_batches::Int
+    total_batches::Int
+end
+
+# Backward-compatible 6-argument outer constructor (Phase 16 callers pass 6 args).
+# Uses broad types to accept BSON-deserialized data (e.g. Vector{Any} for strings).
+function ConvergenceData(
+    batch_sizes, cumulative_n_traj, trace_distances,
+    observable_names, observable_values, observable_gibbs_values,
+)
+    ConvergenceData(
+        batch_sizes, cumulative_n_traj, trace_distances,
+        observable_names, observable_values, observable_gibbs_values,
+        false, NaN, 0, length(batch_sizes),
+    )
+end
+
 struct LSIFramework{T}
     dim::Int
 

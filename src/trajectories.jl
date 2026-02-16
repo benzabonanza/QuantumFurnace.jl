@@ -26,6 +26,7 @@ struct TrajectoryResult{T}
     seed::Int
     times::Union{Nothing, Vector{Float64}}
     measurements_mean::Union{Nothing, Matrix{Float64}}
+    convergence::Union{Nothing, ConvergenceData}
 end
 
 """
@@ -564,7 +565,7 @@ function run_trajectories(
     # ------------------------------------------------------------------
     if observables === nothing
         rho_result = _run_batch_no_obs!(fw, psi0, ntraj, actual_seed, total_time)
-        return TrajectoryResult(rho_result, ntraj, actual_seed, nothing, nothing)
+        return TrajectoryResult(rho_result, ntraj, actual_seed, nothing, nothing, nothing)
     end
 
     # ------------------------------------------------------------------
@@ -635,7 +636,7 @@ function run_trajectories(
         hermitianize!(rho_result)
     end
 
-    return TrajectoryResult(rho_result, ntraj, actual_seed, times, mean_data)
+    return TrajectoryResult(rho_result, ntraj, actual_seed, times, mean_data, nothing)
 end
 
 """

@@ -1,54 +1,10 @@
 # ============================================================================
 # Convergence Tracking: batch-level monitoring for trajectory sampling
 # ============================================================================
-
-"""
-    ConvergenceData
-
-Stores convergence metrics at batch checkpoints during trajectory sampling.
-Scalars only (no density matrix snapshots) to keep memory O(n_batches).
-
-# Fields (Phase 16 -- core convergence tracking)
-- `batch_sizes`: Number of trajectories in each batch.
-- `cumulative_n_traj`: Running total of trajectories after each batch.
-- `trace_distances`: Trace distance to Gibbs state at each checkpoint.
-- `observable_names`: Names of the tracked observables (e.g. "ZZ_12", "H").
-- `observable_values`: Observable expectation values, n_obs x n_checkpoints.
-- `observable_gibbs_values`: Reference Gibbs expectation values for each observable.
-
-# Fields (Phase 17 -- adaptive diagnostics)
-- `converged`: Did adaptive stopping trigger? (false for fixed-count runs)
-- `final_relative_change`: Windowed relative change at termination (NaN for fixed-count runs).
-- `consecutive_stable_batches`: How many consecutive stable checks achieved at termination.
-- `total_batches`: Number of batches actually run.
-"""
-struct ConvergenceData
-    # Phase 16: core convergence tracking
-    batch_sizes::Vector{Int}
-    cumulative_n_traj::Vector{Int}
-    trace_distances::Vector{Float64}
-    observable_names::Vector{String}
-    observable_values::Matrix{Float64}      # n_obs x n_checkpoints
-    observable_gibbs_values::Vector{Float64} # <O_i>_gibbs reference values
-    # Phase 17: adaptive diagnostics
-    converged::Bool
-    final_relative_change::Float64
-    consecutive_stable_batches::Int
-    total_batches::Int
-end
-
-# Backward-compatible 6-argument outer constructor (Phase 16 callers pass 6 args).
-# Uses broad types to accept BSON-deserialized data (e.g. Vector{Any} for strings).
-function ConvergenceData(
-    batch_sizes, cumulative_n_traj, trace_distances,
-    observable_names, observable_values, observable_gibbs_values,
-)
-    ConvergenceData(
-        batch_sizes, cumulative_n_traj, trace_distances,
-        observable_names, observable_values, observable_gibbs_values,
-        false, NaN, 0, length(batch_sizes),
-    )
-end
+#
+# ConvergenceData struct is defined in structs.jl (must be available before
+# trajectories.jl which embeds it in TrajectoryResult).
+#
 
 # ---------------------------------------------------------------------------
 # Observable builders
@@ -175,7 +131,7 @@ end
 
 Run trajectory simulations in batches, measuring convergence metrics after each batch.
 
-Returns `(TrajectoryResult, ConvergenceData)`.
+Returns a `TrajectoryResult` with the `convergence` field populated.
 
 # Arguments
 - `jumps`: Jump operators.
@@ -229,7 +185,7 @@ function run_trajectories_convergence(
     # Pre-allocate convergence data storage
     trace_dists = Vector{Float64}(undef, n_batches)
     obs_values = Matrix{Float64}(undef, n_obs, n_batches)
-    cum_n_traj = Vector{Int}(undef, n_batches)
+    cummulative_n_traj = Vector{Int}(undef, n_batches)
     batch_sizes_vec = Vector{Int}(undef, n_batches)
 
     for batch_idx in 1:n_batches
@@ -255,7 +211,7 @@ function run_trajectories_convergence(
             obs_values[i, batch_idx] = real(tr(rho_running * observables[i]))
         end
 
-        cum_n_traj[batch_idx] = n_total
+        cummulative_n_traj[batch_idx] = n_total
         batch_sizes_vec[batch_idx] = batch_size
     end
 
@@ -265,16 +221,14 @@ function run_trajectories_convergence(
 
     conv_data = ConvergenceData(
         batch_sizes_vec,
-        cum_n_traj,
+        cummulative_n_traj,
         trace_dists,
         observable_names,
         obs_values,
         obs_gibbs,
     )
 
-    traj_result = TrajectoryResult(rho_final, n_total, actual_seed, nothing, nothing)
-
-    return traj_result, conv_data
+    return TrajectoryResult(rho_final, n_total, actual_seed, nothing, nothing, conv_data)
 end
 
 # ---------------------------------------------------------------------------
@@ -287,9 +241,9 @@ end
 Run trajectory simulations in adaptive batches, stopping automatically when
 trace distance convergence is detected or a hard trajectory cap is reached.
 
-Returns `(TrajectoryResult, ConvergenceData)` -- same signature as
-`run_trajectories_convergence`, but with adaptive diagnostic fields populated
-in `ConvergenceData`.
+Returns a `TrajectoryResult` with the `convergence` field populated
+(same as `run_trajectories_convergence`, but with adaptive diagnostic fields
+in the `ConvergenceData`).
 
 # Convergence criterion
 Convergence is declared when the windowed relative change of trace distances
@@ -428,7 +382,5 @@ function run_trajectories_adaptive(
         converged, last_relative_change, consecutive_stable, length(trace_dists),
     )
 
-    traj_result = TrajectoryResult(rho_final, n_total, actual_seed, nothing, nothing)
-
-    return traj_result, conv_data
+    return TrajectoryResult(rho_final, n_total, actual_seed, nothing, nothing, conv_data)
 end
