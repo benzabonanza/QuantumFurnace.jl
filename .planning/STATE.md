@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.2 Multi-threading -- COMPLETE. All 18 phases shipped.
+**Current focus:** Phase 19 logic-simplification (post-milestone cleanup)
 
 ## Current Position
 
-Phase: 18 of 18 (KMS-vs-GNS Experiments) -- COMPLETE
-Plan: 1/1 complete
-Status: Phase 18 complete. v1.2 milestone complete. All 18 phases across 3 milestones shipped.
-Last activity: 2026-02-16 - Completed Phase 18 execution and verification (PASSED 7/7 must-haves)
+Phase: 19 (logic-simplification)
+Plan: 1/3 complete
+Status: Plan 01 complete. Eliminated redundant jump basis transforms. 539/539 tests pass.
+Last activity: 2026-02-16 - Completed Phase 19 Plan 01 (3 tasks, 8 min)
 
-Progress: [██████████████████████████████] 100% (43 plans -- v1.0: 10, v1.1: 16+5q, v1.2: 12)
+Progress: [██████████████████████████████] 100% (44 plans -- v1.0: 10, v1.1: 16+5q, v1.2: 12, cleanup: 1)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 43 (v1.0: 10, v1.1: 16, quick: 5, v1.2: 12)
+- Total plans completed: 44 (v1.0: 10, v1.1: 16, quick: 5, v1.2: 12, cleanup: 1)
 
 **By Milestone:**
 
@@ -28,6 +28,7 @@ Progress: [███████████████████████
 | v1.0 Trajectories | 1-5 | 10 | 2026-02-13 to 2026-02-14 |
 | v1.1 Reduce | 6-11 | 16 (+5 quick) | 2026-02-15 |
 | v1.2 Multi-threading | 12-18 | 12 | 2026-02-15 to 2026-02-16 |
+| Cleanup | 19 | 1/3 | 2026-02-16 |
 
 ## Accumulated Context
 
@@ -36,6 +37,9 @@ Progress: [███████████████████████
 All decisions logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- Phase 19 Plan 01: trotter.eigvecs for TrotterDomain JumpOp basis, hamiltonian.eigvecs for all others (LOCKED)
+- Phase 19 Plan 01: transform_jumps_to_basis kept as public API, zero internal callers
+- Phase 19 Plan 01: TEST_TROTTER_JUMPS and SMALL_TROTTER_JUMPS constants for TrotterDomain test call sites
 - Phase 18 Plan 01: mixing_time = 2.0 * beta (scales with inverse temperature for sufficient mixing)
 - Phase 18 Plan 01: Phase 17 defaults for adaptive: batch_size=200, threshold=0.01, patience=3, window_size=3, min_batches=5
 - Phase 18 Plan 01: seed=42 for deterministic reproducible experiments
@@ -81,6 +85,10 @@ Recent decisions affecting current work:
 - Primary observable: nearest-neighbor correlations <Z_iZ_{i+1}>
 - Adaptive = batch convergence (relative change <1% for 3 consecutive batches, hard cap N_max)
 
+### Roadmap Evolution
+
+- Phase 19 added: logic simplification
+
 ### Pending Todos
 
 None
@@ -99,5 +107,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Phase 18 complete. v1.2 milestone complete. All phases shipped.
+Stopped at: Completed 19-01-PLAN.md (eliminate redundant jump basis transforms)
 Resume file: None
