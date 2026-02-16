@@ -70,7 +70,9 @@ Full details: [milestones/v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
   2. BLAS thread count is set to 1 before parallel execution and restored afterward, preventing thread oversubscription
   3. Given the same master seed and thread count, multi-threaded trajectory results are bitwise identical across runs
   4. Multi-threaded execution at n=4 with 4+ threads is faster than serial execution (no performance regression from threading overhead)
-**Plans**: TBD
+**Plans**: 2 plans
+  - [ ] 13-01-PLAN.md -- Core threaded engine (allocation guard, partition helper, @sync/@spawn dispatch, BLAS control)
+  - [ ] 13-02-PLAN.md -- Threading correctness and performance tests (determinism, BLAS restore, serial-threaded agreement, speedup)
 
 ### Phase 14: GNS Trajectory Path
 **Goal**: GNS (approximate detailed balance, no coherent B term) trajectory simulation works end-to-end and produces physically correct results
