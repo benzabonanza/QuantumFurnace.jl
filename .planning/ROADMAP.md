@@ -42,7 +42,7 @@ Full details: [milestones/v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 - [x] **Phase 12: Workspace Refactor** - Separate mutable workspace from shared framework to enable thread-safe trajectory stepping -- completed 2026-02-15
 - [x] **Phase 13: Multi-Threaded Trajectory Engine** - Parallel trajectory sampling with per-thread workspaces, BLAS control, and deterministic seeding -- completed 2026-02-16
 - [x] **Phase 14: GNS Trajectory Path** - Verify and test GNS (approximate detailed balance) trajectory simulation end-to-end -- completed 2026-02-16
-- [ ] **Phase 15: Data Architecture** - Experiment result serialization and round-trip via BSON
+- [x] **Phase 15: Data Architecture** - Experiment result serialization and round-trip via BSON -- completed 2026-02-16
 - [ ] **Phase 16: Convergence Tracking** - Batch-level trace distance and per-observable convergence metrics during trajectory sampling
 - [ ] **Phase 17: Adaptive Sampling** - Convergence-driven trajectory batching with automatic stopping and hard cap
 - [ ] **Phase 18: KMS-vs-GNS Experiments** - Parameter sweep experiments comparing KMS and GNS across system sizes and temperatures
@@ -95,8 +95,8 @@ Full details: [milestones/v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
   3. Saved files include sufficient metadata (seed, thread count, Julia version, timestamp) to reproduce or contextualize the result
 **Plans**: 2 plans
 Plans:
-  - [ ] 15-01-PLAN.md -- ExperimentResult struct, save/load functions, Dict conversion, metadata capture
-  - [ ] 15-02-PLAN.md -- Round-trip serialization tests, edge cases, integration with real trajectory
+  - [x] 15-01-PLAN.md -- ExperimentResult struct, save/load functions, Dict conversion, metadata capture
+  - [x] 15-02-PLAN.md -- Round-trip serialization tests, edge cases, integration with real trajectory
 
 ### Phase 16: Convergence Tracking
 **Goal**: Trajectory sampling reports trace distance to Gibbs and per-observable values at batch checkpoints, giving users visibility into convergence progress
@@ -153,7 +153,7 @@ Phases execute in numeric order: 12 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18
 | 12. Workspace Refactor | v1.2 | 2/2 | Complete | 2026-02-15 |
 | 13. Multi-Threaded Trajectory Engine | v1.2 | 2/2 | Complete | 2026-02-16 |
 | 14. GNS Trajectory Path | v1.2 | 1/1 | Complete | 2026-02-16 |
-| 15. Data Architecture | v1.2 | 0/2 | Not started | - |
+| 15. Data Architecture | v1.2 | 2/2 | Complete | 2026-02-16 |
 | 16. Convergence Tracking | v1.2 | 0/TBD | Not started | - |
 | 17. Adaptive Sampling | v1.2 | 0/TBD | Not started | - |
 | 18. KMS-vs-GNS Experiments | v1.2 | 0/TBD | Not started | - |
