@@ -139,6 +139,20 @@ end
     end
 end
 
+# Outer constructor: infer D from domain, T from beta, and forward to inner constructor.
+# Required because @kwdef's auto-generated outer constructor calls LiouvConfigGNS(args...)
+# positionally, but only the typed inner constructor LiouvConfigGNS{D,T}(args...) exists.
+function LiouvConfigGNS(
+    num_qubits, with_coherent, with_linear_combination, domain::D,
+    beta::T, sigma, gaussian_parameters, a, b,
+    num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0
+) where {D <: AbstractDomain, T <: AbstractFloat}
+    LiouvConfigGNS{D,T}(
+        num_qubits, with_coherent, with_linear_combination, domain,
+        beta, sigma, gaussian_parameters, a, b,
+        num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0)
+end
+
 """
     ThermalizeConfig
 
@@ -213,6 +227,20 @@ end
                num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0,
                mixing_time, delta)
     end
+end
+
+# Outer constructor: infer D from domain, T from beta, and forward to inner constructor.
+function ThermalizeConfigGNS(
+    num_qubits, with_coherent, with_linear_combination, domain::D,
+    beta::T, sigma, gaussian_parameters, a, b,
+    num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0,
+    mixing_time, delta
+) where {D <: AbstractDomain, T <: AbstractFloat}
+    ThermalizeConfigGNS{D,T}(
+        num_qubits, with_coherent, with_linear_combination, domain,
+        beta, sigma, gaussian_parameters, a, b,
+        num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0,
+        mixing_time, delta)
 end
 
 """

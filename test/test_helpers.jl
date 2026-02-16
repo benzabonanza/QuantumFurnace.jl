@@ -323,3 +323,57 @@ function make_small_liouv_config(domain; with_coherent::Bool=false)
         num_trotter_steps_per_t0 = NUM_TROTTER_STEPS_PER_T0,
     )
 end
+
+# ---------------------------------------------------------------------------
+# Small GNS config factories (3-qubit, approximate detailed balance)
+# ---------------------------------------------------------------------------
+"""
+    make_small_liouv_config_gns(domain; with_coherent=false) -> LiouvConfigGNS
+
+Create a LiouvConfigGNS for the 3-qubit SMALL system.
+Uses Smooth Metro transition (with_linear_combination=true, a=beta/30, b=0.4)
+matching the KMS test parameter choices.
+"""
+function make_small_liouv_config_gns(domain; with_coherent::Bool=false)
+    LiouvConfigGNS(
+        num_qubits = 3,
+        with_coherent = with_coherent,
+        with_linear_combination = true,
+        domain = domain,
+        beta = BETA,
+        sigma = SIGMA,
+        a = BETA / 30.0,
+        b = 0.4,
+        num_energy_bits = NUM_ENERGY_BITS,
+        w0 = W0,
+        t0 = T0,
+        num_trotter_steps_per_t0 = NUM_TROTTER_STEPS_PER_T0,
+    )
+end
+
+"""
+    make_small_thermalize_config_gns(domain; delta=TEST_DELTA, mixing_time=1.0) -> ThermalizeConfigGNS
+
+Create a ThermalizeConfigGNS for the 3-qubit SMALL system.
+"""
+function make_small_thermalize_config_gns(domain;
+    delta::Float64=TEST_DELTA,
+    mixing_time::Float64=1.0,
+)
+    ThermalizeConfigGNS(
+        num_qubits = 3,
+        with_coherent = false,
+        with_linear_combination = true,
+        domain = domain,
+        beta = BETA,
+        sigma = SIGMA,
+        a = BETA / 30.0,
+        b = 0.4,
+        num_energy_bits = NUM_ENERGY_BITS,
+        w0 = W0,
+        t0 = T0,
+        num_trotter_steps_per_t0 = NUM_TROTTER_STEPS_PER_T0,
+        mixing_time = mixing_time,
+        delta = delta,
+    )
+end
