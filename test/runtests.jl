@@ -16,4 +16,5 @@ include("test_helpers.jl")
     include("test_allocation.jl")
     include("test_workspace_independence.jl")
     include("test_threading.jl")
+    include("test_gns_trajectory.jl")
 end
