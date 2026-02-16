@@ -165,3 +165,14 @@ Phases execute in numeric order: 12 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18
 | 16. Convergence Tracking | v1.2 | 2/2 | Complete | 2026-02-16 |
 | 17. Adaptive Sampling | v1.2 | 2/2 | Complete | 2026-02-16 |
 | 18. KMS-vs-GNS Experiments | v1.2 | 1/1 | Complete | 2026-02-16 |
+
+### Phase 19: Logic Simplification
+
+**Goal:** Simplify overly complex logic accumulated during v1.2 development: flatten trajectory call chain from 5 to 3 levels, eliminate redundant jump basis transforms, and simplify result struct hierarchy
+**Depends on:** Phase 18
+**Plans:** 3 plans
+
+Plans:
+- [ ] 19-01-PLAN.md -- Eliminate redundant jump basis transforms (fix at JumpOp construction)
+- [ ] 19-02-PLAN.md -- Flatten trajectory call chain (merge layers, lift framework building)
+- [ ] 19-03-PLAN.md -- Simplify result struct hierarchy (LindbladianResult, DMSimulationResult, embed ConvergenceData)
