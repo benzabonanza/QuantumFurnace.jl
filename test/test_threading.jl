@@ -128,7 +128,7 @@ end
         therm_config = make_small_thermalize_config(TimeDomain();
             delta=0.01, mixing_time=5.0, with_coherent=false)
 
-        ntraj = 200
+        ntraj = 2000
 
         # Warmup both paths
         run_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
