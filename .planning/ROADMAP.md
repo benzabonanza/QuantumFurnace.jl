@@ -120,7 +120,10 @@ Plans:
   1. Adaptive mode runs trajectory batches and stops when relative change in tracked metrics is below 1% for 3 consecutive batches
   2. A hard maximum trajectory cap prevents infinite loops even when convergence is slow
   3. Adaptive mode returns the same result structure as fixed-count mode (convergence history, final density matrix, observables)
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+  - [ ] 17-01-PLAN.md -- Extend ConvergenceData, implement _windowed_relative_change and run_trajectories_adaptive, update serialization
+  - [ ] 17-02-PLAN.md -- Comprehensive adaptive sampling tests (convergence, hard cap, determinism, serialization round-trip)
 
 ### Phase 18: KMS-vs-GNS Experiments
 **Goal**: Paper-ready comparison data showing KMS and GNS convergence behavior across system sizes and inverse temperatures
@@ -158,5 +161,5 @@ Phases execute in numeric order: 12 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18
 | 14. GNS Trajectory Path | v1.2 | 1/1 | Complete | 2026-02-16 |
 | 15. Data Architecture | v1.2 | 2/2 | Complete | 2026-02-16 |
 | 16. Convergence Tracking | v1.2 | 2/2 | Complete | 2026-02-16 |
-| 17. Adaptive Sampling | v1.2 | 0/TBD | Not started | - |
+| 17. Adaptive Sampling | v1.2 | 0/2 | Not started | - |
 | 18. KMS-vs-GNS Experiments | v1.2 | 0/TBD | Not started | - |
