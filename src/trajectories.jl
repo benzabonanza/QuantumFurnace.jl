@@ -39,9 +39,9 @@ struct PerOperatorKraus{T}
     U_B::Union{Nothing, Matrix{T}}      # exp(-i * delta_eff * B^a), or nothing
 end
 
-struct TrajectoryFramework{T,D<:AbstractDomain}
+struct TrajectoryFramework{T,D<:AbstractDomain,F,P}
     domain::D
-    jumps::Vector{JumpOp}
+    jumps::Vector{JumpOp{Matrix{T}}}
     ham_or_trott::Union{HamHam, TrottTrott}
     config::AbstractThermalizeConfig{D}
     precomputed_data::Any  # NamedTuple from precompute_data, varies by domain
@@ -54,6 +54,13 @@ struct TrajectoryFramework{T,D<:AbstractDomain}
     delta::Float64           # original delta (for time stepping / num_steps)
     delta_eff::Float64       # delta / p_jump = delta * n_jumps (for per-operator Kraus probabilities)
     alpha::Float64           # α = 1 - sqrt(1-δ_eff)
+
+    # Hot-path fields with concrete types (avoid accessing abstract-typed config/precomputed_data in step loop)
+    scaled_prefactor::Float64   # rate prefactor with 1/p_jump rescaling, domain-specific
+    sigma::Float64              # cfg.sigma, needed by EnergyDomain oft!() call
+    transition::F               # transition function (concrete closure type)
+    energy_labels::Vector{Float64}
+    oft_nufft_prefactors::P     # NUFFTPrefactors or Nothing (EnergyDomain uses oft! instead)
 end
 
 function TrajectoryWorkspace(fw::TrajectoryFramework{T}) where {T}
@@ -82,11 +89,13 @@ function build_trajectoryframework(
     # For TrotterDomain, transform jump operators from Hamiltonian eigenbasis
     # to Trotter eigenbasis. The NUFFT prefactors use Trotter quasi-Bohr frequencies,
     # so the element-wise product A .* P requires A in the same basis.
-    jumps_for_diss = if config.domain isa TrotterDomain && ham_or_trott isa TrottTrott
+    jumps_for_diss_raw = if config.domain isa TrotterDomain && ham_or_trott isa TrottTrott
         transform_jumps_to_basis(jumps, ham_or_trott.eigvecs)
     else
         collect(JumpOp, jumps)
     end
+    # Convert to concrete element type for zero-allocation access in hot loop
+    jumps_for_diss = convert(Vector{JumpOp{Matrix{CT}}}, jumps_for_diss_raw)
 
     # Precompute per-operator coherent B terms (one per jump)
     # NOTE: precompute_coherent_total_B handles its own Trotter basis transform internally
@@ -135,6 +144,26 @@ function build_trajectoryframework(
         per_operator[a] = PerOperatorKraus(R_a, K0_a, U_residual_a, per_op_U_B[a])
     end
 
+    # Precompute scaled_prefactor for the hot path (avoids accessing abstract config/precomputed_data in step loop)
+    gamma_norm_factor = precomputed_data.gamma_norm_factor
+    scaled_prefactor = if config.domain isa EnergyDomain
+        # EnergyDomain formula
+        config.w0 / (config.sigma * sqrt(2 * pi)) * gamma_norm_factor / (1.0 / n_jumps)
+    else
+        # TimeDomain / TrotterDomain formula
+        config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor / (1.0 / n_jumps)
+    end
+
+    # Extract hot-path fields from precomputed_data with concrete types
+    transition_fn = precomputed_data.transition
+    energy_labels_vec = Vector{Float64}(precomputed_data.energy_labels)
+    # OFT NUFFT prefactors: present for Time/Trotter domains, absent for EnergyDomain
+    oft_nufft_pref = if hasproperty(precomputed_data, :oft_nufft_prefactors)
+        precomputed_data.oft_nufft_prefactors
+    else
+        nothing
+    end
+
     return TrajectoryFramework(
         config.domain,
         jumps_for_diss,
@@ -146,6 +175,11 @@ function build_trajectoryframework(
         Float64(delta),
         Float64(delta_eff),
         Float64(alpha),
+        Float64(scaled_prefactor),
+        Float64(config.sigma),
+        transition_fn,
+        energy_labels_vec,
+        oft_nufft_pref,
     )
 end
 
@@ -482,27 +516,17 @@ function step_along_trajectory!(
     rng::AbstractRNG,
     ) where {D<:Union{TimeDomain,TrotterDomain}}
 
-    cfg = fw.config
-    pd  = fw.precomputed_data
-
-    # Pull hot fields into locals
-    transition         = pd.transition
-    energy_labels      = pd.energy_labels
-    oft_prefactors     = pd.oft_nufft_prefactors
-    gamma_norm_factor  = pd.gamma_norm_factor
-
+    # All hot-path data lives in concrete-typed fields of fw (no abstract access)
     delta_eff = fw.delta_eff
+    scaled_prefactor = fw.scaled_prefactor
+    transition = fw.transition
+    energy_labels = fw.energy_labels
+    oft_prefactors = fw.oft_nufft_prefactors
 
-    # Rate prefactor with 1/p_jump rescaling baked in
-    # base_prefactor already includes gamma_norm_factor; multiply by n_jumps for 1/p_jump
-    scaled_prefactor = cfg.w0 * cfg.t0^2 * (cfg.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor / (1.0 / fw.n_jumps)
-
-    # ------------------------------------------------------------------
-    # Random operator selection (Lie-Trotter splitting)
-    # ------------------------------------------------------------------
+    # Select random operator (Vector elements are concrete-typed)
     a = rand(rng, 1:fw.n_jumps)
-    per_op = fw.per_operator[a]
-    jump = fw.jumps[a]
+    @inbounds per_op = fw.per_operator[a]
+    @inbounds jump = fw.jumps[a]
 
     # ------------------------------------------------------------------
     # Apply per-operator coherent unitary FIRST (matches DM code ordering)
@@ -630,24 +654,17 @@ function step_along_trajectory!(
     rng::AbstractRNG,
     )
 
-    cfg = fw.config
-    pd  = fw.precomputed_data
-
-    transition         = pd.transition
-    energy_labels      = pd.energy_labels
-    gamma_norm_factor  = pd.gamma_norm_factor
-
+    # All hot-path data lives in concrete-typed fields of fw (no abstract access)
     delta_eff = fw.delta_eff
+    scaled_prefactor = fw.scaled_prefactor
+    sigma = fw.sigma
+    transition = fw.transition
+    energy_labels = fw.energy_labels
 
-    # Rate prefactor with 1/p_jump rescaling: base * n_jumps
-    scaled_prefactor = cfg.w0 / (cfg.sigma * sqrt(2 * pi)) * gamma_norm_factor / (1.0 / fw.n_jumps)
-
-    # ------------------------------------------------------------------
-    # Random operator selection (Lie-Trotter splitting)
-    # ------------------------------------------------------------------
+    # Select random operator (Vector elements are concrete-typed)
     a = rand(rng, 1:fw.n_jumps)
-    per_op = fw.per_operator[a]
-    jump = fw.jumps[a]
+    @inbounds per_op = fw.per_operator[a]
+    @inbounds jump = fw.jumps[a]
 
     # ------------------------------------------------------------------
     # Apply per-operator coherent unitary FIRST
@@ -706,7 +723,7 @@ function step_along_trajectory!(
                 w_raw > 1e-12 && continue
                 w = abs(w_raw)
 
-                oft!(ws.jump_oft, jump, w, ham, cfg.sigma)
+                oft!(ws.jump_oft, jump, w, ham, sigma)
 
                 mul!(ws.Rpsi, ws.jump_oft, psi)
                 n2 = _norm2(ws.Rpsi)
@@ -736,7 +753,7 @@ function step_along_trajectory!(
             end
         else
             for w in energy_labels
-                oft!(ws.jump_oft, jump, w, ham, cfg.sigma)
+                oft!(ws.jump_oft, jump, w, ham, sigma)
 
                 mul!(ws.Rpsi, ws.jump_oft, psi)
                 n2 = _norm2(ws.Rpsi)

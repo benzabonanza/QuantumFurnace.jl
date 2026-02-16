@@ -15,7 +15,9 @@ Eliminated patterns that these tests guard against:
 
 using QuantumFurnace: B_bohr, B_time, B_trotter,
                       _precompute_data, _jump_contribution!,
-                      KrausScratch, transform_jumps_to_basis
+                      KrausScratch, transform_jumps_to_basis,
+                      TrajectoryWorkspace, _evolve_along_trajectory!
+using Random
 
 @testset "Allocation Regression" begin
 
@@ -126,6 +128,44 @@ using QuantumFurnace: B_bohr, B_time, B_trotter,
         # that allocations are bounded and don't include the filter overhead.
         # Allow generous budget for eigen + mul! temporaries, but NOT for filter.
         @test allocs < 50 * d^2 * sizeof(CT)
+    end
+
+    @testset "step_along_trajectory! allocations" begin
+        # Guards against GC pressure that would destroy parallel scaling.
+        # Uses the 3-qubit SMALL system for fast execution.
+        config = make_small_thermalize_config(TimeDomain();
+            delta=0.01, mixing_time=1.0, with_coherent=false)
+        precomputed = _precompute_data(config, SMALL_HAM)
+        CT = ComplexF64
+        dim = SMALL_DIM  # 8
+        scratch = KrausScratch(CT, dim)
+        fw = build_trajectoryframework(SMALL_JUMPS, SMALL_HAM, config, precomputed, scratch, 0.01)
+
+        ws = TrajectoryWorkspace(CT, dim)
+
+        psi0 = zeros(CT, dim)
+        psi0[1] = 1.0
+
+        # Wrap in a function to avoid top-level scope allocation artifacts.
+        # Julia's @allocated in global/testset scope can show spurious allocations
+        # from boxing local variables; a function barrier ensures proper optimization.
+        function _measure_step_allocs(fw, ws, psi0)
+            psi = copy(psi0)
+            rng = Xoshiro(999)
+
+            # Warmup: JIT compile all code paths (no-jump, residual, dissipative-jump)
+            for _ in 1:100
+                step_along_trajectory!(psi, fw, ws, rng)
+            end
+
+            # Reset and measure
+            copyto!(psi, psi0)
+            rng2 = Xoshiro(999)
+            return @allocated step_along_trajectory!(psi, fw, ws, rng2)
+        end
+
+        allocs = _measure_step_allocs(fw, ws, psi0)
+        @test allocs == 0
     end
 
 end
