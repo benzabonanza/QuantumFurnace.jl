@@ -86,20 +86,14 @@ function build_trajectoryframework(
 
     alpha = 1 - sqrt(1 - delta_eff)
 
-    # For TrotterDomain, transform jump operators from Hamiltonian eigenbasis
-    # to Trotter eigenbasis. The NUFFT prefactors use Trotter quasi-Bohr frequencies,
-    # so the element-wise product A .* P requires A in the same basis.
-    jumps_for_diss_raw = if config.domain isa TrotterDomain && ham_or_trott isa TrottTrott
-        transform_jumps_to_basis(jumps, ham_or_trott.eigvecs)
-    else
-        collect(JumpOp, jumps)
-    end
     # Convert to concrete element type for zero-allocation access in hot loop
-    jumps_for_diss = convert(Vector{JumpOp{Matrix{CT}}}, jumps_for_diss_raw)
+    # (jumps arrive in the correct basis: trotter.eigvecs for TrotterDomain,
+    #  hamiltonian.eigvecs for other domains -- basis selection is at the source)
+    jumps_for_diss = convert(Vector{JumpOp{Matrix{CT}}}, collect(JumpOp, jumps))
 
     # Precompute per-operator coherent B terms (one per jump)
-    # NOTE: precompute_coherent_total_B handles its own Trotter basis transform internally
-    # (via B_trotter in coherent.jl), so we pass the ORIGINAL jumps here.
+    # Jumps are already in the correct basis (trotter.eigvecs for TrotterDomain,
+    # hamiltonian.eigvecs for other domains), so pass them directly.
     per_op_U_B = Vector{Union{Nothing, Matrix{CT}}}(undef, n_jumps)
     if config.with_coherent
         @inbounds for a in 1:n_jumps

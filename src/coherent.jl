@@ -27,8 +27,7 @@ function _precompute_coherent_total_B(
     elseif config.domain isa TrotterDomain
         (; b_minus, b_plus, gamma_norm_factor) = precomputed_data
         @assert ham_or_trott !== nothing
-        trotter_jumps = transform_jumps_to_basis(jumps, ham_or_trott.eigvecs)
-        B = B_trotter(trotter_jumps, ham_or_trott, b_minus, b_plus, config.beta, config.sigma)
+        B = B_trotter(jumps, ham_or_trott, b_minus, b_plus, config.beta, config.sigma)
 
     else
         # BohrDomain / EnergyDomain
@@ -82,8 +81,7 @@ function _precompute_coherent_unitary_terms(
     elseif config.domain isa TrotterDomain
         (; b_minus, b_plus, gamma_norm_factor) = precomputed_data
         @assert trotter !== nothing
-        trotter_jumps = transform_jumps_to_basis(jumps, trotter.eigvecs)
-        @inbounds for (k, jump) in pairs(trotter_jumps)
+        @inbounds for (k, jump) in pairs(jumps)
             B = B_trotter(jump, trotter, b_minus, b_plus, config.beta, config.sigma)
             rmul!(B, gamma_norm_factor)
             U_terms[k] = exp(-1im * delta * Hermitian(B))
@@ -138,8 +136,7 @@ function _precompute_coherent_terms(
     elseif config.domain isa TrotterDomain
         (; b_minus, b_plus, gamma_norm_factor) = precomputed_data
         @assert trotter !== nothing
-        trotter_jumps = transform_jumps_to_basis(jumps, trotter.eigvecs)
-        @inbounds for (k, jump) in pairs(trotter_jumps)
+        @inbounds for (k, jump) in pairs(jumps)
             B = B_trotter(jump, trotter, b_minus, b_plus, config.beta, config.sigma)
             rmul!(B, gamma_norm_factor)
             coherent_terms[k] = B
@@ -255,8 +252,8 @@ function B_trotter(jump::JumpOp, trotter::TrottTrott, b_minus, b_plus, beta, sig
     d = size(trotter.eigvecs, 1)
     CT = Complex{eltype(trotter.bohr_freqs)}
 
-    # Use jump.in_eigenbasis directly -- callers ensure it contains
-    # the Trotter-basis representation via transform_jumps_to_basis
+    # Use jump.in_eigenbasis directly -- callers construct JumpOps
+    # with trotter.eigvecs as the basis for TrotterDomain
     jump_eig = jump.in_eigenbasis
 
     # Pre-allocated diagonal vector buffers (replace Diagonal wrappers)
@@ -322,8 +319,8 @@ function B_trotter(jumps::Vector{JumpOp}, trotter::TrottTrott, b_minus, b_plus, 
         diag_u_row = transpose(diag_u)
 
         for jump_a in jumps
-            # Use jump_a.in_eigenbasis directly -- callers ensure it contains
-            # the Trotter-basis representation via transform_jumps_to_basis
+            # Use jump_a.in_eigenbasis directly -- callers construct JumpOps
+            # with trotter.eigvecs as the basis for TrotterDomain
             jump_a_eig = jump_a.in_eigenbasis
             # tmp = diag(u2) * A  (row-scale A by u2)
             @. tmp = diag_u2 * jump_a_eig

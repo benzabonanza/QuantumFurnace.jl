@@ -41,11 +41,11 @@ const SEED = 42
 # ============================================================================
 
 """
-    build_heisenberg_xxx(num_qubits, beta) -> HamHam
+    build_heisenberg_hamiltonian(num_qubits, beta) -> HamHam
 
 Build a uniform 1D Heisenberg XXX chain with periodic boundaries and J=1.0.
 """
-function build_heisenberg_xxx(num_qubits::Int, beta::Float64)
+function build_heisenberg_hamiltonian(num_qubits::Int, beta::Float64)
     terms = Vector{Vector{Matrix{ComplexF64}}}([[X, X], [Y, Y], [Z, Z]])
     coeffs = [1.0, 1.0, 1.0]
     return HamHam(terms, coeffs, num_qubits, beta; periodic=true)
@@ -67,7 +67,7 @@ function build_trotter_system(hamiltonian::HamHam, num_qubits::Int)
     for pauli in jump_paulis
         for site in 1:num_qubits
             op = Matrix(pad_term(pauli, num_qubits, site)) ./ norm_factor
-            in_eigen = hamiltonian.eigvecs' * op * hamiltonian.eigvecs
+            in_eigen = trotter.eigvecs' * op * trotter.eigvecs
             push!(jumps, JumpOp(op, in_eigen, op == transpose(op), op == op'))
         end
     end
@@ -194,11 +194,11 @@ function main()
 
     for n in filter_sizes
         for beta in betas
-            mixing_time = 2.0 * beta
+            mixing_time = 20.0
 
             @printf("[%s] Building Hamiltonian: n=%d, beta=%.0f\n",
                 Dates.format(now(), "HH:MM:SS"), n, beta)
-            hamiltonian = build_heisenberg_xxx(n, beta)
+            hamiltonian = build_heisenberg_hamiltonian(n, beta)
             trotter, jumps = build_trotter_system(hamiltonian, n)
 
             # 3 experiments per (n, beta) pair

@@ -74,17 +74,11 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::AbstractLiouvConfi
         _vectorize_liouvillian_coherent!(total_lindbladian, Btot, ws)
     end
 
-    # For TrotterDomain, transform jump operators from Hamiltonian eigenbasis
-    # to Trotter eigenbasis. The NUFFT prefactors use Trotter quasi-Bohr frequencies,
-    # so the element-wise product A .* P requires A in the same basis.
-    jumps_for_diss = if config.domain isa TrotterDomain
-        transform_jumps_to_basis(jumps, trotter.eigvecs)
-    else
-        jumps
-    end
+    # Jumps arrive in the correct basis (trotter.eigvecs for TrotterDomain,
+    # hamiltonian.eigvecs for other domains -- basis selection is at the source).
 
     # Accumulate Liouvillian in-place (no per-jump dim^2×dim^2 allocations).
-    for (k, jump) in pairs(jumps_for_diss)
+    for (k, jump) in pairs(jumps)
         _jump_contribution!(total_lindbladian, jump, ham_or_trott, config, precomputed_data, ws;
             coherent_term=nothing)
     end
@@ -122,13 +116,8 @@ function run_thermalization(
 
     precomputed_data = _precompute_data(config, ham_or_trott)
 
-    # For TrotterDomain, transform jump operators from Hamiltonian eigenbasis
-    # to Trotter eigenbasis for the dissipative contribution.
-    jumps_for_diss = if config.domain isa TrotterDomain
-        transform_jumps_to_basis(jumps, trotter.eigvecs)
-    else
-        jumps
-    end
+    # Jumps arrive in the correct basis (trotter.eigvecs for TrotterDomain,
+    # hamiltonian.eigvecs for other domains -- basis selection is at the source).
 
     # precompute coherent U_B = exp(-i delta B(jump)) per jump to avoid allocations
     p_jump = 1.0 / length(jumps)
@@ -143,8 +132,8 @@ function run_thermalization(
     distances_to_gibbs = [trace_distance_h(Hermitian(evolving_dm), gibbs)]
 
     for step in 1:num_steps
-        idx = rand(rng, 1:length(jumps_for_diss))
-        jump = jumps_for_diss[idx]
+        idx = rand(rng, 1:length(jumps))
+        jump = jumps[idx]
 
         _jump_contribution!(
             evolving_dm,
