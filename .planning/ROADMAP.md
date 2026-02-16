@@ -107,7 +107,10 @@ Plans:
   2. Nearest-neighbor correlation `<Z_iZ_{i+1}>` is tracked per batch and its value converges as trajectory count increases
   3. Energy expectation `<H>` is tracked per batch and converges toward the thermal equilibrium value
   4. Convergence data (trace distance curve, observable curves) is accessible programmatically after a trajectory run completes
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+  - [ ] 16-01-PLAN.md -- ConvergenceData struct, observable builders, run_trajectories_convergence batch runner, Dict serialization
+  - [ ] 16-02-PLAN.md -- Convergence tracking tests: unit tests, serialization round-trip, integration with real trajectories
 
 ### Phase 17: Adaptive Sampling
 **Goal**: Trajectory sampling automatically runs enough batches to reach convergence without the user specifying a fixed trajectory count
@@ -154,6 +157,6 @@ Phases execute in numeric order: 12 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18
 | 13. Multi-Threaded Trajectory Engine | v1.2 | 2/2 | Complete | 2026-02-16 |
 | 14. GNS Trajectory Path | v1.2 | 1/1 | Complete | 2026-02-16 |
 | 15. Data Architecture | v1.2 | 2/2 | Complete | 2026-02-16 |
-| 16. Convergence Tracking | v1.2 | 0/TBD | Not started | - |
+| 16. Convergence Tracking | v1.2 | 0/2 | Not started | - |
 | 17. Adaptive Sampling | v1.2 | 0/TBD | Not started | - |
 | 18. KMS-vs-GNS Experiments | v1.2 | 0/TBD | Not started | - |
