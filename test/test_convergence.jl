@@ -226,7 +226,7 @@ using BSON
         psi0 = zeros(ComplexF64, DIM)
         psi0[1] = 1.0
 
-        traj_result, conv_data = run_trajectories_convergence(
+        traj_result = run_trajectories_convergence(
             TEST_JUMPS, config, psi0, TEST_HAM;
             gibbs=TEST_GIBBS,
             observables=observables,
@@ -235,6 +235,7 @@ using BSON
             n_batches=5,
             seed=42,
         )
+        conv_data = traj_result.convergence
 
         # Basic structure
         @test conv_data isa ConvergenceData
@@ -279,7 +280,7 @@ using BSON
         psi0 = zeros(ComplexF64, DIM)
         psi0[1] = 1.0
 
-        _, conv1 = run_trajectories_convergence(
+        conv1 = run_trajectories_convergence(
             TEST_JUMPS, config, psi0, TEST_HAM;
             gibbs=TEST_GIBBS,
             observables=observables,
@@ -287,9 +288,9 @@ using BSON
             batch_size=50,
             n_batches=2,
             seed=12345,
-        )
+        ).convergence
 
-        _, conv2 = run_trajectories_convergence(
+        conv2 = run_trajectories_convergence(
             TEST_JUMPS, config, psi0, TEST_HAM;
             gibbs=TEST_GIBBS,
             observables=observables,
@@ -297,7 +298,7 @@ using BSON
             batch_size=50,
             n_batches=2,
             seed=12345,
-        )
+        ).convergence
 
         # Bitwise identical
         @test conv1.trace_distances == conv2.trace_distances
@@ -314,7 +315,7 @@ using BSON
         psi0 = zeros(ComplexF64, DIM)
         psi0[1] = 1.0
 
-        _, conv_data = run_trajectories_convergence(
+        conv_data = run_trajectories_convergence(
             TEST_JUMPS, config, psi0, TEST_HAM;
             gibbs=TEST_GIBBS,
             observables=observables,
@@ -322,7 +323,7 @@ using BSON
             batch_size=50,
             n_batches=2,
             seed=99,
-        )
+        ).convergence
 
         # trace_distances is a Vector{Float64} that can be indexed and iterated
         @test conv_data.trace_distances isa Vector{Float64}
@@ -429,7 +430,7 @@ using BSON
         psi0 = zeros(ComplexF64, DIM)
         psi0[1] = 1.0
 
-        traj_result, conv_data = run_trajectories_adaptive(
+        traj_result = run_trajectories_adaptive(
             TEST_JUMPS, config, psi0, TEST_HAM;
             gibbs=TEST_GIBBS,
             observables=observables,
@@ -442,6 +443,7 @@ using BSON
             window_size=3,
             seed=42,
         )
+        conv_data = traj_result.convergence
 
         # System should converge with generous threshold
         @test conv_data.converged == true
@@ -482,7 +484,7 @@ using BSON
         psi0[1] = 1.0
 
         # n_max=500, batch_size=50 -> max_batches=10, threshold=0.0001 is nearly impossible
-        traj_result, conv_data = run_trajectories_adaptive(
+        traj_result = run_trajectories_adaptive(
             TEST_JUMPS, config, psi0, TEST_HAM;
             gibbs=TEST_GIBBS,
             observables=observables,
@@ -495,6 +497,7 @@ using BSON
             window_size=3,
             seed=99,
         )
+        conv_data = traj_result.convergence
 
         # Should NOT converge with 0.01% threshold and only 500 trajectories
         @test conv_data.converged == false
@@ -523,7 +526,7 @@ using BSON
         psi0 = zeros(ComplexF64, DIM)
         psi0[1] = 1.0
 
-        _, conv1 = run_trajectories_adaptive(
+        conv1 = run_trajectories_adaptive(
             TEST_JUMPS, config, psi0, TEST_HAM;
             gibbs=TEST_GIBBS,
             observables=observables,
@@ -533,9 +536,9 @@ using BSON
             convergence_threshold=0.05,
             patience=3,
             seed=12345,
-        )
+        ).convergence
 
-        _, conv2 = run_trajectories_adaptive(
+        conv2 = run_trajectories_adaptive(
             TEST_JUMPS, config, psi0, TEST_HAM;
             gibbs=TEST_GIBBS,
             observables=observables,
@@ -545,7 +548,7 @@ using BSON
             convergence_threshold=0.05,
             patience=3,
             seed=12345,
-        )
+        ).convergence
 
         # Bitwise identical
         @test conv1.trace_distances == conv2.trace_distances
@@ -658,7 +661,7 @@ using BSON
         psi0 = zeros(ComplexF64, DIM)
         psi0[1] = 1.0
 
-        _, conv_data = run_trajectories_adaptive(
+        conv_data = run_trajectories_adaptive(
             TEST_JUMPS, config, psi0, TEST_HAM;
             gibbs=TEST_GIBBS,
             observables=observables,
@@ -667,7 +670,7 @@ using BSON
             n_max=1000,
             convergence_threshold=0.1,
             seed=77,
-        )
+        ).convergence
 
         # New diagnostic fields are accessible and correctly typed
         @test conv_data.converged isa Bool

@@ -70,12 +70,17 @@ end
         precomputed = QuantumFurnace._precompute_data(therm_config, SMALL_HAM)
         scratch = QuantumFurnace.KrausScratch(CT, dim)
         fw = build_trajectoryframework(SMALL_JUMPS, SMALL_HAM, therm_config, precomputed, scratch, 0.01)
+        num_steps = ceil(Int, 0.5 / fw.delta)
         rho_ref = zeros(CT, dim, dim)
         for traj_id in 1:ntraj
             rng = Random.Xoshiro(seed + traj_id)
             ws_ref = QuantumFurnace.TrajectoryWorkspace(CT, dim)
             psi = copy(psi0)
-            QuantumFurnace._evolve_along_trajectory!(psi, fw, ws_ref, rng, 0.5)
+            psi_norm2 = real(dot(psi, psi))
+            rmul!(psi, 1.0 / sqrt(max(psi_norm2, eps(Float64))))
+            for _ in 1:num_steps
+                step_along_trajectory!(psi, fw, ws_ref, rng)
+            end
             QuantumFurnace._accumulate_density_matrix!(rho_ref, psi)
         end
         rho_ref ./= ntraj
@@ -144,17 +149,22 @@ end
         t_threaded /= 3
 
         # Measure serial execution time: force single-thread behavior by running
-        # trajectories one at a time in a loop, calling _evolve_along_trajectory! directly
+        # trajectories one at a time in a loop, using inline step loop directly
         # This simulates serial execution regardless of thread count
         precomputed = QuantumFurnace._precompute_data(therm_config, SMALL_HAM)
         scratch = QuantumFurnace.KrausScratch(CT, dim)
         fw = build_trajectoryframework(SMALL_JUMPS, SMALL_HAM, therm_config, precomputed, scratch, 0.01)
+        num_steps_perf = ceil(Int, 5.0 / fw.delta)
 
         # Warmup serial path
         ws_s = QuantumFurnace.TrajectoryWorkspace(CT, dim)
         psi_s = copy(psi0)
         rng_s = Random.Xoshiro(1)
-        QuantumFurnace._evolve_along_trajectory!(psi_s, fw, ws_s, rng_s, 5.0)
+        psi_s_norm2 = real(dot(psi_s, psi_s))
+        rmul!(psi_s, 1.0 / sqrt(max(psi_s_norm2, eps(Float64))))
+        for _ in 1:num_steps_perf
+            step_along_trajectory!(psi_s, fw, ws_s, rng_s)
+        end
 
         t_serial = @elapsed begin
             for _ in 1:3
@@ -163,7 +173,11 @@ end
                     ws_loop = QuantumFurnace.TrajectoryWorkspace(CT, dim)
                     rng_loop = Random.Xoshiro(42 + traj_id)
                     psi_loop = copy(psi0)
-                    QuantumFurnace._evolve_along_trajectory!(psi_loop, fw, ws_loop, rng_loop, 5.0)
+                    psi_loop_norm2 = real(dot(psi_loop, psi_loop))
+                    rmul!(psi_loop, 1.0 / sqrt(max(psi_loop_norm2, eps(Float64))))
+                    for _ in 1:num_steps_perf
+                        step_along_trajectory!(psi_loop, fw, ws_loop, rng_loop)
+                    end
                     QuantumFurnace._accumulate_density_matrix!(rho_acc, psi_loop)
                 end
             end

@@ -128,7 +128,7 @@ function run_experiment(;
 
     # 4. Run adaptive trajectories
     wall_t0 = time()
-    traj_result, conv_data = run_trajectories_adaptive(
+    traj_result = run_trajectories_adaptive(
         jumps, config, psi0, hamiltonian;
         gibbs=gibbs_trotter,
         observables=observables,
@@ -144,6 +144,7 @@ function run_experiment(;
         total_time=mixing_time,
         delta=delta,
     )
+    conv_data = traj_result.convergence
     wall_time = time() - wall_t0
 
     # 5. Build ExperimentResult and save

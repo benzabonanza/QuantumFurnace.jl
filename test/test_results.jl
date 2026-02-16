@@ -21,7 +21,7 @@ using BSON
     # -----------------------------------------------------------------------
     function _make_fake_trajectory(dim; seed=42, n_trajectories=100)
         rho = Matrix(random_density_matrix(Int(log2(dim))))
-        TrajectoryResult(rho, n_trajectories, seed, nothing, nothing)
+        TrajectoryResult(rho, n_trajectories, seed, nothing, nothing, nothing)
     end
 
     # -----------------------------------------------------------------------
@@ -167,7 +167,7 @@ using BSON
             rho = Matrix(random_density_matrix(3))
             times = collect(0.0:0.1:1.0)
             measurements = rand(length(times), 2)
-            traj = TrajectoryResult(rho, 50, 99, times, measurements)
+            traj = TrajectoryResult(rho, 50, 99, times, measurements, nothing)
             ham_params = Dict{Symbol, Any}()
             metadata = Dict{Symbol, Any}()
 

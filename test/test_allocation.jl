@@ -16,7 +16,7 @@ Eliminated patterns that these tests guard against:
 using QuantumFurnace: B_bohr, B_time, B_trotter,
                       _precompute_data, _jump_contribution!,
                       KrausScratch, transform_jumps_to_basis,
-                      TrajectoryWorkspace, _evolve_along_trajectory!
+                      TrajectoryWorkspace
 using Random
 
 @testset "Allocation Regression" begin
