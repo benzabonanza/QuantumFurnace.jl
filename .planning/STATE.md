@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-02-15)
 
 ## Current Position
 
-Phase: 19 (logic-simplification)
-Plan: 2/3 complete
-Status: Plan 02 complete. Flattened call chain to 3 levels, framework built once. 539/539 tests pass.
-Last activity: 2026-02-16 - Completed Phase 19 Plan 02 (2 tasks, 7 min)
+Phase: 19 (logic-simplification) -- COMPLETE
+Plan: 3/3 complete
+Status: Phase 19 complete. Result structs simplified, convergence embedded in TrajectoryResult. 539/539 tests pass.
+Last activity: 2026-02-16 - Completed Phase 19 Plan 03 (3 tasks, 7 min)
 
-Progress: [██████████████████████████████] 100% (45 plans -- v1.0: 10, v1.1: 16+5q, v1.2: 12, cleanup: 2)
+Progress: [██████████████████████████████] 100% (46 plans -- v1.0: 10, v1.1: 16+5q, v1.2: 12, cleanup: 3)
 
 ## Performance Metrics
 
@@ -28,7 +28,7 @@ Progress: [███████████████████████
 | v1.0 Trajectories | 1-5 | 10 | 2026-02-13 to 2026-02-14 |
 | v1.1 Reduce | 6-11 | 16 (+5 quick) | 2026-02-15 |
 | v1.2 Multi-threading | 12-18 | 12 | 2026-02-15 to 2026-02-16 |
-| Cleanup | 19 | 2/3 | 2026-02-16 |
+| Cleanup | 19 | 3/3 | 2026-02-16 |
 
 ## Accumulated Context
 
@@ -37,6 +37,10 @@ Progress: [███████████████████████
 All decisions logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- Phase 19 Plan 03: ConvergenceData struct moved to structs.jl for include-order safety (before trajectories.jl)
+- Phase 19 Plan 03: LindbladianResult replaces HotSpectralResults (4 fields, no hamiltonian/config/trotter)
+- Phase 19 Plan 03: DMSimulationResult replaces HotAlgorithmResults (3 fields, no hamiltonian/config/trotter)
+- Phase 19 Plan 03: TrajectoryResult.convergence embeds ConvergenceData (convergence runners return single value)
 - Phase 19 Plan 02: _evolve_along_trajectory! inlined into chunk runners, deleted as standalone function
 - Phase 19 Plan 02: _build_framework_and_seed extracts one-time setup for framework + seed generation
 - Phase 19 Plan 02: _run_batch_no_obs! encapsulates serial/threaded dispatch, shared by all callers
@@ -111,5 +115,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Completed 19-02-PLAN.md (flatten trajectory call chain)
+Stopped at: Completed 19-03-PLAN.md (simplify result struct hierarchy) -- Phase 19 COMPLETE
 Resume file: None
