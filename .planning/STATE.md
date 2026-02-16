@@ -10,16 +10,16 @@ See: .planning/PROJECT.md (updated 2026-02-15)
 ## Current Position
 
 Phase: 19 (logic-simplification)
-Plan: 1/3 complete
-Status: Plan 01 complete. Eliminated redundant jump basis transforms. 539/539 tests pass.
-Last activity: 2026-02-16 - Completed Phase 19 Plan 01 (3 tasks, 8 min)
+Plan: 2/3 complete
+Status: Plan 02 complete. Flattened call chain to 3 levels, framework built once. 539/539 tests pass.
+Last activity: 2026-02-16 - Completed Phase 19 Plan 02 (2 tasks, 7 min)
 
-Progress: [██████████████████████████████] 100% (44 plans -- v1.0: 10, v1.1: 16+5q, v1.2: 12, cleanup: 1)
+Progress: [██████████████████████████████] 100% (45 plans -- v1.0: 10, v1.1: 16+5q, v1.2: 12, cleanup: 2)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 44 (v1.0: 10, v1.1: 16, quick: 5, v1.2: 12, cleanup: 1)
+- Total plans completed: 45 (v1.0: 10, v1.1: 16, quick: 5, v1.2: 12, cleanup: 2)
 
 **By Milestone:**
 
@@ -28,7 +28,7 @@ Progress: [███████████████████████
 | v1.0 Trajectories | 1-5 | 10 | 2026-02-13 to 2026-02-14 |
 | v1.1 Reduce | 6-11 | 16 (+5 quick) | 2026-02-15 |
 | v1.2 Multi-threading | 12-18 | 12 | 2026-02-15 to 2026-02-16 |
-| Cleanup | 19 | 1/3 | 2026-02-16 |
+| Cleanup | 19 | 2/3 | 2026-02-16 |
 
 ## Accumulated Context
 
@@ -37,6 +37,10 @@ Progress: [███████████████████████
 All decisions logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- Phase 19 Plan 02: _evolve_along_trajectory! inlined into chunk runners, deleted as standalone function
+- Phase 19 Plan 02: _build_framework_and_seed extracts one-time setup for framework + seed generation
+- Phase 19 Plan 02: _run_batch_no_obs! encapsulates serial/threaded dispatch, shared by all callers
+- Phase 19 Plan 02: Convergence runners call _run_batch_no_obs! directly (not run_trajectories)
 - Phase 19 Plan 01: trotter.eigvecs for TrotterDomain JumpOp basis, hamiltonian.eigvecs for all others (LOCKED)
 - Phase 19 Plan 01: transform_jumps_to_basis kept as public API, zero internal callers
 - Phase 19 Plan 01: TEST_TROTTER_JUMPS and SMALL_TROTTER_JUMPS constants for TrotterDomain test call sites
@@ -107,5 +111,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Completed 19-01-PLAN.md (eliminate redundant jump basis transforms)
+Stopped at: Completed 19-02-PLAN.md (flatten trajectory call chain)
 Resume file: None
