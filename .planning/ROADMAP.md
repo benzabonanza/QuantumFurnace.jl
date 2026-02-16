@@ -44,7 +44,7 @@ Full details: [milestones/v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 - [x] **Phase 14: GNS Trajectory Path** - Verify and test GNS (approximate detailed balance) trajectory simulation end-to-end -- completed 2026-02-16
 - [x] **Phase 15: Data Architecture** - Experiment result serialization and round-trip via BSON -- completed 2026-02-16
 - [x] **Phase 16: Convergence Tracking** - Batch-level trace distance and per-observable convergence metrics during trajectory sampling -- completed 2026-02-16
-- [ ] **Phase 17: Adaptive Sampling** - Convergence-driven trajectory batching with automatic stopping and hard cap
+- [x] **Phase 17: Adaptive Sampling** - Convergence-driven trajectory batching with automatic stopping and hard cap -- completed 2026-02-16
 - [ ] **Phase 18: KMS-vs-GNS Experiments** - Parameter sweep experiments comparing KMS and GNS across system sizes and temperatures
 
 ## Phase Details
@@ -122,8 +122,8 @@ Plans:
   3. Adaptive mode returns the same result structure as fixed-count mode (convergence history, final density matrix, observables)
 **Plans**: 2 plans
 Plans:
-  - [ ] 17-01-PLAN.md -- Extend ConvergenceData, implement _windowed_relative_change and run_trajectories_adaptive, update serialization
-  - [ ] 17-02-PLAN.md -- Comprehensive adaptive sampling tests (convergence, hard cap, determinism, serialization round-trip)
+  - [x] 17-01-PLAN.md -- Extend ConvergenceData, implement _windowed_relative_change and run_trajectories_adaptive, update serialization
+  - [x] 17-02-PLAN.md -- Comprehensive adaptive sampling tests (convergence, hard cap, determinism, serialization round-trip)
 
 ### Phase 18: KMS-vs-GNS Experiments
 **Goal**: Paper-ready comparison data showing KMS and GNS convergence behavior across system sizes and inverse temperatures
@@ -161,5 +161,5 @@ Phases execute in numeric order: 12 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18
 | 14. GNS Trajectory Path | v1.2 | 1/1 | Complete | 2026-02-16 |
 | 15. Data Architecture | v1.2 | 2/2 | Complete | 2026-02-16 |
 | 16. Convergence Tracking | v1.2 | 2/2 | Complete | 2026-02-16 |
-| 17. Adaptive Sampling | v1.2 | 0/2 | Not started | - |
+| 17. Adaptive Sampling | v1.2 | 2/2 | Complete | 2026-02-16 |
 | 18. KMS-vs-GNS Experiments | v1.2 | 0/TBD | Not started | - |
