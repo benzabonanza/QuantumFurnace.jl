@@ -40,7 +40,7 @@ Full details: [milestones/v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 **Milestone Goal:** Multi-threaded trajectory sampling engine with GNS comparison path, enabling paper-ready KMS-vs-GNS convergence experiments across temperature regimes and system sizes.
 
 - [x] **Phase 12: Workspace Refactor** - Separate mutable workspace from shared framework to enable thread-safe trajectory stepping -- completed 2026-02-15
-- [ ] **Phase 13: Multi-Threaded Trajectory Engine** - Parallel trajectory sampling with per-thread workspaces, BLAS control, and deterministic seeding
+- [x] **Phase 13: Multi-Threaded Trajectory Engine** - Parallel trajectory sampling with per-thread workspaces, BLAS control, and deterministic seeding -- completed 2026-02-16
 - [ ] **Phase 14: GNS Trajectory Path** - Verify and test GNS (approximate detailed balance) trajectory simulation end-to-end
 - [ ] **Phase 15: Data Architecture** - Experiment result serialization and round-trip via BSON
 - [ ] **Phase 16: Convergence Tracking** - Batch-level trace distance and per-observable convergence metrics during trajectory sampling
@@ -71,8 +71,8 @@ Full details: [milestones/v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
   3. Given the same master seed and thread count, multi-threaded trajectory results are bitwise identical across runs
   4. Multi-threaded execution at n=4 with 4+ threads is faster than serial execution (no performance regression from threading overhead)
 **Plans**: 2 plans
-  - [ ] 13-01-PLAN.md -- Core threaded engine (allocation guard, partition helper, @sync/@spawn dispatch, BLAS control)
-  - [ ] 13-02-PLAN.md -- Threading correctness and performance tests (determinism, BLAS restore, serial-threaded agreement, speedup)
+  - [x] 13-01-PLAN.md -- Core threaded engine (allocation guard, partition helper, @sync/@spawn dispatch, BLAS control)
+  - [x] 13-02-PLAN.md -- Threading correctness and performance tests (determinism, BLAS restore, serial-threaded agreement, speedup)
 
 ### Phase 14: GNS Trajectory Path
 **Goal**: GNS (approximate detailed balance, no coherent B term) trajectory simulation works end-to-end and produces physically correct results
@@ -147,7 +147,7 @@ Phases execute in numeric order: 12 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18
 | 10. API Surface Cleanup | v1.1 | 3/3 | Complete | 2026-02-15 |
 | 11. Allocation Optimization | v1.1 | 3/3 | Complete | 2026-02-15 |
 | 12. Workspace Refactor | v1.2 | 2/2 | Complete | 2026-02-15 |
-| 13. Multi-Threaded Trajectory Engine | v1.2 | 0/TBD | Not started | - |
+| 13. Multi-Threaded Trajectory Engine | v1.2 | 2/2 | Complete | 2026-02-16 |
 | 14. GNS Trajectory Path | v1.2 | 0/TBD | Not started | - |
 | 15. Data Architecture | v1.2 | 0/TBD | Not started | - |
 | 16. Convergence Tracking | v1.2 | 0/TBD | Not started | - |
