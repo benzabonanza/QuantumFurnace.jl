@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.2 Multi-threading -- Phase 13 Plan 01 complete, Plan 02 remaining
+**Current focus:** v1.2 Multi-threading -- Phase 13 complete, Phase 14 ready
 
 ## Current Position
 
-Phase: 13 of 18 (Multi-Threaded Trajectory Engine)
-Plan: 1/2 complete
-Status: Plan 01 (multi-threaded engine) complete. Plan 02 (thread safety testing) ready.
-Last activity: 2026-02-16 -- Phase 13 Plan 01 executed (2 tasks, 2 commits)
+Phase: 13 of 18 (Multi-Threaded Trajectory Engine) -- COMPLETE
+Plan: 2/2 complete
+Status: Phase 13 complete. All threading tests pass (257 tests with 2 threads). Ready for Phase 14.
+Last activity: 2026-02-16 -- Phase 13 Plan 02 executed (2 tasks, 2 commits)
 
-Progress: [██████████████████████░░░░░░░░] 78% (29/TBD plans -- v1.0: 10, v1.1: 16+5q, v1.2: 3/TBD)
+Progress: [███████████████████████░░░░░░░] 79% (30/TBD plans -- v1.0: 10, v1.1: 16+5q, v1.2: 4/TBD)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 34 (v1.0: 10, v1.1: 16, quick: 5, v1.2: 3)
+- Total plans completed: 35 (v1.0: 10, v1.1: 16, quick: 5, v1.2: 4)
 
 **By Milestone:**
 
@@ -27,7 +27,7 @@ Progress: [██████████████████████░
 |-----------|--------|-------|----------|
 | v1.0 Trajectories | 1-5 | 10 | 2026-02-13 to 2026-02-14 |
 | v1.1 Reduce | 6-11 | 16 (+5 quick) | 2026-02-15 |
-| v1.2 Multi-threading | 12-18 | 3/TBD | 2026-02-15 to ... |
+| v1.2 Multi-threading | 12-18 | 4/TBD | 2026-02-15 to ... |
 
 ## Accumulated Context
 
@@ -36,6 +36,7 @@ Progress: [██████████████████████░
 All decisions logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- Phase 13 Plan 02: Performance test uses ntraj=200 x mixing_time=5.0 (not 50 x 1.0) to amortize threading overhead on dim=8
 - Phase 13 Plan 01: Added F,P type params to TrajectoryFramework{T,D,F,P} for zero-allocation hot path
 - Phase 13 Plan 01: Changed jumps from Vector{JumpOp} to Vector{JumpOp{Matrix{T}}} for concrete element access
 - Phase 13 Plan 01: Per-trajectory Xoshiro(seed + traj_id) seeding replaces shared RNG in serial path
@@ -61,5 +62,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Completed 13-01-PLAN.md. Plan 02 (thread safety testing) ready for execution.
+Stopped at: Completed 13-02-PLAN.md. Phase 13 complete. Phase 14 (convergence checking) ready.
 Resume file: None
