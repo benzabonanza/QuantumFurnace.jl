@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-15)
 Phase: 14 of 18 (GNS Trajectory Path) -- COMPLETE
 Plan: 1/1 complete
 Status: Phase 14 complete. GNS trajectory path validated end-to-end with 284 tests passing.
-Last activity: 2026-02-16 - Completed quick task 19: Fix failing test after EnergyDomain to TrotterDomain rename
+Last activity: 2026-02-16 - Completed quick task 20: Fix basis mismatch in GNS TrotterDomain tests
 
 Progress: [████████████████████████░░░░░░] 81% (31/TBD plans -- v1.0: 10, v1.1: 16+5q, v1.2: 5/TBD)
 
@@ -36,7 +36,8 @@ Progress: [███████████████████████
 All decisions logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-- Phase 14 Plan 01: GNS-to-Gibbs gap at sigma=0.1: EnergyDomain=0.081, BohrDomain=0.035 (Phase 18 baselines)
+- Quick-20: GNS-to-Gibbs gap at sigma=0.1: EnergyDomain=0.081, TrotterDomain=0.081, BohrDomain=0.035 (Phase 18 baselines)
+- Quick-20: TrotterDomain Lindbladian is in Trotter eigenbasis; must transform fixed point to energy eigenbasis before comparing to Gibbs
 - Phase 14 Plan 01: Trajectory convergence params: ntraj=1000, delta=0.01, mixing_time=5.0 -> 0.029 trace distance
 - Phase 14 Plan 01: Fixed @kwdef outer constructor bug for GNS config structs (pre-existing)
 - Phase 13 Plan 02: Performance test uses ntraj=200 x mixing_time=5.0 (not 50 x 1.0) to amortize threading overhead on dim=8
@@ -67,6 +68,7 @@ None
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 19 | Fix failing test after EnergyDomain to TrotterDomain rename in GNS trajectory | 2026-02-16 | 0683acc | [19-fix-failing-test-after-energydomain-to-t](./quick/19-fix-failing-test-after-energydomain-to-t/) |
+| 20 | Fix basis mismatch in GNS TrotterDomain tests (0.83 -> 0.08 gap) | 2026-02-16 | 0161e01 | [20-debug-gns-trotterdomain-0-83-gap-suspect](./quick/20-debug-gns-trotterdomain-0-83-gap-suspect/) |
 
 ## Session Continuity
 
