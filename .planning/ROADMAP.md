@@ -82,7 +82,8 @@ Full details: [milestones/v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
   1. `ThermalizeConfigGNS` dispatches through the full trajectory pipeline (workspace allocation, stepping, density matrix accumulation) without error
   2. GNS trajectories produce valid density matrices (Hermitian, unit trace, positive semidefinite) at every checkpoint
   3. Averaged GNS trajectory density matrix converges toward the GNS approximate fixed point (not exact Gibbs, but within documented approximation bound for the given sigma)
-**Plans**: TBD
+**Plans**: 1 plan
+  - [ ] 14-01-PLAN.md -- GNS test infrastructure + full trajectory validation suite (fixed point, CPTP, convergence, DM validity)
 
 ### Phase 15: Data Architecture
 **Goal**: Experiment results (configs, convergence curves, observables, density matrices) are persistable and reproducible from saved files
@@ -148,7 +149,7 @@ Phases execute in numeric order: 12 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18
 | 11. Allocation Optimization | v1.1 | 3/3 | Complete | 2026-02-15 |
 | 12. Workspace Refactor | v1.2 | 2/2 | Complete | 2026-02-15 |
 | 13. Multi-Threaded Trajectory Engine | v1.2 | 2/2 | Complete | 2026-02-16 |
-| 14. GNS Trajectory Path | v1.2 | 0/TBD | Not started | - |
+| 14. GNS Trajectory Path | v1.2 | 0/1 | Not started | - |
 | 15. Data Architecture | v1.2 | 0/TBD | Not started | - |
 | 16. Convergence Tracking | v1.2 | 0/TBD | Not started | - |
 | 17. Adaptive Sampling | v1.2 | 0/TBD | Not started | - |
