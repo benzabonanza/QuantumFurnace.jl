@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-15)
 Phase: 14 of 18 (GNS Trajectory Path) -- COMPLETE
 Plan: 1/1 complete
 Status: Phase 14 complete. GNS trajectory path validated end-to-end with 284 tests passing.
-Last activity: 2026-02-16 -- Phase 14 Plan 01 complete (GNS trajectory validation)
+Last activity: 2026-02-16 - Completed quick task 19: Fix failing test after EnergyDomain to TrotterDomain rename
 
 Progress: [████████████████████████░░░░░░] 81% (31/TBD plans -- v1.0: 10, v1.1: 16+5q, v1.2: 5/TBD)
 
@@ -61,6 +61,12 @@ None
 ### Blockers/Concerns
 
 None
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 19 | Fix failing test after EnergyDomain to TrotterDomain rename in GNS trajectory | 2026-02-16 | 0683acc | [19-fix-failing-test-after-energydomain-to-t](./quick/19-fix-failing-test-after-energydomain-to-t/) |
 
 ## Session Continuity
 
