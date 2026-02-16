@@ -4,7 +4,7 @@
 
 - ✅ **v1.0 Trajectories** -- Phases 1-5 (shipped 2026-02-14)
 - ✅ **v1.1 Reduce** -- Phases 6-11 (shipped 2026-02-15)
-- 🚧 **v1.2 Multi-threading** -- Phases 12-18 (in progress)
+- ✅ **v1.2 Multi-threading** -- Phases 12-18 (shipped 2026-02-16)
 
 ## Phases
 
@@ -35,7 +35,7 @@ Full details: [milestones/v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 
 </details>
 
-### 🚧 v1.2 Multi-threading (In Progress)
+### ✅ v1.2 Multi-threading (SHIPPED 2026-02-16)
 
 **Milestone Goal:** Multi-threaded trajectory sampling engine with GNS comparison path, enabling paper-ready KMS-vs-GNS convergence experiments across temperature regimes and system sizes.
 
@@ -45,7 +45,7 @@ Full details: [milestones/v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 - [x] **Phase 15: Data Architecture** - Experiment result serialization and round-trip via BSON -- completed 2026-02-16
 - [x] **Phase 16: Convergence Tracking** - Batch-level trace distance and per-observable convergence metrics during trajectory sampling -- completed 2026-02-16
 - [x] **Phase 17: Adaptive Sampling** - Convergence-driven trajectory batching with automatic stopping and hard cap -- completed 2026-02-16
-- [ ] **Phase 18: KMS-vs-GNS Experiments** - Parameter sweep experiments comparing KMS and GNS across system sizes and temperatures
+- [x] **Phase 18: KMS-vs-GNS Experiments** - Parameter sweep experiments comparing KMS and GNS across system sizes and temperatures -- completed 2026-02-16
 
 ## Phase Details
 
@@ -137,7 +137,7 @@ Plans:
   5. All 18 experiment results are saved to BSON and loadable for analysis
 **Plans**: 1 plan
 Plans:
-  - [ ] 18-01-PLAN.md -- Sweep script infrastructure + n=4 verification (build_heisenberg_xxx, build_trotter_system, run_experiment, 27-experiment parameter grid loop, .gitignore update)
+  - [x] 18-01-PLAN.md -- Sweep script infrastructure + n=4 verification (build_heisenberg_xxx, build_trotter_system, run_experiment, 27-experiment parameter grid loop, .gitignore update)
 
 ## Progress
 
@@ -164,4 +164,4 @@ Phases execute in numeric order: 12 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18
 | 15. Data Architecture | v1.2 | 2/2 | Complete | 2026-02-16 |
 | 16. Convergence Tracking | v1.2 | 2/2 | Complete | 2026-02-16 |
 | 17. Adaptive Sampling | v1.2 | 2/2 | Complete | 2026-02-16 |
-| 18. KMS-vs-GNS Experiments | v1.2 | 0/TBD | Not started | - |
+| 18. KMS-vs-GNS Experiments | v1.2 | 1/1 | Complete | 2026-02-16 |

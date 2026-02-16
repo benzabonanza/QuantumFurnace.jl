@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.2 Multi-threading -- Phase 18 Plan 01 complete. Experiment sweep verified.
+**Current focus:** v1.2 Multi-threading -- COMPLETE. All 18 phases shipped.
 
 ## Current Position
 
-Phase: 18 of 18 (KMS-vs-GNS Experiments) -- Plan 01 COMPLETE
+Phase: 18 of 18 (KMS-vs-GNS Experiments) -- COMPLETE
 Plan: 1/1 complete
-Status: Phase 18 Plan 01 complete. Sweep script created and verified on n=4 slice (9 experiments, EXPT-04 confirmed).
-Last activity: 2026-02-16 - Completed 18-01: KMS-vs-GNS experiment sweep
+Status: Phase 18 complete. v1.2 milestone complete. All 18 phases across 3 milestones shipped.
+Last activity: 2026-02-16 - Completed Phase 18 execution and verification (PASSED 7/7 must-haves)
 
-Progress: [██████████████████████████████] 95% (43/TBD plans -- v1.0: 10, v1.1: 16+5q, v1.2: 12/TBD)
+Progress: [██████████████████████████████] 100% (43 plans -- v1.0: 10, v1.1: 16+5q, v1.2: 12)
 
 ## Performance Metrics
 
@@ -27,7 +27,7 @@ Progress: [███████████████████████
 |-----------|--------|-------|----------|
 | v1.0 Trajectories | 1-5 | 10 | 2026-02-13 to 2026-02-14 |
 | v1.1 Reduce | 6-11 | 16 (+5 quick) | 2026-02-15 |
-| v1.2 Multi-threading | 12-18 | 12/TBD | 2026-02-15 to 2026-02-16 |
+| v1.2 Multi-threading | 12-18 | 12 | 2026-02-15 to 2026-02-16 |
 
 ## Accumulated Context
 
@@ -99,5 +99,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Completed 18-01-PLAN.md. Phase 18 Plan 01 (KMS-vs-GNS Experiment Sweep) complete. Sweep script verified on n=4 slice.
+Stopped at: Phase 18 complete. v1.2 milestone complete. All phases shipped.
 Resume file: None
