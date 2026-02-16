@@ -15,10 +15,10 @@ function _sandwich!(target::AbstractMatrix, middle::AbstractMatrix, bread::Abstr
 end
 
 #TODO: Rewrite this with apply_lindbladian!()
-function compute_LSI_alpha2(result::HotSpectralResults; n_restarts=3, g_tol=1e-5)
+function compute_LSI_alpha2(result::LindbladianResult; n_restarts=3, g_tol=1e-5)
 
     # In respective eigenspace either (H or Trotter)
-    L_mat = result.data
+    L_mat = result.liouvillian
     sigma = Hermitian(result.fixed_point)
     sigma_eigen = eigen(sigma)
     sigma_eigen.values .= max.(sigma_eigen.values, 1e-14) # To ensure full-rank numerically

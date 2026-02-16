@@ -30,14 +30,11 @@ function run_lindbladian(jumps::Vector{JumpOp}, config::AbstractLiouvConfig{D,Tc
     gap_vec = eigvecs_near_zero[:, gap_index]
     gap_mode_op = reshape(gap_vec, size(hamiltonian.data))
 
-    result = HotSpectralResults(
-        data = liouv,
+    result = LindbladianResult(
+        liouvillian = liouv,
         fixed_point = steady_state_dm,
         gap_mode = gap_mode_op,
         spectral_gap = spectral_gap,
-        hamiltonian = hamiltonian,
-        trotter = trotter, 
-        config = config
     )
     return result
 end
@@ -157,6 +154,10 @@ function run_thermalization(
     end
 
     time_steps = [0.0:config.delta:(num_steps * config.delta);]
-    return HotAlgorithmResults(evolving_dm, distances_to_gibbs, time_steps, hamiltonian, trotter, config)
+    return DMSimulationResult(
+        final_dm = evolving_dm,
+        trace_distances = distances_to_gibbs,
+        time_steps = time_steps,
+    )
 end
 

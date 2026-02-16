@@ -239,49 +239,43 @@ struct JumpOp{T <: AbstractMatrix{<:Complex}}
 end
 
 """
-        HotAlgorithmResults{D, T}
+        DMSimulationResult{T}
 
     Results from the step-by-step quantum algorithm emulation on thermalization.
 
+    Slimmed version of the former HotAlgorithmResults: carries only the simulation
+    output, not the hamiltonian/trotter/config (callers already have those at the call site).
+
     # Fields
-    - `evolved_dm`: The final density matrix after evolution.
-    - `distances_to_gibbs`: Trace distances to the target Gibbs state at each time step.
+    - `final_dm`: The final density matrix after evolution.
+    - `trace_distances`: Trace distances to the target Gibbs state at each time step.
     - `time_steps`: Vector of time points where data was recorded.
-    - `hamiltonian`: The [`HamHam`](@ref) data used.
-    - `trotter`: The [`TrottTrott`](@ref) data used, in case of a TrotterDomain simulation.
-    - `config`: The given configuration used.
 """
-@kwdef struct HotAlgorithmResults{D, T<:AbstractFloat}
-    evolved_dm::Matrix{Complex{T}}
-    distances_to_gibbs::Vector{T}
+@kwdef struct DMSimulationResult{T<:AbstractFloat}
+    final_dm::Matrix{Complex{T}}
+    trace_distances::Vector{T}
     time_steps::Vector{T}
-    hamiltonian::HamHam{T}
-    trotter::Union{TrottTrott{T}, Nothing} = nothing
-    config::AbstractThermalizeConfig{D,T}
 end
 
 """
-        HotSpectralResults{D, T}
+        LindbladianResult{T}
 
     Results from the spectral analysis of the Liouvillian.
 
+    Slimmed version of the former HotSpectralResults: carries only the spectral
+    output, not the hamiltonian/trotter/config (callers already have those at the call site).
+
     # Fields
-    - `data`: The Liouvillian matrix.
+    - `liouvillian`: The Liouvillian matrix.
     - `fixed_point`: The steady state found via spectral analysis.
     - `gap_mode`: The next eigenmode after the steady state.
     - `spectral_gap`: The first non-zero eigenvalue (gap).
-    - `hamiltonian`: The [`HamHam`](@ref) data used.
-    - `trotter`: The [`TrottTrott`](@ref) data used, in case of a TrotterDomain simulation.
-    - `config`: The given configuration used.
 """
-@kwdef struct HotSpectralResults{D, T<:AbstractFloat}
-    data::Matrix{Complex{T}}  #! Remove when space matters
+@kwdef struct LindbladianResult{T<:AbstractFloat}
+    liouvillian::Matrix{Complex{T}}
     fixed_point::Matrix{Complex{T}}
     gap_mode::Matrix{Complex{T}}
     spectral_gap::Complex{T}
-    hamiltonian::HamHam{T}
-    trotter::Union{TrottTrott{T}, Nothing} = nothing
-    config::AbstractLiouvConfig{D,T}
 end
 
 struct LSIFramework{T}

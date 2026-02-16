@@ -28,7 +28,7 @@ using Dates
 export AbstractConfig, AbstractLiouvConfig, AbstractThermalizeConfig,
        LiouvConfig, LiouvConfigGNS, ThermalizeConfig, ThermalizeConfigGNS,
        HamHam, TrottTrott,
-       HotAlgorithmResults, HotSpectralResults,
+       LindbladianResult, DMSimulationResult,
        JumpOp
 
 # Types: Domains
