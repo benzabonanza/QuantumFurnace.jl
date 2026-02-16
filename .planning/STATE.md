@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.2 Multi-threading -- Phase 13 complete, Phase 14 ready
+**Current focus:** v1.2 Multi-threading -- Phase 14 complete, ready for Phase 15
 
 ## Current Position
 
-Phase: 13 of 18 (Multi-Threaded Trajectory Engine) -- COMPLETE
-Plan: 2/2 complete
-Status: Phase 13 verified and complete. Ready to plan Phase 14.
-Last activity: 2026-02-16 -- Phase 13 verified (passed: 11/11 must-haves, 4/4 success criteria)
+Phase: 14 of 18 (GNS Trajectory Path) -- COMPLETE
+Plan: 1/1 complete
+Status: Phase 14 complete. GNS trajectory path validated end-to-end with 284 tests passing.
+Last activity: 2026-02-16 -- Phase 14 Plan 01 complete (GNS trajectory validation)
 
-Progress: [███████████████████████░░░░░░░] 79% (30/TBD plans -- v1.0: 10, v1.1: 16+5q, v1.2: 4/TBD)
+Progress: [████████████████████████░░░░░░] 81% (31/TBD plans -- v1.0: 10, v1.1: 16+5q, v1.2: 5/TBD)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 35 (v1.0: 10, v1.1: 16, quick: 5, v1.2: 4)
+- Total plans completed: 36 (v1.0: 10, v1.1: 16, quick: 5, v1.2: 5)
 
 **By Milestone:**
 
@@ -27,7 +27,7 @@ Progress: [███████████████████████
 |-----------|--------|-------|----------|
 | v1.0 Trajectories | 1-5 | 10 | 2026-02-13 to 2026-02-14 |
 | v1.1 Reduce | 6-11 | 16 (+5 quick) | 2026-02-15 |
-| v1.2 Multi-threading | 12-18 | 4/TBD | 2026-02-15 to ... |
+| v1.2 Multi-threading | 12-18 | 5/TBD | 2026-02-15 to ... |
 
 ## Accumulated Context
 
@@ -36,6 +36,9 @@ Progress: [███████████████████████
 All decisions logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- Phase 14 Plan 01: GNS-to-Gibbs gap at sigma=0.1: EnergyDomain=0.081, BohrDomain=0.035 (Phase 18 baselines)
+- Phase 14 Plan 01: Trajectory convergence params: ntraj=1000, delta=0.01, mixing_time=5.0 -> 0.029 trace distance
+- Phase 14 Plan 01: Fixed @kwdef outer constructor bug for GNS config structs (pre-existing)
 - Phase 13 Plan 02: Performance test uses ntraj=200 x mixing_time=5.0 (not 50 x 1.0) to amortize threading overhead on dim=8
 - Phase 13 Plan 01: Added F,P type params to TrajectoryFramework{T,D,F,P} for zero-allocation hot path
 - Phase 13 Plan 01: Changed jumps from Vector{JumpOp} to Vector{JumpOp{Matrix{T}}} for concrete element access
@@ -62,5 +65,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Phase 13 verified and complete. Ready to plan Phase 14 (GNS Trajectory Path).
+Stopped at: Phase 14 complete. Ready for Phase 15.
 Resume file: None
