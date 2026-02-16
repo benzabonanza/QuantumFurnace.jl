@@ -63,7 +63,7 @@ function build_trotter_system(hamiltonian::HamHam, num_qubits::Int)
     n_jumps = length(jump_paulis) * num_qubits
     norm_factor = sqrt(n_jumps)
 
-    jumps = JumpOp{Matrix{ComplexF64}}[]
+    jumps = JumpOp[]
     for pauli in jump_paulis
         for site in 1:num_qubits
             op = Matrix(pad_term(pauli, num_qubits, site)) ./ norm_factor
@@ -82,7 +82,7 @@ Run a single adaptive trajectory experiment and save the result to BSON.
 Returns (result, convergence_data, wall_time_seconds).
 """
 function run_experiment(;
-    jumps::Vector{JumpOp{Matrix{ComplexF64}}},
+    jumps::Vector{JumpOp},
     hamiltonian::HamHam,
     trotter::TrottTrott,
     num_qubits::Int,
@@ -169,89 +169,94 @@ end
 # Main sweep
 # ============================================================================
 
-# Parameter grid
-system_sizes = [4, 6, 8]
-betas = [5.0, 10.0, 20.0]
+function main()
+    # Parameter grid
+    system_sizes = [4, 6, 8]
+    betas = [5.0, 10.0, 20.0]
 
-# Command-line filter: optionally restrict system sizes
-filter_sizes = isempty(ARGS) ? system_sizes : [parse(Int, a) for a in ARGS]
+    # Command-line filter: optionally restrict system sizes
+    filter_sizes = isempty(ARGS) ? system_sizes : [parse(Int, a) for a in ARGS]
 
-# Output directory
-project_root = dirname(dirname(@__FILE__))
-output_dir = joinpath(project_root, "experiments")
-mkpath(output_dir)
+    # Output directory
+    project_root = dirname(dirname(@__FILE__))
+    output_dir = joinpath(project_root, "experiments")
+    mkpath(output_dir)
 
-sweep_start = time()
-failed_experiments = String[]
-total_experiments = length(filter_sizes) * length(betas) * 3
-experiment_count = 0
+    sweep_start = time()
+    failed_experiments = String[]
+    total_experiments = length(filter_sizes) * length(betas) * 3
+    experiment_count = 0
 
-@printf("\n=== KMS-vs-GNS Sweep ===\n")
-@printf("System sizes: %s\n", string(filter_sizes))
-@printf("Betas: %s\n", string(betas))
-@printf("Total experiments: %d\n\n", total_experiments)
+    @printf("\n=== KMS-vs-GNS Sweep ===\n")
+    @printf("System sizes: %s\n", string(filter_sizes))
+    @printf("Betas: %s\n", string(betas))
+    @printf("Total experiments: %d\n\n", total_experiments)
 
-for n in filter_sizes
-    for beta in betas
-        mixing_time = 2.0 * beta
+    for n in filter_sizes
+        for beta in betas
+            mixing_time = 2.0 * beta
 
-        @printf("[%s] Building Hamiltonian: n=%d, beta=%.0f\n",
-            Dates.format(now(), "HH:MM:SS"), n, beta)
-        hamiltonian = build_heisenberg_xxx(n, beta)
-        trotter, jumps = build_trotter_system(hamiltonian, n)
+            @printf("[%s] Building Hamiltonian: n=%d, beta=%.0f\n",
+                Dates.format(now(), "HH:MM:SS"), n, beta)
+            hamiltonian = build_heisenberg_xxx(n, beta)
+            trotter, jumps = build_trotter_system(hamiltonian, n)
 
-        # 3 experiments per (n, beta) pair
-        experiments = [
-            (:KMS, 1.0/beta, "kms_n$(n)_beta$(Int(beta)).bson"),
-            (:GNS, 1.0/beta, "gns_sigma1_n$(n)_beta$(Int(beta)).bson"),
-            (:GNS, 0.5/beta, "gns_sigma05_n$(n)_beta$(Int(beta)).bson"),
-        ]
+            # 3 experiments per (n, beta) pair
+            experiments = [
+                (:KMS, 1.0/beta, "kms_n$(n)_beta$(Int(beta)).bson"),
+                (:GNS, 1.0/beta, "gns_sigma1_n$(n)_beta$(Int(beta)).bson"),
+                (:GNS, 0.5/beta, "gns_sigma05_n$(n)_beta$(Int(beta)).bson"),
+            ]
 
-        for (db_type, sigma, filename) in experiments
-            experiment_count += 1
-            label = "$(db_type) n=$(n) beta=$(Int(beta)) sigma=$(round(sigma; digits=4))"
-            @printf("[%s] (%d/%d) Starting: %s\n",
-                Dates.format(now(), "HH:MM:SS"), experiment_count, total_experiments, label)
+            for (db_type, sigma, filename) in experiments
+                experiment_count += 1
+                label = "$(db_type) n=$(n) beta=$(Int(beta)) sigma=$(round(sigma; digits=4))"
+                @printf("[%s] (%d/%d) Starting: %s\n",
+                    Dates.format(now(), "HH:MM:SS"), experiment_count, total_experiments, label)
 
-            try
-                result, conv_data, wall_time = run_experiment(;
-                    jumps=jumps,
-                    hamiltonian=hamiltonian,
-                    trotter=trotter,
-                    num_qubits=n,
-                    beta=beta,
-                    sigma=sigma,
-                    delta=DELTA,
-                    db_type=db_type,
-                    mixing_time=mixing_time,
-                    n_max=N_MAX,
-                    seed=SEED,
-                    output_path=joinpath(output_dir, filename),
-                    label=label,
-                )
+                try
+                    result, conv_data, wall_time = run_experiment(;
+                        jumps=jumps,
+                        hamiltonian=hamiltonian,
+                        trotter=trotter,
+                        num_qubits=n,
+                        beta=beta,
+                        sigma=sigma,
+                        delta=DELTA,
+                        db_type=db_type,
+                        mixing_time=mixing_time,
+                        n_max=N_MAX,
+                        seed=SEED,
+                        output_path=joinpath(output_dir, filename),
+                        label=label,
+                    )
 
-                status = conv_data.converged ? "CONVERGED" : "HIT CAP"
-                td = conv_data.trace_distances[end]
-                n_traj = result.trajectory_result.n_trajectories
-                @printf("  -> %s  td=%.4f  n_traj=%d  wall=%.1fs\n",
-                    status, td, n_traj, wall_time)
-            catch e
-                @printf("  -> FAILED: %s\n", sprint(showerror, e))
-                push!(failed_experiments, label)
+                    status = conv_data.converged ? "CONVERGED" : "HIT CAP"
+                    td = conv_data.trace_distances[end]
+                    n_traj = result.trajectory_result.n_trajectories
+                    @printf("  -> %s  td=%.4f  n_traj=%d  wall=%.1fs\n",
+                        status, td, n_traj, wall_time)
+                catch e
+                    @printf("  -> FAILED: %s\n", sprint(showerror, e))
+                    push!(failed_experiments, label)
+                end
             end
+        end
+    end
+
+    sweep_wall = time() - sweep_start
+    @printf("\n=== Sweep Complete ===\n")
+    @printf("Total wall time: %.1fs (%.1f min)\n", sweep_wall, sweep_wall / 60.0)
+    @printf("Experiments: %d/%d succeeded\n",
+        total_experiments - length(failed_experiments), total_experiments)
+
+    if !isempty(failed_experiments)
+        @printf("\nWARNING: %d experiments failed:\n", length(failed_experiments))
+        for label in failed_experiments
+            @printf("  - %s\n", label)
         end
     end
 end
 
-sweep_wall = time() - sweep_start
-@printf("\n=== Sweep Complete ===\n")
-@printf("Total wall time: %.1fs (%.1f min)\n", sweep_wall, sweep_wall / 60.0)
-@printf("Experiments: %d/%d succeeded\n",
-    total_experiments - length(failed_experiments), total_experiments)
-
-if !isempty(failed_experiments)
-    @printf("\nWARNING: %d experiments failed:\n", length(failed_experiments))
-    for label in failed_experiments
-        @printf("  - %s\n", label)
-    end
-end
+# Run the sweep
+main()
