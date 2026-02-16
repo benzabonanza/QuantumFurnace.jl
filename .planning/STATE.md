@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.2 Multi-threading -- Phase 15 in progress
+**Current focus:** v1.2 Multi-threading -- Phase 15 complete, ready for Phase 16
 
 ## Current Position
 
-Phase: 15 of 18 (Data Architecture)
-Plan: 1/2 complete
-Status: Phase 15 Plan 01 complete. ExperimentResult struct and save/load infrastructure implemented.
-Last activity: 2026-02-16 - Completed 15-01: ExperimentResult struct + save/load
+Phase: 15 of 18 (Data Architecture) -- COMPLETE
+Plan: 2/2 complete
+Status: Phase 15 complete. ExperimentResult struct, save/load, and comprehensive round-trip tests all verified. 364 tests pass.
+Last activity: 2026-02-16 - Completed 15-02: ExperimentResult serialization tests
 
-Progress: [█████████████████████████░░░░░] 83% (37/TBD plans -- v1.0: 10, v1.1: 16+5q, v1.2: 6/TBD)
+Progress: [██████████████████████████░░░░] 85% (38/TBD plans -- v1.0: 10, v1.1: 16+5q, v1.2: 7/TBD)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 37 (v1.0: 10, v1.1: 16, quick: 5, v1.2: 6)
+- Total plans completed: 38 (v1.0: 10, v1.1: 16, quick: 5, v1.2: 7)
 
 **By Milestone:**
 
@@ -27,7 +27,7 @@ Progress: [███████████████████████
 |-----------|--------|-------|----------|
 | v1.0 Trajectories | 1-5 | 10 | 2026-02-13 to 2026-02-14 |
 | v1.1 Reduce | 6-11 | 16 (+5 quick) | 2026-02-15 |
-| v1.2 Multi-threading | 12-18 | 6/TBD | 2026-02-15 to ... |
+| v1.2 Multi-threading | 12-18 | 7/TBD | 2026-02-15 to ... |
 
 ## Accumulated Context
 
@@ -36,6 +36,8 @@ Progress: [███████████████████████
 All decisions logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- Phase 15 Plan 02: 364 total tests (284 existing + 80 new) -- all round-trip, forward compat, integration tests pass
+- Phase 15 Plan 02: Integration test uses 3-qubit SMALL system with 10 trajectories (fast, proves full pipeline)
 - Phase 15 Plan 01: Dict-based BSON serialization for ExperimentResult (avoids parametric struct pitfalls)
 - Phase 15 Plan 01: TrajectoryResult embedded as field, domain singletons stored as strings
 - Phase 15 Plan 01: LibGit2 for git hash capture, Dates for timestamps (both stdlibs)
@@ -77,5 +79,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Completed 15-01-PLAN.md. Ready for 15-02.
+Stopped at: Completed 15-02-PLAN.md. Phase 15 fully complete. Ready for Phase 16.
 Resume file: None
