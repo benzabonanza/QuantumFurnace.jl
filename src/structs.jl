@@ -126,17 +126,6 @@ end
     w0::Union{T, Nothing} = nothing
     eta::Union{T, Nothing} = nothing
     num_trotter_steps_per_t0::Union{Int, Nothing} = nothing
-
-    function LiouvConfigGNS{D,T}(
-        num_qubits, with_coherent, with_linear_combination, domain,
-        beta, sigma, gaussian_parameters, a, b,
-        num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0
-    ) where {D, T}
-        with_coherent && error("GNS configs must have with_coherent=false")
-        new{D,T}(num_qubits, with_coherent, with_linear_combination, domain,
-               beta, sigma, gaussian_parameters, a, b,
-               num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0)
-    end
 end
 
 # Outer constructor: infer D from domain, T from beta, and forward to inner constructor.
@@ -147,6 +136,7 @@ function LiouvConfigGNS(
     beta::T, sigma, gaussian_parameters, a, b,
     num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0
 ) where {D <: AbstractDomain, T <: AbstractFloat}
+    with_coherent && error("GNS configs must have with_coherent=false")
     LiouvConfigGNS{D,T}(
         num_qubits, with_coherent, with_linear_combination, domain,
         beta, sigma, gaussian_parameters, a, b,
@@ -214,19 +204,6 @@ end
 
     mixing_time::T
     delta::T
-
-    function ThermalizeConfigGNS{D,T}(
-        num_qubits, with_coherent, with_linear_combination, domain,
-        beta, sigma, gaussian_parameters, a, b,
-        num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0,
-        mixing_time, delta
-    ) where {D, T}
-        with_coherent && error("GNS configs must have with_coherent=false")
-        new{D,T}(num_qubits, with_coherent, with_linear_combination, domain,
-               beta, sigma, gaussian_parameters, a, b,
-               num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0,
-               mixing_time, delta)
-    end
 end
 
 # Outer constructor: infer D from domain, T from beta, and forward to inner constructor.
@@ -236,6 +213,7 @@ function ThermalizeConfigGNS(
     num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0,
     mixing_time, delta
 ) where {D <: AbstractDomain, T <: AbstractFloat}
+    with_coherent && error("GNS configs must have with_coherent=false")
     ThermalizeConfigGNS{D,T}(
         num_qubits, with_coherent, with_linear_combination, domain,
         beta, sigma, gaussian_parameters, a, b,

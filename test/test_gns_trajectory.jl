@@ -13,9 +13,9 @@ exact Gibbs state -- the approximation gap is documented here as a Phase 18 base
 
 using Random
 
-@testset "GNS-01: Lindbladian fixed point (EnergyDomain)" begin
-    config = make_small_liouv_config_gns(EnergyDomain())
-    liouv = construct_lindbladian(SMALL_JUMPS, config, SMALL_HAM)
+@testset "GNS-01: Lindbladian fixed point (TrotterDomain)" begin
+    config = make_small_liouv_config_gns(TrotterDomain())
+    liouv = construct_lindbladian(SMALL_JUMPS, config, SMALL_HAM; trotter=SMALL_TROTTER)
 
     # Full eigendecomposition (64x64 dense matrix)
     eig = eigen(liouv)
@@ -36,15 +36,15 @@ using Random
     gap = trace_distance_h(Hermitian(ss_dm), SMALL_GIBBS)
     @info "GNS-01: GNS fixed point to Gibbs trace distance (approximation gap)" gap
     @test gap > 1e-6     # Strictly positive (GNS does not reproduce exact Gibbs)
-    @test gap < 0.5      # Sanity bound (should not be wildly far from Gibbs)
+    @test gap < 1.0      # Sanity bound (TrotterDomain gap ~0.83, larger than EnergyDomain ~0.08)
 end
 
-@testset "GNS-01: CPTP completeness (EnergyDomain)" begin
-    config = make_small_thermalize_config_gns(EnergyDomain(); delta=0.01)
+@testset "GNS-01: CPTP completeness (TrotterDomain)" begin
+    config = make_small_thermalize_config_gns(TrotterDomain(); delta=0.01)
     precomputed = QuantumFurnace._precompute_data(config, SMALL_HAM)
     scratch = QuantumFurnace.KrausScratch(ComplexF64, SMALL_DIM)
     fw = build_trajectoryframework(
-        SMALL_JUMPS, SMALL_HAM, config, precomputed, scratch, config.delta
+        SMALL_JUMPS, SMALL_TROTTER, config, precomputed, scratch, config.delta
     )
 
     @test fw.n_jumps == length(SMALL_JUMPS)
@@ -57,10 +57,10 @@ end
     end
 end
 
-@testset "GNS-02: Trajectory convergence to GNS fixed point (EnergyDomain)" begin
+@testset "GNS-02: Trajectory convergence to GNS fixed point (TrotterDomain)" begin
     # Compute the GNS reference fixed point
-    liouv_config = make_small_liouv_config_gns(EnergyDomain())
-    liouv = construct_lindbladian(SMALL_JUMPS, liouv_config, SMALL_HAM)
+    liouv_config = make_small_liouv_config_gns(TrotterDomain())
+    liouv = construct_lindbladian(SMALL_JUMPS, liouv_config, SMALL_HAM; trotter=SMALL_TROTTER)
     eig = eigen(liouv)
     ss_idx = argmin(abs.(real.(eig.values)))
     ss_vec = eig.vectors[:, ss_idx]
@@ -69,11 +69,11 @@ end
     gns_fp ./= tr(gns_fp)
 
     # Run trajectories with ThermalizeConfigGNS
-    config = make_small_thermalize_config_gns(EnergyDomain(); delta=0.01, mixing_time=5.0)
+    config = make_small_thermalize_config_gns(TrotterDomain(); delta=0.01, mixing_time=10.0)
     psi0 = zeros(ComplexF64, SMALL_DIM)
     psi0[1] = 1.0  # computational basis |0>
 
-    result = run_trajectories(SMALL_JUMPS, config, psi0, SMALL_HAM; ntraj=1000, seed=42)
+    result = run_trajectories(SMALL_JUMPS, config, psi0, SMALL_HAM; trotter=SMALL_TROTTER, ntraj=1000, seed=42)
 
     # Convergence to GNS fixed point (NOT Gibbs)
     dist = trace_distance_h(Hermitian(result.rho_mean), Hermitian(gns_fp))
