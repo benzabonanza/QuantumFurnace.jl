@@ -190,10 +190,20 @@ function _dict_to_config_kwargs(d::Dict, domain)
     kwargs[:sigma]                   = d[:sigma]
 
     # Optional fields (only set if present and non-nothing)
-    for key in (:gaussian_parameters, :a, :b, :num_energy_bits, :t0, :w0, :eta, :num_trotter_steps_per_t0)
+    for key in (:a, :b, :num_energy_bits, :t0, :w0, :eta, :num_trotter_steps_per_t0)
         val = get(d, key, nothing)
         if val !== nothing
             kwargs[key] = val
+        end
+    end
+
+    # gaussian_parameters: BSON stores tuples as arrays, so convert back
+    gp = get(d, :gaussian_parameters, nothing)
+    if gp !== nothing
+        if gp isa AbstractVector
+            kwargs[:gaussian_parameters] = (gp[1], gp[2])
+        else
+            kwargs[:gaussian_parameters] = gp
         end
     end
 
@@ -206,4 +216,181 @@ function _dict_to_config_kwargs(d::Dict, domain)
     end
 
     return kwargs
+end
+
+# ============================================================================
+# Metadata auto-capture
+# ============================================================================
+
+"""
+    _capture_metadata(; n_threads, wall_time_seconds, extra) -> Dict{Symbol, Any}
+
+Auto-capture run metadata: Julia version, timestamp, git hash, thread count, wall time.
+Merges any extra key-value pairs from the `extra` Dict.
+"""
+function _capture_metadata(;
+    n_threads::Int = Threads.nthreads(),
+    wall_time_seconds::Union{Float64, Nothing} = nothing,
+    extra::Dict{Symbol, Any} = Dict{Symbol, Any}(),
+)
+    meta = Dict{Symbol, Any}(
+        :julia_version     => string(VERSION),
+        :timestamp         => Dates.format(Dates.now(), dateformat"yyyy-mm-dd_HH:MM:SS"),
+        :git_hash          => _capture_git_hash(),
+        :n_threads         => n_threads,
+        :wall_time_seconds => wall_time_seconds,
+    )
+    merge!(meta, extra)
+    return meta
+end
+
+"""
+    _capture_git_hash() -> String
+
+Capture the current HEAD commit hash via LibGit2. Returns "unknown" on failure.
+"""
+function _capture_git_hash()
+    try
+        project_root = dirname(Pkg.project().path)
+        repo = LibGit2.GitRepo(project_root)
+        hash = string(LibGit2.head_oid(repo))
+        close(repo)
+        return hash
+    catch
+        return "unknown"
+    end
+end
+
+# ============================================================================
+# Hamiltonian parameter extraction
+# ============================================================================
+
+"""
+    _extract_hamiltonian_params(ham::HamHam) -> Dict{Symbol, Any}
+
+Extract the minimal set of Hamiltonian parameters needed for provenance/reconstruction.
+Does NOT store derived quantities (eigendecomposition, bohr_freqs, bohr_dict, gibbs).
+"""
+function _extract_hamiltonian_params(ham::HamHam)
+    return Dict{Symbol, Any}(
+        :num_qubits        => Int(log2(size(ham.data, 1))),
+        :base_coeffs       => ham.base_coeffs,
+        :base_terms        => [Matrix.(term_group) for term_group in ham.base_terms],
+        :disordering_term  => ham.disordering_term === nothing ? nothing : Matrix.(ham.disordering_term),
+        :disordering_coeffs => ham.disordering_coeffs,
+        :periodic          => ham.periodic,
+        :shift             => ham.shift,
+        :rescaling_factor  => ham.rescaling_factor,
+    )
+end
+
+# ============================================================================
+# Save / Load wrappers
+# ============================================================================
+
+"""
+    save_experiment(result::ExperimentResult, path::String) -> String
+
+Save an ExperimentResult to a BSON file at `path`, plus a companion `.txt` file.
+Creates parent directories as needed. Returns the path.
+"""
+function save_experiment(result::ExperimentResult, path::String)
+    d = _experiment_to_dict(result)
+    mkpath(dirname(path))
+    BSON.bson(path, d)
+    _write_companion_txt(result, replace(path, ".bson" => ".txt"))
+    return path
+end
+
+"""
+    save_experiment(result::ExperimentResult) -> String
+
+Save an ExperimentResult to the default results directory with an auto-generated filename.
+"""
+function save_experiment(result::ExperimentResult)
+    dir = _default_results_dir(result.config)
+    filename = _generate_experiment_filename(result.config)
+    path = joinpath(dir, filename)
+    return save_experiment(result, path)
+end
+
+"""
+    load_experiment(path::String) -> ExperimentResult
+
+Load an ExperimentResult from a BSON file.
+"""
+function load_experiment(path::String)
+    d = BSON.load(path)
+    return _dict_to_experiment(d)
+end
+
+# ============================================================================
+# Companion text file
+# ============================================================================
+
+"""
+    _write_companion_txt(result::ExperimentResult, path::String)
+
+Write a human-readable summary alongside the BSON file.
+Simple key-value format for quick browsing without Julia.
+"""
+function _write_companion_txt(result::ExperimentResult, path::String)
+    open(path, "w") do io
+        cfg  = result.config
+        meta = result.metadata
+
+        println(io, "=== QuantumFurnace Experiment Result ===")
+        println(io)
+        println(io, "Date:       ", get(meta, :timestamp, "unknown"))
+        println(io, "Git:        ", get(meta, :git_hash, "unknown"))
+        println(io, "Julia:      ", get(meta, :julia_version, "unknown"))
+        println(io)
+        println(io, "--- Config ---")
+        println(io, "Type:       ", (cfg isa Union{LiouvConfigGNS, ThermalizeConfigGNS}) ? "GNS" : "KMS")
+        println(io, "Kind:       ", (cfg isa AbstractThermalizeConfig) ? "thermalize" : "liouv")
+        println(io, "Domain:     ", typeof(cfg.domain))
+        println(io, "n_qubits:   ", cfg.num_qubits)
+        println(io, "beta:       ", cfg.beta)
+        println(io, "sigma:      ", cfg.sigma)
+        if cfg isa AbstractThermalizeConfig
+            println(io, "mix_time:   ", cfg.mixing_time)
+            println(io, "delta:      ", cfg.delta)
+        end
+        println(io)
+        println(io, "--- Results ---")
+        traj = result.trajectory_result
+        println(io, "N_traj:     ", traj.n_trajectories)
+        println(io, "Seed:       ", traj.seed)
+        println(io, "Threads:    ", get(meta, :n_threads, "unknown"))
+        println(io, "Wall time:  ", get(meta, :wall_time_seconds, "unknown"), " s")
+        println(io, "rho dim:    ", size(traj.rho_mean, 1), "x", size(traj.rho_mean, 2))
+    end
+end
+
+# ============================================================================
+# Filename generation and default paths
+# ============================================================================
+
+"""
+    _generate_experiment_filename(config::AbstractConfig) -> String
+
+Generate a descriptive filename: `{db}_{n}_{beta}_{domain}_{date}.bson`.
+"""
+function _generate_experiment_filename(config::AbstractConfig)
+    db_str     = (config isa Union{LiouvConfigGNS, ThermalizeConfigGNS}) ? "gns" : "kms"
+    domain_str = lowercase(replace(string(typeof(config.domain)), "Domain" => ""))
+    n_str      = "n$(config.num_qubits)"
+    beta_str   = "beta$(round(Int, config.beta))"
+    date_str   = Dates.format(Dates.now(), dateformat"yyyymmdd")
+    return "$(db_str)_$(n_str)_$(beta_str)_$(domain_str)_$(date_str).bson"
+end
+
+"""
+    _default_results_dir(config::AbstractConfig) -> String
+
+Return the default results subdirectory for the given config type.
+"""
+function _default_results_dir(config::AbstractConfig)
+    subdir = (config isa Union{LiouvConfigGNS, ThermalizeConfigGNS}) ? "approx_gns" : "kms"
+    return joinpath(dirname(Pkg.project().path), "results", subdir)
 end

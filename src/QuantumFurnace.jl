@@ -19,6 +19,8 @@ using Base.Threads
 using LinearMaps
 using SharedArrays
 using FINUFFT
+using LibGit2
+using Dates
 
 # --- Public API ---
 
@@ -37,6 +39,9 @@ export LSIFramework, compute_LSI_alpha2
 
 # Trajectory
 export TrajectoryFramework, TrajectoryResult, build_trajectoryframework, step_along_trajectory!
+
+# Results / Data persistence
+export ExperimentResult, save_experiment, load_experiment
 
 # Simulation
 export run_lindbladian, run_thermalization, construct_lindbladian,
@@ -92,5 +97,6 @@ include("furnace.jl")
 include("log_sobolev.jl")
 include("log_sobolev_manopt.jl")
 include("linearmaps_liouv.jl")
+include("results.jl")
 
 end
