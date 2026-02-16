@@ -294,4 +294,69 @@ using BSON
         @test endswith(gns_filename, ".bson")
     end
 
+    # -----------------------------------------------------------------------
+    # Test group 9: Integration - save/load real trajectory result
+    # -----------------------------------------------------------------------
+    @testset "Integration: save/load real trajectory result" begin
+        mktempdir() do tmpdir
+            # Use SMALL test fixtures (3-qubit system)
+            config = make_small_thermalize_config(TrotterDomain(); delta=0.01, mixing_time=1.0)
+            psi0 = zeros(ComplexF64, SMALL_DIM)
+            psi0[1] = 1.0  # computational basis |0>
+
+            traj_result = run_trajectories(
+                SMALL_JUMPS, config, psi0, SMALL_HAM;
+                trotter=SMALL_TROTTER, ntraj=10, seed=12345,
+            )
+
+            ham_params = QuantumFurnace._extract_hamiltonian_params(SMALL_HAM)
+            metadata = QuantumFurnace._capture_metadata(wall_time_seconds=0.5)
+
+            result = ExperimentResult(config, traj_result, ham_params, metadata)
+            path = joinpath(tmpdir, "test_integration.bson")
+            save_experiment(result, path)
+
+            loaded = load_experiment(path)
+
+            # Exact density matrix match (serialization only, no float computation)
+            @test isapprox(loaded.trajectory_result.rho_mean, traj_result.rho_mean; atol=0)
+            @test loaded.trajectory_result.n_trajectories == 10
+            @test loaded.trajectory_result.seed == 12345
+
+            # Config round-trip
+            @test loaded.config.beta == config.beta
+            @test loaded.config.sigma == config.sigma
+            @test loaded.config.domain isa TrotterDomain
+            @test loaded.config.num_qubits == 3
+
+            # Metadata has auto-captured fields
+            @test haskey(loaded.metadata, :julia_version)
+            @test haskey(loaded.metadata, :timestamp)
+            @test haskey(loaded.metadata, :git_hash)
+
+            # Hamiltonian params have reproduction-relevant keys
+            @test haskey(loaded.hamiltonian_params, :base_coeffs)
+            @test haskey(loaded.hamiltonian_params, :periodic)
+        end
+    end
+
+    # -----------------------------------------------------------------------
+    # Test group 10: Metadata auto-capture
+    # -----------------------------------------------------------------------
+    @testset "Metadata auto-capture" begin
+        meta = QuantumFurnace._capture_metadata(n_threads=2, wall_time_seconds=3.14)
+
+        @test haskey(meta, :julia_version)
+        @test haskey(meta, :timestamp)
+        @test haskey(meta, :git_hash)
+        @test haskey(meta, :n_threads)
+        @test haskey(meta, :wall_time_seconds)
+
+        @test meta[:julia_version] == string(VERSION)
+        @test meta[:n_threads] == 2
+        @test meta[:wall_time_seconds] == 3.14
+        @test meta[:git_hash] isa String
+        @test !isempty(meta[:timestamp])
+    end
+
 end  # @testset "ExperimentResult serialization"
