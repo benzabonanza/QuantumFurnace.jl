@@ -135,7 +135,9 @@ Plans:
   3. The full parameter grid (n=4,6,8 x beta=5,10,20 x {KMS, GNS@1/beta, GNS@0.5/beta}) executes using TrotterDomain with pre-built Hamiltonians
   4. Results demonstrate that KMS achieves lower final trace distance to Gibbs than GNS at sigma=1/beta (validating exact vs approximate detailed balance)
   5. All 18 experiment results are saved to BSON and loadable for analysis
-**Plans**: TBD
+**Plans**: 1 plan
+Plans:
+  - [ ] 18-01-PLAN.md -- Sweep script infrastructure + n=4 verification (build_heisenberg_xxx, build_trotter_system, run_experiment, 27-experiment parameter grid loop, .gitignore update)
 
 ## Progress
 
