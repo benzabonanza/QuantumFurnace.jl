@@ -218,6 +218,43 @@ function _dict_to_config_kwargs(d::Dict, domain)
     return kwargs
 end
 
+# ---------------------------------------------------------------------------
+# ConvergenceData <-> Dict conversion (for safe BSON serialization)
+# ---------------------------------------------------------------------------
+
+"""
+    _convergence_to_dict(conv::ConvergenceData) -> Dict{Symbol, Any}
+
+Convert a ConvergenceData to a plain Dict for BSON serialization.
+"""
+function _convergence_to_dict(conv::ConvergenceData)
+    return Dict{Symbol, Any}(
+        :batch_sizes           => conv.batch_sizes,
+        :cumulative_n_traj     => conv.cumulative_n_traj,
+        :trace_distances       => conv.trace_distances,
+        :observable_names      => conv.observable_names,
+        :observable_values     => conv.observable_values,
+        :observable_gibbs_values => conv.observable_gibbs_values,
+    )
+end
+
+"""
+    _dict_to_convergence(d::Dict) -> ConvergenceData
+
+Reconstruct a ConvergenceData from a Dict loaded from BSON.
+Uses `get` with default for forward compatibility.
+"""
+function _dict_to_convergence(d::Dict)
+    return ConvergenceData(
+        d[:batch_sizes],
+        d[:cumulative_n_traj],
+        d[:trace_distances],
+        d[:observable_names],
+        d[:observable_values],
+        get(d, :observable_gibbs_values, Float64[]),
+    )
+end
+
 # ============================================================================
 # Metadata auto-capture
 # ============================================================================
