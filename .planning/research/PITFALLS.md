@@ -1,517 +1,481 @@
-# Domain Pitfalls: Multi-Threaded Trajectory Engine, GNS Comparison, and Adaptive Sampling
+# Domain Pitfalls: Spectral Gap Estimation from Trajectory Observables
 
-**Domain:** Adding multi-threaded trajectory sampling, GNS-vs-KMS convergence experiments, adaptive sampling termination, and convergence tracking to an existing Julia quantum Gibbs sampling package
-**Researched:** 2026-02-15
-**Confidence:** HIGH (codebase-grounded analysis + verified Julia documentation + community-documented pitfalls)
+**Domain:** Adding spectral gap estimation via exponential fitting to observable decay curves from quantum trajectory simulations, cross-validated against exact Liouvillian eigenvalues
+**Researched:** 2026-02-16
+**Confidence:** HIGH (codebase analysis + established numerical analysis + quantum open systems literature)
 
 ---
 
 ## Critical Pitfalls
 
-Mistakes that cause rewrites, silently wrong results, or major performance regressions.
+Mistakes that cause wrong spectral gap estimates, silent numerical failures, or fundamentally flawed cross-validation.
 
 ---
 
-### Pitfall 1: BLAS Thread Oversubscription -- Julia Threads x OpenBLAS Threads = CPU Starvation
+### Pitfall 1: Confusing Complex Liouvillian Eigenvalue with Real Observable Decay Rate
 
 **What goes wrong:**
-OpenBLAS (Julia's default BLAS) spawns its own thread pool for matrix operations. When you run `julia -t 8` and OpenBLAS also uses 8 threads, every `mul!(ws.psi_tmp, per_op.K0, psi)` call in `step_along_trajectory!` launches 8 BLAS threads, and 8 Julia threads each do this concurrently, creating 64 OS threads competing for 8 cores. The result is *slower* than single-threaded execution. This is documented in [Julia issue #49455](https://github.com/JuliaLang/julia/issues/49455) where multi-threaded `mul!` was 73% slower than serial.
+The existing `run_lindbladian()` in `furnace.jl` (line 22) computes `spectral_gap = eigvals_near_zero[gap_index]`, which is a `Complex{T}` value -- the second eigenvalue of the Liouvillian superoperator. The Liouvillian is non-Hermitian, so its eigenvalues are generically complex: `lambda_2 = -gamma + i*omega` where `gamma > 0` is the decay rate and `omega` is an oscillation frequency. The observable decay rate from trajectory fitting will be a real number `gamma_fit`. The cross-validation must compare `gamma_fit` against `-Re(lambda_2)`, NOT against `abs(lambda_2)` or `real(lambda_2)`.
 
 **Why it happens:**
-The current codebase uses `mul!` extensively in the trajectory hot path (lines 491-507 of `trajectories.jl`: `mul!(ws.Rpsi, per_op.R, psi)`, `mul!(ws.psi_tmp, per_op.K0, psi)`, `mul!(ws.Rpsi, per_op.U_residual, psi)`). These are matrix-vector products (`gemv!`) which call into BLAS. For n=4 (dim=16), BLAS threading overhead exceeds the computation time. For n=8 (dim=256), each `gemv!` does 256x256 work -- still small enough that BLAS threading hurts more than helps when Julia threads handle the outer parallelism.
+The `LindbladianResult` struct stores `spectral_gap::Complex{T}` (structs.jl line 263). The existing simulation script `main_liouv.jl` (line 130) prints `abs(real(liouv_result.spectral_gap))`, which happens to be correct for the comparison but hides the sign convention. When writing the cross-validation, it is natural to compare `abs(spectral_gap)` (the modulus) against the fitted decay rate, which would be WRONG whenever `Im(lambda_2) != 0` because `|lambda_2| = sqrt(gamma^2 + omega^2) > gamma`.
+
+**The physics:**
+For a Lindbladian L, the semigroup `exp(Lt)` has eigenvalues `exp(lambda_k * t)`. For an observable `O`, the deviation from steady state decays as:
+
+```
+<O>(t) - <O>_ss = sum_k c_k * exp(lambda_k * t) = sum_k c_k * exp(-gamma_k * t) * exp(i * omega_k * t)
+```
+
+The REAL part of the eigenvalue controls the exponential envelope. If you measure `<O>(t)` from trajectories, the oscillations `exp(i*omega*t)` average out for a real-valued observable, and the dominant visible decay rate is `gamma_1 = -Re(lambda_2)`.
+
+However, for KMS-detailed-balanced Lindbladians (which QuantumFurnace implements), the Liouvillian is self-adjoint with respect to the GNS inner product, meaning all eigenvalues are real and non-positive. So for the exact KMS construction (BohrDomain), `Im(lambda_2) = 0`. But for approximate domains (Energy, Time, Trotter), the detailed balance is approximate, and eigenvalues may have small imaginary parts. The cross-validation must handle both cases.
 
 **Consequences:**
-- Multi-threaded trajectory runs are slower than single-threaded.
-- Performance puzzlement leads to removing threading ("it doesn't help"), when the fix is simply `BLAS.set_num_threads(1)`.
-- At n=12 (dim=4096), BLAS threading on individual `gemv!` calls *might* help, but only if Julia threads are few. The crossover is system-dependent.
+- Comparing `abs(spectral_gap)` to the fitted rate gives a systematic overestimate of agreement (the modulus is always >= the real part).
+- For TrotterDomain at coarse Trotter steps, `Im(lambda_2)` can be non-negligible, making the discrepancy significant.
+- False confidence in the cross-validation: you think trajectory-based and exact methods agree when they do not.
 
 **Prevention:**
-1. **Set `BLAS.set_num_threads(1)` at the entry point of the multi-threaded trajectory engine.** This is the standard pattern used by ITensors.jl, Krylov.jl, and other Julia HPC packages.
-2. Save and restore the original BLAS thread count: `old_blas_threads = BLAS.get_num_threads(); BLAS.set_num_threads(1); ... ; BLAS.set_num_threads(old_blas_threads)`.
-3. For n=12 on cluster, benchmark the crossover: try `BLAS.set_num_threads(1)` with `julia -t 64` vs `BLAS.set_num_threads(4)` with `julia -t 16`. The optimal split depends on the ratio of trajectory-level parallelism to per-trajectory BLAS work.
-4. The codebase already has a TODO comment at `jump_workers.jl:464`: `#TODO: test it; set BLAS threads to 1, let julia threads be more.` -- this confirms the author already identified the issue.
+1. Define the comparison quantity explicitly: `exact_gap = -real(liouv_result.spectral_gap)`. Assert it is positive.
+2. Also record `imag(liouv_result.spectral_gap)` and flag when `|Im/Re| > threshold` (e.g., 0.1), because a large imaginary part means observable oscillations that complicate exponential fitting.
+3. For BohrDomain (exact KMS), assert `abs(imag(spectral_gap)) < 1e-10` as a sanity check.
+4. When the imaginary part is significant, the observable time series will show damped oscillations, not pure exponential decay. The fitting model must account for this (see Pitfall 3).
 
 **Detection:**
-- `htop` shows many more threads than expected.
-- Multi-threaded runs are *slower* than single-threaded (anti-scaling).
-- `BLAS.get_num_threads()` returns > 1 when Julia is started with `-t N`.
+- Print both `real(spectral_gap)` and `imag(spectral_gap)` in every cross-validation.
+- Test: for BohrDomain, verify `imag(spectral_gap) ~= 0`.
+- Test: for TrotterDomain with fine Trotter steps, verify `|Im/Re| < 0.01`.
 
-**Phase to address:** Phase 1 (Multi-threaded trajectory engine) -- must be set before any performance benchmarking.
+**Phase to address:** Cross-validation phase -- the very first thing to get right when defining the comparison metric.
 
 ---
 
-### Pitfall 2: Shared Mutable TrajectoryWorkspace Across Threads -- Data Race in the Hot Path
+### Pitfall 2: Observable Basis Mismatch -- Eigenbasis vs Computational vs Trotter Basis
 
 **What goes wrong:**
-`TrajectoryFramework` contains a single mutable `ws::TrajectoryWorkspace{T}` (defined at `trajectories.jl:46`) with shared buffers `jump_oft`, `psi_tmp`, and `Rpsi`. The current `run_trajectories` function (line 383) uses a single `fw` and loops sequentially over trajectories. If this loop is naively parallelized with `@threads for trajectory in 1:ntraj`, all threads write to the same `ws.psi_tmp`, `ws.Rpsi`, and `ws.jump_oft` concurrently. This is a data race that produces silently wrong results (corrupted state vectors, wrong jump probabilities, incorrect density matrices).
+The total magnetization observable `M_z = sum_i Z_i` is naturally defined in the computational basis. The trajectory simulation evolves `psi` in the Hamiltonian eigenbasis (for Energy/Time domains) or Trotter eigenbasis (for TrotterDomain). If the observable matrix is constructed in the computational basis but applied to `psi` in the eigenbasis, `<psi|M_z_comp|psi>` gives a wrong expectation value. The decay curve of this wrong observable decays at the wrong rate, and the fitted spectral gap is meaningless.
 
 **Why it happens:**
-The `TrajectoryFramework` struct was designed for single-threaded execution. The workspace is embedded in the framework to avoid per-trajectory allocation. When parallelizing, the natural instinct is to parallelize the outer loop without realizing the workspace is shared mutable state.
+This is the EXACT same class of bug that caused the v1.2 quick-task 20 crisis: the GNS TrotterDomain test compared a Trotter-basis fixed point against an energy-eigenbasis Gibbs state, producing a spurious gap of 0.83 instead of 0.0807. The existing `build_convergence_observables()` in `convergence.jl` (lines 25-46) correctly transforms ZZ operators into the eigenbasis via `V' * O_comp * V`. The `build_convergence_observables_trotter()` (lines 56-77) correctly uses `V_T' * O_comp * V_T`. But when building a NEW observable (total magnetization), there is high risk of forgetting this transform.
+
+**The insidious part:**
+If the observable is diagonal in the eigenbasis (like the Hamiltonian `H`), the computational-basis and eigenbasis representations differ only by the unitary transform, and the EXPECTATION VALUE is basis-independent for the correct `psi`. But the MATRIX REPRESENTATION used in `_accumulate_measurements!` (trajectories.jl line 325: `mul!(tmp, observables[i], psi)`) must be in the SAME basis as `psi`. Since `psi` is in the eigenbasis, `observables[i]` must also be in the eigenbasis.
+
+For total magnetization `M_z = sum_i Z_i`:
+- Computational basis: `M_z_comp = sum_i pad_term([Z], num_qubits, i)`
+- Eigenbasis: `M_z_eigen = V' * M_z_comp * V` where `V = hamiltonian.eigvecs`
+- Trotter basis: `M_z_trotter = V_T' * M_z_comp * V_T` where `V_T = trotter.eigvecs`
 
 **Consequences:**
-- Corrupted trajectory results that *look* reasonable (density matrix is still approximately Hermitian, trace approximately 1) but converge to wrong steady state.
-- Non-deterministic behavior that changes with thread count, timing, and system load.
-- Extremely difficult to diagnose because the race condition is probabilistic and the corruption is small per-step.
+- The observable time series looks physically plausible (starts near zero, evolves to some value) but the values are wrong.
+- The fitted decay rate does not correspond to any physical decay mode.
+- Cross-validation against exact spectral gap fails, and the failure is attributed to "statistical noise" rather than a basis error.
+- This bug is particularly hard to catch because `<M_z>` for a random initial state is close to zero in any basis for the Heisenberg chain (symmetry), so the wrong-basis result might pass superficial sanity checks.
 
 **Prevention:**
-1. **Create per-thread workspaces.** Allocate `nthreads()` copies of `TrajectoryWorkspace` and index by `threadid()` or use `@spawn`-based task parallelism with task-local workspaces.
-2. Better pattern: allocate a `Vector{TrajectoryWorkspace}` of length `nthreads()` and pass `ws_pool[threadid()]` into the step function.
-3. **Do NOT share `psi` across threads.** Each thread must have its own state vector. The current `psi = copy(psi0)` on line 384 must move inside the parallelized loop, creating per-thread copies.
-4. The read-only data in `TrajectoryFramework` (per_operator, jumps, precomputed_data, config) is safe to share -- only `ws` is mutable.
-5. Preferred Julia pattern: use `Threads.@spawn` with closures that capture per-task workspace, rather than `@threads` with `threadid()` indexing (which is fragile if tasks migrate between threads).
+1. Follow the EXISTING pattern from `build_convergence_observables()`: always transform `O_eigen = V' * O_comp * V`.
+2. Build the total magnetization observable in the SAME function that builds ZZ observables, using the same basis transform.
+3. Add a regression test: for the eigenbasis energy observable `H_eigen`, verify that `tr(gibbs * H_eigen)` matches the analytical Gibbs energy. Then do the same for `M_z_eigen`: verify `tr(gibbs * M_z_eigen) = sum_i <Z_i>_gibbs`. This catches basis mismatches.
+4. For TrotterDomain: use `build_convergence_observables_trotter()` (which uses `V_T`) rather than `build_convergence_observables()` (which uses `V`). Do NOT mix them.
 
 **Detection:**
-- Results change when thread count changes (even with same RNG seed per thread).
-- `@assert` on state vector norm fails sporadically.
-- ThreadSanitizer (not available for Julia) would catch this, but manual code review is the primary defense.
+- Compare `<M_z>` from trajectory vs `tr(gibbs * M_z)` analytically. If they disagree at convergence, suspect basis mismatch.
+- For the Heisenberg chain WITHOUT disorder, `<M_z>_gibbs = 0` by SU(2) symmetry. If `<M_z>` from trajectories converges to a nonzero value for the clean chain, something is wrong.
 
-**Phase to address:** Phase 1 (Multi-threaded trajectory engine) -- core design decision, must be right from the start.
+**Phase to address:** Observable construction phase -- before ANY trajectory runs with the new observable.
 
 ---
 
-### Pitfall 3: Global RNG in step_along_trajectory! -- Non-Reproducible and Non-Thread-Safe Random Sampling
+### Pitfall 3: Fitting Single Exponential to Multi-Exponential Decay
 
 **What goes wrong:**
-The current `step_along_trajectory!` calls `rand(1:fw.n_jumps)` and `rand() * total_weight` (lines 483, 517, 627, 661 of `trajectories.jl`) using Julia's global default RNG. When multiple threads call `rand()` concurrently:
-1. The global RNG's state is task-local (since Julia 1.7), so concurrent tasks get different streams. But the stream assignment depends on task scheduling order, which is non-deterministic. Result: the same seed produces different results on different runs.
-2. Reproducibility across different thread counts is impossible because task creation order changes the parent RNG state (documented in [Julia issue #49522](https://github.com/JuliaLang/julia/issues/49522)).
+The observable decay `<O>(t) - <O>_ss` is a superposition of ALL Liouvillian eigenmodes, not just the slowest:
+
+```
+<O>(t) - <O>_ss = c_1 * exp(-gamma_1 * t) + c_2 * exp(-gamma_2 * t) + ... + noise
+```
+
+where `gamma_1 < gamma_2 < ...` are the decay rates (negative real parts of Liouvillian eigenvalues). The spectral gap is `gamma_1`. Fitting a single exponential `A * exp(-gamma * t)` to this data gives a `gamma_fit` that is BIASED HIGH -- it is a weighted average of all decay rates, dominated by the fast-decaying components at short times and the slow component at long times.
 
 **Why it happens:**
-Julia's `TaskLocalRNG` is designed so that `rand()` is thread-safe (no race conditions), but it is NOT reproducible across different threading configurations. Each spawned task gets a deterministically-derived child RNG from the parent, but the order of task spawning depends on the parallel decomposition, which depends on `nthreads()`.
+For a general initial state (like the maximally mixed state) and a general observable (like total magnetization), the coefficients `c_k` can be non-negligible for many eigenmodes. The single-exponential fit minimizes the sum of squared residuals over the entire time range, which means:
+- At short times: the fast modes dominate, pulling `gamma_fit` up.
+- At long times: only the slowest mode survives, but the signal is buried in noise.
+- The least-squares optimum is a compromise that overestimates the spectral gap.
+
+For the Heisenberg chain at n=4 (dim=16, Liouvillian dim=256), there are 255 non-zero eigenvalues. The spectral gap `gamma_1` might be ~0.08 while the second eigenvalue `gamma_2` might be ~0.15 -- a factor of 2 larger. The observable `M_z` will have overlap with both modes.
 
 **Consequences:**
-- Cannot reproduce results from a paper by changing thread count (e.g., laptop has 4 threads, cluster has 64).
-- Cannot bisect a bug by varying thread count while holding the random stream fixed.
-- Test suite becomes flaky when CI runners have varying thread counts.
-- The existing use of `StableRNGs` in tests (see `Project.toml` test deps) provides cross-version stability but does NOT solve multi-threading reproducibility.
+- The fitted spectral gap is systematically too large (optimistic).
+- Cross-validation against exact eigenvalue `gamma_1` fails with the fit consistently above the true value.
+- The overestimate gets WORSE with fewer trajectories (more noise at long times, fit dominated by short-time behavior).
 
 **Prevention:**
-1. **Pass explicit per-trajectory RNG objects** derived from a master seed: `rng_per_traj = [StableRNG(master_seed + i) for i in 1:ntraj]` or `Xoshiro(master_seed + i)`.
-2. Modify `step_along_trajectory!` to accept an `rng::AbstractRNG` parameter: `a = rand(rng, 1:fw.n_jumps)` instead of `a = rand(1:fw.n_jumps)`.
-3. Seed derivation must be deterministic and independent of thread count. The pattern `seed_i = hash(master_seed, i)` ensures trajectory `i` always uses the same stream regardless of which thread runs it.
-4. Do NOT use `Random.seed!(seed)` + `TaskLocalRNG` for multi-threaded code. This seeds only the current task's RNG, not child tasks.
-5. For paper-quality results, store the per-trajectory seeds alongside the results so any trajectory can be replayed exactly.
+1. **Use late-time fitting only.** Discard the initial transient (t < t_cutoff) and fit only the long-time tail where the slowest mode dominates. The cutoff should be `t_cutoff ~ 3 / gamma_2` (roughly 3 decay times of the second mode). For n=4, this is estimable from the exact Liouvillian. For larger systems, start with a conservative cutoff (e.g., discard the first 50% of the time series).
+2. **Fit log-linear.** Plot `log|<O>(t) - <O>_ss|` vs `t`. At late times this should be linear with slope `-gamma_1`. A linear fit to the log-data in the tail region is more robust than nonlinear exponential fitting.
+3. **Use the exact steady-state value.** Subtract `<O>_ss = tr(gibbs * O)` (known analytically from the Gibbs state) rather than fitting it as a free parameter. This eliminates one degree of freedom and prevents the fitter from absorbing baseline errors into the decay rate.
+4. **Multi-exponential awareness.** If cross-validation fails, try a two-exponential fit `c_1 * exp(-gamma_1 * t) + c_2 * exp(-gamma_2 * t)` and check if `gamma_1` from the two-exponential fit matches the exact spectral gap. But beware: two-exponential fitting is ill-conditioned (see Pitfall 5).
+5. **Observable choice matters.** Choose observables with maximal overlap with the slowest eigenmode. The energy observable `<H>` may or may not have good overlap. The optimal observable is the gap mode itself (`liouv_result.gap_mode`), but this is only known from the exact diagonalization, creating a circularity. In practice, try multiple observables and see which gives the most consistent gap estimate.
 
 **Detection:**
-- Run the same simulation twice with same master seed but different `-t` values. If results differ, reproducibility is broken.
-- Check that `run_trajectories(..., ntraj=1000, seed=42)` on `-t 1` gives the same `rho_mean` as on `-t 8`.
+- Fitted gap is consistently 20-100% larger than the exact gap.
+- Residuals show systematic curvature (not random scatter) at early times.
+- Changing the fit window (start time) changes the fitted gap significantly.
 
-**Phase to address:** Phase 1 (Multi-threaded trajectory engine) -- API design must include RNG parameters from the start.
+**Phase to address:** Exponential fitting phase -- core fitting methodology.
 
 ---
 
-### Pitfall 4: False Sharing on Per-Thread Density Matrix Accumulation
+### Pitfall 4: Trajectory Noise Destroying the Late-Time Signal
 
 **What goes wrong:**
-The natural multi-threading pattern accumulates trajectory results into a shared `rho_mean` matrix using atomic operations or a lock: `lock(lk); rho_mean .+= psi * psi'; unlock(lk)`. Even without a lock, if per-thread partial sums are stored in adjacent memory (e.g., `rho_partials = [zeros(dim,dim) for _ in 1:nthreads()]`), the matrices for different threads may share cache lines (64 bytes = 4 ComplexF64 values). When thread 1 writes to `rho_partials[1][end, end]` and thread 2 writes to `rho_partials[2][1, 1]`, false sharing forces cache line invalidation between cores, destroying parallel speedup.
+At late times `t >> 1/gamma_1`, the observable deviation `<O>(t) - <O>_ss` is exponentially small. With `N_traj` trajectories, the statistical error on `<O>(t)` scales as `sigma(t) / sqrt(N_traj)`, where `sigma(t)` is the single-trajectory variance. At late times, the signal `|c_1 * exp(-gamma_1 * t)|` drops below the noise floor `sigma / sqrt(N_traj)`. Beyond this point, the data is pure noise, and including it in the fit corrupts the estimate.
+
+For the QuantumFurnace setup:
+- Each trajectory is a single pure-state evolution. The variance of `<psi|O|psi>` for a single trajectory is `<O^2> - <O>^2`, which is O(1) for bounded observables like `M_z` (eigenvalues in [-n, +n]).
+- The signal decays as `~exp(-gamma_1 * t)` where `gamma_1 ~ 0.08` for n=4 Heisenberg.
+- After time `t = 50`, the signal is `exp(-4) ~ 0.018`. With 1000 trajectories, noise is `1/sqrt(1000) ~ 0.032`. The signal is already buried.
 
 **Why it happens:**
-Julia's default allocator does not guarantee cache-line alignment between array allocations. For small matrices (n=4, dim=16, 16x16 ComplexF64 = 4 KB), different per-thread accumulator matrices may land within the same cache line at their boundaries. The effect is most severe when `dim` is small (n=4: 4 KB per matrix, cache line covers ~1.5% of the matrix).
+This is the fundamental signal-to-noise problem of extracting slow decay rates from stochastic simulations. It is well-known in quantum Monte Carlo for imaginary-time correlation functions (see Sandvik and Vidal, "Excitation Gap from Optimized Correlation Functions"). The problem is intrinsic to the method, not a bug.
 
 **Consequences:**
-- Multi-threaded accumulation shows sub-linear or no speedup despite embarrassingly parallel work.
-- Performance varies unpredictably with `nthreads()` and allocation patterns.
-- The issue is invisible in profiling (no locks, no contention visible) -- only cache miss counters reveal it.
+- If fitting includes the noisy tail, the fitter either: (a) finds a spurious minimum far from the true gap, or (b) converges to a shallow minimum with enormous uncertainty.
+- The fitted `gamma_fit` can be arbitrarily wrong if the noise-dominated region is large relative to the signal region.
+- Bootstrap confidence intervals on the fit become huge, but only if computed correctly (see Pitfall 8).
 
 **Prevention:**
-1. **Use per-thread accumulators with a final reduction** instead of writing to shared memory:
-   ```julia
-   rho_partials = [zeros(ComplexF64, dim, dim) for _ in 1:nthreads()]
-   @threads for i in 1:ntraj
-       # ... run trajectory ...
-       rho_partials[threadid()] .+= psi * psi'
-   end
-   rho_mean = sum(rho_partials) ./ ntraj
-   ```
-2. For n>=6 (dim>=64, matrix = 64 KB), false sharing is negligible because each matrix spans many cache lines. Focus prevention effort on n=4 benchmarks.
-3. Padding between per-thread allocations (allocate each in a separate array with 64-byte alignment) eliminates the issue but is rarely needed for matrices >= 4 KB.
-4. Prefer the `@spawn`-per-batch pattern where each task accumulates its own local `rho_batch` and returns it, then the main thread sums the batch results. This naturally separates memory.
+1. **Determine the noise floor empirically.** Compute `std(<O>(t))` across trajectories at each time point. The noise floor is `std / sqrt(N_traj)`. Exclude time points where `|<O>(t) - <O>_ss| < k * noise_floor` (e.g., k=2 or k=3).
+2. **Use weighted least squares.** Weight each data point by `1 / variance(t)`. This automatically downweights the noisy tail. LsqFit.jl supports the `wt` parameter for weighted fitting.
+3. **Increase trajectory count.** The noise floor drops as `1/sqrt(N_traj)`. To extend the usable time range by a factor of 2, you need 4x more trajectories (the signal drops by `exp(-gamma_1 * Delta_t) ~ exp(-0.08 * 25) ~ 0.14` while noise drops by `1/2`).
+4. **Use coarser time binning at late times.** Average the observable over wider time windows at late times to reduce noise. This is equivalent to a running average, which does NOT bias the decay rate.
+5. **For cross-validation at n=4,6 (where exact gap is known):** compute the expected signal-to-noise ratio at the planned trajectory count, and verify it is sufficient to resolve the gap before running the full experiment.
 
 **Detection:**
-- `perf stat` (Linux) shows high L1d cache miss rate.
-- Speedup plateaus or degrades beyond 2-4 threads for small systems.
-- Speedup is fine for n=8 but poor for n=4 with the same code.
+- Plot `|<O>(t) - <O>_ss|` on a log scale alongside the noise floor `std/sqrt(N_traj)`. The signal should be well above the noise for at least ~3 decay times (`3/gamma_1`).
+- If the error bars on the fit exceed 50% of the fitted value, the signal-to-noise is inadequate.
+- The fit residuals in the late-time region should be consistent with random noise, not systematic.
 
-**Phase to address:** Phase 1 (Multi-threaded trajectory engine) -- design the accumulation pattern correctly.
-
----
-
-### Pitfall 5: KMS-vs-GNS "Comparison" Using Different Sigma Values Without Realizing It Changes the Physics
-
-**What goes wrong:**
-The KMS transition function (`_pick_transition_kms` in `energy_domain.jl:9-46`) uses a shifted argument `w + beta*sigma^2/2` in the exponential, while the GNS transition function (`_pick_transition_gns` in `energy_domain.jl:64-103`) uses the unshifted argument `w`. This means that for the same `(beta, sigma, a, b)` parameters, the two lines have different effective temperature-dependent behavior. A "comparison" that uses the same sigma for both lines is comparing apples to oranges: the KMS line at `sigma=0.1` and the GNS line at `sigma=0.1` are implementing physically different Lindbladians with different spectral gaps, different mixing times, and different fixed-point approximation errors.
-
-**Why it happens:**
-The mathematical difference is by design (KMS-DB uses the shifted gamma, GNS-DB uses the unshifted gamma satisfying KMS condition). But when setting up comparison experiments, it is natural to use the same config parameters for both lines: `LiouvConfig(sigma=0.1, ...)` vs `LiouvConfigGNS(sigma=0.1, ...)`. The sigma appears as the same parameter but its role in the transition function differs.
-
-**Consequences:**
-- Paper results that claim "KMS converges faster than GNS" (or vice versa) may be an artifact of comparing at different effective resolutions.
-- Referee asks "did you control for the effective smoothing parameter?" and the answer is no.
-- Results do not reproduce when using a different Hamiltonian because the sigma-shift effect depends on the spectral gap.
-
-**Prevention:**
-1. **Define a "fair comparison" protocol** before running experiments:
-   - Option A: **Same sigma** -- accept that the Lindbladians are different and the comparison is "at fixed algorithmic parameter sigma, which line converges faster?"
-   - Option B: **Matched spectral gap** -- tune sigma_GNS so that the GNS Lindbladian has the same spectral gap as the KMS Lindbladian. This is fair but expensive (requires computing the spectral gap for each).
-   - Option C: **Same computational budget** -- run both for the same wall-clock time (or same number of CPTP map applications) and compare trace distance to Gibbs. This is the most operationally meaningful comparison.
-2. **Document which comparison protocol is used** in every experiment.
-3. **Plot both the fixed-point approximation error** (`||rho_fixedpoint - gibbs||`) and the **convergence rate** separately. KMS may have a better fixed point (exact with coherent term) but slower mixing, or vice versa.
-
-**Detection:**
-- Large discrepancy in mixing times between KMS and GNS that reverses when sigma is changed.
-- GNS fixed point is further from Gibbs than KMS (expected, since GNS omits the coherent correction), but the trajectory comparison does not account for this.
-- Results flip when switching Hamiltonian.
-
-**Phase to address:** Phase for KMS-vs-GNS experiments -- must define protocol before running any comparison.
-
----
-
-### Pitfall 6: Comparing KMS-vs-GNS Convergence Without Separating Fixed-Point Error from Mixing Rate
-
-**What goes wrong:**
-The KMS Lindbladian (with coherent correction) has the exact Gibbs state as its fixed point. The GNS Lindbladian (without coherent correction, enforced by `ThermalizeConfigGNS` constructor constraint `with_coherent && error(...)`) has an *approximate* fixed point. When measuring "convergence to Gibbs state" as trace distance over time, the KMS line eventually reaches `distance ~ 0` while the GNS line saturates at `distance ~ epsilon_fixedpoint > 0`. This makes KMS look superior, but the mixing *rate* (spectral gap) might actually favor GNS for certain systems.
-
-**Why it happens:**
-The GNS construction (CKBG23) satisfies the KMS detailed balance condition in the transition weights but omits the Lamb shift (coherent B term). This means its fixed point is the Gibbs state only in the `sigma -> 0` limit. For finite sigma, the fixed point deviates from Gibbs by `O(sigma)`. The KMS construction (CKG23) adds the coherent correction to achieve exact detailed balance. Comparing convergence to Gibbs mixes two effects: (1) how fast the Lindbladian mixes (spectral gap), and (2) how close the fixed point is to Gibbs (approximation error).
-
-**Consequences:**
-- The paper cannot make claims about relative mixing rates if the convergence metric conflates mixing with fixed-point accuracy.
-- At small sigma (where both fixed points are close to Gibbs), the comparison is fair for mixing rate. At large sigma, the GNS line is penalized by its worse fixed point.
-- Reviewers familiar with the Chen et al. papers will flag this immediately.
-
-**Prevention:**
-1. **Separate the two metrics:**
-   - **Mixing rate:** Compute the spectral gap of each Lindbladian via `run_lindbladian`. Report `gap_KMS` vs `gap_GNS` directly.
-   - **Fixed-point quality:** Compute `||rho_fixedpoint_KMS - gibbs||` and `||rho_fixedpoint_GNS - gibbs||` via eigenanalysis of the Lindbladian.
-   - **Trajectory convergence:** Measure trace distance to *each line's own fixed point*, not to the Gibbs state. This isolates the mixing rate from the fixed-point error.
-2. Plot convergence as `log(||rho(t) - rho_fixedpoint||)` vs `t`. The slope gives the mixing rate. The y-intercept is the initial distance. The x-intercept is meaningless if measured against Gibbs for GNS.
-3. For the paper, include a panel showing `||rho_fixedpoint - gibbs||` vs sigma for both lines. This demonstrates the cost of omitting the coherent correction.
-
-**Detection:**
-- GNS convergence curve flattens at a nonzero trace distance while KMS reaches machine precision.
-- The "plateau" level for GNS changes with sigma -- this is the fixed-point error, not a sampling artifact.
-- Removing the sigma-dependence (setting sigma very small) makes both lines converge to the same point.
-
-**Phase to address:** Phase for KMS-vs-GNS experiments -- analysis methodology, must precede result interpretation.
-
----
-
-### Pitfall 7: Adaptive Sampling Terminates Prematurely Due to Autocorrelation in Sequential Trajectories
-
-**What goes wrong:**
-An adaptive stopping criterion checks whether the standard error of the trajectory-averaged observable has dropped below a threshold: `se = std(observations) / sqrt(n_traj)`. If `se < epsilon`, stop sampling. But consecutive trajectories started from the same initial state `psi0` and evolved for the same total time produce *correlated* final states when the mixing time is not much longer than the total evolution time. The naive standard error estimate assumes i.i.d. samples and underestimates the true uncertainty by a factor of `sqrt(tau_corr)`, where `tau_corr` is the integrated autocorrelation time.
-
-**Why it happens:**
-In the current `run_trajectories` (line 383-396), each trajectory starts from `psi0` and evolves independently. If the system has not fully mixed by `total_time`, the final states cluster around the transient-evolved state rather than sampling the full steady-state distribution. The samples ARE independent (different random streams), but they are all biased toward the same transient regime. The standard error of the mean correctly reflects sampling noise, but the *mean itself* is biased. The adaptive criterion detects low variance (all trajectories are close to each other) and terminates, not realizing that the trajectories are close to each other because they are all close to the wrong answer.
-
-**Consequences:**
-- Adaptive sampling terminates with a "converged" flag but the result is far from the steady state.
-- The reported uncertainty is small but does not include the systematic bias from insufficient mixing.
-- More trajectories do NOT fix this -- the bias is a property of `total_time`, not `ntraj`.
-
-**Prevention:**
-1. **Never use convergence of the trajectory average as evidence of convergence to the steady state.** The two are completely different:
-   - "Trajectory average has converged" = sampling noise is small = you have enough trajectories for THIS total_time.
-   - "Result is close to steady state" = total_time is long enough = you need to check against a known steady-state metric.
-2. **Use an observable-based convergence criterion** instead of a statistical one: track `||rho(t) - rho(t-Delta)|| / ||rho(t-Delta)||` over macro time windows. Convergence to the steady state means this ratio drops below a threshold. This is what `run_thermalization` already does (checking distance to Gibbs at each step, line 143-150 in `furnace.jl`).
-3. **For adaptive trajectory count at fixed total_time:** use batch means with gap. Run `B` batches of `M` trajectories each. Compute `rho_batch_b` for each batch. The adaptive criterion is `std([||rho_batch_b - rho_running_mean||^2 for b]) / sqrt(B) < epsilon`. This gives a proper estimate of the mean's uncertainty.
-4. **For adaptive total_time at fixed trajectory count:** run trajectories to time `T`, compute `rho_avg(T)`. Then extend all trajectories to time `2T` and compute `rho_avg(2T)`. If `||rho_avg(2T) - rho_avg(T)|| < threshold`, the total time is sufficient. This is a time-doubling protocol.
-
-**Detection:**
-- Convergence criterion triggers very quickly (e.g., after 50 trajectories) for a system that is known to have a long mixing time.
-- Increasing total_time changes the "converged" result significantly.
-- The "converged" result depends on `psi0` (if truly at steady state, it should not).
-
-**Phase to address:** Phase for adaptive sampling -- core algorithm design.
+**Phase to address:** Trajectory runner and fitting phases -- must plan trajectory count and time range together.
 
 ---
 
 ## Moderate Pitfalls
 
-Mistakes that cause significant debugging time or subtle performance issues.
+Mistakes that cause significant debugging time, wrong intermediate results, or wasted computation, but are recoverable.
 
 ---
 
-### Pitfall 8: Per-Thread Workspace Copies Balloon Memory at n=12
+### Pitfall 5: Exponential Fitting Sensitivity to Initial Parameter Guesses
 
 **What goes wrong:**
-For n=12 qubits (dim=4096), a single `TrajectoryWorkspace` contains:
-- `jump_oft`: 4096x4096 ComplexF64 = 256 MB
-- `psi_tmp`: 4096 ComplexF64 = 64 KB
-- `Rpsi`: 4096 ComplexF64 = 64 KB
-
-Plus each `PerOperatorKraus` contains R, K0, U_residual (each 4096x4096 = 256 MB) and optionally U_B (256 MB). With 36 jump operators (3 Paulis x 12 sites), the per-operator data alone is `36 * 4 * 256 MB = 36 GB`. This is shared read-only across threads.
-
-But if each of `T` threads needs its own workspace, that adds `T * 256 MB` for `jump_oft` alone. With 64 threads on a 512 GB cluster node, that is 16 GB of workspace. Manageable, but only if:
-1. The precomputed data is shared (not copied per thread).
-2. The NUFFTPrefactors 3D array (`dim x dim x n_energy_labels`) is shared (not copied).
-
-The NUFFTPrefactors at n=12: `4096 * 4096 * n_labels * 16 bytes`. With `num_energy_bits=12` giving ~4096 energy labels (after truncation, maybe ~500), that is `4096 * 4096 * 500 * 16 = 128 GB`. This alone may exceed node memory.
-
-**Prevention:**
-1. **Audit memory before parallelizing.** Print total precomputed data size before entering the trajectory loop. For n=12, this is a critical path: if the prefactors do not fit in memory, multi-threading is moot.
-2. Share all read-only data (`per_operator`, `precomputed_data`, `jumps`, `config`) via a single `TrajectoryFramework` instance. Only `ws` needs per-thread copies.
-3. For the `jump_oft` buffer in the workspace: this is a temporary matrix used during the dissipative jump scan. At n=12, the scan iterates over energy labels and writes to `jump_oft` using `@. ws.jump_oft = jump.in_eigenbasis * pref`. This is the hot allocation. Consider using smaller buffers if the scan can be restructured (e.g., compute `||A_w psi||^2` without materializing the full A_w matrix).
-4. The `SharedArray` support already in `nufft.jl` (line 51-53) is for `Distributed` parallelism, not `Threads`. For `Threads`, regular arrays are automatically shared. Do not accidentally create `nprocs() * nthreads()` copies.
-
-**Detection:**
-- `OutOfMemoryError` when starting multi-threaded run at n=12.
-- Memory usage grows linearly with thread count when it should be constant (precomputed data) + linear (workspaces only).
-- Swap usage on cluster node indicates memory pressure.
-
-**Phase to address:** Phase 1 (Multi-threaded trajectory engine) -- memory budget must be established before scaling to n=12.
-
----
-
-### Pitfall 9: GC Stop-the-World Pauses Destroy Multi-Thread Scaling
-
-**What goes wrong:**
-Julia's garbage collector is stop-the-world: when GC triggers, ALL threads pause until collection completes. If trajectory threads allocate frequently (e.g., creating temporary matrices, closures, or type-unstable intermediate values), GC pauses increase with thread count because more threads = more allocation = more frequent GC. This is documented in [Julia issue #33033](https://github.com/JuliaLang/julia/issues/33033) where multi-threaded allocation-heavy workloads showed significant slowdown as thread count increased.
+Nonlinear least squares fitting of `A * exp(-gamma * t) + offset` is highly sensitive to the initial guess for `gamma`. The Levenberg-Marquardt algorithm (used by LsqFit.jl) converges to local minima. If the initial `gamma_0` is far from the true value, the fit may:
+- Converge to a wrong local minimum (e.g., fitting to a fast mode instead of the slow mode).
+- Diverge entirely (LsqFit returns NaN or throws an exception).
+- Converge to a physically nonsensical result (`gamma < 0` or `gamma ~ 0`).
 
 **Why it happens:**
-The trajectory step function (`step_along_trajectory!`) is *designed* to be allocation-free (all workspace is pre-allocated). But subtle allocations can creep in:
-- `rand(1:fw.n_jumps)` -- allocates a `UnitRange` on each call.
-- `@. ws.jump_oft = jump.in_eigenbasis * pref` -- if types are not inferred, creates temporary arrays.
-- `mul!(ws.Rpsi, ws.jump_oft', psi)` -- the adjoint `ws.jump_oft'` creates a lazy `Adjoint` wrapper, which itself does not allocate the array but creates a small heap object.
-- Closure captures in the transition function (e.g., `w -> exp(-beta * w / 2)` from `pick_transition`) -- each call to the closure is fine, but if the closure itself is not inferred, it boxes.
+The exponential model is highly nonlinear in the rate parameter. Small changes in `gamma` produce large changes in the residual at late times but small changes at early times. The least-squares landscape has narrow valleys and shallow basins, especially when fitting to noisy data.
 
-**Consequences:**
-- Scaling from 1 to 8 threads gives 3x speedup instead of expected 7x.
-- GC time (visible via `@time` or `GC.gc_stats()`) grows from 1% to 20% of wall time.
-- Performance degrades non-uniformly: some trajectory batches take much longer than others (those that trigger GC).
+For the QuantumFurnace use case, the spectral gap `gamma_1` ranges from ~0.01 to ~0.2 depending on the Hamiltonian, domain, and temperature. An initial guess of `gamma_0 = 1.0` (off by 10x) is enough to cause convergence failure.
 
 **Prevention:**
-1. **Profile allocations of the hot path before parallelizing.** Use `@allocated step_along_trajectory!(psi, fw)` (warmup + measure, as already done in `test_allocation.jl`). If allocations per step > 0, find and eliminate them.
-2. Replace `rand(1:fw.n_jumps)` with `rand(rng, 1:fw.n_jumps)` using an explicit RNG to avoid potential task-local RNG lookup overhead.
-3. Ensure all workspace buffers are `isbitstype` or concretely typed. Check with `@code_warntype step_along_trajectory!(psi, fw)`.
-4. Consider `GC.enable(false)` during the trajectory loop and `GC.gc()` after completion, but ONLY if the loop is confirmed allocation-free. If it allocates, disabling GC causes unbounded memory growth.
-5. The existing `test_allocation.jl` tests guard against allocation regressions -- ensure these tests cover the multi-threaded hot path as well.
+1. **Use the log-linear estimate as the initial guess.** Before nonlinear fitting, compute `gamma_init = -slope(linear_fit(log|signal|, t))` over the last 30% of the signal-above-noise time range. This is cheap, robust, and typically within 50% of the true value.
+2. **Fix the offset parameter.** Set `offset = <O>_ss = tr(gibbs * O)` (known analytically) instead of fitting it. This reduces the problem from 3 parameters to 2, greatly improving convergence.
+3. **Bound the parameters.** Use LsqFit.jl's `lower` and `upper` bounds: `gamma in [1e-4, 10.0]`, `A in [-max_signal, max_signal]`. This prevents runaway to unphysical values.
+4. **Try multiple initial guesses.** Run the fit from 3-5 different `gamma_0` values spanning the expected range. Take the result with the lowest residual sum of squares.
 
 **Detection:**
-- `@time` reports significant GC time (> 5% of total).
-- `@allocated` in the step function returns > 0 bytes.
-- Scaling curve shows diminishing returns beyond 4 threads.
+- LsqFit.jl throws a convergence warning or returns `converged = false`.
+- The fitted `gamma` is negative or orders of magnitude from expected.
+- The fit residual is comparable to the total signal variance (fit did not improve over a constant model).
 
-**Phase to address:** Phase 1 (Multi-threaded trajectory engine) -- allocation audit before parallelization.
+**Phase to address:** Exponential fitting implementation.
 
 ---
 
-### Pitfall 10: Thread-Unsafe FINUFFT Plan Execution
+### Pitfall 6: Using abs(spectral_gap) Instead of Sorting by Real Part
 
 **What goes wrong:**
-The NUFFT prefactors are precomputed in `_prepare_oft_nufft_prefactors` (`nufft.jl`) using a FINUFFT plan object. This plan is used only during precomputation (not in the trajectory loop). However, if precomputation is ever parallelized (e.g., precomputing for KMS and GNS configs concurrently), FINUFFT plan objects are NOT thread-safe -- concurrent `finufft_exec!` calls on different plans may share internal FFTW wisdom, causing race conditions.
+The existing `run_lindbladian()` (furnace.jl line 18) sorts eigenvalues by `abs.(real.(eigvals_near_zero))` to find the steady state (smallest) and gap mode (second smallest). This works when eigenvalues are real or nearly real. But the Arpack `eigs()` call with `sigma=shift` (shift-invert mode) returns the 2 eigenvalues closest to `shift = 1e-9 * (1 + 1im)`. The sorting by `abs(real(...))` could misidentify the gap eigenvalue if:
+- Two eigenvalues have similar real parts but different imaginary parts.
+- The shift-invert targets an eigenvalue with a small imaginary part but not the one with the smallest real part magnitude.
 
-**Why it happens:**
-FINUFFT uses FFTW internally, and FFTW's plan creation/execution shares global state (the "wisdom" cache). Multiple concurrent FINUFFT executions can corrupt this shared state.
+For KMS BohrDomain where all eigenvalues are real, this is fine. For TrotterDomain where eigenvalues have small imaginary parts, sorting by `abs(real(...))` could pick the wrong second eigenvalue, giving a wrong spectral gap.
 
 **Consequences:**
-- Silent data corruption in precomputed NUFFT prefactors.
-- Non-deterministic NaN or incorrect values in the prefactor matrix.
-- Trajectory results are wrong in ways that look like physics bugs, not threading bugs.
+- The "exact" spectral gap used as ground truth in cross-validation is itself wrong.
+- The cross-validation comparison is meaningless because both sides are wrong.
 
 **Prevention:**
-1. **Keep precomputation single-threaded** (current behavior is correct -- `nthreads=1` on line 109 of `furnace_utensils.jl`).
-2. If parallelizing precomputation for multiple configs (e.g., KMS and GNS in parallel), serialize the FINUFFT calls or use separate FFTW wisdom sessions.
-3. The trajectory loop does NOT call FINUFFT (it uses precomputed prefactors via `_prefactor_view`), so this is only a concern during setup.
+1. After extracting the spectral gap, verify: compute `gamma_exact = -real(spectral_gap)` and `omega_exact = imag(spectral_gap)`. Assert `gamma_exact > 0` (the gap eigenvalue must have negative real part). Assert `gamma_exact < gamma_max` for some reasonable bound (e.g., `gamma_max < 1.0` for the rescaled Hamiltonian).
+2. For the cross-validation study, also compute the full spectrum (not just 2 eigenvalues) for n=4 systems where this is feasible (Liouvillian is 256x256). Use `eigen()` instead of `eigs()` and verify that the gap identified by `eigs()` matches the second-smallest `abs(real(...))` in the full spectrum.
+3. Consider requesting more eigenvalues from Arpack: `eigs(liouv, nev=5, sigma=shift)` and then sorting to find the true gap.
 
 **Detection:**
-- Incorrect trajectory results when precomputing KMS and GNS configs concurrently.
-- FFTW-related segfaults or assertion failures.
+- For BohrDomain: full eigenvalue check (all should be real and non-positive).
+- For n=4: compare `eigs(nev=2)` result against `eigen()` full spectrum.
+- If the fitted gap consistently disagrees with the "exact" gap in a systematic direction, suspect that the exact gap is wrong.
 
-**Phase to address:** Phase for KMS-vs-GNS experiments -- relevant if parallelizing experiment setup.
+**Phase to address:** Cross-validation phase -- validate the ground truth before using it.
 
 ---
 
-### Pitfall 11: Convergence Tracking Accumulates O(ntraj * dim^2) Memory
+### Pitfall 7: Wrong Time Grid for Observable Sampling
 
 **What goes wrong:**
-If convergence tracking stores the density matrix `rho_avg` at each checkpoint (e.g., every 100 trajectories), and there are 100,000 trajectories with 1000 checkpoints, this creates 1000 density matrices of size `dim x dim`. For n=8 (dim=256): `1000 * 256 * 256 * 16 bytes = 1 GB`. For n=12: `1000 * 4096 * 4096 * 16 = 256 GB`. This silently exhausts memory before the simulation completes.
+The existing `run_trajectories()` with observables uses `save_every` to subsample the time grid: measurements are taken every `save_every * delta` time units. If `save_every` is too large, the Nyquist criterion for the oscillation frequency `omega` (imaginary part of the spectral gap) is violated, and the time series aliases. More commonly, if `save_every` is too small, the data points are highly autocorrelated (consecutive measurements on the same trajectory step are correlated), which inflates apparent signal-to-noise and leads to underestimated error bars on the fit.
+
+For spectral gap fitting specifically:
+- The TOTAL evolution time `total_time` must be long enough to see at least 3-5 decay times: `total_time > 5 / gamma_1`. For `gamma_1 ~ 0.08`, this means `total_time > 62`. With `delta = 0.01`, that is 6,200 steps.
+- The sampling interval `save_every * delta` must be fine enough to resolve the decay: at least 10-20 points per decay time. For `gamma_1 ~ 0.08`, one decay time is `~12.5`, so `save_every * delta ~ 0.6-1.2`.
+- But `delta = 0.01` with `save_every = 1` gives 6,200 data points, which is excessive and wastes memory. Use `save_every = 50-100`.
 
 **Why it happens:**
-The natural convergence tracking pattern is: "store a snapshot every K trajectories so I can plot the convergence curve later." This works for small systems but does not scale.
+The time grid parameters were designed for convergence tracking (where you want to see the full trajectory), not for spectral gap estimation (where you want a specific time range at specific resolution).
 
 **Consequences:**
-- `OutOfMemoryError` during long runs, losing all partially computed results.
-- Swap thrashing makes the simulation appear to hang.
-- Results are lost because no intermediate output was saved to disk.
+- Too coarse sampling: miss the initial transient, aliasing of oscillatory components.
+- Too fine sampling: memory bloat (6200 points * N_traj * N_obs), slow fitting, autocorrelation bias.
+- Too short total time: cannot resolve the spectral gap (the signal has not decayed enough).
+- Too long total time: the late-time data is all noise (see Pitfall 4), wasting computation.
 
 **Prevention:**
-1. **Track scalar convergence metrics, not full density matrices.** Store `trace_distance(rho_avg, rho_target)` or `fidelity(rho_avg, rho_target)` at each checkpoint. This is O(1) per checkpoint.
-2. **Keep only the current and previous `rho_avg`** in memory for computing convergence rate. Overwrite the previous at each checkpoint.
-3. For post-hoc analysis, save checkpointed `rho_avg` to disk (BSON/JLD2) rather than keeping in memory.
-4. For convergence curve plotting, store `(ntraj, trace_distance)` pairs: `Vector{Tuple{Int, Float64}}`, which is negligible memory.
-5. The existing `run_thermalization` already follows this pattern: it stores `distances_to_gibbs::Vector{Float64}` (scalar per step), not density matrix snapshots.
+1. Choose `total_time` based on a rough estimate of the spectral gap. For cross-validation where the exact gap is known, use `total_time = 5 / gamma_exact`. Otherwise, use a conservative estimate based on the domain approximation level.
+2. Choose `save_every` so that there are 100-500 usable data points across the signal region.
+3. For memory efficiency, use `save_every >> 1`. The trajectory step loop runs at `delta` resolution for accuracy, but measurements can be coarser.
+4. Run a short pilot trajectory (100 trajectories, full time range) to estimate the decay timescale before committing to the full run.
 
 **Detection:**
-- Memory usage grows linearly during trajectory accumulation.
-- GC becomes frequent and slow as heap grows.
-- For n>=8, the simulation slows dramatically partway through.
+- The observable time series is flat (no visible decay) -- total time too short.
+- The observable time series is noisy everywhere -- too few trajectories or total time too long.
+- Memory issues when storing `measurements_mean` -- `save_every` too small.
 
-**Phase to address:** Phase for convergence tracking -- data structure design.
+**Phase to address:** Trajectory runner phase -- parameter selection.
 
 ---
 
-### Pitfall 12: Batch Size Effect on Convergence Estimate Gives False Precision
+### Pitfall 8: Naive Error Estimation on Fitted Parameters
 
 **What goes wrong:**
-Adaptive stopping uses batch means: group trajectories into batches of size `B`, compute `rho_batch` for each, then estimate uncertainty from the inter-batch variance. If `B` is too small (e.g., `B=10`), each batch `rho_batch` is very noisy, making the inter-batch variance large. This gives a *correct but conservative* stopping criterion (safe, but wastes computation). If `B` is too large (e.g., `B=10000`), there are few batches (e.g., 10 batches for 100K trajectories), and the inter-batch variance estimate has high uncertainty (few degrees of freedom in the chi-squared distribution), giving false precision -- the estimated standard error may be too small by a factor of 2-3.
-
-**Why it happens:**
-The number of batches `K` determines the degrees of freedom for the variance estimate: `var(batch_means)` has `K-1` degrees of freedom. With `K=5`, the 95% confidence interval for the variance spans a factor of ~6. The estimated standard error can be off by sqrt(6) ~ 2.4x in either direction. For `K=30`, the factor drops to ~1.5, which is acceptable.
+LsqFit.jl provides `stderror(fit)` which estimates parameter uncertainties from the covariance matrix of the fit. This estimate assumes: (a) the model is correct, (b) residuals are independent and identically distributed, and (c) the noise is Gaussian. For trajectory-averaged observables, condition (b) is violated: consecutive time points from the same trajectory are correlated (they share the same trajectory history), and the noise is non-Gaussian (it comes from projective measurements on quantum states, not Gaussian noise).
 
 **Consequences:**
-- With too few batches: premature stopping with underestimated uncertainty (false confidence).
-- With too many small batches: correct but very slow convergence detection (wasted computation).
-- Published uncertainty bounds may be too tight by 2-3x.
+- `stderror(fit)` dramatically underestimates the true uncertainty on the fitted spectral gap.
+- The cross-validation reports "agreement within error bars" when the actual uncertainty is much larger.
+- Publication-quality error bars based on `stderror` are unreliable.
 
 **Prevention:**
-1. **Use at least 20-30 batches** for the adaptive stopping criterion. This gives ~20-30 degrees of freedom and a variance estimate within ~50% of the true value.
-2. **Batch size formula:** `B = max(ntraj_min / 30, 100)` where `ntraj_min` is the minimum expected trajectory count. Start with `B=100` and adjust.
-3. **Report effective sample size (ESS)** alongside the batch estimate: `ESS = ntraj * var_naive / var_batch`. If `ESS << ntraj`, the batch means are correlated (possible if trajectories share some hidden state, though they should not).
-4. Use the Student-t correction: the stopping criterion should use `t_alpha(K-1) * se_batch` rather than `z_alpha * se_batch` to account for the finite number of batches.
+1. **Use bootstrap resampling over trajectories.** The correct error estimation procedure is:
+   - Split the N_traj trajectories into M bootstrap samples (resample with replacement).
+   - For each bootstrap sample, recompute the trajectory-averaged observable time series.
+   - Fit each bootstrap time series independently.
+   - The standard deviation of the M fitted gaps is the bootstrap standard error.
+2. **Use block averaging.** Divide trajectories into K blocks. Compute the fitted gap from each block independently. The standard error is `std(block_gaps) / sqrt(K)`.
+3. **Do NOT use jackknife on time points** (this would propagate autocorrelation). Resample over trajectories (which are independent), not over time points.
+4. Bootstrap is computationally cheap: the expensive part is running trajectories. Refitting 100 bootstrap samples is trivial.
 
 **Detection:**
-- Batch variance estimate changes significantly when batch size is doubled (should be relatively stable).
-- Re-running the same experiment gives significantly different uncertainty estimates.
-- `ESS / ntraj < 0.5` indicates a problem with the batching.
+- `stderror(fit)` gives uncertainties much smaller than the observed variation across different seeds or trajectory counts.
+- Bootstrap uncertainty is 5-50x larger than `stderror(fit)`.
 
-**Phase to address:** Phase for adaptive sampling -- statistical methodology.
+**Phase to address:** Statistical analysis phase -- error estimation on the spectral gap.
+
+---
+
+### Pitfall 9: Subtracting Wrong Steady-State Value in Observable Decay
+
+**What goes wrong:**
+The exponential decay analysis requires subtracting the steady-state expectation value: `signal(t) = <O>(t) - <O>_ss`. If `<O>_ss` is wrong, the entire decay analysis is corrupted. There are several ways to get `<O>_ss` wrong:
+
+1. **Using the Gibbs state instead of the Liouvillian fixed point.** For exact KMS (BohrDomain), the fixed point IS the Gibbs state. But for approximate domains (Energy, Time, Trotter), the Liouvillian fixed point deviates from the Gibbs state. The observable decays toward the FIXED POINT, not toward the Gibbs state. Using `<O>_gibbs` instead of `<O>_fixed_point` introduces a constant offset that the exponential fitter will absorb, biasing the decay rate.
+
+2. **Using `tr(gibbs_comp * O_comp)` in the computational basis when `O` is in the eigenbasis.** This gives the wrong trace. Must use `tr(gibbs_eigen * O_eigen)` or `tr(gibbs_trotter * O_trotter)`, consistent with the basis of the trajectory.
+
+3. **Using the trajectory time-averaged value instead of the known analytical value.** The trajectory-averaged `<O>(t_final)` at the end of a long evolution approximates `<O>_ss` but with statistical noise. Using it as `<O>_ss` introduces noise into every data point of the decay signal, creating correlated errors.
+
+**Consequences:**
+- A systematic offset in the signal causes the exponential fit to converge to a wrong rate.
+- For small offsets, the bias is approximately `delta_gamma ~ offset / (t_final * signal_amplitude)`, which can be significant.
+- The cross-validation shows a consistent directional bias (fit always above or always below the exact gap).
+
+**Prevention:**
+1. For cross-validation where the Liouvillian is available: compute `<O>_ss = tr(fixed_point * O)` using `liouv_result.fixed_point` from `run_lindbladian()`. This is the correct steady-state value that the trajectories converge to.
+2. When the Liouvillian is NOT available (large systems): use `<O>_gibbs` but acknowledge the domain approximation error. For KMS with coherent term, this error is controlled by Trotter/quadrature errors.
+3. Always compute both `<O>_gibbs` and `<O>_fixed_point` and report the difference. If it exceeds the statistical precision, flag it.
+
+**Detection:**
+- The subtracted signal `<O>(t) - <O>_ss` does not approach zero at late times (it approaches a nonzero constant). This is a clear sign that `<O>_ss` is wrong.
+- The fit residuals show a systematic constant offset.
+
+**Phase to address:** Observable analysis phase -- computing the correct baseline.
+
+---
+
+### Pitfall 10: Total Magnetization Has Zero Overlap with Gap Mode (Symmetry Selection)
+
+**What goes wrong:**
+For the isotropic Heisenberg Hamiltonian `H = sum(XX + YY + ZZ)`, the total magnetization `M_z = sum_i Z_i` commutes with the Hamiltonian: `[H, M_z] = 0`. This means `M_z` is block-diagonal in the energy eigenbasis, with blocks corresponding to different total `S_z` sectors. If the gap mode of the Liouvillian connects states within the same `S_z` sector, then `M_z` may have ZERO overlap with the gap mode -- meaning `c_1 = 0` in the expansion `<M_z>(t) - <M_z>_ss = sum c_k exp(-gamma_k t)`, and the slowest visible decay is `gamma_2` (the second gap), not `gamma_1`.
+
+For the DISORDERED Heisenberg chain (with the external Z-field that QuantumFurnace uses), `[H, M_z] != 0` in general, so this exact cancellation is broken. However, the overlap `c_1` may still be small if the disorder is weak, leading to a near-invisible slowest mode in the `M_z` time series.
+
+**Why it happens:**
+Symmetry-based selection rules are a fundamental feature of quantum systems. The Liouvillian preserves symmetry sectors if the jump operators respect the symmetry. For single-site Pauli jumps `{X_i, Y_i, Z_i}`, the `Z_i` jump preserves `M_z` but `X_i, Y_i` do not. So the full Lindbladian does NOT preserve `M_z`, and the gap mode generically has nonzero overlap with `M_z`. But the overlap may be small for systems close to the symmetric limit.
+
+**Consequences:**
+- Fitting `M_z` decay extracts the SECOND gap instead of the first.
+- Cross-validation fails because the fitted rate is ~2x the true spectral gap.
+- The failure mode is subtle: the fit quality (R^2) may be excellent, but the extracted gap is wrong.
+
+**Prevention:**
+1. **Use multiple observables and compare.** Fit the spectral gap from `M_z`, from `<H>`, from `<Z_1 Z_2>`, and from other observables. If they all give the same gap, it is likely the true spectral gap. If one gives a systematically different value, it may have selection-rule issues.
+2. **Check overlap coefficients.** For small systems (n=4), compute the gap mode from the exact Liouvillian and calculate `c_1 = tr(gap_mode^dagger * O)` for each observable. Choose the observable with the largest `|c_1|`.
+3. **Prefer observables that break symmetries.** Single-site `Z_i` (for site i with strong disorder) is better than `M_z` because it has overlap with all eigenmodes. Nearest-neighbor correlations `Z_i Z_{i+1}` are also generally safe.
+4. **For the cross-validation: report the gap from each observable separately** and note which observables agree and which do not.
+
+**Detection:**
+- The fitted gap from `M_z` is approximately 2x the fitted gap from `Z_1 Z_2`.
+- The `M_z` decay signal is much smaller in amplitude than expected from other observables.
+- The overlap coefficient `c_1` (computed from exact diagonalization) is anomalously small.
+
+**Phase to address:** Observable selection phase -- before running the full experiment.
 
 ---
 
 ## Minor Pitfalls
 
-Issues that cause confusion or small inefficiencies.
+Mistakes that cause confusion, wasted time, or suboptimal results, but are easily fixed.
 
 ---
 
-### Pitfall 13: mul! on Adjoint Views May Allocate Unexpectedly
+### Pitfall 11: Memory Blow-Up from Storing Full Observable Time Series per Trajectory
 
 **What goes wrong:**
-In the dissipative branch of `step_along_trajectory!`, `mul!(ws.Rpsi, ws.jump_oft', psi)` creates a lazy `Adjoint` wrapper for `ws.jump_oft'`. While the wrapper itself is small, some BLAS dispatch paths for `Adjoint` inputs may allocate intermediate arrays. This is harmless for single-threaded code but creates GC pressure in multi-threaded code (see Pitfall 9).
+The current `run_trajectories()` with observables returns `measurements_mean` as an `n_obs x num_saves` matrix averaged over all trajectories. This is memory-efficient. But for bootstrap error estimation (Pitfall 8), you need per-trajectory or per-batch observable time series, not just the mean. Storing per-trajectory data requires `n_obs x num_saves x N_traj` memory, which for n=8 (17 observables, 500 time points, 10,000 trajectories) is 17 * 500 * 10000 * 8 bytes = 680 MB.
 
 **Prevention:**
-- Use `mul!(ws.Rpsi, adjoint(ws.jump_oft), psi)` explicitly and verify with `@allocated` that it does not allocate.
-- Alternatively, precompute `jump_oft_dag` as a separate buffer and fill it with `copy!(ws.jump_oft_dag, ws.jump_oft); conj!(ws.jump_oft_dag)` -- but this wastes a buffer for a minor optimization.
-- Profile first: the allocation may already be zero (Julia's BLAS dispatch for `gemv!` with `Adjoint` is typically allocation-free for dense matrices).
+1. Store per-BATCH means, not per-trajectory. With batch_size=200 and 50 batches, you get 50 independent time series at a cost of 17 * 500 * 50 * 8 = 3.4 MB.
+2. Compute bootstrap over batches (block bootstrap), not over individual trajectories.
+3. The existing `run_trajectories_convergence` already uses a batch structure. Extend it to also record per-batch observable TIME SERIES (not just checkpoint values).
 
-**Phase to address:** Phase 1 (Allocation audit) -- check during allocation profiling.
+**Phase to address:** Data architecture phase.
 
 ---
 
-### Pitfall 14: `threadid()` Indexing is Unsafe with Task Migration (Julia >= 1.7)
+### Pitfall 12: LsqFit.jl Convergence Failure with Default Parameters
 
 **What goes wrong:**
-Using `Threads.threadid()` to index into per-thread workspace arrays assumes tasks stay on the same thread. Since Julia 1.7, tasks can migrate between threads during yield points. If a task starts on thread 3 (uses workspace 3), yields (e.g., GC pause, I/O), and resumes on thread 5, it now uses workspace 5, which may be in use by another task. This causes the same data-race as Pitfall 2.
+LsqFit.jl's `curve_fit()` uses default tolerances that may be too tight for noisy data, or too few iterations for slow convergence. The default `maxIter=1000` is usually sufficient, but the default `x_tol=1e-8` and `g_tol=1e-12` can cause premature termination on noisy data where the gradient is dominated by noise.
 
 **Prevention:**
-1. Use `@spawn`-based parallelism where each task creates and owns its workspace in a closure. The workspace is stack-local to the task, not indexed by thread ID.
-2. If using `@threads`, ensure the loop body never yields. For trajectory stepping, this is likely the case (pure computation, no I/O), but GC pauses can trigger migration.
-3. Pin tasks to threads using `@threads :static` (Julia >= 1.7), which prevents migration. This is the simplest fix but limits scheduler flexibility.
-4. Preferred pattern:
-   ```julia
-   @sync for batch in batches
-       @spawn begin
-           ws_local = TrajectoryWorkspace(CT, dim)
-           psi_local = Vector{ComplexF64}(undef, dim)
-           for i in batch
-               # ... use ws_local, psi_local ...
-           end
-       end
-   end
-   ```
+1. Set explicit tolerances: `curve_fit(model, t, data, p0; maxIter=10000, x_tol=1e-6, g_tol=1e-8)`.
+2. Check `fit.converged` after every fit. If false, increase iterations or relax tolerances.
+3. Always provide parameter bounds via `lower` and `upper` to prevent physically nonsensical solutions.
 
-**Phase to address:** Phase 1 (Multi-threaded trajectory engine) -- architecture decision.
+**Phase to address:** Exponential fitting implementation.
 
 ---
 
-### Pitfall 15: Convergence Comparison Using Different Initial States
+### Pitfall 13: Initial State Contamination of Decay Rate
 
 **What goes wrong:**
-When comparing KMS-vs-GNS convergence rates, using a different initial state for each run (e.g., random pure states with different seeds) introduces variance in the convergence curve that masks the actual rate difference. The trajectory-averaged convergence is `E[||rho(t) - rho_ss||]`, which depends on the initial state.
+The initial state `psi0` determines the coefficients `c_k` in the eigenmode expansion. If `psi0` is a ground state (e.g., `psi0 = [1, 0, 0, ...]` in the eigenbasis), it may already be close to the Gibbs state, meaning `<O>(0) - <O>_ss` is small and the decay signal is weak. Alternatively, if `psi0` is an eigenstate of the observable, the initial transient may be dominated by a specific eigenmode that is not the gap mode.
 
 **Prevention:**
-1. **Use the same initial state for all comparison runs.** The standard choice is `|0...0>` (computational zero state) or the maximally mixed state `I/dim`.
-2. **Use the maximally mixed state** for convergence rate comparison: it is rotationally symmetric (no basis-dependent artifacts) and its initial distance to Gibbs is `1 - 1/dim` (known analytically), making convergence curves comparable.
-3. **Avoid using random pure states** for comparison experiments unless the comparison is averaged over initial states (which requires many runs).
+1. Use the maximally mixed state as the initial DM (which corresponds to random pure states in the trajectory picture -- but NOTE: maximally mixed state is NOT a pure state and cannot be represented by a single trajectory starting from a specific `psi0`).
+2. For trajectory simulations, use a fixed initial state like `psi0 = [1, 0, 0, ...]` (eigenbasis ground state) which is far from the Gibbs state at high temperature. This maximizes the decay signal.
+3. Run from multiple initial states and verify that the fitted gap is consistent.
 
-**Phase to address:** Phase for KMS-vs-GNS experiments -- experimental protocol.
+**Phase to address:** Experiment design phase.
 
 ---
 
-### Pitfall 16: FINUFFT nthreads Parameter Interacts with Julia Threading
+### Pitfall 14: Confusing Observable Decay Time with Mixing Time
 
 **What goes wrong:**
-The NUFFT precomputation (`_prepare_oft_nufft_prefactors` in `nufft.jl:59`) uses `nthreads=1` for the FINUFFT plan. If this is changed to use more FINUFFT threads while Julia threads are also active, FINUFFT's internal OpenMP parallelism conflicts with Julia's threading in the same way as BLAS (Pitfall 1). Additionally, FINUFFT linked against FFTW may use FFTW's own thread pool, creating a three-way thread contention: Julia threads x BLAS threads x FFTW threads.
+The "spectral gap" from the Liouvillian is the slowest decay rate, which sets the ASYMPTOTIC convergence rate. The actual mixing time (time to reach within epsilon of the steady state) depends on the initial state, the observable, and the target precision:
+
+```
+t_mix(epsilon) ~ (1/gamma_1) * log(c_max / epsilon)
+```
+
+where `c_max` is the largest eigenmode coefficient. The decay rate `gamma_1` from fitting gives the SLOPE of the log-distance curve at late times, not the total mixing time. Reporting `1/gamma_fit` as "the mixing time" without specifying the prefactor is misleading.
 
 **Prevention:**
-1. Keep FINUFFT `nthreads=1` when using Julia multi-threading (current behavior is correct).
-2. If precomputation is a bottleneck, parallelize across energy labels using Julia threads rather than FINUFFT internal parallelism.
-3. Document the thread budget: `total_OS_threads <= num_cores` where `total = julia_threads * BLAS_threads * FINUFFT_threads`.
+1. Report `gamma_fit` as the "spectral gap estimate" or "asymptotic decay rate", NOT as "the mixing time".
+2. If estimating mixing time, also estimate the prefactor: `c_max ~ |<O>(0) - <O>_ss|`.
+3. The mixing time bound is `t_mix ~ (1/gamma_1) * log(c_max / epsilon)` for target precision epsilon.
 
-**Phase to address:** Phase 1 -- inherited from current design, no change needed unless precomputation is parallelized.
+**Phase to address:** Results reporting -- terminology and interpretation.
 
 ---
 
 ## Phase-Specific Warnings
 
-| Phase Topic | Likely Pitfall | Mitigation |
-|-------------|---------------|------------|
-| Multi-threaded trajectory engine | BLAS oversubscription (P1), shared workspace race (P2), global RNG (P3) | Set `BLAS.set_num_threads(1)`, per-task workspace, explicit per-trajectory RNG |
-| Multi-threaded trajectory engine | False sharing on accumulation (P4), GC pressure (P9) | Per-batch accumulation with final reduction, allocation audit before parallelizing |
-| Multi-threaded trajectory engine | Memory at n=12 (P8), task migration (P14) | Memory budget audit, `@threads :static` or `@spawn`-per-batch pattern |
-| GNS trajectory path | Sigma interpretation (P5), fixed-point vs mixing rate (P6) | Define comparison protocol, separate metrics |
-| KMS-vs-GNS experiments | Fair comparison methodology (P5, P6), initial state (P15) | Same initial state, same computational budget, separate fixed-point error from mixing rate |
-| Adaptive sampling | Premature convergence (P7), batch size effects (P12) | Observable-based convergence + statistical stopping, 20-30 batches minimum |
-| Convergence tracking | Memory from snapshots (P11), autocorrelation (P7) | Scalar metrics only, time-doubling protocol for mixing verification |
-| Precomputation parallelism | FINUFFT thread safety (P10, P16) | Keep FINUFFT single-threaded, serialize precomputation |
+| Phase Topic | Likely Pitfall | Severity | Mitigation |
+|-------------|---------------|----------|------------|
+| **Observable construction (M_z)** | Basis mismatch (Pitfall 2) | CRITICAL | Follow `build_convergence_observables` pattern exactly |
+| **Observable construction (M_z)** | Symmetry selection (Pitfall 10) | MODERATE | Use multiple observables, check overlap |
+| **Trajectory runner for gap estimation** | Wrong time grid (Pitfall 7) | MODERATE | Compute time range from rough gap estimate |
+| **Trajectory runner for gap estimation** | Noise floor at late times (Pitfall 4) | CRITICAL | Pre-compute signal-to-noise, choose N_traj accordingly |
+| **Exponential fitting** | Single-exponential bias (Pitfall 3) | CRITICAL | Late-time fitting, log-linear pre-estimate |
+| **Exponential fitting** | Initial guess sensitivity (Pitfall 5) | MODERATE | Log-linear pre-estimate, bounded parameters |
+| **Exponential fitting** | LsqFit.jl convergence (Pitfall 12) | MINOR | Explicit tolerances, bounds, convergence check |
+| **Cross-validation metric** | Complex vs real gap (Pitfall 1) | CRITICAL | Always use `-real(spectral_gap)`, check imaginary part |
+| **Cross-validation ground truth** | Wrong eigenvalue from Arpack (Pitfall 6) | MODERATE | Full spectrum check for n=4, request more eigenvalues |
+| **Cross-validation baseline** | Wrong steady-state value (Pitfall 9) | MODERATE | Use Liouvillian fixed point, not Gibbs state |
+| **Error estimation** | Naive stderror (Pitfall 8) | MODERATE | Bootstrap over trajectory batches |
+| **Memory management** | Per-trajectory storage (Pitfall 11) | MINOR | Per-batch storage, block bootstrap |
+| **Results interpretation** | Decay rate vs mixing time (Pitfall 14) | MINOR | Correct terminology, include prefactor |
+
+---
+
+## Recommended Build Order to Minimize Risk
+
+Based on the pitfall analysis, the safest implementation order is:
+
+1. **Cross-validation metric first** (addresses Pitfalls 1, 6): Define exactly what you are comparing. Extract exact gap from Liouvillian. Validate with full spectrum for n=4.
+
+2. **Observable construction second** (addresses Pitfalls 2, 10): Build M_z in the correct basis. Compute overlap coefficients with gap mode for n=4 to verify observability.
+
+3. **Trajectory runner with correct time grid third** (addresses Pitfalls 4, 7): Compute required total_time and save_every from the exact gap. Run pilot to verify signal-to-noise.
+
+4. **Exponential fitting fourth** (addresses Pitfalls 3, 5, 12): Implement log-linear pre-estimate, late-time fitting, fixed baseline subtraction.
+
+5. **Error estimation fifth** (addresses Pitfall 8): Implement block bootstrap over trajectory batches.
+
+6. **Full cross-validation last** (addresses Pitfall 9): Compare trajectory-derived gap against exact gap with proper error bars.
 
 ---
 
 ## Sources
 
-### Julia Threading and BLAS Interaction
-- [Julia Multi-Threading Documentation](https://docs.julialang.org/en/v1/manual/multi-threading/)
-- [Multi-threaded `mul!` slower than serial (Julia issue #49455)](https://github.com/JuliaLang/julia/issues/49455)
-- [ITensors.jl Multithreading Guide (BLAS.set_num_threads pattern)](https://itensor.github.io/ITensors.jl/dev/Multithreading.html)
-- [Julia BLAS thread count defaults (issue #33409)](https://github.com/JuliaLang/julia/issues/33409)
-- [Julia Threads vs BLAS threads (Discourse)](https://discourse.julialang.org/t/julia-threads-vs-blas-threads/8914)
+### Verified (HIGH confidence)
+- QuantumFurnace.jl codebase -- Direct analysis of `furnace.jl` (run_lindbladian, spectral_gap extraction), `structs.jl` (LindbladianResult with Complex{T} spectral_gap), `trajectories.jl` (observable accumulation, TrajectoryWorkspace), `convergence.jl` (build_convergence_observables basis transforms), `qi_tools.jl` (gibbs_state, trace_distance)
+- Quick task 20 summary (.planning/quick/20-debug-gns-trotterdomain-0-83-gap-suspect/20-SUMMARY.md) -- Documented basis mismatch causing spurious 0.83 gap (should be 0.0807)
+- [LsqFit.jl documentation](https://julianlsolvers.github.io/LsqFit.jl/latest/tutorial/) -- Levenberg-Marquardt, parameter bounds, convergence control
+- [LsqFit.jl GitHub](https://github.com/JuliaNLSolvers/LsqFit.jl) -- API reference, weighted fitting
+- [Lindbladian Wikipedia](https://en.wikipedia.org/wiki/Lindbladian) -- Spectral gap definition, eigenvalue structure, convergence rate
+- [Sandvik (2011) "Excitation Gap from Optimized Correlation Functions in QMC Simulations"](https://ar5iv.labs.arxiv.org/html/1112.2269) -- Signal-to-noise in extracting gaps from Monte Carlo
+- [Nachtergaele, Sims (2006) "Spectral Gap and Exponential Decay of Correlations"](https://link.springer.com/article/10.1007/s00220-006-0030-4) -- Theory of gap-controlled correlation decay
+- [Mori (2022) "Liouvillian analysis of relaxation time in open quantum systems"](https://www2.yukawa.kyoto-u.ac.jp/~nqs2022/slide/4th/Mori.pdf) -- Complex eigenvalue structure, decay rate vs oscillation frequency
+- [Chen, Kastoryano, Gilyen (2025)](https://arxiv.org/abs/2311.09207) -- KMS detailed balance, real eigenvalues under GNS inner product
 
-### RNG and Reproducibility
-- [TaskLocalRNG vs Xoshiro performance (Discourse)](https://discourse.julialang.org/t/why-is-tasklocalrng-faster-than-xoshiro-with-multiple-threads/74577)
-- [Random.seed! reproducibility issue (#49522)](https://github.com/JuliaLang/julia/issues/49522)
-- [Reproducible multithreaded Monte Carlo (Discourse)](https://discourse.julialang.org/t/reproducible-multithreaded-monte-carlo-task-local-random/35269)
-- [StableRNGs.jl](https://github.com/JuliaRandom/StableRNGs.jl)
+### Domain knowledge (HIGH confidence, established physics/numerics)
+- Exponential fitting of sums of exponentials is an ill-conditioned problem (classic numerical analysis result)
+- Late-time fitting extracts the slowest decay mode (standard technique in spectroscopy and QMC)
+- Bootstrap resampling is the gold standard for error estimation in Monte Carlo (Efron 1979)
+- Signal-to-noise for Monte Carlo averages scales as 1/sqrt(N_samples)
+- KMS-detailed-balanced Lindbladians are self-adjoint w.r.t. GNS inner product, giving real eigenvalues
+- Total magnetization commutes with isotropic Heisenberg Hamiltonian (SU(2) symmetry)
+- Disorder breaks SU(2) symmetry, making all observables generically overlap with all eigenmodes
 
-### GC and Allocation
-- [Multi-threaded allocation benchmark shows GC slowdown (issue #33033)](https://github.com/JuliaLang/julia/issues/33033)
-- [GC and threading performance (Discourse)](https://discourse.julialang.org/t/garbage-collection-and-threading/107250)
-- [Julia Memory Management Documentation](https://docs.julialang.org/en/v1/manual/memory-management/)
-
-### False Sharing
-- [False sharing in multi-threading (Julia blog)](https://blog.jling.dev/blog/false_share/)
-- [Julia for HPC: Multithreading](https://enccs.github.io/julia-for-hpc/multithreading/)
-
-### Quantum Trajectory Methodology
-- [Monte Carlo wave-function method: robust algorithm and convergence (Abdelhafez et al. 2019)](https://arxiv.org/abs/1803.08589)
-- [QuTiP Monte Carlo Solver documentation](https://qutip.org/docs/4.5/guide/dynamics/dynamics-monte.html)
-- [QuantumToolbox.jl Monte Carlo Solver](https://qutip.org/QuantumToolbox.jl/stable/users_guide/time_evolution/mcsolve)
-
-### Adaptive MCMC and Convergence
-- [Convergence diagnostics for MCMC (Roy 2019)](https://arxiv.org/pdf/1909.11827)
-- [Adaptive MCMC survey (Liang et al. 2020)](https://asp-eurasipjournals.springeropen.com/articles/10.1186/s13634-020-00675-6)
-
-### Codebase References
-- `src/trajectories.jl` -- TrajectoryWorkspace, step_along_trajectory!, run_trajectories
-- `src/structs.jl` -- ThermalizeConfig, ThermalizeConfigGNS, TrajectoryFramework
-- `src/energy_domain.jl` -- _pick_transition_kms, _pick_transition_gns (sigma shift difference)
-- `src/jump_workers.jl:464` -- existing TODO: "set BLAS threads to 1"
-- `src/nufft.jl` -- NUFFTPrefactors, memory scaling
-- `src/furnace_utensils.jl:109` -- FINUFFT nthreads=1
-- `src/furnace.jl:101` -- run_thermalization RNG parameter
-- `test/test_allocation.jl` -- existing allocation regression tests
+### Partially verified (MEDIUM confidence)
+- [ResearchGate discussion on fitting sum of exponentials](https://www.researchgate.net/post/What_are_good_methods_for_fitting_a_sum_of_exponentials_to_data_without_an_initial_guess) -- Practical advice on multi-exponential fitting
+- [Exponential curve fitting numerical conditioning](https://davdata.nl/math/expfitting.html) -- Ill-conditioning analysis
+- [Mixing time from Liouvillian spectral gap](https://arxiv.org/html/2411.04454) -- Recent theoretical bounds on mixing time
 
 ---
-*Pitfalls research for: QuantumFurnace.jl -- Multi-threaded trajectory engine, GNS comparison, adaptive sampling*
-*Researched: 2026-02-15*
-*Milestone: Multi-threaded trajectory engine + KMS-vs-GNS experiments*
+*Pitfalls research for: v1.3 Mixing Time Estimation -- Spectral gap estimation from trajectory observables*
+*Researched: 2026-02-16*

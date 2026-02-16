@@ -1,258 +1,285 @@
-# Stack Research: v1.1 Multi-Threaded Trajectory Engine & KMS-vs-GNS Experiments
+# Stack Research: Spectral Gap Estimation from Trajectory Observable Decay
 
-**Domain:** Multi-threaded Monte Carlo trajectory sampling, adaptive convergence, experiment data management for quantum Lindbladian simulation
-**Researched:** 2026-02-15
-**Confidence:** HIGH (core recommendations use Julia stdlib threading + verified pure-Julia packages; one MEDIUM item noted)
+**Domain:** Nonlinear curve fitting, statistical inference on decay rates, spectral gap cross-validation for quantum Lindbladian simulation
+**Researched:** 2026-02-16
+**Confidence:** HIGH (LsqFit.jl verified via official docs + GitHub; Distributions.jl verified; integration points confirmed from codebase analysis)
 
 ## Scope
 
-This stack research covers ONLY the additions needed for the v1.1 milestone:
-1. Multi-threaded trajectory sampling with shared read-only precomputed data
-2. Thread-safe RNG patterns (per-task seeding for reproducibility)
-3. Adaptive convergence-based early stopping per observable
-4. Experiment data serialization (parameter sweeps, convergence curves)
-5. BLAS thread management for trajectory parallelism
+This stack research covers ONLY the additions needed for spectral gap estimation via trajectory-based observable decay fitting:
 
-It does NOT re-research the existing stack (Arpack, FINUFFT, LinearAlgebra, BSON, StableRNGs, HypothesisTests, etc.). See the v1.0 STACK.md for those.
+1. Exponential decay curve fitting: `f(t) = A * exp(-gap * t) + c`
+2. Parameter uncertainty / confidence intervals on the fitted gap
+3. Robust initial guess strategies for the Levenberg-Marquardt solver
+4. Statistical tools for handling noisy trajectory-averaged data
+5. Cross-validation against exact Liouvillian eigenvalues (Arpack)
 
-## Current Stack (Relevant Subset)
+It does NOT re-research the existing stack. See the v1.2 codebase STACK.md for Arpack, FINUFFT, LinearAlgebra, BSON, StableRNGs, HypothesisTests, StatsBase, threading, convergence monitoring, etc.
 
-These existing dependencies are directly used and need no changes:
+## Current Stack (Relevant Subset for This Feature)
 
-| Dependency | Role in This Milestone | Status |
-|------------|----------------------|--------|
-| LinearAlgebra (stdlib) | mul!, dot, BLAS for matrix ops in trajectory steps | Keep -- must manage BLAS.set_num_threads(1) |
-| Random (stdlib) | rand() calls in step_along_trajectory! via TaskLocalRNG | Keep -- Julia's default RNG is already task-local since 1.7 |
-| Base.Threads (stdlib) | Already imported in QuantumFurnace.jl | Keep -- extend usage |
-| StableRNGs (test extra) | Reproducible per-trajectory seeding in tests | Keep in test target |
-| Statistics (stdlib) | mean(), std() for convergence monitoring | Keep -- use more heavily |
-| BSON | Hamiltonian loading (load_hamiltonian) | Keep as-is, not for new data |
+These existing capabilities are directly used and need no changes:
+
+| Existing Capability | Role in Spectral Gap Estimation | Status |
+|---------------------|-------------------------------|--------|
+| `run_trajectories(..., observables=..., save_every=N)` | Generates time series `<O_i>(t)` averaged over trajectories | Keep -- produces the raw data for fitting |
+| `TrajectoryResult.measurements_mean` | Matrix{Float64} of shape (n_obs, n_saves) -- observable means at each save point | Keep -- this is the input to the fitter |
+| `TrajectoryResult.times` | Vector{Float64} of time points corresponding to saves | Keep -- independent variable for fitting |
+| `run_lindbladian(...)` -> `LindbladianResult.spectral_gap` | Exact spectral gap via Arpack shift-invert for n=4,6 | Keep -- ground truth for cross-validation |
+| `build_convergence_observables(ham, n)` | Builds ZZ_ij and H observables in eigenbasis | Keep -- defines which observables to track |
+| `_compute_gibbs_observable_values(gibbs, observables)` | Computes equilibrium values `<O_i>_gibbs` | Keep -- defines the asymptotic offset `c` in the fit |
+| HypothesisTests (test extra) | OneSampleTTest for statistical validation | Keep -- useful for testing gap estimate consistency |
+| StatsBase (test extra) | mean, std for trajectory statistics | Keep -- useful in test assertions |
 
 ## New Production Dependencies (src/)
 
-### Core: Multi-Threading Infrastructure
+### Core: LsqFit.jl -- Nonlinear Curve Fitting
 
 | Technology | Version | Purpose | Why Recommended |
 |------------|---------|---------|-----------------|
-| *No new package needed* | -- | Julia threading via `Threads.@spawn` + manual reduction | The existing `using Base.Threads` in QuantumFurnace.jl is sufficient. The trajectory parallelism pattern is embarrassingly parallel: spawn N_traj independent tasks, each with its own workspace clone, accumulate results via per-thread partial sums merged after `@sync`. This does NOT need OhMyThreads.jl -- see Alternatives Considered below. |
+| LsqFit.jl | >= 0.15 | Levenberg-Marquardt nonlinear least squares fitting for `f(t) = A * exp(-gap * t) + c` | **The** standard Julia package for nonlinear curve fitting. Pure Julia. Provides `curve_fit` with parameter bounds (essential: gap > 0), weighted fitting (essential: weight by 1/variance at each time point), and built-in `confidence_interval` / `standard_error` for parameter uncertainty without needing a separate statistics package. Uses ForwardDiff for automatic Jacobian computation. Latest release v0.15.1 (April 2025), actively maintained by JuliaNLSolvers. |
 
-**Confidence: HIGH** -- Julia's task-based threading with `@spawn`/`@sync` is the standard approach for embarrassingly parallel Monte Carlo. Confirmed in [Julia multi-threading docs](https://docs.julialang.org/en/v1/manual/multi-threading/) and used by QuantumToolbox.jl, SequentialMonteCarlo.jl, and MCIntegration.jl.
+**Confidence: HIGH** -- Verified via [official docs](https://julianlsolvers.github.io/LsqFit.jl/latest/), [GitHub v0.15.1 release](https://github.com/JuliaNLSolvers/LsqFit.jl), and [tutorial](https://julianlsolvers.github.io/LsqFit.jl/latest/tutorial/).
 
-### Core: Data Serialization
+**Why LsqFit over alternatives:**
 
-| Technology | Version | Purpose | Why Recommended |
-|------------|---------|---------|-----------------|
-| JLD2.jl | >= 0.5 | Save/load experiment results (convergence curves, parameter sweeps, density matrices) | Pure Julia, no C library dependency. Preserves Julia types exactly -- critical for saving `NamedTuple` results, `Matrix{ComplexF64}` density matrices, and nested experiment metadata without manual serialization. HDF5-compatible format means results can also be read from Python/MATLAB if needed for paper figures. Already the de facto standard for Julia scientific computing data persistence. Replaces any ad-hoc BSON usage for experiment data. |
+1. **Built-in parameter uncertainty** -- `confidence_interval(fit, alpha)` computes t-distribution-based CIs directly from the Jacobian at the solution. No need to write bootstrap code or pull in a separate statistics package for the primary use case.
 
-**Confidence: HIGH** -- JLD2 v0.6.3 (latest release Nov 2024) verified via [GitHub releases](https://github.com/JuliaIO/JLD2.jl/releases). API confirmed via [official docs](https://juliaio.github.io/JLD2.jl/stable/). Pure Julia, actively maintained by JuliaIO org.
+2. **Parameter bounds** -- `curve_fit(model, t, y, p0; lower=[...], upper=[...])` constrains the gap to be positive and the amplitude to be physically reasonable. Essential because unconstrained Levenberg-Marquardt can converge to negative decay rates on noisy data.
 
-### Supporting: Experiment Result Tables
+3. **Weighted fitting** -- Pass `wt = 1 ./ variance_per_timepoint` to properly handle trajectory noise that varies with time (early time points have high variance from diverse initial conditions; late time points have low signal).
 
-| Technology | Version | Purpose | Why Recommended |
-|------------|---------|---------|-----------------|
-| DataFrames.jl | >= 1.7 | Tabular experiment results (parameter sweep tables, convergence summaries) | For the KMS-vs-GNS paper experiments, you need to sweep over (n_qubits, beta, sigma, domain, kms_vs_gns) and record metrics (trace_distance, spectral_gap, convergence_time, n_traj_to_converge). A DataFrame is the natural structure for this. Enables filtering, grouping, and CSV export for paper tables. |
-| CSV.jl | >= 0.10 | Export experiment tables to CSV for paper figures/LaTeX | Companion to DataFrames. Write `CSV.write("results.csv", df)` for direct consumption by plotting tools or LaTeX table generators. Lightweight. |
+4. **Minimal dependency footprint** -- LsqFit depends on Distributions, ForwardDiff, NLSolversBase, StatsAPI, LinearAlgebra, Printf. Of these, ForwardDiff, NLSolversBase, StatsAPI, LinearAlgebra, and Printf are already in the Manifest.toml as transitive dependencies of Optim (which is a direct dep). Adding LsqFit only truly adds **LsqFit itself + Distributions.jl** as new resolved packages.
 
-**Confidence: HIGH** -- DataFrames.jl is the standard tabular data package in Julia, verified via [official docs](https://dataframes.juliadata.org/stable/). CSV.jl is its standard I/O companion.
-
-## No New Production Dependencies Needed for Threading
-
-This is the critical insight: **Julia's stdlib threading is sufficient for this milestone.**
-
-### Why stdlib Threading Is Enough
-
-The trajectory sampling loop in `run_trajectories` (trajectories.jl:383-395) is embarrassingly parallel:
+**Key API for this milestone:**
 
 ```julia
-# Current sequential loop:
-@inbounds for trajectory in 1:ntraj
-    copyto!(psi, psi0)
-    _evolve_along_trajectory!(psi, fw, total_time)
-    _accumulate_density_matrix!(rho_mean, psi)
-end
+using LsqFit
+
+# Model: observable deviation decays exponentially to equilibrium
+# p = [A, gap, c] where A = amplitude, gap = decay rate, c = offset
+model(t, p) = p[1] .* exp.(-p[2] .* t) .+ p[3]
+
+# Fit with bounds: gap > 0, A can be any sign, c unconstrained
+fit = curve_fit(model, times, obs_deviation, p0;
+                lower = [-Inf, 0.0, -Inf],
+                upper = [Inf, Inf, Inf])
+
+# Extract gap estimate and uncertainty
+gap_estimate = fit.param[2]
+gap_stderr = standard_error(fit)[2]
+gap_ci = confidence_interval(fit, 0.05)[2]  # 95% CI on gap
+
+# Covariance matrix for full parameter correlation analysis
+cov_matrix = estimate_covar(fit)
 ```
 
-The parallel version needs:
-1. **Per-task workspace clones** (TrajectoryWorkspace + psi vector) -- cheap to allocate
-2. **Per-task partial rho accumulation** -- merge after all tasks complete
-3. **Shared read-only data** -- TrajectoryFramework fields (per_operator, precomputed_data, config) are immutable after construction
+### Transitive: Distributions.jl -- Brought in by LsqFit
 
-This maps directly to Julia's `@sync`/`@spawn` pattern with per-task buffers and a final reduction. No locks needed because each task writes only to its own buffers.
+| Technology | Version | Purpose | Why Acceptable |
+|------------|---------|---------|----------------|
+| Distributions.jl | >= 0.25 | t-distribution quantiles for `confidence_interval()` in LsqFit; not used directly in QuantumFurnace code | LsqFit uses `quantile(TDist(dof), 1 - alpha/2)` internally to compute confidence intervals. This is a well-maintained, standard Julia statistics package (v0.25.123, Jan 2026). Compatible with Julia 1.11+. It brings some transitive deps (PDMats, StatsFuns, FillArrays, etc.) but these are lightweight and standard in the Julia ecosystem. |
 
-### Threading Pattern for run_trajectories
+**Confidence: HIGH** -- Verified via [Distributions.jl v0.25 docs](https://juliastats.org/Distributions.jl/v0.25/) generated with Julia 1.11.7. [v0.25.123 on Zenodo](https://zenodo.org/records/18145493).
+
+## No New Test Dependencies Needed
+
+The existing test extras are sufficient:
+
+| Existing Test Dep | Role in Spectral Gap Tests |
+|-------------------|---------------------------|
+| HypothesisTests | `OneSampleTTest` to verify fitted gap matches exact Arpack gap within statistical tolerance |
+| StatsBase | `mean`, `std` for computing reference statistics on fit residuals |
+| StableRNGs | Deterministic seeding for reproducible trajectory data in gap estimation tests |
+
+## How LsqFit Integrates with Existing Code
+
+### Data Flow: Trajectory -> Fit -> Gap
 
 ```julia
-function run_trajectories_threaded(fw, psi0, ntraj; nchunks=Threads.nthreads())
-    dim = length(psi0)
-    CT = eltype(psi0)
+# STEP 1: Run trajectories with observable measurement (EXISTING)
+observables, obs_names = build_convergence_observables(hamiltonian, n_qubits)
+result = run_trajectories(jumps, config, psi0, hamiltonian;
+    observables = observables,
+    save_every = save_every,
+    ntraj = ntraj,
+    seed = seed)
 
-    # Divide trajectories into chunks
-    chunk_sizes = _divide_work(ntraj, nchunks)
+# result.times        :: Vector{Float64}      -- time grid
+# result.measurements_mean :: Matrix{Float64}  -- (n_obs, n_saves)
 
-    # Per-chunk partial results (allocated before spawning)
-    partial_rhos = [zeros(CT, dim, dim) for _ in 1:nchunks]
+# STEP 2: Compute deviation from equilibrium (NEW, uses existing helpers)
+obs_gibbs = _compute_gibbs_observable_values(gibbs, observables)
+# For observable i: deviation(t) = <O_i>(t) - <O_i>_gibbs
 
-    @sync for (chunk_id, chunk_size) in enumerate(chunk_sizes)
-        Threads.@spawn begin
-            # Per-task workspace (NOT shared)
-            ws = TrajectoryWorkspace(CT, dim)
-            psi = Vector{CT}(undef, dim)
+# STEP 3: Fit exponential decay (NEW, uses LsqFit)
+using LsqFit
 
-            # Per-task RNG: Julia's TaskLocalRNG is automatically task-local
-            # Seed deterministically from chunk_id for reproducibility
-            Random.seed!(fw.base_seed + chunk_id)
+model(t, p) = p[1] .* exp.(-p[2] .* t) .+ p[3]
 
-            local_rho = partial_rhos[chunk_id]
-            for _ in 1:chunk_size
-                copyto!(psi, psi0)
-                _evolve_along_trajectory!(psi, fw_with_ws(fw, ws), total_time)
-                _accumulate_density_matrix!(local_rho, psi)
-            end
-        end
+for i in 1:n_obs
+    y = result.measurements_mean[i, :] .- obs_gibbs[i]
+    # Or fit the raw data with c as free parameter:
+    # model_with_offset(t, p) = p[1] * exp(-p[2] * t) + p[3]
+    # y = result.measurements_mean[i, :]
+    # p0 = [y[1] - y[end], initial_gap_guess, y[end]]
+
+    p0 = _compute_initial_guess(result.times, y)
+    fit = curve_fit(model, result.times, y, p0;
+                    lower = [-Inf, 0.0, -Inf])
+    gap_i = fit.param[2]
+    gap_ci_i = confidence_interval(fit, 0.05)[2]
+end
+
+# STEP 4: Cross-validate against exact gap (EXISTING Arpack result)
+liouv = run_lindbladian(jumps, liouv_config, hamiltonian; trotter=trotter)
+exact_gap = abs(real(liouv.spectral_gap))
+```
+
+### Integration Points in the Codebase
+
+| Integration Point | File | What Changes |
+|-------------------|------|-------------|
+| New function: `estimate_spectral_gap(result, gibbs, observables)` | New file: `src/spectral_gap.jl` | Takes TrajectoryResult + Gibbs state + observables, returns gap estimate + CI + per-observable fits |
+| New struct: `SpectralGapResult` | `src/structs.jl` | Holds gap estimate, confidence interval, per-observable fit quality (R-squared, residual norm), fit parameters |
+| Existing: `run_trajectories` with `observables` + `save_every` | `src/trajectories.jl` | No changes needed -- already produces the exact data format required |
+| Existing: `run_lindbladian` -> `LindbladianResult.spectral_gap` | `src/furnace.jl` | No changes needed -- provides ground truth for validation |
+| New export: `estimate_spectral_gap` | `src/QuantumFurnace.jl` | Add to exports |
+| New `using LsqFit` | `src/QuantumFurnace.jl` | Add import |
+
+## Robust Initial Guess Strategy
+
+The Levenberg-Marquardt algorithm in LsqFit converges reliably IF the initial guess is reasonable. For noisy trajectory data, a poor initial guess causes convergence to local minima or failure. **This is the most likely pitfall**, not the fitting library itself.
+
+### Recommended: Log-Linear Preprocessing for Initial Guess
+
+```julia
+function _compute_initial_guess(times, deviation)
+    # deviation = <O>(t) - <O>_gibbs, should decay from ~A to ~0
+
+    # Estimate offset c from late-time average (last 20% of data)
+    n = length(deviation)
+    c_guess = mean(deviation[max(1, round(Int, 0.8*n)):n])
+
+    # Subtract offset, take abs to handle sign, take log
+    shifted = deviation .- c_guess
+    # Use only points where |shifted| > threshold to avoid log(~0)
+    mask = abs.(shifted) .> 0.01 * maximum(abs.(shifted))
+    if sum(mask) < 3
+        # Fallback: crude guess
+        A_guess = deviation[1] - c_guess
+        gap_guess = 1.0 / (times[end] - times[1])
+        return [A_guess, gap_guess, c_guess]
     end
 
-    # Merge: sum partial rhos (sequential, cheap)
-    rho_mean = sum(partial_rhos) ./ ntraj
-    hermitianize!(rho_mean)
-    return rho_mean
+    # Log-linear fit: log|shifted| = log|A| - gap * t
+    log_y = log.(abs.(shifted[mask]))
+    t_masked = times[mask]
+    # Simple linear regression
+    t_mean = mean(t_masked)
+    y_mean = mean(log_y)
+    slope = sum((t_masked .- t_mean) .* (log_y .- y_mean)) / sum((t_masked .- t_mean).^2)
+    intercept = y_mean - slope * t_mean
+
+    A_guess = sign(shifted[1]) * exp(intercept)
+    gap_guess = max(-slope, 1e-6)  # Ensure positive
+
+    return [A_guess, gap_guess, c_guess]
 end
 ```
 
-### Why TrajectoryFramework Needs Refactoring
+**Why log-linear for initial guess only (not final fit):**
+- Log transform distorts error distribution (additive Gaussian noise on linear scale becomes non-Gaussian on log scale)
+- Log transform cannot handle sign changes in the deviation (which happen when noise pushes the observable past equilibrium)
+- But for initial guess, approximate is fine -- the nonlinear LM fit refines from there
 
-The current `TrajectoryFramework` struct embeds a mutable `ws::TrajectoryWorkspace{T}` field. This is the **single blocker** for thread safety -- the framework is otherwise read-only. The fix is straightforward:
+**Confidence: HIGH** -- Standard numerical methods practice. The log-linear initial guess + nonlinear refinement pattern is used in scipy.optimize.curve_fit documentation, MATLAB's fit() documentation, and countless scientific computing references.
 
-1. Remove `ws` from `TrajectoryFramework` (make it a separate argument)
-2. Each spawned task creates its own `TrajectoryWorkspace`
-3. `step_along_trajectory!(psi, fw, ws)` takes workspace as explicit argument
+## Weighted Fitting for Trajectory Noise
 
-This is a small refactor (adding one argument to 2-3 functions) with large payoff.
+Trajectory-averaged observable values have non-uniform variance along the time axis:
 
-## Thread-Safe RNG Strategy
+- **Early times (t << 1/gap):** High variance because trajectories haven't mixed -- each trajectory is near the initial state but random jumps create spread.
+- **Late times (t >> 1/gap):** Low variance because trajectories have converged near the thermal equilibrium. The signal (deviation from Gibbs) is also small, so SNR is low.
 
-### Julia's TaskLocalRNG (No Package Needed)
-
-Since Julia 1.7, the default RNG (`Random.default_rng()`) returns a `TaskLocalRNG` -- each `@spawn`ed task gets its own RNG state, deterministically seeded from the parent task's state. This means:
-
-- `rand()` inside a spawned task is automatically thread-safe
-- No data races on RNG state between tasks
-- Deterministic if the parent task's RNG is seeded before spawning
-
-**Confidence: HIGH** -- Verified in [Julia Random docs](https://docs.julialang.org/en/v1/stdlib/Random/) and confirmed by [JuliaCon 2025 talk on TaskLocalRNG](https://pretalx.com/juliacon-2025/talk/ZNBEAN/).
-
-### Reproducibility Pattern
-
-For reproducible multi-threaded experiments:
+### Weight Computation from Trajectory Batches
 
 ```julia
-# Seed parent task before spawning
-Random.seed!(experiment_seed)
+# Option A: If running multiple independent batches (e.g., from run_trajectories_convergence)
+# Compute per-timepoint variance across batches
+# wt = 1 ./ var_per_timepoint
 
-# Each @spawn inherits a deterministic child RNG state
-# Results are reproducible IF trajectory count per chunk is fixed
-@sync for chunk_id in 1:nchunks
-    Threads.@spawn begin
-        # TaskLocalRNG is already seeded deterministically
-        for _ in 1:chunk_size
-            r = rand()  # thread-safe, deterministic
-        end
-    end
-end
+# Option B: If running a single large batch with save_every
+# Split trajectories into sub-batches, compute variance of means
+# This requires modifying run_trajectories to return per-sub-batch data
+
+# Option C (RECOMMENDED for first implementation): Unweighted fit
+# Start with unweighted fit. Add weighting later if fit quality is poor.
+# Reason: For n=4,6 with ntraj >= 10000, the trajectory average is smooth
+# enough that unweighted fitting gives good results. Weighting is a
+# refinement for when the gap estimate precision matters.
 ```
 
-**Caveat:** Reproducibility requires fixed `nchunks` (i.e., fixed thread count). Changing `julia -t 4` to `julia -t 8` will change results because task seeding depends on spawn order. This is acceptable for experiments -- document the thread count alongside results.
+**Recommendation:** Start with unweighted fitting. The unweighted fit is simpler, and for the cross-validation against exact eigenvalues (the primary goal), the gap estimate only needs to be within ~10-20% of the exact value to demonstrate the method works. Add variance-weighted fitting as a refinement if unweighted residuals show systematic structure.
 
-### StableRNGs for Cross-Version Test Reproducibility
+## Multi-Exponential Considerations
 
-For regression tests that must produce identical results across Julia versions, continue using `StableRNG(seed)` per task:
+The observable deviation from equilibrium is not a pure single exponential. The exact expansion is:
+
+```
+<O>(t) - <O>_gibbs = sum_k c_k * exp(lambda_k * t)
+```
+
+where `lambda_k` are Liouvillian eigenvalues (all with Re(lambda_k) <= 0) and `c_k` depend on the overlap of the initial state and observable with the k-th eigenmode.
+
+### Why Single Exponential Works for Gap Estimation
+
+At long times (t >> 1/|lambda_3|), all faster modes have decayed, leaving:
+
+```
+<O>(t) - <O>_gibbs ≈ c_2 * exp(lambda_2 * t)   for large t
+```
+
+where `lambda_2` is the spectral gap (smallest non-zero eigenvalue in magnitude). **The gap dominates the late-time behavior**, which is precisely what we want to extract.
+
+### Fitting Window Selection
+
+Do NOT fit the entire time series. Instead:
+
+1. **Skip early transient:** The first ~10% of the time series contains multi-exponential contributions from fast modes. Skip it.
+2. **Skip late noise floor:** Once the deviation drops below the trajectory noise level, the data is pure noise. Stop there.
+3. **Fit the middle region** where the single exponential dominates.
 
 ```julia
-Threads.@spawn begin
-    rng = StableRNG(base_seed + chunk_id)
-    # Pass rng explicitly or copy! to task-local RNG
+function _select_fitting_window(times, deviation; skip_fraction=0.1, noise_floor_ratio=0.05)
+    n = length(times)
+    t_start = round(Int, skip_fraction * n) + 1
+    max_dev = maximum(abs.(deviation))
+    t_end = findlast(abs.(deviation) .> noise_floor_ratio * max_dev)
+    t_end = max(t_end, t_start + 5)  # Need at least a few points
+    return t_start:t_end
 end
 ```
 
-This is test-only. Production code uses `TaskLocalRNG` (zero overhead, no extra package).
+**Confidence: HIGH** -- This is standard practice in spectroscopy, NMR relaxometry, and fluorescence lifetime imaging where exponential decay rates are extracted from noisy data with multi-exponential contributions.
 
-## BLAS Thread Management
+### When Single Exponential Fails
 
-### The Problem
+If the observable has zero overlap with the gap eigenmode (`c_2 = 0`), the fitted rate will correspond to `lambda_3` or a later eigenvalue. This is why fitting multiple observables (ZZ correlations + energy) is essential -- at least one will have non-zero gap overlap.
 
-`step_along_trajectory!` calls `mul!(ws.psi_tmp, per_op.K0, psi)` -- matrix-vector products via BLAS. By default, BLAS uses multiple threads per `mul!` call. When Julia also uses multiple threads for trajectory parallelism, you get thread oversubscription: N_julia_threads x N_blas_threads total threads competing for N_cores physical cores.
+**Detection:** Compare gap estimates across observables. If they agree, the estimate is the true gap. If they disagree, the smallest positive fitted rate (closest to zero) is the best gap estimate, because faster rates indicate the observable couples to higher modes.
 
-### The Solution
-
-Set `BLAS.set_num_threads(1)` before launching parallel trajectories. The system sizes in QuantumFurnace (dim = 2^n for n=4,6,8,12, i.e., dim = 16, 64, 256, 4096) are small enough that single-threaded BLAS is optimal:
-
-- **dim <= 256 (n <= 8):** BLAS parallelism has zero benefit. Overhead of thread management exceeds gains for matrices this small.
-- **dim = 4096 (n = 12):** Marginal benefit from BLAS threads, but trajectory-level parallelism is far more efficient (thousands of independent trajectories vs. parallelizing a single 4096x4096 multiply).
-
-```julia
-function run_trajectories_threaded(...)
-    old_blas_threads = BLAS.get_num_threads()
-    BLAS.set_num_threads(1)  # Prevent oversubscription
-    try
-        # ... spawn trajectory tasks ...
-    finally
-        BLAS.set_num_threads(old_blas_threads)  # Restore
-    end
-end
-```
-
-**Confidence: HIGH** -- This pattern is used by [ITensors.jl](https://itensor.github.io/ITensors.jl/dev/Multithreading.html) and recommended in [Julia for HPC course](https://enccs.github.io/julia-for-hpc/multithreading/). The [Julia Discourse thread on BLAS vs Julia threads](https://discourse.julialang.org/t/julia-threads-vs-blas-threads/8914) confirms this is the standard approach.
-
-## Adaptive Convergence Monitoring
-
-### No External Package Needed
-
-The convergence monitoring for adaptive trajectory count requires tracking running mean and variance of per-observable expectation values. This is a Welford online algorithm -- 10 lines of code, no package dependency:
-
-```julia
-mutable struct OnlineMeanVar{T}
-    n::Int
-    mean::T
-    M2::T  # sum of squared deviations
-end
-
-function update!(s::OnlineMeanVar, x)
-    s.n += 1
-    delta = x - s.mean
-    s.mean += delta / s.n
-    delta2 = x - s.mean
-    s.M2 += delta * delta2
-end
-
-variance(s::OnlineMeanVar) = s.n > 1 ? s.M2 / (s.n - 1) : zero(s.M2)
-stderr(s::OnlineMeanVar) = sqrt(variance(s) / s.n)
-```
-
-For adaptive stopping: check `stderr(stat) / abs(stat.mean) < rtol` every `check_interval` trajectories.
-
-### Why NOT OnlineStats.jl
-
-OnlineStats.jl provides Mean, Variance, and many other streaming statistics. However:
-- It is a heavyweight dependency (many transitive deps) for something that is literally 10 lines of code
-- The package is designed for general-purpose streaming analytics, not scientific convergence monitoring
-- You need per-observable tracking (a vector of `OnlineMeanVar` structs), which is trivial to implement but awkward with OnlineStats types
-
-**Decision:** Implement Welford's algorithm inline. No package needed.
-
-**Confidence: HIGH** -- Welford's algorithm is numerically stable and well-understood. Used by NumPy, Rust's statistical crates, and OnlineStats.jl itself internally.
-
-## What NOT to Add for This Milestone
+## What NOT to Add
 
 | Avoid | Why | What to Do Instead |
 |-------|-----|-------------------|
-| OhMyThreads.jl | Adds a dependency for syntactic sugar. The `tmapreduce` pattern is elegant but the trajectory parallelism here is simple enough that `@sync`/`@spawn` with manual chunk allocation is clearer and has zero dependency cost. OhMyThreads' `TaskLocalValue` pattern is useful but `TrajectoryWorkspace` allocation in the spawn body achieves the same thing. | Use `@sync`/`@spawn` with per-task workspace allocation. Consider OhMyThreads only if you later add more complex parallel patterns (e.g., dynamic load balancing for variable-length trajectories). |
-| Distributed.jl (multi-process) | Already in `[deps]` but using it for trajectory parallelism adds complexity (serialization of frameworks, separate memory spaces) for zero benefit on a single node. Multi-threading is strictly better for shared-memory trajectory parallelism because the precomputed data (NUFFT prefactors, per-operator Kraus matrices) is read-only and shared without copying. | Use `Threads.@spawn` for single-node parallelism. Distributed is relevant only for multi-node cluster runs (separate milestone). |
-| OnlineStats.jl | 10 lines of Welford's algorithm replaces the entire package for this use case. OnlineStats brings transitive deps (OrderedCollections, AbstractTrees, etc.) for features you will never use. | Implement `OnlineMeanVar` struct inline. |
-| DrWatson.jl | Excellent for managing large experiment projects with file naming conventions, git tagging, etc. However, QuantumFurnace is a library package, not an experiment-management project. The experiment scripts that use QuantumFurnace should use DrWatson; the package itself should not depend on it. | Let experiment scripts (outside the package) use DrWatson if desired. The package provides `save_experiment_results(path, results)` using JLD2 directly. |
-| HDF5.jl | JLD2 already produces HDF5-compatible files without requiring the HDF5 C library. Adding HDF5.jl brings a binary dependency (libhdf5) that complicates installation, especially on clusters. | Use JLD2, which is pure Julia and HDF5-compatible. If raw HDF5 is needed later (e.g., for interop with specific tools), add it then. |
-| Arrow.jl | Faster than JLD2 for flat tabular data but cannot serialize Julia-specific types like `Matrix{ComplexF64}` or nested NamedTuples. The experiment results mix tabular (parameter sweep) and non-tabular (density matrices, convergence curves) data. | Use JLD2 for full results (types preserved), CSV for human-readable tables. |
-| Transducers.jl / FLoops.jl | Predecessor of OhMyThreads with heavier API. FLoops is in maintenance mode. Transducers API is powerful but overkill for this use case. | Use `@sync`/`@spawn`. |
-| SharedArrays (stdlib) | Already in `[deps]` for NUFFT prefactors with Distributed. For multi-threaded (not multi-process) code, regular `Array` is shared between threads automatically (same memory space). SharedArrays adds overhead for no benefit in the threading context. | Regular Julia `Array` for shared read-only data in threaded code. |
-| Atomics / lock-based accumulation | Julia `Threads.Atomic` only works on primitive types (Float64, Int64), not matrices. Lock-based matrix accumulation adds contention. Per-task partial sums with final merge is both simpler and faster. | Per-task partial rho accumulation, merge after `@sync`. |
+| **Bootstrap.jl** for confidence intervals | LsqFit already provides analytically-derived `confidence_interval` from the Jacobian covariance matrix. Bootstrap resampling would require either (a) storing per-trajectory data (massive memory for ntraj=10000+), or (b) re-running trajectories (computationally prohibitive). The Jacobian-based CI is standard and appropriate for this application. | Use `confidence_interval(fit, alpha)` from LsqFit. If Jacobian-based CIs are insufficient (e.g., highly non-Gaussian residuals), implement a simple residual bootstrap on the fit residuals, which requires no extra package. |
+| **Optim.jl for custom fitting** | Already a dependency, but LsqFit wraps the Levenberg-Marquardt algorithm with purpose-built curve fitting infrastructure (Jacobian management, covariance estimation, confidence intervals). Reimplementing this with raw Optim would be error-prone and redundant. | Use LsqFit which internally uses NLSolversBase (same optimization base as Optim). |
+| **SignalDecomposition.jl / Prony method packages** | Prony and matrix pencil methods are theoretically superior for multi-exponential decomposition, but (a) no mature Julia package exists, (b) the single-exponential fit with window selection is sufficient for gap estimation, (c) Prony methods require equispaced samples (which we have) but are notoriously sensitive to noise without careful SVD-based regularization. | Fit single exponential with window selection. If multi-exponential decomposition is needed later, implement a simple SVD-based Prony method in ~50 lines rather than adding an external dependency. |
+| **GLM.jl / StatsModels.jl** | These are for linear statistical models and generalized linear models. The exponential decay fit is inherently nonlinear. | Use LsqFit for nonlinear fitting. |
+| **Measurements.jl** | Propagates uncertainties through calculations via dual numbers. Elegant but heavyweight for this use case where we only need CI on one parameter (the gap). | Use `standard_error(fit)[2]` from LsqFit directly. |
+| **Multi-exponential fit (fitting 2+ decay rates)** | Tempting for extracting lambda_2 AND lambda_3. But 6+ parameter fits (A1, gap1, A2, gap2, A3, c) on noisy data are notoriously ill-conditioned. The gap/lambda_3 ratio determines identifiability; for Lindbladians this ratio is often < 2, making the two rates nearly indistinguishable from noisy data. | Fit single exponential with late-time window. Extract gap from the dominant late-time decay. Cross-validate against exact Arpack eigenvalues. |
+| **Distributions.jl as direct dependency** | It is a transitive dependency of LsqFit. Do not import it directly in QuantumFurnace -- the confidence interval computation happens inside LsqFit. | Let LsqFit handle the t-distribution internally. If you ever need Distributions directly (e.g., for custom statistical tests), add it then. |
 
 ## Recommended Stack Summary
 
@@ -260,32 +287,20 @@ OnlineStats.jl provides Mean, Variance, and many other streaming statistics. How
 
 | Package | UUID | Purpose |
 |---------|------|---------|
-| JLD2 | `033835bb-8acc-5ee8-8aed-2f6b5d7c090b` | Experiment result serialization |
+| LsqFit | `2fda8390-95c7-5789-9bda-21331edee243` | Nonlinear curve fitting for exponential decay gap estimation |
 
-### Production Dependencies to ADD to `[deps]` (Experiment Scripts)
-
-| Package | UUID | Purpose |
-|---------|------|---------|
-| DataFrames | `a93c6f00-e57d-5684-b7b6-d8193f3e46c0` | Parameter sweep result tables |
-| CSV | `336ed68f-0bac-5ca0-87d4-7b16caf5d00b` | CSV export for paper tables/figures |
-
-**Note:** DataFrames and CSV could alternatively live only in experiment scripts outside the package. If the package itself provides a `sweep_parameters(...)` API that returns a DataFrame, they belong in `[deps]`. If experiments are standalone scripts, they go in the script's own environment.
+That is **one** new direct dependency. The transitive deps (Distributions, ForwardDiff, NLSolversBase, StatsAPI) are either already resolved or lightweight and standard.
 
 ### No New Test Dependencies
 
-The existing test extras (StableRNGs, HypothesisTests, StatsBase, Aqua) are sufficient for testing the threaded trajectory engine.
+HypothesisTests and StatsBase (already in test extras) provide everything needed for validating gap estimates against exact eigenvalues.
 
 ## Installation
 
 ```julia
 using Pkg
 Pkg.activate(".")
-
-# Add production dependency
-Pkg.add("JLD2")
-
-# For experiment scripts (decide if in-package or script-level)
-Pkg.add(["DataFrames", "CSV"])
+Pkg.add("LsqFit")
 ```
 
 Concrete `Project.toml` additions:
@@ -293,208 +308,73 @@ Concrete `Project.toml` additions:
 ```toml
 [deps]
 # ... existing deps ...
-JLD2 = "033835bb-8acc-5ee8-8aed-2f6b5d7c090b"
-
-# Optional: only if sweep API is part of the package
-DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
-CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+LsqFit = "2fda8390-95c7-5789-9bda-21331edee243"
 
 [compat]
 # ... existing compat ...
-JLD2 = "0.5, 0.6"
-DataFrames = "1"
-CSV = "0.10"
+LsqFit = "0.15"
 ```
 
-## How Each Addition Integrates with Existing Code
-
-### JLD2 Integration
-
-```julia
-using JLD2
-
-# Save full experiment result
-function save_experiment(path::String, result::NamedTuple)
-    jldsave(path;
-        rho_mean = result.rho_mean,
-        measurements = result.measurements_mean,
-        times = result.times,
-        config = result.config_summary,   # Dict, not the full config (avoid type issues across versions)
-        metadata = Dict(
-            "n_qubits" => config.num_qubits,
-            "ntraj" => ntraj,
-            "julia_version" => string(VERSION),
-            "nthreads" => Threads.nthreads(),
-            "timestamp" => Dates.now(),
-        )
-    )
-end
-
-# Load back
-data = load(path)
-rho = data["rho_mean"]  # Matrix{ComplexF64} -- types preserved exactly
-```
-
-### Threading Integration with Existing TrajectoryFramework
-
-The key refactor: separate workspace from framework.
-
-```julia
-# BEFORE (current): workspace embedded in framework
-struct TrajectoryFramework{T,D}
-    # ... read-only fields ...
-    ws::TrajectoryWorkspace{T}  # MUTABLE -- prevents sharing
-end
-
-# AFTER: workspace is a separate argument
-struct TrajectoryFramework{T,D}
-    # ... read-only fields only ...
-    # ws removed
-end
-
-# step_along_trajectory! gains a ws argument:
-function step_along_trajectory!(psi, fw, ws)
-    # Uses fw (shared read-only) and ws (per-task mutable)
-end
-
-# Backward compatibility wrapper:
-function step_along_trajectory!(psi, fw_with_ws::TrajectoryFrameworkLegacy)
-    step_along_trajectory!(psi, fw_with_ws.framework, fw_with_ws.ws)
-end
-```
-
-### BLAS Thread Control Integration
-
-```julia
-# In the threaded trajectory runner:
-function run_trajectories(jumps, config, psi0, hamiltonian;
-                          ntraj=1, nthreads=Threads.nthreads(), ...)
-    # ... build framework ...
-
-    if ntraj > 1 && nthreads > 1
-        _run_trajectories_threaded(fw, psi0, ntraj, nthreads; ...)
-    else
-        _run_trajectories_sequential(fw, psi0, ntraj; ...)
-    end
-end
-
-function _run_trajectories_threaded(fw, psi0, ntraj, nthreads; ...)
-    old_blas = BLAS.get_num_threads()
-    BLAS.set_num_threads(1)
-    try
-        # ... @sync/@spawn pattern ...
-    finally
-        BLAS.set_num_threads(old_blas)
-    end
-end
-```
-
-### Adaptive Convergence Integration
-
-```julia
-function run_trajectories_adaptive(fw, psi0, observables;
-                                    rtol=1e-3, max_traj=100_000,
-                                    check_every=100)
-    n_obs = length(observables)
-    stats = [OnlineMeanVar(0, 0.0, 0.0) for _ in 1:n_obs]
-    rho_acc = zeros(ComplexF64, dim, dim)
-
-    ntraj = 0
-    while ntraj < max_traj
-        # Run a batch of trajectories (potentially threaded)
-        for _ in 1:check_every
-            psi = copy(psi0)
-            _evolve_along_trajectory!(psi, fw, ws, total_time)
-            _accumulate_density_matrix!(rho_acc, psi)
-            for i in 1:n_obs
-                val = real(dot(psi, observables[i] * psi))
-                update!(stats[i], val)
-            end
-            ntraj += 1
-        end
-
-        # Check convergence: all observables within tolerance
-        converged = all(i -> stderr(stats[i]) / max(abs(stats[i].mean), 1e-15) < rtol,
-                       1:n_obs)
-        converged && break
-    end
-
-    rho_mean = rho_acc ./ ntraj
-    return (rho_mean=rho_mean, stats=stats, ntraj=ntraj, converged=converged)
-end
-```
+**Note on compat range:** Pin to `"0.15"` (not `"0.14, 0.15"`) because v0.15 introduced important improvements to the Levenberg-Marquardt implementation and parameter bounds handling. The package requires Julia >= 1.6, well within the project's Julia >= 1.11 requirement.
 
 ## Alternatives Considered
 
 | Recommended | Alternative | When to Use Alternative |
 |-------------|-------------|-------------------------|
-| `@sync`/`@spawn` manual chunking | OhMyThreads.jl `tmapreduce` | If you add dynamic load balancing (e.g., early-stopped trajectories where some finish faster). OhMyThreads' `:greedy` scheduler handles uneven workloads well. For fixed-length trajectories (current case), manual chunking is simpler. |
-| JLD2 for full results | BSON (already in deps) | Never for new data. BSON is used only for legacy Hamiltonian loading. JLD2 is faster, preserves types better, and produces HDF5-compatible files. |
-| JLD2 for full results | HDF5.jl | Only if you need HDF5 features that JLD2 doesn't expose (chunked datasets, compression filters, MPI-IO). For experiment results at this scale, JLD2 is sufficient and avoids the C library dependency. |
-| JLD2 + CSV for experiment data | Arrow.jl | Only if you need columnar format for very large tabular datasets (millions of rows). For parameter sweep tables with hundreds of rows, CSV is simpler and human-readable. |
-| Inline Welford algorithm | OnlineStats.jl | Only if you need dozens of different streaming statistics (quantiles, histograms, etc.). For mean + variance + standard error, inline code is better. |
-| Manual chunk allocation | FLoops.jl / Transducers.jl | Never. FLoops is in maintenance mode. Transducers is powerful but the learning curve is not justified for this use case. |
-| TaskLocalRNG (Julia stdlib) | Per-task StableRNG instances | Only in tests where cross-Julia-version reproducibility is required. For production runs, TaskLocalRNG is zero-overhead and deterministic within a Julia version. |
-| DataFrames + CSV | Printf-based table output | If you want zero dependencies and your experiment scripts are standalone. Printf tables work but cannot be filtered, sorted, or joined programmatically. |
+| LsqFit.jl `curve_fit` | Optim.jl + manual Jacobian | Only if you need a custom loss function (e.g., robust L1 loss instead of L2). For standard least squares, LsqFit is strictly better because it handles Jacobian computation, covariance estimation, and confidence intervals automatically. |
+| LsqFit.jl `confidence_interval` | Manual bootstrap resampling | Only if residuals are severely non-Gaussian (would indicate a model misspecification rather than a statistics problem). For Monte Carlo trajectory data with sufficient ntraj, the central limit theorem ensures approximately Gaussian residuals. |
+| Single exponential fit with window selection | Multi-exponential fit via Prony/ESPRIT | Only if you need to extract multiple eigenvalues simultaneously. For gap estimation alone, the single exponential approach is more robust and well-conditioned. Consider this for a future milestone if eigenvalue spectrum characterization is needed. |
+| Unweighted initial fit | Variance-weighted fit from sub-batches | Add weighting as a refinement AFTER the unweighted approach is validated. Weighting requires either storing per-trajectory-batch data or modifying run_trajectories to return variance estimates. |
+| LsqFit.jl | SciPy via PythonCall.jl | Never. Adding a Python dependency for curve fitting when a mature pure-Julia solution exists is unjustifiable overhead. |
 
 ## Stack Patterns by Use Case
 
-**If running experiments on a single workstation (n=4,6,8):**
-- Use `julia -t auto` (all cores)
-- Set `BLAS.set_num_threads(1)`
-- JLD2 for results, CSV for summary tables
-- Adaptive convergence with rtol=1e-3 to avoid over-sampling
+**If estimating the gap for n=4 (dim=16, validation target):**
+- Run ntraj >= 5000 with save_every = 10, total_time = 5/expected_gap
+- Unweighted single exponential fit on late-time window
+- Cross-validate against exact Arpack gap from `run_lindbladian`
+- LsqFit confidence_interval gives error bars on the estimate
 
-**If running on a cluster (n=12, many parameter points):**
-- Use `julia -t N` where N = cores per node
-- Each SLURM job runs one parameter point
-- JLD2 per job, merge results post-hoc with a collection script
-- Consider DrWatson in the experiment management scripts (not in the package)
-- Distributed.jl remains relevant for multi-node runs within a single job
+**If estimating the gap for n=6 (dim=64, validation target):**
+- Run ntraj >= 10000 with save_every = 20, total_time = 5/expected_gap
+- Same fitting approach as n=4
+- Exact Arpack gap still available (64^2 = 4096 dim Liouvillian)
+- May need weighted fit if signal-to-noise is poor at late times
 
-**If preparing paper figures:**
-- Use CSV export from DataFrames for plotting in Julia (Plots.jl/Makie.jl) or Python (matplotlib)
-- JLD2 for archiving full density matrices and convergence data
-- Save metadata (git commit, Julia version, thread count) alongside results for reproducibility
+**If estimating the gap for n=8+ (dim=256+, where Arpack is infeasible):**
+- This is the production use case: trajectory-based gap estimation IS the method
+- Run ntraj >= 50000 with save_every = 50
+- Fit multiple observables (all ZZ correlations + energy)
+- Take gap estimate as minimum fitted rate across observables with good fit quality
+- No exact cross-validation available; rely on agreement across observables and CI overlap
 
 ## Version Compatibility
 
 | Package | Compatible With | Notes |
 |---------|-----------------|-------|
-| JLD2 >= 0.5 | Julia >= 1.6 | Pure Julia. v0.6.3 is latest (Nov 2024). `[compat]` should be `"0.5, 0.6"` to accept both major-minor ranges. No known issues with Julia 1.11/1.12. |
-| DataFrames >= 1.7 | Julia >= 1.6 | Stable API since 1.0. Actively maintained. |
-| CSV >= 0.10 | Julia >= 1.6 | Lightweight. Works with DataFrames seamlessly. |
-| Base.Threads (stdlib) | Julia >= 1.3 (basic), 1.7+ (TaskLocalRNG) | Julia 1.11+ required per Project.toml `[compat]`. TaskLocalRNG fully stable. |
-| Random (stdlib) | Julia >= 1.7 (task-local RNG) | Default RNG is task-local. `Random.seed!()` seeds the current task's RNG. |
+| LsqFit 0.15.1 | Julia >= 1.6 | Latest stable (April 2025). Pure Julia. No binary dependencies. |
+| LsqFit 0.15.1 | Distributions >= 0.18 | LsqFit compat allows 0.18-0.25. Project will resolve 0.25.x. |
+| LsqFit 0.15.1 | ForwardDiff >= 0.10 or 1.0 | Already in Manifest via Optim. No conflict. |
+| LsqFit 0.15.1 | NLSolversBase 7.5 | Already in Manifest via Optim. No conflict. |
+| LsqFit 0.15.1 | StatsAPI 1.x | Already in Manifest. No conflict. |
+| Distributions 0.25.x | Julia 1.11, 1.12 | Verified: docs generated with Julia 1.11.7. |
 
-## Cleanup Opportunities
-
-While adding stack for this milestone:
-
-| Item | Current | Should Be | Impact |
-|------|---------|-----------|--------|
-| SharedArrays in `[deps]` | Used by NUFFT for Distributed | Keep but do NOT use for threading | Avoid confusion: threading shares memory automatically |
-| Distributed in `[deps]` | Used by `#! uncomment for multi-threads` comment in furnace.jl | Keep for future cluster use | The TODO comment in `construct_lindbladian` uses `@distributed`, which is multi-process, not multi-thread. Do not confuse with `Threads.@spawn`. |
-| BSON in `[deps]` | Used for legacy Hamiltonian loading | Keep, but use JLD2 for all new data | Do not use BSON for new experiment results |
+**No version conflicts expected.** The shared transitive dependencies (ForwardDiff, NLSolversBase, StatsAPI) are already resolved in the Manifest.toml via Optim. Adding LsqFit will not trigger version conflicts.
 
 ## Sources
 
-- [Julia Multi-Threading documentation](https://docs.julialang.org/en/v1/manual/multi-threading/) -- `@spawn`, `@sync`, task-based parallelism. HIGH confidence.
-- [Julia Random stdlib documentation](https://docs.julialang.org/en/v1/stdlib/Random/) -- TaskLocalRNG, per-task seeding, `Random.seed!` behavior. HIGH confidence.
-- [JLD2.jl official documentation](https://juliaio.github.io/JLD2.jl/stable/) -- API, HDF5 compatibility, type preservation. HIGH confidence.
-- [JLD2.jl GitHub releases](https://github.com/JuliaIO/JLD2.jl/releases) -- v0.6.3 (Nov 2024), latest stable. HIGH confidence.
-- [OhMyThreads.jl documentation](https://juliafolds2.github.io/OhMyThreads.jl/stable/) -- TaskLocalValue, tmapreduce API, scheduler options. Evaluated but not recommended. HIGH confidence.
-- [OhMyThreads.jl thread-safe storage](https://juliafolds2.github.io/OhMyThreads.jl/stable/literate/tls/tls/) -- TaskLocalValue pattern for per-task buffers. HIGH confidence.
-- [ITensors.jl multithreading guide](https://itensor.github.io/ITensors.jl/dev/Multithreading.html) -- BLAS.set_num_threads(1) pattern for Julia threading + BLAS coexistence. HIGH confidence.
-- [Julia Discourse: BLAS vs Julia threads](https://discourse.julialang.org/t/julia-threads-vs-blas-threads/8914) -- Thread oversubscription problem and solutions. HIGH confidence.
-- [Julia Discourse: Reproducible multithreaded Monte Carlo](https://discourse.julialang.org/t/reproducible-multithreaded-monte-carlo-task-local-random/35269) -- Per-task RNG patterns. HIGH confidence.
-- [JuliaCon 2025: Fixing Julia's task-local RNG](https://pretalx.com/juliacon-2025/talk/ZNBEAN/) -- TaskLocalRNG design, DotMix algorithm. HIGH confidence.
-- [QuantumToolbox.jl Monte Carlo solver](https://qutip.org/QuantumToolbox.jl/stable/users_guide/time_evolution/mcsolve) -- EnsembleThreads() pattern for parallel trajectories. HIGH confidence.
-- [Julia Discourse: JLD2 vs Arrow performance](https://discourse.julialang.org/t/why-jld2-jl-is-40x-slower-than-arrow-jl/122217) -- JLD2 slower for flat tables, but preserves Julia types. Informed JLD2+CSV dual strategy. MEDIUM confidence.
-- [DataFrames.jl documentation](https://dataframes.juliadata.org/stable/) -- Tabular data API. HIGH confidence.
-- [StableRNGs.jl GitHub](https://github.com/JuliaRandom/StableRNGs.jl) -- Cross-version reproducible RNG for tests. HIGH confidence.
-- [Welford's online algorithm (Wikipedia)](https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Welford's_online_algorithm) -- Numerically stable streaming variance. HIGH confidence (textbook algorithm).
+- [LsqFit.jl GitHub repository](https://github.com/JuliaNLSolvers/LsqFit.jl) -- v0.15.1 (April 2025), release history, dependency list. HIGH confidence.
+- [LsqFit.jl official documentation](https://julianlsolvers.github.io/LsqFit.jl/latest/) -- API reference, tutorials. HIGH confidence.
+- [LsqFit.jl Getting Started](https://julianlsolvers.github.io/LsqFit.jl/latest/getting_started/) -- confidence_interval, standard_error, estimate_covar API. HIGH confidence.
+- [LsqFit.jl Tutorial](https://julianlsolvers.github.io/LsqFit.jl/latest/tutorial/) -- Exponential model example, parameter bounds, weighted fitting. HIGH confidence.
+- [LsqFit.jl Project.toml](https://raw.githubusercontent.com/JuliaNLSolvers/LsqFit.jl/master/Project.toml) -- Dependencies: Distributions, ForwardDiff, NLSolversBase, StatsAPI, LinearAlgebra, Printf. Julia >= 1.6. HIGH confidence.
+- [Distributions.jl v0.25 docs](https://juliastats.org/Distributions.jl/v0.25/) -- Generated with Julia 1.11.7, confirming compatibility. HIGH confidence.
+- [Distributions.jl v0.25.123 on Zenodo](https://zenodo.org/records/18145493) -- Latest release Jan 2026. HIGH confidence.
+- [HypothesisTests.jl parametric tests](https://juliastats.org/HypothesisTests.jl/stable/parametric/) -- OneSampleTTest for gap validation. HIGH confidence.
+- [Bootstrap.jl](https://github.com/juliangehring/Bootstrap.jl) -- Evaluated but not recommended (LsqFit CI is sufficient). HIGH confidence evaluation.
+- [Julia Discourse: weighted LsqFit](https://discourse.julialang.org/t/how-to-do-weighted-least-squares-fit-with-lsqfit-jl/61136) -- Weight parameter usage patterns. MEDIUM confidence.
+- Standard exponential decay fitting methodology from NMR/spectroscopy literature -- log-linear initial guess, window selection, multi-exponential considerations. HIGH confidence (textbook methods).
 
 ---
-*Stack research for: QuantumFurnace.jl v1.1 Multi-Threaded Trajectory Engine & KMS-vs-GNS Experiments*
-*Researched: 2026-02-15*
+*Stack research for: QuantumFurnace.jl Spectral Gap Estimation from Trajectory Observable Decay*
+*Researched: 2026-02-16*

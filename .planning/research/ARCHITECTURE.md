@@ -1,786 +1,769 @@
-# Architecture: Multi-Threaded Trajectory Engine, GNS Path, Adaptive Sampling, Experiments
+# Architecture: Spectral Gap Estimation from Trajectory Observable Decay
 
-**Domain:** Multi-threaded trajectory sampling + GNS trajectory path + convergence experiments for QuantumFurnace.jl
-**Researched:** 2026-02-15
-**Confidence:** HIGH (direct codebase analysis of all source files + Julia threading documentation)
+**Domain:** Observable-only trajectory runner + exponential fitting for Lindbladian spectral gap estimation
+**Researched:** 2026-02-16
+**Confidence:** HIGH (direct codebase analysis of all source files, existing architecture patterns well understood from v1.0-v1.2)
 
-## System Overview: New Components Integrated With Existing Architecture
+## System Overview: New Components in Existing Architecture
 
 ```
-EXISTING (unchanged)                        NEW / MODIFIED (this milestone)
-=================                           ================================
+EXISTING (read-only or lightly modified)         NEW (this milestone)
+========================================         ====================
 
-+-- structs.jl ----------------------------+
-|  HamHam{T}, TrottTrott{T}               |   READ-ONLY by all threads
-|  Config{D,T}: ThermalizeConfig,          |
-|    ThermalizeConfigGNS                   |
-|  JumpOp, HotAlgorithmResults             |
-+------------------------------------------+
+trajectories.jl                                  spectral_gap.jl (NEW)
+  TrajectoryFramework (read-only)                  SpectralGapResult struct
+  TrajectoryWorkspace (per-thread)                 estimate_spectral_gap()
+  step_along_trajectory!(psi, fw, ws, rng)           -> calls run_observable_trajectories
+  _accumulate_measurements!                          -> calls fit_exponential_decay
+  _accumulate_density_matrix!                        -> optionally cross-validates vs exact
+  _run_chunk_with_obs!  (TEMPLATE)
+  _run_batch_no_obs!    (reused for final DM)      run_observable_trajectories() (NEW)
+  run_trajectories(...; observables)                  -> _run_chunk_obs_only! (NEW)
+                                                      -> observable-only hot loop
+convergence.jl                                       -> DM once at end via _run_batch_no_obs!
+  run_trajectories_convergence
+  run_trajectories_adaptive                        fit_exponential_decay() (NEW)
+  build_convergence_observables                      -> model: f(t) = A*exp(-lambda*t) + C
+                                                     -> uses LsqFit.jl curve_fit with bounds
+furnace.jl
+  run_lindbladian -> LindbladianResult             convergence.jl (MODIFIED)
+    .spectral_gap (exact reference)                  build_total_magnetization(ham, n_qubits)
+                                                     build_gap_estimation_observables(ham, n)
 
-+-- furnace_utensils.jl --------------------+
-|  _precompute_data(config, ham_or_trott)  |   Called ONCE before spawning threads
-|  NUFFTPrefactors, transition functions   |   Result is READ-ONLY shared data
-+------------------------------------------+
-
-+-- trajectories.jl ------------------------+   +-- NEW: parallel_trajectories.jl --------+
-|  TrajectoryFramework{T,D}                |   |  run_trajectories_parallel(...)         |
-|  build_trajectoryframework(...)          |   |    - Builds ONE framework               |
-|  step_along_trajectory!(psi, fw)         |   |    - Clones per-thread workspace        |
-|  run_trajectories(...)  [single-thread]  |   |    - Spawns @threads loop               |
-|  _evolve_along_trajectory!(psi, fw, t)   |   |    - Reduces rho_mean + observables     |
-+------------------------------------------+   |    - Returns TrajectoryResults          |
-                                               +----------------------------------------+
-
-+-- energy_domain.jl -----------------------+
-|  pick_transition(ThermalizeConfigGNS)    |   Already dispatches correctly for GNS
-|    -> _pick_transition_gns(config)       |   No changes needed
-+------------------------------------------+
-
-+-- coherent.jl ----------------------------+   +-- NEW: adaptive_sampling.jl -------------+
-|  _precompute_coherent_total_B(...)       |   |  AdaptiveBatchManager                   |
-|  with_coherent enforced false for GNS    |   |    - Runs batches of N_batch trajs      |
-|  -> B term naturally skipped             |   |    - Evaluates convergence criteria      |
-+------------------------------------------+   |    - Decides continue/stop               |
-                                               |  Convergence criteria:                   |
-                                               |    - Trace distance variance             |
-                                               |    - Observable variance                 |
-                                               +------------------------------------------+
-
-                                               +-- NEW: experiment_runner.jl --------------+
-                                               |  ExperimentSpec (parameter grid)         |
-                                               |  ExperimentResult (config+data+metadata) |
-                                               |  run_kms_vs_gns_experiment(...)          |
-                                               |  save/load via JLD2                      |
-                                               +------------------------------------------+
+structs.jl
+  LindbladianResult{T} (.spectral_gap)
+  TrajectoryResult (measurements_mean, times)
+  ConvergenceData
 ```
 
-## Question 1: Thread-Safe Read-Only Access to Precomputed Data
+## Recommended Architecture
 
-### The Problem
+### Principle: Compose Existing Primitives, Add Minimal New Code
 
-`TrajectoryFramework` currently bundles read-only precomputed data (per-operator Kraus matrices, precomputed_data NamedTuple, config, jumps) with mutable per-trajectory workspace (`TrajectoryWorkspace` containing `jump_oft`, `psi_tmp`, `Rpsi`). Multiple threads cannot share a single `TrajectoryWorkspace` because `step_along_trajectory!` mutates it in-place.
+The existing codebase provides all the trajectory simulation machinery. The new milestone needs:
 
-### Recommended Architecture: Immutable Framework + Per-Thread Workspace
+1. A trajectory runner variant that measures observables during simulation but skips per-trajectory DM reconstruction (reconstructing the DM only once from a separate final run or from the same trajectories at the end)
+2. An exponential fitting function to extract decay rate from observable time series
+3. A result struct to package the estimated gap with metadata
+4. A total magnetization observable builder
+5. A cross-validation helper that compares trajectory-estimated gap against exact eigenvalue gap
+
+### Component 1: Observable-Only Trajectory Runner
+
+**What exists:** `_run_chunk_with_obs!` measures observables at `save_every` intervals AND accumulates DM at the end of each trajectory. The DM accumulation (`_accumulate_density_matrix!`) is a rank-1 update (O(dim^2)) at the end of each trajectory -- cheap for dim=16 (n=4) but nontrivial for dim=256 (n=8).
+
+**What is needed:** A trajectory runner that:
+- Measures observables at regular intervals (same as `_run_chunk_with_obs!`)
+- Does NOT reconstruct the DM per trajectory during the observable measurement pass
+- Optionally reconstructs the DM once at the end (by running `_run_batch_no_obs!` separately or by accumulating DM from the same trajectories at the final step only)
+
+**Key insight:** The existing `_run_chunk_with_obs!` already does both observable measurement and DM accumulation. The "observable-only" variant is a simplification: remove the `_accumulate_density_matrix!` call from the per-trajectory loop, and add it back only at the very end (or as a separate pass). This is a small modification.
+
+**Recommended approach -- new function `_run_chunk_obs_only!`:**
 
 ```julia
-# EXISTING (no changes):
-struct TrajectoryFramework{T,D<:AbstractDomain}
-    domain::D
-    jumps::Vector{JumpOp}
-    ham_or_trott::Union{HamHam, TrottTrott}
-    config::AbstractThermalizeConfig{D}
-    precomputed_data::Any
-    per_operator::Vector{PerOperatorKraus{T}}
-    n_jumps::Int
-    delta::Float64
-    delta_eff::Float64
-    alpha::Float64
-    ws::TrajectoryWorkspace{T}  # <-- This is the problem for threading
+function _run_chunk_obs_only!(
+    ws::TrajectoryWorkspace{<:Complex},
+    fw::TrajectoryFramework{<:Complex},
+    psi0::Vector{<:Complex},
+    chunk::UnitRange{Int},
+    master_seed::Int,
+    total_time::Real,
+    observables::Vector{<:Matrix{<:Complex}},
+    save_every::Int,
+    num_steps::Int,
+    num_saves::Int,
+    mean_data_local::Matrix{Float64},
+    # NEW: optional final-step DM accumulation
+    accumulate_final_dm::Bool,
+)
+    psi = copy(psi0)
+    tmp_meas = ws.psi_tmp
+
+    for traj_id in chunk
+        rng = Random.Xoshiro(master_seed + traj_id)
+        copyto!(psi, psi0)
+        n2 = real(dot(psi, psi))
+        rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
+
+        # Measure at t=0
+        _accumulate_measurements!(mean_data_local, 1, psi, observables, tmp_meas)
+
+        save_idx = 1
+        for step in 1:num_steps
+            step_along_trajectory!(psi, fw, ws, rng)
+            if step % save_every == 0
+                save_idx += 1
+                _accumulate_measurements!(mean_data_local, save_idx, psi, observables, tmp_meas)
+            end
+        end
+
+        # DM accumulation: ONLY if requested (for final-step DM)
+        if accumulate_final_dm
+            _accumulate_density_matrix!(ws.rho_acc, psi)
+        end
+    end
+    return nothing
 end
 ```
 
-The cleanest approach: **separate the mutable workspace from the immutable framework**.
+**Why not just use `_run_chunk_with_obs!` as-is:** The existing function always accumulates DM. For the spectral gap estimation use case, the user wants many short trajectories with frequent observable snapshots to fit the decay curve, and DM reconstruction is secondary. Skipping per-trajectory DM accumulation (or making it optional) clarifies intent and slightly reduces memory pressure on the workspace `rho_acc` buffer (though the cost is negligible for current system sizes).
+
+**Alternative considered and rejected -- reuse existing `run_trajectories` with `accumulate_final_dm=true`:** Adding a boolean flag to the existing `_run_chunk_with_obs!` would work, but pollutes the existing function with a parameter that 95% of callers do not need. A separate function is cleaner. The new function can share the inner loop structure via copy (both functions are ~25 lines; DRY is not a concern at this size).
+
+### Component 2: Public API -- `run_observable_trajectories`
+
+This is the public entry point for observable-only trajectory simulation:
 
 ```julia
-# NEW: Thread-local workspace, allocated per thread
-struct ThreadTrajectoryState{T}
-    ws::TrajectoryWorkspace{T}   # jump_oft, psi_tmp, Rpsi buffers
-    psi::Vector{T}               # Current state vector (reused across trajectories)
-    rho_local::Matrix{T}         # Thread-local density matrix accumulator
-    obs_local::Union{Nothing, Matrix{Float64}}  # Thread-local observable accumulator
-    rng::Random.AbstractRNG      # Per-thread RNG for reproducibility
-end
+"""
+    run_observable_trajectories(jumps, config, psi0, hamiltonian;
+        observables, save_every, ntraj, total_time, delta, seed,
+        trotter, reconstruct_dm)
 
-function ThreadTrajectoryState(::Type{T}, dim::Int, n_obs::Int, seed::Int) where {T}
-    ThreadTrajectoryState{T}(
-        TrajectoryWorkspace(T, dim),
-        zeros(T, dim),
-        zeros(T, dim, dim),
-        n_obs > 0 ? zeros(Float64, n_obs, num_saves) : nothing,
-        Random.MersenneTwister(seed),
+Run trajectories measuring observables at regular intervals.
+Unlike run_trajectories, DM reconstruction is optional (controlled
+by `reconstruct_dm`; default false). When false, rho_mean in the
+returned TrajectoryResult is zeros (not computed).
+
+Returns TrajectoryResult with times and measurements_mean populated.
+"""
+function run_observable_trajectories(
+    jumps::Vector{JumpOp},
+    config::AbstractThermalizeConfig,
+    psi0::Vector{<:Complex},
+    hamiltonian::HamHam;
+    observables::Vector{<:Matrix{<:Complex}},
+    save_every::Int = 1,
+    ntraj::Int = 1000,
+    total_time::Real = config.mixing_time,
+    delta::Real = config.delta,
+    seed::Union{Int,Nothing} = nothing,
+    trotter::Union{TrottTrott,Nothing} = nothing,
+    reconstruct_dm::Bool = false,
+)
+```
+
+**Integration with existing architecture:** This function follows the exact same pattern as `run_trajectories`:
+1. Call `_build_framework_and_seed` (existing) to get `(fw, actual_seed)`
+2. Compute `num_steps`, `num_saves`, `times` (same logic as `run_trajectories`)
+3. Dispatch to multi-threaded or serial `_run_chunk_obs_only!` (new)
+4. Return `TrajectoryResult` with `measurements_mean` and `times` populated, `rho_mean` zeros or computed depending on `reconstruct_dm`
+
+**Where this lives:** `src/spectral_gap.jl` (new file). Keeping it separate from `trajectories.jl` prevents the already-large trajectories file (927 lines) from growing further, and groups all spectral-gap-related code together.
+
+### Component 3: Exponential Fitting
+
+**The physics:** For a Lindbladian with spectral gap lambda (the real part of the second-smallest eigenvalue of the Liouvillian), observables decay exponentially toward their steady-state value:
+
+```
+<O>(t) - <O>_ss  ~  A * exp(-lambda * t)  as t -> infinity
+```
+
+where `<O>_ss = tr(O * rho_ss)` is the steady-state expectation value. The decay rate lambda equals the real part of the Lindbladian spectral gap (|Re(eigenvalue_2)|).
+
+In practice, the observable time series has:
+- An initial transient (first few steps) where the system has not yet "felt" the gap mode
+- An exponential decay regime (most of the time series)
+- Statistical noise from finite trajectory averaging
+- A plateau at the steady-state value
+
+**Fitting model:**
+
+```
+f(t, p) = p[1] * exp(-p[2] * t) + p[3]
+```
+
+where:
+- `p[1]` = amplitude A (can be positive or negative)
+- `p[2]` = decay rate lambda (this is the spectral gap estimate)
+- `p[3]` = steady-state offset C = <O>_ss
+
+**Implementation using LsqFit.jl:**
+
+LsqFit.jl is the standard Julia package for nonlinear curve fitting. It provides Levenberg-Marquardt optimization with parameter bounds, automatic Jacobian via ForwardDiff, and built-in confidence intervals / standard errors. This is preferred over raw Optim.jl because:
+
+1. `curve_fit` with `lower`/`upper` bounds constrains `gap > 0` natively
+2. `confidence_interval(fit, alpha)` gives t-distribution-based CIs on the gap
+3. `standard_error(fit)` gives Jacobian-based parameter uncertainties
+4. The transitive deps (ForwardDiff, NLSolversBase) are already in the Manifest via Optim
+
+```julia
+using LsqFit
+
+function fit_exponential_decay(
+    times::Vector{Float64},
+    values::Vector{Float64};
+    p0::Union{Nothing, Vector{Float64}} = nothing,
+    skip_initial::Int = 0,
+    gibbs_value::Union{Nothing, Float64} = nothing,
+)
+    # Trim initial transient
+    t = times[skip_initial+1:end]
+    y = values[skip_initial+1:end]
+
+    # Model
+    model(t, p) = p[1] .* exp.(-p[2] .* t) .+ p[3]
+
+    # Auto-initialize if no guess provided
+    if p0 === nothing
+        C_guess = gibbs_value !== nothing ? gibbs_value : mean(y[max(1,end-div(length(y),5)):end])
+        A_guess = y[1] - C_guess
+        # Log-linear estimate for gap
+        shifted = abs.(y .- C_guess) .+ 1e-15
+        log_y = log.(shifted)
+        gap_guess = -(log_y[end] - log_y[1]) / (t[end] - t[1])
+        gap_guess = max(gap_guess, 1e-6)
+        p0 = [A_guess, gap_guess, C_guess]
+    end
+
+    # Bounds: gap must be positive
+    lower = [-Inf, 0.0, -Inf]
+    upper = [Inf, Inf, Inf]
+
+    fit = curve_fit(model, t, y, p0; lower=lower, upper=upper)
+
+    # Extract results
+    params = fit.param
+    gap_ci = confidence_interval(fit, 0.05)[2]  # 95% CI on gap
+    gap_se = standard_error(fit)[2]
+
+    return (
+        amplitude = params[1],
+        decay_rate = params[2],   # This is the spectral gap estimate
+        offset = params[3],
+        converged = fit.converged,
+        residual_norm = sqrt(sum(fit.resid.^2) / length(t)),
+        confidence_interval = gap_ci,
+        standard_error = gap_se,
+        fit_result = fit,  # Raw LsqFit result for further analysis
     )
 end
 ```
 
-### Why This Works
+**Why LsqFit.jl over Optim.jl:** While Optim.jl is already a dependency and can do nonlinear optimization, LsqFit.jl wraps Levenberg-Marquardt with purpose-built curve fitting infrastructure: automatic Jacobian computation, covariance estimation, confidence intervals, and parameter bounds. Reimplementing these with raw Optim.jl would be error-prone and redundant. LsqFit.jl adds one direct dependency; its transitive deps (ForwardDiff, NLSolversBase, StatsAPI) are already resolved in the Manifest.toml via Optim. The only truly new transitive package is Distributions.jl (used internally for t-distribution quantiles in confidence intervals).
 
-1. **`TrajectoryFramework` fields are all immutable or read-only after construction:**
-   - `per_operator::Vector{PerOperatorKraus{T}}` -- Kraus matrices R, K0, U_residual, U_B are precomputed and never mutated during stepping
-   - `precomputed_data` -- NUFFTPrefactors, transition function, energy_labels are read-only
-   - `jumps` -- JumpOp data and in_eigenbasis are read-only
-   - `config` -- immutable struct
-   - `ham_or_trott` -- immutable after construction
+**Why Levenberg-Marquardt over NelderMead:** LM uses gradient information (via the Jacobian) for faster convergence and provides the Jacobian-based covariance matrix needed for confidence intervals. NelderMead is derivative-free but cannot produce uncertainty estimates without additional work.
 
-2. **`TrajectoryWorkspace` fields are the ONLY mutable state:**
-   - `jump_oft` -- scratch buffer overwritten each step
-   - `psi_tmp` -- scratch buffer overwritten each step
-   - `Rpsi` -- scratch buffer overwritten each step
+**Alternative considered:** Linear regression on log-transformed data `log(|<O>(t) - C|) = log(A) - lambda*t`. This avoids nonlinear optimization but requires knowing `C` (the steady-state value) a priori, and breaks when `<O>(t) - C` changes sign (which happens with noisy data). The nonlinear fit is more robust. However, the log-linear approach is used as the initial guess strategy (see STACK.md for details).
 
-3. **Julia's memory model guarantees**: Read-only access to shared immutable data across threads requires no synchronization. The `NUFFTPrefactors.data` (3D array) and `per_operator` Kraus matrices are allocated once and only read during `step_along_trajectory!`.
-
-### BLAS Thread Management
-
-Critical: `step_along_trajectory!` calls `mul!` (BLAS gemv/gemm) inside each trajectory step. If Julia threads > 1 AND BLAS threads > 1, nested parallelism causes thread oversubscription and performance collapse.
-
-```julia
-# At the start of run_trajectories_parallel:
-BLAS.set_num_threads(1)  # Disable BLAS multithreading
-# ... run @threads loop ...
-# Optionally restore after: BLAS.set_num_threads(n_blas_original)
-```
-
-This is standard practice for Julia multi-threaded scientific computing. The existing codebase already imports `Base.Threads` (line 18 of `QuantumFurnace.jl`).
-
-### Per-Thread RNG Strategy
-
-Julia's `TaskLocalRNG` (default since Julia 1.7) is per-task, not per-thread, which is suitable for `@spawn` but not ideal for `@threads` reproducibility. For reproducible parallel Monte Carlo:
-
-```julia
-# Create independent RNGs with jump-ahead (guaranteed non-overlapping streams)
-rngs = [Random.MersenneTwister(seed + i) for i in 1:nthreads()]
-```
-
-Then pass `rngs[threadid()]` into the trajectory loop. The existing codebase uses `rand()` directly in `step_along_trajectory!`, so thread-local RNG requires either:
-
-- **Option A (recommended):** Modify `step_along_trajectory!` to accept an `rng` argument: `rand(rng, 1:fw.n_jumps)` instead of `rand(1:fw.n_jumps)`. This is a small signature change with big payoff for reproducibility.
-- **Option B:** Use `@threads :static` scheduling (guarantees thread IDs are stable) and seed task-local RNG per thread before the loop.
-
-**Recommendation: Option A.** It is explicit, testable, and matches the pattern already used in `run_thermalization` (which already accepts `rng::AbstractRNG`).
-
-## Question 2: GNS Trajectory Path Integration
-
-### Current GNS Dispatch Architecture
-
-The existing code already has a clean KMS-vs-GNS dispatch via config type:
-
-```
-Config type hierarchy:
-  AbstractThermalizeConfig{D,T}
-    |-- ThermalizeConfig{D,T}      (KMS line)
-    |-- ThermalizeConfigGNS{D,T}   (GNS line)
-
-Dispatch points (already working):
-  1. pick_transition(config::ThermalizeConfigGNS)  -> _pick_transition_gns(config)
-     Returns UNSHIFTED gamma_tilde(w) satisfying KMS condition directly
-  2. _pick_alpha(config::ThermalizeConfigGNS)      -> _pick_alpha_gns(config)
-     Returns GNS alpha function for BohrDomain
-  3. validate_config!(config): enforces with_coherent=false for GNS
-  4. _precompute_data(config, ham_or_trott): uses pick_transition(config),
-     so GNS transition weight flows automatically via dispatch
-  5. Coherent B term: _precompute_coherent_total_B returns nothing when
-     config.with_coherent==false (enforced for GNS configs)
-```
-
-### What Needs to Change for GNS Trajectory Path
-
-**Almost nothing.** The trajectory code in `trajectories.jl` dispatches on `AbstractThermalizeConfig{D}` for the domain type, and the GNS-specific behavior flows through `_precompute_data` and `pick_transition` which already handle `ThermalizeConfigGNS` correctly.
-
-Here is the exhaustive list of functions that must accept `ThermalizeConfigGNS`:
-
-| Function | File | Current Dispatch | GNS Status |
-|----------|------|-----------------|------------|
-| `run_trajectories()` | `trajectories.jl` | `config::AbstractThermalizeConfig` | **Already works** -- accepts any subtype |
-| `build_trajectoryframework()` | `trajectories.jl` | `config::AbstractThermalizeConfig` | **Already works** |
-| `_precompute_data()` | `furnace_utensils.jl` | Dispatches on domain `D` | **Already works** -- calls `pick_transition(config)` which dispatches on GNS |
-| `pick_transition()` | `energy_domain.jl` | Has explicit `ThermalizeConfigGNS` method | **Already works** |
-| `_precompute_R()` | `trajectories.jl` | `config::AbstractThermalizeConfig{D}` | **Already works** -- uses `precomputed_data.transition` |
-| `step_along_trajectory!()` | `trajectories.jl` | `fw::TrajectoryFramework{T,D}` | **Already works** -- uses `fw.precomputed_data.transition` |
-| `_precompute_coherent_total_B()` | `coherent.jl` | `config::AbstractConfig` | **Already works** -- returns `nothing` when `with_coherent==false` |
-| `validate_config!()` | `misc_tools.jl` | `config::AbstractConfig` | **Already works** -- enforces `with_coherent=false` for GNS |
-| `_select_b_plus_calculator()` | `furnace_utensils.jl` | `config::Union{LiouvConfig, ThermalizeConfig}` | **N/A** -- only called when `with_coherent==true`, which GNS configs cannot be |
-
-### The One Required Change
-
-The `_select_b_plus_calculator` function only dispatches on `Union{LiouvConfig, ThermalizeConfig}` (KMS types). If someone bypasses validation and passes a GNS config with `with_coherent=true` (which the inner constructor blocks), it would error. **This is NOT a bug -- the inner constructor prevents it.** No code change needed.
-
-### Verification Strategy for GNS Trajectory Path
-
-The right way to verify GNS trajectories work is:
-
-1. Create a `ThermalizeConfigGNS` with valid parameters
-2. Run `run_trajectories(jumps, config_gns, psi0, ham; ntraj=N)`
-3. Compare trajectory-averaged rho against:
-   - The GNS Liouvillian fixed point (from `run_lindbladian` with `LiouvConfigGNS`)
-   - The Gibbs state (with expected domain approximation error)
-4. Confirm that `per_op.U_B === nothing` for all operators (no coherent term)
-
-```julia
-# Smoke test for GNS trajectory path:
-gns_config = ThermalizeConfigGNS(
-    num_qubits=4, with_coherent=false,
-    with_linear_combination=true, domain=EnergyDomain(),
-    beta=10.0, sigma=0.1, a=1/30, b=0.4,
-    num_energy_bits=12, w0=0.05, t0=T0,
-    num_trotter_steps_per_t0=10,
-    mixing_time=10.0, delta=0.01
-)
-result = run_trajectories(jumps, gns_config, psi0, ham; ntraj=1000)
-# result.framework.per_operator[1].U_B === nothing  # Confirm no B term
-```
-
-## Question 3: Adaptive Sampling Architecture
-
-### Design: Batch-Based Convergence Testing
-
-Adaptive sampling means "keep running trajectories until convergence criteria are met." The architecture should separate three concerns:
-
-1. **Batch execution** -- run N trajectories in parallel and accumulate results
-2. **Convergence evaluation** -- assess whether current results are converged
-3. **Decision logic** -- continue, stop, or adjust batch size
+### Component 4: Result Struct
 
 ```julia
 """
-Manages adaptive trajectory sampling with convergence detection.
-
-Usage:
-    manager = AdaptiveBatchManager(fw, psi0;
-        batch_size=100, max_trajectories=100_000,
-        convergence_criterion=TraceDistanceVariance(rtol=0.01))
-
-    while !is_converged(manager)
-        run_batch!(manager)
-    end
-
-    result = finalize(manager)
+Spectral gap estimation result from trajectory observable decay.
 """
-mutable struct AdaptiveBatchManager{T, C<:ConvergenceCriterion}
-    # Immutable setup
-    fw::TrajectoryFramework{T}
-    psi0::Vector{T}
-    gibbs::Union{Nothing, Hermitian}  # Target state (if known, for convergence check)
-    observables::Union{Nothing, Vector{Matrix{T}}}
+struct SpectralGapResult{T<:AbstractFloat}
+    # Estimated gap
+    estimated_gap::T                    # |lambda| from exponential fit
+    gap_confidence_interval::Tuple{T,T} # 95% CI from LsqFit
+    gap_standard_error::T               # SE from Jacobian covariance
+    fit_amplitude::T                    # A from fit
+    fit_offset::T                       # C from fit (steady-state estimate)
+    fit_converged::Bool                 # Did LM converge?
+    fit_residual_norm::T                # RMS residual of fit
 
-    # Mutable state
-    rho_running::Matrix{T}              # Running sum of |psi><psi| across all trajectories
-    obs_running::Union{Nothing, Matrix{Float64}}  # Running sum of <O_i> per trajectory
-    n_completed::Int                     # Total trajectories completed so far
+    # Observable used
+    observable_name::String             # Which observable was fitted
+    observable_index::Int               # Index in the observables vector
 
-    # Convergence tracking
-    criterion::C
-    convergence_history::Vector{Float64}  # Value of criterion after each batch
-    batch_size::Int
-    max_trajectories::Int
+    # Per-observable fits (for multi-observable consistency check)
+    all_gap_estimates::Vector{T}        # Gap from each observable
+    all_observable_names::Vector{String}
 
-    # Thread-local state (created lazily on first batch)
-    thread_states::Union{Nothing, Vector{ThreadTrajectoryState{T}}}
-end
-```
+    # Cross-validation (optional, only for small systems)
+    exact_gap::Union{Nothing, Complex{T}}  # From run_lindbladian, if available
+    relative_error::Union{Nothing, T}      # |estimated - |Re(exact)|| / |Re(exact)|
 
-### Convergence Criteria (Trait Pattern)
-
-```julia
-abstract type ConvergenceCriterion end
-
-"""Stop when trace distance between consecutive batch-averages is below rtol."""
-struct TraceDistanceStability <: ConvergenceCriterion
-    rtol::Float64       # Relative tolerance
-    window::Int         # Number of consecutive batches that must be stable
-end
-
-"""Stop when standard error of per-observable means is below atol."""
-struct ObservableVariance <: ConvergenceCriterion
-    atol::Float64       # Absolute tolerance on standard error
-end
-
-"""Stop when batch-averaged rho is within threshold of target Gibbs state."""
-struct GibbsProximity <: ConvergenceCriterion
-    threshold::Float64  # Trace distance threshold
-end
-
-# Evaluate convergence after each batch
-function evaluate_convergence(
-    crit::TraceDistanceStability,
-    manager::AdaptiveBatchManager,
-)::Bool
-    length(manager.convergence_history) < crit.window && return false
-    recent = manager.convergence_history[end-crit.window+1:end]
-    return all(v -> v < crit.rtol, recent)
-end
-```
-
-### Thread Coordination for Adaptive Batches
-
-Each batch runs a fixed number of trajectories in parallel, then synchronizes to evaluate convergence:
-
-```
-Batch 1:  Thread1[N/nthreads trajs] | Thread2[...] | ... | ThreadK[...]
-          |                          |                     |
-          +--- reduce into rho_running (atomic add or per-thread + merge) ---+
-          |
-          Evaluate convergence criterion
-          |
-Batch 2:  Thread1[...] | Thread2[...] | ... | ThreadK[...]
-          |
-          ...
-          |
-Done:     Return averaged rho_mean = rho_running / n_completed
-```
-
-The reduction after each batch can use a simple sequential merge of per-thread accumulators (cost: K * dim^2 additions, negligible compared to trajectory cost).
-
-### Online Mean Computation
-
-For numerical stability, use the Welford online algorithm for the running mean:
-
-```julia
-function accumulate_batch!(manager::AdaptiveBatchManager, batch_rho::Matrix)
-    manager.n_completed += batch_size
-    # Simple running sum (divide by n_completed at query time)
-    manager.rho_running .+= batch_rho
-end
-
-function current_mean(manager::AdaptiveBatchManager)
-    return manager.rho_running ./ manager.n_completed
-end
-```
-
-For variance tracking (needed by `TraceDistanceStability`), track batch-level means:
-
-```julia
-# After each batch:
-batch_mean = batch_rho ./ batch_size
-overall_mean = current_mean(manager)
-# Convergence metric: trace_distance(batch_mean, overall_mean)
-push!(manager.convergence_history, trace_distance_h(
-    Hermitian(batch_mean), Hermitian(overall_mean)))
-```
-
-## Question 4: Per-Observable Tracking
-
-### During Trajectory vs Post-Average
-
-**During trajectory (recommended).** Per-observable expectation values must be computed on the pure state `psi` within each trajectory step, then averaged. You cannot compute `<O>` from the averaged `rho_mean` after the fact if you want time-resolved observable curves, because the trajectory-average of `<psi|O|psi>` at intermediate times gives the time-resolved expectation, while `tr(O * rho_mean)` only gives the final-time expectation.
-
-The existing `run_trajectories` already implements this correctly via `_accumulate_measurements!`:
-
-```julia
-# FROM trajectories.jl (existing, lines 405-437):
-for _ in 1:ntraj
-    copyto!(psi, psi0)
-    # normalize once per trajectory
-    save_idx = 1
-    for step in 1:num_steps
-        step_along_trajectory!(psi, fw)
-        if step % save_every == 0
-            save_idx += 1
-            _accumulate_measurements!(mean_data, save_idx, psi, observables, tmp_meas)
-        end
-    end
-end
-mean_data ./= ntraj  # Average over trajectories
-```
-
-### Thread-Safe Observable Accumulation
-
-Each thread accumulates into its own `obs_local::Matrix{Float64}` (dimensions: `n_observables x num_saves`). After the `@threads` loop, merge:
-
-```julia
-# Merge thread-local accumulators
-for state in thread_states
-    mean_data .+= state.obs_local
-end
-mean_data ./= ntraj
-```
-
-This avoids any atomic operations or locks during the hot loop. The merge cost is `O(nthreads * n_obs * num_saves)`, which is negligible.
-
-### Observable Choice for KMS-vs-GNS Experiments
-
-For the paper experiments, the relevant observables are:
-1. **Trace distance to Gibbs**: `trace_distance_h(Hermitian(rho_traj), gibbs)` -- computed post-average from `rho_mean`
-2. **Per-site magnetization**: `<Z_i>` for each qubit site -- measured per-trajectory at each save point
-3. **Energy**: `<H>` -- measured per-trajectory, tracks thermalization
-4. **Purity**: `tr(rho^2)` -- computed post-average from `rho_mean`
-
-Items 2-3 require during-trajectory measurement. Items 1 and 4 can be computed from the final `rho_mean`.
-
-## Question 5: Experiment Results Data Model
-
-### Recommended Structure
-
-```julia
-"""
-Complete record of a single experiment run: configuration + results + metadata.
-Designed for serialization via JLD2.
-"""
-struct ExperimentResult{D, T<:AbstractFloat}
-    # --- Configuration (what was run) ---
-    config::AbstractThermalizeConfig{D,T}
-    hamiltonian_id::String          # e.g. "heis_disordered_periodic_n4"
-    db_type::Symbol                 # :KMS or :GNS
-    num_qubits::Int
-    beta::T
-    domain::D
-
-    # --- Trajectory results ---
-    rho_mean::Matrix{Complex{T}}    # Trajectory-averaged density matrix
-    n_trajectories::Int             # Number of trajectories used
-    wall_time_seconds::Float64      # Total wall-clock time
-
-    # --- Observable time series (if measured) ---
-    times::Union{Nothing, Vector{Float64}}
-    observable_means::Union{Nothing, Matrix{Float64}}  # (n_obs x n_times)
-    observable_names::Union{Nothing, Vector{String}}
-
-    # --- Convergence diagnostics ---
-    trace_dist_to_gibbs::T          # Final trace distance to Gibbs
-    trace_dist_to_fixed_point::Union{Nothing, T}  # If Liouvillian FP was computed
-    convergence_history::Union{Nothing, Vector{Float64}}  # Batch convergence values
-
-    # --- Metadata ---
-    timestamp::String               # ISO 8601
-    julia_version::String
-    n_threads::Int
-    git_commit::Union{Nothing, String}
-    seed::Int
-end
-```
-
-### Serialization Strategy
-
-Use **JLD2** (already HDF5-compatible, pure Julia, handles arbitrary Julia types):
-
-```julia
-using JLD2
-
-function save_experiment(result::ExperimentResult, path::String)
-    jldsave(path; result=result)
-end
-
-function load_experiment(path::String)::ExperimentResult
-    return load(path, "result")
-end
-```
-
-JLD2 natively serializes complex Julia types including parametric structs, so `ExperimentResult{EnergyDomain, Float64}` round-trips correctly. The existing codebase uses BSON for Hamiltonian serialization (which has known fragility with struct evolution -- see `_load_hamiltonian_bson`), so JLD2 is a deliberate upgrade.
-
-### File Organization for Experiments
-
-```
-experiments/
-  kms_vs_gns/
-    n4_beta10_energy/
-      kms_ntraj10000_seed42.jld2
-      gns_ntraj10000_seed42.jld2
-    n6_beta10_energy/
-      kms_ntraj10000_seed42.jld2
-      gns_ntraj10000_seed42.jld2
-    summary.jld2  # Aggregated comparison data
-```
-
-### Separation from Source
-
-Experiment scripts should live in `experiments/` (not `src/`), with the new source components (`parallel_trajectories.jl`, `adaptive_sampling.jl`) in `src/`. The experiment runner uses the library API:
-
-```
-src/                        experiments/
-  parallel_trajectories.jl    kms_vs_gns.jl  (script: defines grid, calls library)
-  adaptive_sampling.jl        analyze_results.jl  (script: loads JLD2, makes plots)
-  experiment_types.jl         plot_convergence.jl
-```
-
-## Question 6: Parameter Sweep Organization (n=4,6,8)
-
-### Recommended: Flat Parameter Grid with Job Specification
-
-```julia
-"""
-Specification for a single experiment point in a parameter sweep.
-"""
-struct ExperimentSpec{D<:AbstractDomain, T<:AbstractFloat}
-    num_qubits::Int
-    beta::T
-    domain::D
-    db_type::Symbol   # :KMS or :GNS
-    with_coherent::Bool
+    # Trajectory metadata
     n_trajectories::Int
+    total_time::T
+    save_every::Int
     seed::Int
-    # ... other parameters from ThermalizeConfig
-end
-
-"""
-Generate the full parameter grid for KMS-vs-GNS experiments.
-"""
-function kms_vs_gns_grid(;
-    qubit_counts = [4, 6, 8],
-    betas = [10.0],
-    domains = [EnergyDomain()],
-    db_types = [:KMS, :GNS],
-    n_trajectories = 10_000,
-    base_seed = 42,
-)::Vector{ExperimentSpec}
-    specs = ExperimentSpec[]
-    seed_counter = base_seed
-
-    for n in qubit_counts
-        for beta in betas
-            for domain in domains
-                for db in db_types
-                    with_coh = (db == :KMS)  # KMS can have B; GNS cannot
-                    push!(specs, ExperimentSpec(
-                        n, beta, domain, db, with_coh,
-                        n_trajectories, seed_counter))
-                    seed_counter += 1
-                end
-            end
-        end
-    end
-    return specs
 end
 ```
 
-### Why Flat Grid, Not Nested Loops
+**Where this lives:** `src/spectral_gap.jl` (with other gap estimation code). Unlike `LindbladianResult` and `TrajectoryResult` which are used across multiple files, `SpectralGapResult` is produced and consumed only by the gap estimation module. Co-locating the struct with its producer keeps `structs.jl` focused on core types and makes the gap estimation module self-contained.
 
-A flat grid of `ExperimentSpec` objects has several advantages over nested `for n in [4,6,8]; for db in [:KMS,:GNS]; ...`:
+### Component 5: Total Magnetization Observable
 
-1. **Resumability:** Each spec has a unique identity. If the experiment crashes at spec 7/12, you can resume from spec 8.
-2. **Progress tracking:** `ProgressMeter` over a flat vector gives clear ETA.
-3. **Selective re-running:** Failed or suspicious specs can be re-run individually.
-4. **Parallelism flexibility:** The grid can be split across multiple Julia processes (Distributed) or run serially.
+**What exists:** `build_convergence_observables` in `convergence.jl` builds nearest-neighbor `Z_iZ_{i+1}` correlations and energy `<H>` in the Hamiltonian eigenbasis.
 
-### Execution Pattern
+**What is needed:** Total magnetization `M_z = sum_i Z_i` in the Hamiltonian eigenbasis.
 
 ```julia
-function run_experiment_grid(specs::Vector{ExperimentSpec}, output_dir::String)
-    results = ExperimentResult[]
+"""
+    build_total_magnetization(hamiltonian::HamHam, num_qubits::Int) -> Matrix{ComplexF64}
 
-    for (i, spec) in enumerate(specs)
-        @info "Running experiment $i/$(length(specs))" spec.num_qubits spec.db_type
-
-        # Build Hamiltonian (expensive for n=8, dim=256)
-        ham = load_hamiltonian("heis", spec.num_qubits; beta=spec.beta)
-        jumps = build_standard_jumps(ham, spec.num_qubits)
-        psi0 = fill(ComplexF64(1.0), 2^spec.num_qubits) / sqrt(2^spec.num_qubits)
-
-        # Build config (KMS or GNS)
-        config = build_config(spec)
-
-        # Run with parallel trajectories + adaptive sampling
-        t0 = time()
-        result_data = run_trajectories_parallel(
-            jumps, config, psi0, ham;
-            ntraj=spec.n_trajectories,
-            seed=spec.seed,
-        )
-        wall_time = time() - t0
-
-        # Package result
-        result = ExperimentResult(
-            config=config,
-            hamiltonian_id="heis_disordered_periodic_n$(spec.num_qubits)",
-            db_type=spec.db_type,
-            # ... fill remaining fields ...
-        )
-
-        # Save immediately (crash resilience)
-        save_experiment(result, joinpath(output_dir, filename(spec)))
-        push!(results, result)
+Build the total magnetization operator M_z = sum_i Z_i in the Hamiltonian eigenbasis.
+"""
+function build_total_magnetization(hamiltonian::HamHam, num_qubits::Int)
+    V = hamiltonian.eigvecs
+    dim = 2^num_qubits
+    Mz_comp = zeros(ComplexF64, dim, dim)
+    for i in 1:num_qubits
+        Mz_comp .+= pad_term([Z], num_qubits, i)
     end
-    return results
+    return V' * Mz_comp * V  # Transform to eigenbasis
 end
 ```
 
-### Scaling Considerations for n=4,6,8
+**Where this lives:** `src/convergence.jl` alongside the existing `build_convergence_observables`. Add a convenience function that returns the full set needed for gap estimation:
 
-| n | dim | Precompute cost | Per-trajectory step cost | Memory per thread |
-|---|-----|----------------|------------------------|-------------------|
-| 4 | 16  | ~1s (NUFFT)    | ~100us (12 jumps, ~200 energies) | ~50 KB |
-| 6 | 64  | ~10s (NUFFT)   | ~1ms (18 jumps, ~200 energies) | ~800 KB |
-| 8 | 256 | ~100s (NUFFT)  | ~20ms (24 jumps, ~200 energies) | ~12 MB |
+```julia
+"""
+    build_gap_estimation_observables(hamiltonian::HamHam, num_qubits::Int)
 
-For n=8, each trajectory step involves `mul!` on 256x256 matrices. With 10K trajectories at 1000 steps each, that is 10M steps * 20ms = ~55 hours single-threaded. With 8 threads: ~7 hours. With adaptive sampling stopping early: potentially much less.
+Build observables for spectral gap estimation: energy + total magnetization + ZZ correlations.
+Returns (observables, names).
+"""
+function build_gap_estimation_observables(hamiltonian::HamHam, num_qubits::Int)
+    observables = Matrix{ComplexF64}[]
+    names = String[]
 
-**Implication:** n=8 experiments should:
-1. Use adaptive sampling aggressively (stop when converged)
-2. Use the largest reasonable batch size (amortize reduction overhead)
-3. Consider fewer trajectories if convergence is fast
-4. Save intermediate results after each batch
+    V = hamiltonian.eigvecs
 
-## Component Boundaries: New vs Modified
+    # Energy (diagonal in eigenbasis) -- strongest gap coupling
+    H_eigen = Matrix{ComplexF64}(diagm(ComplexF64.(hamiltonian.eigvals)))
+    push!(observables, H_eigen)
+    push!(names, "H")
+
+    # Total magnetization
+    Mz = build_total_magnetization(hamiltonian, num_qubits)
+    push!(observables, Mz)
+    push!(names, "Mz_total")
+
+    # ZZ correlations (following build_convergence_observables pattern)
+    for i in 1:num_qubits-1
+        ZZ_comp = Matrix{ComplexF64}(pad_term([Z, Z], num_qubits, i))
+        ZZ_eigen = V' * ZZ_comp * V
+        push!(observables, ZZ_eigen)
+        push!(names, "ZZ_$(i)$(i+1)")
+    end
+
+    return observables, names
+end
+```
+
+### Component 6: Cross-Validation Against Exact Eigenvalues
+
+For n=4 (dim=16) and n=6 (dim=64), the full Liouvillian can be constructed and diagonalized. The exact spectral gap from `run_lindbladian` serves as ground truth.
+
+```julia
+"""
+    cross_validate_gap(estimated::SpectralGapResult, exact_result::LindbladianResult)
+
+Compare trajectory-estimated spectral gap against exact Liouvillian eigenvalue.
+Returns the relative error |estimated - |Re(exact)|| / |Re(exact)|.
+
+IMPORTANT: Uses -real(spectral_gap), NOT abs(spectral_gap). The imaginary
+part of the eigenvalue produces oscillations, not decay.
+"""
+function cross_validate_gap(
+    estimated::SpectralGapResult,
+    exact_result::LindbladianResult,
+)
+    exact_gap_real = abs(real(exact_result.spectral_gap))
+    imag_fraction = abs(imag(exact_result.spectral_gap)) / exact_gap_real
+
+    if imag_fraction > 0.1
+        @warn "Liouvillian gap eigenvalue has significant imaginary part " *
+              "(|Im/Re| = $(round(imag_fraction, digits=3))). " *
+              "Observable decay may show oscillations; pure exponential fit may be poor."
+    end
+
+    rel_error = abs(estimated.estimated_gap - exact_gap_real) / exact_gap_real
+    return rel_error
+end
+```
+
+**Where this lives:** `src/spectral_gap.jl` alongside the other gap estimation code.
+
+### Component 7: Top-Level API -- `estimate_spectral_gap`
+
+The main entry point that orchestrates everything:
+
+```julia
+"""
+    estimate_spectral_gap(jumps, config, psi0, hamiltonian;
+        observables=nothing, observable_names=nothing,
+        ntraj=1000, save_every=10, total_time=config.mixing_time,
+        seed=nothing, trotter=nothing, skip_initial=0,
+        exact_result=nothing, reconstruct_dm=false)
+
+Estimate the Lindbladian spectral gap from trajectory observable decay.
+
+Runs observable-only trajectories, fits exponential decay to each observable,
+and returns the best gap estimate (lowest fit residual with valid decay rate).
+
+If `exact_result::LindbladianResult` is provided, cross-validates against
+the exact spectral gap.
+
+Returns SpectralGapResult.
+"""
+function estimate_spectral_gap(
+    jumps::Vector{JumpOp},
+    config::AbstractThermalizeConfig,
+    psi0::Vector{<:Complex},
+    hamiltonian::HamHam;
+    observables::Union{Nothing, Vector{<:Matrix{<:Complex}}} = nothing,
+    observable_names::Union{Nothing, Vector{String}} = nothing,
+    ntraj::Int = 1000,
+    save_every::Int = 10,
+    total_time::Real = config.mixing_time,
+    seed::Union{Int,Nothing} = nothing,
+    trotter::Union{TrottTrott,Nothing} = nothing,
+    skip_initial::Int = 0,
+    exact_result::Union{Nothing, LindbladianResult} = nothing,
+    reconstruct_dm::Bool = false,
+)
+    # Default observables: energy + total magnetization + ZZ correlations
+    if observables === nothing
+        observables, observable_names = build_gap_estimation_observables(
+            hamiltonian, config.num_qubits)
+    end
+
+    # Run observable-only trajectories
+    traj_result = run_observable_trajectories(
+        jumps, config, psi0, hamiltonian;
+        observables=observables, save_every=save_every,
+        ntraj=ntraj, total_time=total_time, seed=seed,
+        trotter=trotter, reconstruct_dm=reconstruct_dm,
+    )
+
+    # Fit exponential decay to each observable
+    all_gap_estimates = Float64[]
+    best_fit = nothing
+    best_residual = Inf
+
+    for (i, name) in enumerate(observable_names)
+        obs_series = traj_result.measurements_mean[i, :]
+        fit = fit_exponential_decay(
+            traj_result.times, obs_series;
+            skip_initial=skip_initial,
+        )
+        push!(all_gap_estimates, fit.converged && fit.decay_rate > 0 ? fit.decay_rate : NaN)
+
+        if fit.converged && fit.decay_rate > 0 && fit.residual_norm < best_residual
+            best_fit = fit
+            best_residual = fit.residual_norm
+            best_obs_name = name
+            best_obs_idx = i
+        end
+    end
+
+    # Cross-validate if exact result available
+    exact_gap = exact_result !== nothing ? exact_result.spectral_gap : nothing
+    rel_error = if exact_gap !== nothing && best_fit !== nothing
+        abs(best_fit.decay_rate - abs(real(exact_gap))) / abs(real(exact_gap))
+    else
+        nothing
+    end
+
+    actual_seed = traj_result.seed
+
+    return SpectralGapResult(
+        best_fit.decay_rate,
+        best_fit.confidence_interval,
+        best_fit.standard_error,
+        best_fit.amplitude,
+        best_fit.offset,
+        best_fit.converged,
+        best_fit.residual_norm,
+        best_obs_name,
+        best_obs_idx,
+        all_gap_estimates,
+        observable_names,
+        exact_gap,
+        rel_error,
+        ntraj,
+        Float64(total_time),
+        save_every,
+        actual_seed,
+    )
+end
+```
+
+## Component Boundaries
 
 ### New Files
 
 | File | Purpose | Key Types/Functions |
 |------|---------|-------------------|
-| `src/parallel_trajectories.jl` | Multi-threaded trajectory runner | `ThreadTrajectoryState`, `run_trajectories_parallel`, `step_along_trajectory!(psi, fw, rng)` |
-| `src/adaptive_sampling.jl` | Adaptive batch manager + convergence criteria | `AdaptiveBatchManager`, `ConvergenceCriterion`, `run_batch!`, `is_converged` |
-| `src/experiment_types.jl` | Data model for experiment results | `ExperimentResult`, `ExperimentSpec`, `save_experiment`, `load_experiment` |
-| `experiments/kms_vs_gns.jl` | Experiment script (not in module) | `kms_vs_gns_grid`, `run_experiment_grid` |
+| `src/spectral_gap.jl` | Spectral gap estimation from observable decay | `SpectralGapResult`, `estimate_spectral_gap`, `run_observable_trajectories`, `fit_exponential_decay`, `_run_chunk_obs_only!`, `cross_validate_gap` |
 
 ### Modified Files
 
 | File | What Changes | Why |
 |------|-------------|-----|
-| `src/trajectories.jl` | Add `rng::AbstractRNG` parameter to `step_along_trajectory!` (default: `Random.default_rng()`) | Thread-safe RNG for parallel execution |
-| `src/QuantumFurnace.jl` | Add `include` for new files, export new public API | Module registration |
-| `Project.toml` | Add `JLD2` dependency | Experiment result serialization |
+| `src/convergence.jl` | Add `build_total_magnetization`, `build_gap_estimation_observables` | Observable builders grouped with existing `build_convergence_observables` |
+| `src/QuantumFurnace.jl` | Add `include("spectral_gap.jl")`, `using LsqFit`, export new public API | Module registration + new dependency |
+| `Project.toml` | Add `LsqFit = "2fda8390-95c7-5789-9bda-21331edee243"` to `[deps]` and `LsqFit = "0.15"` to `[compat]` | New dependency |
 
 ### Unchanged Files
 
-Every other source file remains unchanged. The GNS trajectory path works through existing dispatch without modification. The key insight is that `ThermalizeConfigGNS <: AbstractThermalizeConfig`, so all trajectory functions that dispatch on `AbstractThermalizeConfig` already accept GNS configs. The GNS-specific behavior (unshifted transition, no B term) is delivered by:
-1. `pick_transition(config::ThermalizeConfigGNS)` returning the unshifted gamma
-2. `config.with_coherent == false` causing B term precomputation to be skipped
+| File | Why Unchanged |
+|------|--------------|
+| `src/trajectories.jl` | All primitives (`step_along_trajectory!`, `_accumulate_measurements!`, `_build_framework_and_seed`, `_run_batch_no_obs!`, `_partition_trajectories`) are reused as-is |
+| `src/furnace.jl` | `run_lindbladian` already returns `LindbladianResult` with `.spectral_gap` -- used as-is for cross-validation |
+| `src/structs.jl` | No changes needed; `SpectralGapResult` lives in `spectral_gap.jl` |
+| `src/results.jl` | `ExperimentResult` serialization not needed for this milestone (can be added later) |
 
-## Data Flow: End-to-End for a KMS-vs-GNS Experiment
+## Data Flow
+
+### Gap Estimation Flow (Complete)
 
 ```
-[ExperimentSpec(n=4, db=:KMS)]
+User calls: estimate_spectral_gap(jumps, config, psi0, ham; ntraj=1000)
     |
     v
-[load_hamiltonian("heis", 4; beta=10.0)]  -->  HamHam{Float64}
+build_gap_estimation_observables(ham, n_qubits)
+    -> [H (eigenbasis), Mz_total (eigenbasis), ZZ_12, ZZ_23, ...]
     |
     v
-[build_standard_jumps(ham, 4)]  -->  Vector{JumpOp} (12 jumps)
+run_observable_trajectories(jumps, config, psi0, ham; observables, save_every, ntraj)
+    |
+    |  _build_framework_and_seed(jumps, config, psi0, ham)  [EXISTING]
+    |    -> (fw::TrajectoryFramework, seed)
+    |
+    |  Compute num_steps, num_saves, times  [same logic as run_trajectories]
+    |
+    |  Multi-threaded dispatch:
+    |    For each thread chunk:
+    |      _run_chunk_obs_only!(ws, fw, psi0, chunk, seed, total_time,
+    |        observables, save_every, num_steps, num_saves, mean_data_local,
+    |        accumulate_final_dm=false)
+    |
+    |  Reduce: mean_data = sum(per_thread) / ntraj
+    |
+    |  Return TrajectoryResult(rho_mean=zeros, ..., times=times,
+    |    measurements_mean=mean_data)
     |
     v
-[build_config(spec)]  -->  ThermalizeConfig{EnergyDomain, Float64}
-    |                       (with_coherent=true for KMS)
-    v
-[_precompute_data(config, ham)]  -->  NamedTuple (transition, energy_labels, gamma_norm_factor)
+For each observable i:
+    fit_exponential_decay(times, measurements_mean[i, :])
+        -> model: f(t) = A*exp(-lambda*t) + C
+        -> LsqFit.curve_fit with lower=[..., 0.0, ...] bounds
+        -> returns (amplitude, decay_rate, offset, converged,
+                    residual_norm, confidence_interval, standard_error)
     |
     v
-[build_trajectoryframework(jumps, ham, config, precomputed, scratch, delta)]
-    |                       -->  TrajectoryFramework (per_operator with U_B matrices)
-    v
-[run_trajectories_parallel(jumps, config, psi0, ham; ntraj=10000)]
-    |
-    |  BLAS.set_num_threads(1)
-    |
-    |  Create nthreads() ThreadTrajectoryState instances
-    |
-    |  @threads for batch in 1:ntraj
-    |      state = thread_states[threadid()]
-    |      copyto!(state.psi, psi0)
-    |      _evolve_along_trajectory!(state.psi, fw, total_time, state.rng)
-    |      _accumulate_density_matrix!(state.rho_local, state.psi)
-    |      (optional: _accumulate_measurements!(...))
-    |  end
-    |
-    |  Reduce: rho_mean = sum(state.rho_local for state in thread_states) / ntraj
+Select best fit (lowest residual_norm, decay_rate > 0, converged)
     |
     v
-[ExperimentResult(config, rho_mean, trace_dist_to_gibbs, ...)]
+Optional: cross_validate_gap(estimated, exact_result::LindbladianResult)
+    -> rel_error = |estimated_gap - |Re(exact_gap)|| / |Re(exact_gap)|
+    -> Warns if Im(exact_gap) is significant
     |
     v
-[save_experiment(result, "kms_n4_beta10.jld2")]
-
-
-[ExperimentSpec(n=4, db=:GNS)]
-    |
-    v
-... same pipeline but with ThermalizeConfigGNS ...
-    |
-    |  pick_transition dispatches to _pick_transition_gns (unshifted gamma)
-    |  config.with_coherent=false -> per_op.U_B === nothing (no B term)
-    |
-    v
-[ExperimentResult(config_gns, rho_mean_gns, ...)]
-    |
-    v
-[save_experiment(result, "gns_n4_beta10.jld2")]
-
-
-COMPARISON:
-    load both results
-    compare trace_dist_to_gibbs: KMS vs GNS
-    compare observable time series
-    compare convergence rates
+Return SpectralGapResult{Float64}(
+    estimated_gap, gap_ci, gap_se, amplitude, offset, converged,
+    residual_norm, observable_name, observable_index,
+    all_gap_estimates, all_observable_names,
+    exact_gap, relative_error,
+    n_trajectories, total_time, save_every, seed
+)
 ```
 
-## Suggested Build Order
+### Cross-Validation Flow (n=4,6 only)
 
-Based on dependency analysis:
+```
+# Step 1: Compute exact gap via full Liouvillian
+liouv_config = LiouvConfig(... same params as ThermalizeConfig ...)
+exact_result = run_lindbladian(jumps, liouv_config, ham)
+# exact_result.spectral_gap is the exact gap (Complex, Re part is decay rate)
 
-### Phase 1: RNG Signature Change (enables all subsequent work)
+# Step 2: Estimate gap from trajectories
+gap_result = estimate_spectral_gap(jumps, config, psi0, ham;
+    ntraj=5000, exact_result=exact_result)
 
-**Modify:** `step_along_trajectory!` to accept `rng::AbstractRNG = Random.default_rng()`.
+# Step 3: Compare
+@info "Gap estimation" exact=abs(real(exact_result.spectral_gap))
+    estimated=gap_result.estimated_gap
+    relative_error=gap_result.relative_error
+    ci_95=gap_result.gap_confidence_interval
+```
 
-This is a 2-line change per domain variant (replace `rand()` -> `rand(rng)`, `rand(1:fw.n_jumps)` -> `rand(rng, 1:fw.n_jumps)`). No behavioral change for existing callers.
+## Key Design Decisions
 
-**Files modified:** `trajectories.jl`
-**Depends on:** Nothing
-**Enables:** Phase 2 (parallel execution)
+### Decision 1: Separate File vs Extending trajectories.jl
 
-### Phase 2: Multi-Threaded Trajectory Engine
+**Choice:** New file `src/spectral_gap.jl`.
 
-**New:** `parallel_trajectories.jl` with `ThreadTrajectoryState` and `run_trajectories_parallel`.
+**Rationale:** `trajectories.jl` is already 927 lines. Adding ~200 lines of gap estimation code would push it past 1100 lines. The gap estimation logic is a distinct concern (fitting, cross-validation) that happens to use trajectory primitives. Separation keeps both files focused. The new file imports from trajectories via the module (no circular dependencies).
 
-**Files new:** `src/parallel_trajectories.jl`
-**Depends on:** Phase 1 (RNG parameter)
-**Enables:** Phase 4 (experiments)
+### Decision 2: `_run_chunk_obs_only!` vs Modifying `_run_chunk_with_obs!`
 
-### Phase 3: GNS Trajectory Verification
+**Choice:** New function `_run_chunk_obs_only!`.
 
-**New:** Tests confirming GNS trajectory path works. No source changes needed.
+**Rationale:** The existing `_run_chunk_with_obs!` works correctly for its use case (observable measurement + DM accumulation). Adding a boolean flag `accumulate_dm` to it would be a minor change, but it introduces a branch into a per-trajectory hot loop and complicates the function's contract. A separate function is 25 lines and crystal clear in purpose. The DRY cost is minimal -- the two functions share the same structure but differ in one line (the `_accumulate_density_matrix!` call).
 
-**Files new:** `test/test_gns_trajectory.jl` or section in existing test file
-**Depends on:** Nothing (GNS dispatch already works)
-**Enables:** Phase 4 (experiments need both KMS and GNS)
+**Note:** The new `_run_chunk_obs_only!` DOES accept an `accumulate_final_dm` flag, but this controls whether DM is accumulated at the END of each trajectory (not at every step). This is distinct from the mid-simulation DM reconstruction that the convergence pipeline does. The flag defaults to `false` for pure observable runs, and `true` when the caller wants a DM estimate alongside the observable time series.
 
-### Phase 4: Experiment Data Model + Serialization
+### Decision 3: LsqFit.jl for Exponential Fitting
 
-**New:** `experiment_types.jl` with `ExperimentResult`, `ExperimentSpec`, save/load.
+**Choice:** LsqFit.jl (new dependency).
 
-**Files new:** `src/experiment_types.jl`
-**Depends on:** Nothing (pure data types)
-**Enables:** Phase 5 (adaptive sampling), Phase 6 (experiments)
+**Rationale:** LsqFit.jl provides the complete curve fitting pipeline needed for spectral gap estimation:
 
-### Phase 5: Adaptive Sampling
+1. **Parameter bounds** -- `curve_fit(model, t, y, p0; lower=[...], upper=[...])` constrains gap > 0 natively. Essential because unconstrained optimization can converge to negative decay rates on noisy data.
+2. **Confidence intervals** -- `confidence_interval(fit, alpha)` computes t-distribution-based CIs from the Jacobian covariance matrix. No separate statistics package needed.
+3. **Standard errors** -- `standard_error(fit)` gives Jacobian-based parameter uncertainties.
+4. **Weighted fitting** -- `wt = 1 ./ variance` for non-uniform noise across the time series.
+5. **Automatic Jacobian** -- ForwardDiff computes the exact Jacobian, enabling proper Levenberg-Marquardt and covariance estimation.
 
-**New:** `adaptive_sampling.jl` with `AdaptiveBatchManager`, convergence criteria.
+The alternative (Optim.jl, already a dependency) would require manually implementing all of the above. While Optim.jl's NelderMead can minimize the residual, it cannot produce confidence intervals or standard errors without additional work. For a curve fitting task, the purpose-built tool is the right choice.
 
-**Files new:** `src/adaptive_sampling.jl`
-**Depends on:** Phase 2 (parallel trajectories), Phase 4 (result types)
-**Enables:** Phase 6 (experiments use adaptive sampling)
+The dependency cost is minimal: LsqFit.jl depends on ForwardDiff, NLSolversBase, StatsAPI (all already in Manifest via Optim) plus Distributions.jl (the only truly new transitive package, used internally for t-distribution quantiles).
 
-### Phase 6: KMS-vs-GNS Experiment Runner
+### Decision 4: Observable Selection for Gap Estimation
 
-**New:** `experiments/kms_vs_gns.jl` script.
+**Choice:** Energy (H) + Total magnetization (M_z) + ZZ correlations as defaults, with user-override.
 
-**Files new:** `experiments/kms_vs_gns.jl`, `experiments/analyze_results.jl`
-**Depends on:** All previous phases
-**Enables:** Paper results
+**Rationale:** The spectral gap governs the slowest-decaying mode. Energy `<H>` has the strongest coupling to the gap mode (it is diagonal in the eigenbasis where the gap mode describes population redistribution). ZZ correlations `<Z_iZ_{i+1}>` probe two-body terms that make up the Hamiltonian. Total magnetization `M_z` is included as a consistency check but may have weak gap coupling for near-isotropic systems (see PITFALLS.md Pitfall 10). Fitting multiple observables and selecting the best provides robustness.
+
+### Decision 5: SpectralGapResult Location
+
+**Choice:** Define `SpectralGapResult` in `src/spectral_gap.jl` (not `src/structs.jl`).
+
+**Rationale:** Unlike `LindbladianResult` and `TrajectoryResult` which are used across multiple files, `SpectralGapResult` is produced and consumed only by the gap estimation module. Co-locating the struct with its producer keeps `structs.jl` focused on core types and makes the gap estimation module self-contained. If BSON serialization is needed later, add a converter in `results.jl`.
+
+## Patterns to Follow
+
+### Pattern 1: Follow the `run_trajectories_convergence` Template
+
+`run_trajectories_convergence` in `convergence.jl` demonstrates the correct pattern for building a higher-level trajectory runner on top of existing primitives:
+
+1. Call `_build_framework_and_seed` once
+2. Use `_run_batch_no_obs!` for trajectory execution
+3. Accumulate results across batches
+4. Return a result struct
+
+The new `run_observable_trajectories` follows the same pattern but uses `_run_chunk_obs_only!` (observable variant) instead of `_run_batch_no_obs!`.
+
+### Pattern 2: Multi-Threading via Existing Chunk Pattern
+
+The existing codebase uses `_partition_trajectories` to split work across threads, and `@sync for (idx, chunk) in enumerate(chunks); Threads.@spawn ...` for parallel execution. The new observable-only runner reuses this exact pattern, including the `BLAS.set_num_threads(1)` guard.
+
+### Pattern 3: Observable Builders in convergence.jl
+
+The existing `build_convergence_observables` builds observables in the eigenbasis by: (1) constructing the operator in computational basis, (2) transforming to eigenbasis via `V' * O * V`. The new `build_total_magnetization` follows the same pattern.
 
 ## Anti-Patterns to Avoid
 
-### Anti-Pattern: Shared Mutable State in @threads Loop
+### Anti-Pattern 1: Fitting to Noisy Plateau Region
 
-**What goes wrong:** Two threads write to the same `rho_mean` accumulator matrix without synchronization. Data race produces incorrect results silently (no crash, just wrong numbers).
+**What goes wrong:** If `total_time` is much longer than 1/gap, the observable time series is mostly flat (at the steady-state value) with noise. Fitting an exponential to mostly-flat data gives unreliable lambda estimates.
 
-**Prevention:** Each thread has its own `rho_local` accumulator. Merge after the loop completes. Never use `@threads` with a shared mutable accumulator unless using `Threads.Atomic` or locks.
+**Prevention:** The `skip_initial` parameter trims the early transient. More importantly, `total_time` should be chosen to be ~3-5x the expected mixing time (3-5/gap), so the exponential decay is well-sampled. The cross-validation against exact eigenvalues will catch bad fits.
 
-### Anti-Pattern: Global RNG in Parallel Code
+### Anti-Pattern 2: Selecting the Wrong Observable
 
-**What goes wrong:** All threads share `Random.default_rng()`, producing correlated random streams and non-reproducible results. In Julia >= 1.7, TaskLocalRNG is per-task, but `@threads` tasks may share RNG state depending on scheduler.
+**What goes wrong:** If the observable chosen for fitting is orthogonal to the gap mode, its projection onto the slowest-decaying mode is zero. The fit then captures the second-slowest mode (or noise), giving the wrong gap estimate.
 
-**Prevention:** Explicitly construct per-thread RNGs with independent seeds. Pass as argument to `step_along_trajectory!`.
+**Prevention:** Fit multiple observables and select the one with the best fit quality (lowest residual). Energy and ZZ correlations are both global observables that generically have nonzero overlap with the gap mode for Heisenberg chains.
 
-### Anti-Pattern: Saving Results Only at the End
+### Anti-Pattern 3: Ignoring the Sign of the Decay Rate
 
-**What goes wrong:** A 10-hour n=8 experiment crashes at hour 9. All results lost.
+**What goes wrong:** The optimizer finds a negative `lambda` (exponentially growing solution), which is unphysical.
 
-**Prevention:** Save after each experiment point. Use `jldsave` with unique filenames per spec. Implement resume logic (check if output file exists, skip if so).
+**Prevention:** Use LsqFit.jl's `lower` bounds to constrain `p[2] >= 0`. The `estimate_spectral_gap` function additionally filters for `fit.decay_rate > 0`.
 
-### Anti-Pattern: Monolithic Experiment Script
+### Anti-Pattern 4: Using Too Few Trajectories
 
-**What goes wrong:** Experiment logic, trajectory engine, data types, and analysis all in one 500-line script. Cannot test components independently. Cannot reuse trajectory engine without experiment boilerplate.
+**What goes wrong:** With N=100 trajectories, the observable time series has O(1/sqrt(100)) = 10% noise per time point. The exponential fit is dominated by noise rather than signal.
 
-**Prevention:** Library code in `src/` (importable, testable), experiment scripts in `experiments/` (use the library).
+**Prevention:** Use at least N=1000 trajectories for n=4, and N=5000+ for n=8. The noise level scales as 1/sqrt(N), so 10000 trajectories give ~1% noise.
+
+### Anti-Pattern 5: Comparing abs(spectral_gap) Instead of abs(real(spectral_gap))
+
+**What goes wrong:** The Liouvillian eigenvalue is complex. `abs(lambda) = sqrt(Re^2 + Im^2) >= abs(Re(lambda))`. Cross-validation using `abs` systematically overestimates agreement.
+
+**Prevention:** Always use `abs(real(exact_result.spectral_gap))` for comparison. Warn when `|Im/Re| > 0.1`.
+
+## Scalability Considerations
+
+| Concern | n=4 (dim=16) | n=6 (dim=64) | n=8 (dim=256) |
+|---------|--------------|--------------|---------------|
+| Observable measurement cost per step | ~1us (2+ obs, dim=16 gemv) | ~10us (2+ obs, dim=64 gemv) | ~200us (2+ obs, dim=256 gemv) |
+| DM accumulation per trajectory | ~0.5us (rank-1 update, 16x16) | ~8us (64x64) | ~130us (256x256) |
+| Memory per thread (obs-only) | ~10 KB | ~100 KB | ~1.5 MB |
+| Exact Liouvillian (cross-validation) | ~0.1s (256x256 eigs) | ~30s (4096x4096 eigs) | INFEASIBLE (65536x65536) |
+| Recommended N_traj for gap fit | 1000-5000 | 2000-5000 | 5000-10000 |
+| LsqFit curve_fit time | <1ms (3-param fit, ~200 points) | <1ms | <1ms |
+
+**Key scaling insight:** For n=8, the exact Liouvillian is infeasible (dim^2 = 65536, so the Liouvillian is 65536x65536). This is precisely why trajectory-based gap estimation is needed. Cross-validation is limited to n<=6. The fitting itself is negligible cost; all computation time is in trajectory sampling.
+
+## Suggested Build Order
+
+### Phase 1: Observable Builders (No Dependencies)
+
+**Add** `build_total_magnetization` and `build_gap_estimation_observables` to `convergence.jl`. Export from module.
+
+**Test:** Verify M_z is Hermitian in eigenbasis, `tr(gibbs * M_z)` gives expected magnetization.
+
+**Complexity:** LOW (~20 lines).
+
+### Phase 2: Observable-Only Trajectory Runner (Depends on Phase 1)
+
+**Add** `_run_chunk_obs_only!` and `run_observable_trajectories` to new `src/spectral_gap.jl`. This is the core trajectory loop variant.
+
+**Test:** Run with known observables, verify `measurements_mean` matches `run_trajectories` with same observables and seed. Verify DM is zeros when `reconstruct_dm=false`.
+
+**Complexity:** MEDIUM (~120 lines, follows existing patterns exactly).
+
+### Phase 3: Exponential Fitting (Can Parallel with Phase 2)
+
+**Add** LsqFit.jl dependency. Add `fit_exponential_decay` to `src/spectral_gap.jl`.
+
+**Test:** Fit synthetic exponential data `y = 2.0 * exp(-0.5 * t) + 1.0 + noise`, verify recovered parameters match within tolerance. Verify `confidence_interval` brackets the true value.
+
+**Complexity:** LOW-MEDIUM (~50 lines).
+
+### Phase 4: Gap Estimation API + Result Struct (Depends on Phases 2, 3)
+
+**Add** `SpectralGapResult`, `estimate_spectral_gap`, `cross_validate_gap` to `src/spectral_gap.jl`. Wire up the full pipeline.
+
+**Test:** For n=4 (where exact gap is cheap to compute), verify `relative_error < 0.2` (20% agreement). This is a loose threshold for noisy trajectory data; tighter thresholds are a tuning problem.
+
+**Complexity:** MEDIUM (~80 lines).
+
+### Phase 5: Cross-Validation Experiment (Depends on Phase 4)
+
+**Add** a simulation script (e.g., `simulations/gap_estimation.jl`) that:
+1. For n=4 and n=6: compute exact gap via `run_lindbladian`, estimate gap from trajectories, report relative error
+2. For n=8: estimate gap from trajectories only (exact is infeasible)
+3. Sweep over beta values to characterize how gap estimation quality varies with temperature
+
+**Complexity:** LOW (script, not library code).
+
+### Build Order Rationale
+
+- **Phase 1 first:** Observable builders are pure functions with no dependencies. Fast to implement and test. Enable Phase 2.
+- **Phase 2 and 3 can be parallel:** The trajectory runner and the fitting function are independent. However, Phase 2 depends on Phase 1 for observable construction.
+- **Phase 4 integrates 2+3:** The top-level API wires the trajectory runner to the fitter. Must come after both.
+- **Phase 5 is validation:** Uses everything, validates the approach, produces the deliverable.
 
 ## Sources
 
-- Direct codebase analysis of all 23 source files in QuantumFurnace.jl `src/`
-- Direct analysis of all test files in `test/`
-- [Julia Multi-Threading Documentation](https://docs.julialang.org/en/v1/manual/multi-threading/)
-- [Julia for HPC: Multithreading](https://enccs.github.io/julia-for-hpc/multithreading/) -- BLAS thread management patterns
-- [JLD2.jl Documentation](https://juliaio.github.io/JLD2.jl/stable/) -- struct serialization, HDF5 compatibility
-- [Julia Random Numbers Documentation](https://docs.julialang.org/en/v1/stdlib/Random/) -- TaskLocalRNG, per-thread RNG
-- [Reproducible Multithreaded Monte Carlo Discussion](https://discourse.julialang.org/t/reproducible-multithreaded-monte-carlo-task-local-random/35269) -- per-task RNG patterns
-- [BLAS Thread Overhead Issue](https://github.com/JuliaLang/julia/issues/43292) -- BLAS.set_num_threads(1) for multi-threaded code
-- [ITensors.jl Multithreading Guide](https://itensor.github.io/ITensors.jl/dev/Multithreading.html) -- BLAS thread disabling pattern
-- [Carlo.jl Framework (2025)](https://arxiv.org/abs/2408.03386) -- Monte Carlo simulation framework design patterns
-- [DifferentialEquations.jl Parallel Monte Carlo](https://docs.sciml.ai/release-4.6/features/monte_carlo.html) -- multi-threaded trajectory patterns
+### Primary (HIGH confidence -- direct codebase analysis)
+- `src/trajectories.jl` (927 lines) -- `_run_chunk_with_obs!`, `_run_chunk_no_obs!`, `_run_batch_no_obs!`, `run_trajectories`, `_build_framework_and_seed`, `step_along_trajectory!`, `_accumulate_measurements!`, `_accumulate_density_matrix!`, `_partition_trajectories`
+- `src/convergence.jl` (387 lines) -- `run_trajectories_convergence`, `run_trajectories_adaptive`, `build_convergence_observables`, `build_convergence_observables_trotter`
+- `src/furnace.jl` (163 lines) -- `run_lindbladian` returning `LindbladianResult` with `spectral_gap`
+- `src/structs.jl` (358 lines) -- `LindbladianResult`, `TrajectoryResult`, `ConvergenceData`, domain types, config hierarchy
+- `src/QuantumFurnace.jl` -- module structure, exports, `using Optim`
+- `Project.toml` -- Optim.jl already a dependency; LsqFit.jl to be added
+
+### Secondary (HIGH confidence -- verified via official documentation)
+- [LsqFit.jl Documentation](https://julianlsolvers.github.io/LsqFit.jl/latest/) -- curve_fit API, confidence_interval, standard_error, parameter bounds
+- [LsqFit.jl GitHub v0.15.1](https://github.com/JuliaNLSolvers/LsqFit.jl) -- Dependencies, Julia compat, release history
+
+### Tertiary (MEDIUM confidence -- methodology references)
+- [Excitation Gap from Optimized Correlation Functions in QMC](https://ar5iv.labs.arxiv.org/html/1112.2269) -- methodology for gap estimation from Monte Carlo data
+- [Generalized Moment Method for Gap Estimation](https://journals.aps.org/prl/abstract/10.1103/PhysRevLett.115.080601) -- alternative gap estimation approaches
+- Lindbladian spectral gap theory: observables decay exponentially at rate governed by the spectral gap
+- Chen, Kastoryano, Gilyen (2025) "An efficient and exact noncommutative quantum Gibbs sampler" -- the KMS construction that QuantumFurnace implements
 
 ---
-*Architecture research for: Multi-threaded trajectory engine + GNS path + adaptive sampling + experiments (v1.1 milestone)*
-*Researched: 2026-02-15*
+*Architecture research for: v1.3 Spectral gap estimation from trajectory observable decay*
+*Researched: 2026-02-16*

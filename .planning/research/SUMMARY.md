@@ -1,209 +1,300 @@
 # Project Research Summary
 
-**Project:** QuantumFurnace.jl v1.2 Multi-Threaded Trajectory Engine & KMS-vs-GNS Experiments
-**Domain:** High-performance quantum Monte Carlo trajectory sampling for Gibbs state preparation
-**Researched:** 2026-02-15
+**Project:** v1.3 Spectral Gap Estimation from Trajectory Observable Decay
+**Domain:** Quantum trajectory simulation + nonlinear exponential decay fitting + statistical cross-validation
+**Researched:** 2026-02-16
 **Confidence:** HIGH
 
 ## Executive Summary
 
-QuantumFurnace.jl implements quantum trajectory sampling for Gibbs state preparation using the Monte Carlo wave function (MCWF) method with Chen et al.'s KMS and GNS detailed balance constructions. The v1.2 milestone adds multi-threaded trajectory parallelism, the GNS trajectory path (approximate detailed balance), adaptive convergence monitoring, and comparison experiments to validate that KMS (exact detailed balance with coherent correction) outperforms GNS.
+This milestone adds spectral gap estimation via exponential fitting to time-resolved observable decay from quantum trajectory simulations. The physics is well-established: for a Lindbladian with spectral gap λ, observable expectation values decay exponentially toward thermal equilibrium at rate λ. By running trajectory simulations with observable measurements at regular intervals, fitting `A * exp(-λ * t) + C` to the decay curve, and extracting λ, we estimate the spectral gap without constructing the full Liouvillian (which becomes infeasible at n≥8). Cross-validation against exact Liouvillian eigenvalues at n=4,6 establishes trust.
 
-The recommended approach is straightforward: use Julia's stdlib threading (`Threads.@spawn`) with per-thread workspaces and explicit RNG seeding for reproducibility. No new production dependencies are needed for threading — only JLD2 for experiment data serialization and optionally DataFrames/CSV for parameter sweep tables. The architecture separates the immutable read-only precomputed data (NUFFT prefactors, Kraus matrices) from mutable per-thread scratch buffers (TrajectoryWorkspace), enabling embarrassingly parallel execution across thousands of independent trajectories.
+The recommended approach is minimal and well-constrained: add LsqFit.jl (one new dependency) for Levenberg-Marquardt curve fitting with parameter bounds and built-in confidence intervals, create a new `spectral_gap.jl` module that wraps existing trajectory primitives with exponential fitting logic, extend observable builders to include total magnetization, and implement cross-validation helpers. The existing trajectory infrastructure (`run_trajectories` with observables, `step_along_trajectory!`, measurement accumulation) is reused as-is. The architecture follows established patterns from `run_trajectories_convergence`.
 
-The critical risk is BLAS thread oversubscription: Julia threads calling OpenBLAS-threaded `mul!` creates nested parallelism that destroys performance. The fix is trivial (`BLAS.set_num_threads(1)` before spawning threads) but must be applied from the start. Secondary risks include false RNG seeding (breaking reproducibility), data races from shared mutable workspace, and conflating fixed-point approximation error with mixing rate when comparing KMS vs GNS.
+The key risk is multi-exponential contamination: the observable decay is a sum of exponentials (one per Liouvillian eigenmode), not a pure single exponential. Fitting the full time series biases the gap estimate high. The mitigation is late-time fitting (skip the first 10-20% of data where fast modes dominate) combined with multi-observable consistency checks (fit energy, magnetization, and ZZ correlations independently; the smallest fitted rate with good quality is the true gap). Secondary risks include basis mismatch for new observables (critical pitfall from v1.2 quick-task-20 experience), noise floor at late times (requires sufficient trajectories: 5000+ for n=4,6, 10000+ for n=8), and confusing complex Liouvillian eigenvalues with real decay rates (must compare against `-real(spectral_gap)`, not `abs(spectral_gap)`).
 
 ## Key Findings
 
 ### Recommended Stack
 
-Julia's standard library threading is sufficient for this milestone. The trajectory sampling is embarrassingly parallel: each trajectory is an independent sequence of CPTP map applications with its own state vector, workspace buffers, and RNG. Shared read-only data (precomputed NUFFT prefactors, per-operator Kraus matrices R/K0/U_residual/U_B) is safely accessed by all threads via a single `TrajectoryFramework` instance.
+LsqFit.jl (v0.15+) is the single new production dependency. It provides Levenberg-Marquardt nonlinear least squares with parameter bounds (essential: gap > 0), confidence intervals via t-distribution from Jacobian covariance, standard errors, and weighted fitting (for non-uniform trajectory noise). It is pure Julia, actively maintained by JuliaNLSolvers, and adds minimal dependency footprint: its transitive deps (ForwardDiff, NLSolversBase, StatsAPI) are already resolved via the existing Optim.jl dependency. The only truly new package is Distributions.jl (used internally by LsqFit for t-quantiles in confidence intervals), which is a standard, lightweight, well-maintained statistics package.
 
 **Core technologies:**
-- **Base.Threads (stdlib)** — `@spawn`/`@sync` pattern for parallel trajectories. TaskLocalRNG provides per-task thread-safe random streams. Already imported in the codebase.
-- **JLD2.jl (new dependency)** — Experiment result serialization. Preserves Julia types exactly (nested NamedTuples, ComplexF64 matrices, parametric structs). HDF5-compatible for Python/MATLAB interop. Replaces BSON for new data.
-- **DataFrames.jl + CSV.jl (optional)** — Parameter sweep result tables if sweep API lives in the package. Use JLD2 for full results + CSV for human-readable summary tables.
-- **BLAS.set_num_threads(1)** — Critical for avoiding thread oversubscription. At dim=256 (n=8), single-threaded BLAS per trajectory + Julia thread-level parallelism across trajectories is optimal.
+- **LsqFit.jl v0.15+**: Nonlinear curve fitting for `A * exp(-gap * t) + C` — provides `curve_fit` with bounds, `confidence_interval`, `standard_error`, and automatic Jacobian computation. The standard Julia package for this task; purpose-built for curve fitting unlike raw Optim.jl.
+- **Distributions.jl v0.25+ (transitive)**: t-distribution for confidence intervals — brought in by LsqFit, used internally, not directly imported by QuantumFurnace.
+- **Existing trajectory infrastructure (reused)**: `run_trajectories` with observables, `TrajectoryFramework`, `step_along_trajectory!`, `_accumulate_measurements!` — all primitives work as-is; no changes needed to core simulation engine.
 
-**No new packages needed for:**
-- Adaptive convergence: Welford's online mean/variance algorithm is 10 lines of code. OnlineStats.jl is overkill.
-- Thread-safe RNG: Julia 1.7+ TaskLocalRNG is built-in. Use explicit `Xoshiro(seed + trajectory_id)` for reproducibility.
-- Observable tracking: Existing `_accumulate_measurements!` pattern extends naturally to per-thread buffers.
+**Alternatives considered and rejected:**
+- Optim.jl alone: already a dependency, but lacks curve-fitting infrastructure (confidence intervals, covariance estimation). Would require manual implementation of what LsqFit provides.
+- Bootstrap.jl: LsqFit's Jacobian-based CIs are sufficient. Bootstrap would require storing per-trajectory data (massive memory) or re-running trajectories (prohibitively expensive).
+- Prony's method / matrix pencil: theoretically superior for multi-exponential decomposition but (a) no mature Julia package, (b) notoriously noise-sensitive without SVD regularization, (c) requires equally-spaced samples. Single-exponential fit with window selection is more robust.
 
 ### Expected Features
 
-**Must have (table stakes for v1.2):**
-- **Multi-threaded trajectory sampling** — Thousands of trajectories at n=8 require parallelism. Each trajectory is independent. Share precomputed data (R, K0, NUFFT prefactors) read-only; clone workspace per thread.
-- **Per-thread workspace** — TrajectoryWorkspace (jump_oft, psi_tmp, Rpsi buffers) is mutable. Cannot be shared. Each thread allocates its own.
-- **GNS trajectory path** — ThermalizeConfigGNS already exists. Dispatches correctly through `pick_transition` to `_pick_transition_gns` (unshifted gamma). No coherent B term (`with_coherent=false` enforced). Verify correct integration.
-- **Density matrix accumulation** — Thread-safe: each thread accumulates `rho_local`, final reduction merges all. Avoids contention.
-- **Trace distance to Gibbs tracking** — Primary convergence metric. Compute `trace_distance_h(rho_avg, gibbs)` at batch intervals.
-- **Per-observable convergence** — Track `<Z_iZ_{i+1}>` (nearest-neighbor correlations), `<Z_i>` (local magnetization), `<H>` (energy) per trajectory batch. Most informative for Heisenberg chains.
-- **Adaptive sampling** — Run trajectory batches until convergence criterion met (trace distance stabilized, observable standard error below threshold). Maximum budget cap prevents infinite loops.
-- **Experiment data architecture** — Serialize ExperimentResult (config + rho_mean + convergence curves + metadata) via JLD2. Enables parameter sweeps over (n, beta, KMS/GNS).
-- **KMS-vs-GNS experiment driver** — Script running matched experiments: same Hamiltonian, same beta, same delta, different detailed balance construction. Compares final trace distances and convergence rates.
+**Must have (table stakes):**
+- **Observable-only trajectory runner**: Run trajectories with time-resolved observable measurements (`<O>(t)` at `save_every` intervals) without per-trajectory DM reconstruction. Existing `run_trajectories` with observables already does this; just need to clarify/simplify the API.
+- **Total magnetization observable**: `M_z = sum_i Z_i` in eigenbasis/Trotter basis, following the pattern of existing `build_convergence_observables`. Easy addition; one function.
+- **Single-exponential fit with bounds**: Model `f(t) = A * exp(-gap * t) + C`, constrain `gap > 0`, auto-initialize from log-linear estimate. Core of the milestone.
+- **Fit quality metrics**: R-squared, residual norm, confidence interval on gap. LsqFit provides these directly.
+- **Cross-validation against exact Liouvillian**: For n=4,6, compare trajectory-fitted gap vs `run_lindbladian().spectral_gap`. This is the validation that makes the method credible for n≥8.
+- **`estimate_spectral_gap` function**: Public API that orchestrates observable-trajectories + multi-observable fitting + best-fit selection + optional cross-validation. Returns `SpectralGapResult` with gap estimate, CI, per-observable results, and metadata.
 
-**Should have (differentiators):**
-- **Convergence curve plotting** — Paper-ready plots of trace distance vs N_traj for KMS and GNS on same axes.
-- **Bootstrap confidence intervals** — Error bars on trace distance from trajectory sub-batches.
-- **Spectral gap measurement** — For n<=6, compute Liouvillian gap. For n=8, estimate from trajectory convergence rate.
-- **Multiple initial states** — Verify convergence from maximally mixed and random pure states.
+**Should have (competitive):**
+- **Multi-observable consistency check**: Fit gap from energy, M_z, and all ZZ correlations independently; report agreement. Minimal code, high scientific value.
+- **Fitting window selection**: Skip early transient (first 10-20%) and late noise floor. Improves fit quality significantly with minimal complexity.
+- **Variance-weighted fitting**: Weight by `1/var(O(t_i))` if per-time variance is available. LsqFit supports this via `wt` parameter. Optional refinement.
+- **Gap vs beta scaling plot**: For paper figures. Low complexity, deferred to simulation scripts (not library code).
 
-**Defer (v2+ or anti-features):**
-- **GPU acceleration** — dim=256 is far too small for GPU advantage. GPU kernel launch overhead dominates.
-- **Distributed (MPI) trajectories** — Single-node multi-core sufficient for N_traj ~ 10^4-10^5. MPI adds serialization overhead.
-- **Float32 trajectories** — Trace distance to Gibbs at high beta is ~1e-6, below Float32 noise floor.
-- **Adaptive timestep** — QuantumFurnace uses discrete-time CPTP unraveling, not continuous-time MCWF. Timestep is fixed.
+**Defer (v2+):**
+- **Damped oscillation model**: `A * exp(-gamma * t) * cos(omega * t + phi) + C` for complex eigenvalues with significant imaginary part. Only needed if pure exponential fits fail (unlikely for KMS-balanced Lindbladians which have real eigenvalues).
+- **Multi-exponential fit**: Extracts multiple decay rates simultaneously. Ill-conditioned; only needed if eigenvalue spectrum characterization (not just gap) is the goal.
+- **Bootstrap confidence intervals**: Jacobian-based CIs from LsqFit are sufficient for validation. Bootstrap adds complexity without clear benefit for this use case.
 
 ### Architecture Approach
 
-The architecture cleanly separates immutable shared data from mutable per-thread state. The current single-threaded design embeds a `TrajectoryWorkspace` in `TrajectoryFramework`, which blocks sharing. The fix: pass workspace as a separate argument to `step_along_trajectory!`, allowing one framework to serve many threads.
+The design follows the "compose existing primitives, add minimal new code" principle. All trajectory simulation machinery is reused. The new milestone adds: (1) a new file `src/spectral_gap.jl` containing all gap estimation code (keeps the already-large `trajectories.jl` focused), (2) a variant of the trajectory inner loop `_run_chunk_obs_only!` that measures observables without per-trajectory DM accumulation (optional, for clarity and slight memory efficiency), (3) exponential fitting function `fit_exponential_decay` wrapping LsqFit.jl, (4) result struct `SpectralGapResult` co-located in `spectral_gap.jl`, (5) observable builder extensions in `convergence.jl` for total magnetization, and (6) cross-validation helper that compares fitted gap against `LindbladianResult.spectral_gap`.
 
 **Major components:**
+1. **Observable builders (convergence.jl)** — `build_total_magnetization(ham, n)` and `build_gap_estimation_observables(ham, n)` extend existing patterns. Transform observables to eigenbasis/Trotter basis via `V' * O * V` (critical to avoid basis mismatch pitfall).
+2. **Trajectory runner variant (spectral_gap.jl)** — `run_observable_trajectories` and `_run_chunk_obs_only!` follow the `run_trajectories` pattern exactly but make DM reconstruction optional. Reuses all existing primitives: `_build_framework_and_seed`, `step_along_trajectory!`, `_accumulate_measurements!`, multi-threading via `_partition_trajectories`.
+3. **Exponential fitting (spectral_gap.jl)** — `fit_exponential_decay(times, values)` uses LsqFit.jl `curve_fit` with: log-linear initial guess, parameter bounds `[gap >= 0]`, optional Gibbs value for offset, returns named tuple with gap, CI, SE, residual norm, converged flag.
+4. **Top-level API (spectral_gap.jl)** — `estimate_spectral_gap(jumps, config, psi0, ham; observables, ntraj, save_every, exact_result)` runs trajectories, fits all observables, selects best fit (lowest residual, converged, gap > 0), optionally cross-validates, returns `SpectralGapResult`.
+5. **Cross-validation helper (spectral_gap.jl)** — `cross_validate_gap(estimated, exact_result::LindbladianResult)` compares `estimated.gap` vs `abs(real(exact_result.spectral_gap))`, warns if `|Im/Re| > 0.1`, returns relative error.
 
-1. **TrajectoryFramework (immutable, shared read-only)** — Contains per-operator Kraus matrices (R, K0, U_residual, U_B), precomputed NUFFT prefactors, transition function, config, jumps. Built once before spawning threads. All fields are read-only during trajectory stepping.
+**Integration points:**
+- `src/spectral_gap.jl` (NEW): ~250 lines, all gap estimation logic
+- `src/convergence.jl` (MODIFY): +2 functions (~40 lines) for observable builders
+- `src/QuantumFurnace.jl` (MODIFY): `include("spectral_gap.jl")`, `using LsqFit`, export new API
+- `Project.toml` (MODIFY): add LsqFit dependency and compat entry
 
-2. **ThreadTrajectoryState (mutable, per-thread)** — Contains TrajectoryWorkspace (scratch buffers), per-thread psi vector, per-thread rho accumulator, per-thread observable accumulator, per-thread RNG. Allocated per spawned thread/task. Merged after `@sync`.
-
-3. **AdaptiveBatchManager (convergence control)** — Runs trajectory batches of fixed size, evaluates convergence criteria (trace distance stability, observable standard error), decides continue/stop. Maintains running mean and convergence history. Maximum budget prevents infinite loops.
-
-4. **ExperimentResult (data model)** — Contains config, rho_mean, trace distance, observable time series, convergence history, metadata (timestamp, Julia version, thread count, seed). Serialized via JLD2 per experiment point.
-
-5. **GNS dispatch (existing, no changes)** — ThermalizeConfigGNS <: AbstractThermalizeConfig. `pick_transition(config::ThermalizeConfigGNS)` returns unshifted gamma. `with_coherent=false` enforced, so B term is skipped. All trajectory machinery already handles this via polymorphic dispatch.
-
-**Key patterns:**
-- **Thread coordination:** `@spawn` per batch or chunk, each task allocates workspace in closure, reduces locally, returns result. Main thread sums batch results. No locks or atomics needed.
-- **BLAS thread management:** Set `BLAS.set_num_threads(1)` before trajectory loop, restore after. Critical for n=4-8 (dim=16-256) where BLAS threading overhead exceeds computation time.
-- **Reproducible RNG:** Seed per-trajectory RNGs deterministically: `rng_i = Xoshiro(master_seed + trajectory_id)`. Pass to `step_along_trajectory!(psi, fw, rng)`. Results reproducible within Julia version at fixed thread count.
+**No changes needed:**
+- `src/trajectories.jl`: all primitives reused as-is
+- `src/furnace.jl`: `run_lindbladian` already provides `.spectral_gap` for cross-validation
+- `src/structs.jl`: `SpectralGapResult` lives in `spectral_gap.jl` (not a cross-module type)
 
 ### Critical Pitfalls
 
-1. **BLAS thread oversubscription (CRITICAL)** — OpenBLAS uses multiple threads for `mul!`. Julia threads + BLAS threads = 64 OS threads on 8 cores. Performance collapse (73% slower than serial in documented cases). **Prevention:** `BLAS.set_num_threads(1)` at entry point of parallel trajectory engine. The codebase already has a TODO comment flagging this issue.
+1. **Confusing complex eigenvalue with real decay rate (CRITICAL)** — The Liouvillian `spectral_gap` is `Complex{T}`. Observable decay rate is `-real(spectral_gap)`, NOT `abs(spectral_gap)`. Cross-validation MUST use `abs(real(...))` for comparison. For KMS-balanced Lindbladians (exact BohrDomain), eigenvalues are real; for approximate domains (Energy, Time, Trotter), small imaginary parts can appear. Flag when `|Im/Re| > 0.1` (indicates oscillatory decay, not pure exponential). **Mitigation:** Define comparison quantity explicitly: `exact_gap = abs(real(liouv_result.spectral_gap))`, assert positive, warn on large imaginary part.
 
-2. **Shared mutable TrajectoryWorkspace data race (CRITICAL)** — The current TrajectoryFramework embeds a single `ws::TrajectoryWorkspace{T}` with shared buffers (jump_oft, psi_tmp, Rpsi). Naive parallelization of the trajectory loop causes all threads to write to the same buffers concurrently. Silently wrong results. **Prevention:** Separate workspace from framework. Pass `ws` as explicit argument to `step_along_trajectory!`. Each thread allocates its own workspace.
+2. **Observable basis mismatch (CRITICAL)** — Trajectories evolve in eigenbasis/Trotter basis; observables MUST be transformed to the same basis via `V' * O * V`. This is the exact bug class from v1.2 quick-task-20 (0.83 gap instead of 0.0807 from mixing bases). Total magnetization `M_z = sum_i Z_i` is naturally defined in computational basis; must transform. **Mitigation:** Follow `build_convergence_observables` pattern exactly; add regression test `tr(gibbs * M_z_eigen) = sum_i <Z_i>_gibbs` to catch basis errors.
 
-3. **Global RNG breaks reproducibility (CRITICAL)** — `step_along_trajectory!` currently calls `rand()` (implicit global RNG). TaskLocalRNG is thread-safe but NOT reproducible across different thread counts (task seeding depends on spawn order). **Prevention:** Modify `step_along_trajectory!` to accept `rng::AbstractRNG` parameter. Seed per-trajectory RNGs independently: `Xoshiro(seed + i)`.
+3. **Multi-exponential contamination (CRITICAL)** — Observable decay is `sum_k c_k * exp(-gamma_k * t)`, not a single exponential. Fitting the full time series gives a biased estimate (weighted average of all rates, pulled high by fast modes). **Mitigation:** (a) Late-time fitting only — skip first 10-20% where fast modes dominate; (b) Fit multiple observables independently, select the smallest fitted rate with good R-squared as the true gap; (c) Use exact steady-state value `<O>_ss = tr(gibbs * O)` as fixed parameter rather than fitting it.
 
-4. **KMS-vs-GNS comparison at same sigma conflates physics (MODERATE)** — KMS uses shifted gamma `(w + beta*sigma^2/2)`, GNS uses unshifted gamma `w`. Same sigma parameter produces different Lindbladians with different spectral gaps and fixed-point errors. **Prevention:** Define comparison protocol upfront (same sigma vs matched gap vs same compute budget). Document which protocol is used. Separate fixed-point error from mixing rate in analysis.
+4. **Noise floor at late times (CRITICAL)** — At `t >> 1/gap`, signal `|<O>(t) - <O>_ss| ~ exp(-gap * t)` drops below noise `sigma / sqrt(N_traj)`. Including noisy tail corrupts fit. For gap ~ 0.08, signal reaches noise floor at t ~ 50 with 1000 trajectories. **Mitigation:** (a) Pre-compute signal-to-noise from rough gap estimate, choose `N_traj` such that signal > 3*noise for at least 3 decay times; (b) Use weighted fitting by `1/var(t)` to downweight noisy regions; (c) Empirically determine noise floor and exclude time points where `|signal| < 2*noise`.
 
-5. **Adaptive sampling stops prematurely from autocorrelation (MODERATE)** — Consecutive trajectories from same initial state produce correlated final states if mixing time is not much longer than total evolution time. Standard error estimate assumes i.i.d., underestimates uncertainty. **Prevention:** Use observable-based convergence (track `||rho(t) - rho(t-Delta)||`) rather than pure statistical criterion. Batch means with proper batch size (20-30 batches minimum).
+5. **Fitting sensitivity to initial guess (MODERATE)** — Levenberg-Marquardt converges to local minima. Poor initial `gap_0` causes convergence to wrong rate or failure. **Mitigation:** (a) Log-linear pre-estimate: fit `log|<O>(t) - C|` vs `t` to get initial gap; (b) Fix offset to known Gibbs value to reduce from 3-parameter to 2-parameter fit; (c) Use LsqFit bounds `lower=[..., 0.0, ...]` to constrain `gap >= 0`.
 
 ## Implications for Roadmap
 
-Based on research, the milestone naturally decomposes into sequential phases due to strong dependencies. The workspace refactor is a gate for all parallelism. GNS path verification and experiment data model can proceed in parallel after that. Adaptive sampling requires convergence tracking. Experiments integrate everything.
+Based on research, suggested phase structure:
 
-### Phase 1: Workspace Refactor (Gate for Parallelism)
-**Rationale:** The embedded mutable workspace in TrajectoryFramework is the single blocker for thread safety. This refactor enables all subsequent parallel work.
-**Delivers:** `step_along_trajectory!(psi, fw, ws, rng)` signature with explicit workspace and RNG arguments. Backward compatibility wrapper for existing code.
-**Addresses:** Pitfall 2 (shared mutable workspace), Pitfall 3 (global RNG). Prerequisite for multi-threading.
-**Complexity:** LOW — signature change to 2-3 functions, add workspace parameter.
+### Phase 1: Observable Infrastructure
+**Rationale:** Zero-dependency foundation. Observable builders have no external deps and enable all subsequent work. Following the same pattern as existing `build_convergence_observables` minimizes basis-mismatch risk. Can be tested in isolation against Gibbs state traces.
 
-### Phase 2: Multi-Threaded Trajectory Engine
-**Rationale:** Thousands of trajectories at n=8 require parallelism. Embarrassingly parallel once workspace is separated.
-**Delivers:** `run_trajectories_parallel(jumps, config, psi0, ham; ntraj, seed, nthreads)` using `@spawn`-per-batch pattern. Per-thread workspace allocation, per-thread partial rho accumulation, final reduction. BLAS thread management (`BLAS.set_num_threads(1)`).
-**Addresses:** Core feature (multi-threaded sampling), Pitfall 1 (BLAS oversubscription), Pitfall 4 (false sharing via per-thread buffers), Pitfall 9 (GC pressure via allocation audit).
-**Complexity:** MEDIUM — threading coordination, per-thread state management, RNG reproducibility testing.
-**Depends on:** Phase 1 (workspace refactor).
+**Delivers:**
+- `build_total_magnetization(ham, n)`
+- `build_gap_estimation_observables(ham, n)` returning [H, M_z, ZZ_12, ZZ_23, ...]
+- Basis transform regression tests
 
-### Phase 3: GNS Trajectory Path Verification
-**Rationale:** GNS dispatch already exists but needs integration testing. Can proceed in parallel with Phase 2 (no code changes needed, only verification).
-**Delivers:** Tests confirming GNS trajectory path produces correct fixed point. Verification that `per_op.U_B === nothing` for GNS configs. Documentation of sigma parameter space for paper experiments.
-**Addresses:** Core feature (GNS path), prerequisite for KMS-vs-GNS experiments.
-**Complexity:** LOW — test harness, no source changes.
-**Depends on:** Nothing (GNS dispatch already works).
+**Addresses:** Total magnetization observable (table stakes), basis mismatch prevention (critical pitfall 2)
 
-### Phase 4: Experiment Data Model + Serialization
-**Rationale:** Need concrete data structures and persistence before building convergence tracking or experiments. JLD2 preserves Julia types, enabling clean round-trip of nested configs and matrices.
-**Delivers:** `ExperimentResult` struct, `ExperimentSpec` for parameter grid, `save_experiment`/`load_experiment` via JLD2. Directory structure for experiment organization.
-**Addresses:** Core feature (data architecture). Enables Phase 5 (adaptive sampling) and Phase 6 (experiments).
-**Complexity:** MEDIUM — data model design, JLD2 integration, file organization.
-**Depends on:** Nothing (pure data types).
+**Avoids:** Pitfall 2 (basis mismatch) by following `build_convergence_observables` pattern exactly
 
-### Phase 5: Convergence Tracking & Adaptive Sampling
-**Rationale:** Adaptive sampling requires trace distance tracking, per-observable tracking, and batch-based convergence evaluation. Builds on multi-threading and data model.
-**Delivers:** `AdaptiveBatchManager` with convergence criteria (trace distance stability, observable variance, Gibbs proximity). Batch execution with convergence evaluation. Welford online mean/variance for numerical stability.
-**Addresses:** Core features (trace distance tracking, per-observable convergence, adaptive sampling). Pitfall 7 (premature stopping via observable-based convergence), Pitfall 11 (memory via scalar metrics), Pitfall 12 (batch size effects).
-**Complexity:** MEDIUM — convergence criteria design, batch coordination, statistical methodology.
-**Depends on:** Phase 2 (multi-threading), Phase 4 (data model).
+**Complexity:** LOW (~40 lines in `convergence.jl`)
 
-### Phase 6: KMS-vs-GNS Experiment Driver
-**Rationale:** Integration point tying all features together. Runs matched experiments across parameter grid (n=4,6,8; beta=5,10,20; KMS vs GNS). Produces paper-ready comparison data.
-**Delivers:** `kms_vs_gns_grid()` parameter sweep specification. `run_experiment_grid()` driver script. Convergence curve plotting. Matched comparison protocol definition (same sigma, same initial state, separate fixed-point error from mixing rate).
-**Addresses:** Core feature (KMS-vs-GNS experiments). Pitfall 5 (comparison protocol), Pitfall 6 (fixed-point vs mixing), Pitfall 15 (initial state control).
-**Complexity:** MEDIUM — parameter sweep logic, experiment orchestration, result aggregation.
-**Depends on:** All previous phases.
+---
+
+### Phase 2: Add LsqFit Dependency + Exponential Fitting
+**Rationale:** The fitting logic can be developed and tested independently of trajectory simulation using synthetic exponential data. This validates the fitting methodology (initial guess, bounds, convergence) before integrating with noisy trajectory data. Can run in parallel with Phase 1.
+
+**Delivers:**
+- LsqFit.jl added to `Project.toml`
+- `fit_exponential_decay(times, values; skip_initial, gibbs_value)` in new `spectral_gap.jl`
+- Synthetic data tests: fit `y = 2.0 * exp(-0.5 * t) + 1.0 + noise`, verify recovery
+
+**Uses:** LsqFit.jl for `curve_fit`, `confidence_interval`, `standard_error`
+
+**Addresses:** Single-exponential fit with bounds (table stakes), fit quality metrics (table stakes)
+
+**Avoids:** Pitfall 5 (initial guess sensitivity) via log-linear pre-estimate, Pitfall 3 (multi-exponential) via `skip_initial` parameter
+
+**Complexity:** MEDIUM (~70 lines fitting function + tests)
+
+---
+
+### Phase 3: Observable-Only Trajectory Runner
+**Rationale:** Depends on Phase 1 for observables but independent of Phase 2 (fitting). Follows `run_trajectories_convergence` template. The trajectory runner produces time-series data that Phase 4 will consume.
+
+**Delivers:**
+- `_run_chunk_obs_only!` (observable variant of trajectory loop)
+- `run_observable_trajectories(jumps, config, psi0, ham; observables, save_every, ntraj, reconstruct_dm=false)`
+- Returns `TrajectoryResult` with `measurements_mean` and `times`
+
+**Uses:** Existing trajectory primitives (`_build_framework_and_seed`, `step_along_trajectory!`, `_accumulate_measurements!`, multi-threading)
+
+**Implements:** Observable-only trajectory runner architecture component
+
+**Addresses:** Observable-only trajectory runner (table stakes), correct time grid selection (pitfall 7 mitigation)
+
+**Avoids:** Pitfall 4 (noise floor) by exposing `ntraj` and `total_time` parameters for signal-to-noise planning
+
+**Complexity:** MEDIUM (~120 lines following existing patterns)
+
+---
+
+### Phase 4: Gap Estimation API + Result Struct
+**Rationale:** Depends on Phases 2 and 3 (requires both fitting and trajectory runner). Integrates observable-trajectories with multi-observable fitting, implements best-fit selection logic, packages results.
+
+**Delivers:**
+- `SpectralGapResult` struct in `spectral_gap.jl`
+- `estimate_spectral_gap(jumps, config, psi0, ham; observables, ntraj, save_every, exact_result)`
+- Fits all observables, selects best (lowest residual, converged, gap > 0)
+- Returns gap estimate + CI + per-observable results
+
+**Implements:** Top-level API architecture component
+
+**Addresses:** `estimate_spectral_gap` function (table stakes), multi-observable consistency check (differentiator)
+
+**Avoids:** Pitfall 3 (multi-exponential) by comparing gap across observables (smallest rate with good fit is true gap)
+
+**Complexity:** MEDIUM (~80 lines orchestration logic)
+
+---
+
+### Phase 5: Cross-Validation Helpers + n=4,6 Validation
+**Rationale:** Depends on Phase 4 (needs `estimate_spectral_gap` API). Cross-validation establishes trust in the method by comparing against exact Liouvillian eigenvalues at n=4,6. This is the scientific validation step.
+
+**Delivers:**
+- `cross_validate_gap(estimated, exact_result::LindbladianResult)` helper
+- Validation simulation script for n=4 and n=6
+- Report: relative error, confidence interval overlap, per-observable gap comparison
+
+**Addresses:** Cross-validation against exact Liouvillian gap (table stakes)
+
+**Avoids:**
+- Pitfall 1 (complex vs real) by using `abs(real(spectral_gap))` and warning on large imaginary part
+- Pitfall 6 (wrong eigenvalue from Arpack) by requesting more eigenvalues and validating against full spectrum for n=4
+- Pitfall 9 (wrong steady-state value) by using `liouv_result.fixed_point` for baseline subtraction in cross-validation tests
+
+**Complexity:** MEDIUM (helper is ~30 lines; validation script is separate, not library code)
+
+---
+
+### Phase 6: Gap Scaling Studies (Optional, Deferred)
+**Rationale:** Uses complete implementation from Phases 1-5. This is a simulation/paper phase, not library development. Can be done outside the main milestone delivery.
+
+**Delivers:**
+- Gap vs beta scaling plots
+- Gap vs n scaling plots (tests system-size independence prediction from arXiv:2510.08533)
+- Variance-weighted fitting refinement (if needed for precision)
+
+**Addresses:** Gap scaling plots (differentiator), variance-weighted fitting (differentiator)
+
+**Complexity:** LOW (simulation scripts using stable API)
+
+---
 
 ### Phase Ordering Rationale
 
-- **Workspace refactor gates everything:** Cannot parallelize until workspace is separated from framework. Small change, large enabling effect. Do first.
-- **GNS verification is independent:** Dispatches through existing polymorphic code. Can happen in parallel with Phase 2. No changes needed, only tests.
-- **Data model before adaptive sampling:** Need concrete result types before building convergence manager. Data model is pure (no behavioral logic), can define early.
-- **Adaptive sampling integrates threading + tracking:** Requires multi-threaded trajectory execution and data persistence. Must come after Phase 2 and Phase 4.
-- **Experiments integrate everything:** Cannot run comparison experiments until all components (threading, GNS path, data model, adaptive sampling) are complete. Natural final phase.
+- **Phases 1 and 2 can be parallel:** Observable builders and exponential fitting are independent. Both are foundational.
+- **Phase 3 depends on Phase 1:** Needs observables to measure during trajectories.
+- **Phase 4 depends on Phases 2 and 3:** Integrates fitting with trajectory runner.
+- **Phase 5 depends on Phase 4:** Cross-validation needs the complete API.
+- **Phase 6 is post-delivery:** Paper figures and refinements happen after validation.
+
+**Key dependency chain:**
+```
+Phase 1 (observables)  ─┐
+                        ├─> Phase 3 (trajectories) ─┐
+Phase 2 (fitting)     ──┼───────────────────────────┼─> Phase 4 (API) ──> Phase 5 (validation) ──> Phase 6 (scaling)
+```
+
+**Risk mitigation via ordering:**
+- Address critical basis-mismatch pitfall (2) first via Phase 1 (observable patterns)
+- Validate fitting methodology via synthetic data in Phase 2 before applying to noisy trajectory data
+- Cross-validation (Phase 5) validates the entire pipeline before extending to n≥8
 
 ### Research Flags
 
-**Phases with standard patterns (skip research-phase):**
-- **Phase 1 (Workspace refactor):** Straightforward signature change. No external research needed.
-- **Phase 2 (Multi-threading):** Julia threading documentation is comprehensive. Pattern is well-established in QuantumOptics.jl, ITensors.jl. BLAS thread management is documented.
-- **Phase 3 (GNS verification):** Physics is known (Chen 2023 paper). Implementation already exists. Testing only.
-- **Phase 4 (Data model):** Standard serialization problem. JLD2 docs are sufficient.
+**Phases with standard patterns (minimal additional research needed):**
+- **Phase 1 (Observables):** Follows `build_convergence_observables` exactly. Basis transform pattern is established. Skip `/gsd:research-phase`.
+- **Phase 2 (Fitting):** LsqFit.jl is well-documented, exponential fitting is standard numerics. Skip `/gsd:research-phase`.
+- **Phase 3 (Trajectories):** Follows `run_trajectories_convergence` template. All primitives exist. Skip `/gsd:research-phase`.
 
-**Phases needing validation during execution:**
-- **Phase 5 (Adaptive sampling):** Convergence criteria tuning is empirical. Threshold values (rtol=0.01, batch_size=100) are reasonable defaults but may need adjustment based on pilot runs at n=4,6,8. Not a research issue — a parameter tuning issue.
-- **Phase 6 (Experiments):** Sigma parameter space for fair KMS-vs-GNS comparison needs empirical validation. Initial proposal (sigma=1/beta for both) is defensible but may need refinement based on spectral gap measurements. This is experimental science, not software architecture research.
+**Phases needing light validation during planning (but not deep research):**
+- **Phase 4 (API):** Multi-observable selection logic (pick best fit by R-squared, converged, gap > 0) is straightforward but may benefit from a quick-task to define the exact selection heuristic. Consider a quick-task for "best-fit selection criteria".
+- **Phase 5 (Cross-validation):** The comparison metric (exact vs fitted) needs precision in handling complex eigenvalues and imaginary part warnings. Consider a quick-task to validate the comparison logic for n=4 BohrDomain vs TrotterDomain.
 
-**No phases require `/gsd:research-phase`:** The architecture, stack, and pitfalls are well-understood from this research. Phase planning should focus on implementation details, not additional domain research.
+**No phase requires `/gsd:research-phase`:** All technical approaches are well-understood from domain research.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | Julia stdlib threading is verified sufficient. JLD2 is actively maintained, pure Julia. No speculative dependencies. |
-| Features | HIGH | Codebase analysis shows GNS dispatch already works. Multi-threading pattern is standard MCWF methodology. Observable selection grounded in Heisenberg chain physics. |
-| Architecture | HIGH | Direct source code analysis of all 23 src files. Workspace separation pattern is proven in Julia HPC community. Thread coordination matches established Monte Carlo patterns. |
-| Pitfalls | HIGH | BLAS oversubscription, RNG reproducibility, and workspace data races are documented Julia issues with known solutions. KMS-vs-GNS comparison subtleties grounded in Chen et al. papers. |
+| Stack | HIGH | LsqFit.jl verified via official docs, GitHub, and tutorial. Dependency analysis confirms minimal footprint. All existing trajectory primitives are production-ready. |
+| Features | HIGH | Physics foundation is textbook Lindbladian theory. Feature scope is well-defined by cross-validation at n=4,6. Observable builders follow established patterns. |
+| Architecture | HIGH | Direct codebase analysis of all relevant files (trajectories.jl, convergence.jl, furnace.jl, structs.jl). New components follow existing patterns exactly. Integration points are clear. |
+| Pitfalls | HIGH | Critical pitfalls identified from (a) codebase analysis (basis mismatch from v1.2 quick-task-20), (b) numerical analysis literature (multi-exponential fitting, noise floor), (c) quantum open systems theory (complex eigenvalues, decay rate vs oscillation frequency). Mitigations are concrete and testable. |
 
 **Overall confidence:** HIGH
 
+The research is grounded in direct codebase analysis (all source files read), verified external dependencies (LsqFit.jl documentation and GitHub), established physics (Lindbladian spectral decomposition, observable decay), and battle-tested numerical methods (Levenberg-Marquardt fitting, log-linear initial guess). The architecture reuses 95% of existing code. The new code (~250 lines in `spectral_gap.jl`, ~40 lines in `convergence.jl`) follows established patterns from `run_trajectories_convergence` and `build_convergence_observables`.
+
 ### Gaps to Address
 
-**Empirical validation needed:**
-- **BLAS thread count crossover at n=12:** For dim=4096, benchmark `BLAS.set_num_threads(1)` with `julia -t 64` vs `BLAS.set_num_threads(4)` with `julia -t 16`. Optimal split is system-dependent. Current recommendation (BLAS=1 for n<=8) is safe but may be suboptimal at n=12.
-- **Sigma parameter space for GNS:** The approximation error `||rho_fixedpoint_GNS - gibbs||` vs sigma needs empirical measurement for the specific Heisenberg Hamiltonians used. Chen 2023 theory gives asymptotic bounds but practical values depend on the spectrum.
-- **Adaptive convergence threshold tuning:** The proposed rtol=0.01 for trace distance stability is reasonable but may need adjustment based on pilot runs. Too tight wastes computation; too loose gives false convergence.
+**Multi-observable selection heuristic:** The "best fit" selection logic (from energy, M_z, and ZZ correlations) uses "lowest residual + converged + gap > 0" as the criterion. This is reasonable but may need refinement based on validation results. **Mitigation:** Phase 5 cross-validation will reveal if this heuristic is sufficient. If not, consider weighted average across observables with inverse-variance weighting, or select the observable with best R-squared rather than best residual norm.
 
-**Implementation decisions deferred to planning:**
-- **DataFrames in package vs experiment scripts:** If parameter sweep API (`sweep_kms_vs_gns(...)` returning DataFrame) lives in the package, add DataFrames to `[deps]`. If experiments are standalone scripts outside the package, keep it script-local. Decision depends on whether the package is a library (defer DataFrames) or includes experiment tooling.
-- **Batch size formula:** Recommended `B = max(ntraj_min / 30, 100)` for 20-30 batches. Actual optimal value depends on convergence speed (fast convergence allows larger batches; slow convergence needs more checkpoints). Tune empirically.
-- **Workspace allocation strategy:** Current recommendation is `@spawn`-per-batch with closure-captured workspace. Alternative: `@threads :static` with `threadid()` indexing into pre-allocated workspace pool. Both work; choose based on allocation profiling results.
+**Exact eigenvalue for non-BohrDomain:** The research assumes `run_lindbladian` returns the correct spectral gap for Energy, Time, and TrotterDomain. Pitfall 6 flags that Arpack with shift-invert may misidentify the gap eigenvalue when eigenvalues have similar real parts. **Mitigation:** Phase 5 validation should compute full spectrum (via `eigen()`) for n=4 to verify Arpack's result. If discrepancy found, extend `run_lindbladian` to request more eigenvalues and sort properly.
 
-**No major gaps:** The research is comprehensive for milestone planning. Remaining questions are tuning parameters and empirical validation during execution, not architecture uncertainties.
+**Signal-to-noise planning for n=8:** The recommended trajectory counts (5000+ for n=4,6, 10000+ for n=8) are rough estimates. The actual required `N_traj` depends on the specific Hamiltonian's spectral gap and observable variance. **Mitigation:** Phase 5 validation at n=4,6 will calibrate the signal-to-noise relationship. Use this to plan n=8 runs. Consider a pilot run (100 trajectories) before committing to full N_traj.
+
+**Gibbs vs fixed-point for offset:** The exponential fit uses `<O>_ss` as the offset parameter. For exact KMS (BohrDomain), this is the Gibbs value. For approximate domains, it should be the Liouvillian fixed point. The research flags this as Pitfall 9. **Mitigation:** For cross-validation (Phase 5), use `liouv_result.fixed_point` to compute `<O>_ss`. For production use at n≥8 (where Liouvillian is unavailable), use Gibbs value and acknowledge domain approximation error. Document this in the function docstring.
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- **QuantumFurnace.jl codebase** — Direct analysis of all 23 source files, all tests, and existing trajectory infrastructure. Verified workspace structure, GNS dispatch, and RNG usage.
-- **Julia Multi-Threading Documentation** (https://docs.julialang.org/en/v1/manual/multi-threading/) — `@spawn`, `@sync`, TaskLocalRNG, thread safety.
-- **Julia Random stdlib** (https://docs.julialang.org/en/v1/stdlib/Random/) — TaskLocalRNG per-task seeding, deterministic child RNG derivation.
-- **JLD2.jl official documentation** (https://juliaio.github.io/JLD2.jl/stable/) — API, type preservation, HDF5 compatibility.
-- **ITensors.jl Multithreading Guide** (https://itensor.github.io/ITensors.jl/dev/Multithreading.html) — BLAS.set_num_threads(1) pattern.
-- **Chen, Kastoryano, Gilyen (2025)** "An efficient and exact noncommutative quantum Gibbs sampler" (arXiv:2311.09207) — KMS construction, coherent B term, exact detailed balance.
-- **Chen, Kastoryano, Brandao, Gilyen (2023)** "Quantum Thermal State Preparation" (arXiv:2303.18224) — GNS construction, sigma parameter, energy uncertainty.
 
-### Secondary (MEDIUM confidence)
-- **Julia Discourse: BLAS vs Julia threads** (https://discourse.julialang.org/t/julia-threads-vs-blas-threads/8914) — Thread oversubscription problem and solutions.
-- **Julia Discourse: Reproducible multithreaded Monte Carlo** (https://discourse.julialang.org/t/reproducible-multithreaded-monte-carlo-task-local-random/35269) — Per-task RNG patterns.
-- **Julia issue #49455** (https://github.com/JuliaLang/julia/issues/49455) — Multi-threaded `mul!` 73% slower than serial due to oversubscription.
-- **Julia issue #49522** (https://github.com/JuliaLang/julia/issues/49522) — `Random.seed!` reproducibility across thread counts.
-- **QuantumToolbox.jl Monte Carlo Solver** (https://qutip.org/QuantumToolbox.jl/stable/users_guide/time_evolution/mcsolve) — EnsembleThreads() pattern for parallel trajectories.
-- **1D Heisenberg chain physics** — Bethe ansatz ground state correlations (~-0.44 for infinite chain), SU(2) symmetry, antiferromagnetic order. Standard condensed matter textbook knowledge.
+**Codebase (direct analysis):**
+- `src/trajectories.jl` (927 lines) — `run_trajectories`, `_run_chunk_with_obs!`, `step_along_trajectory!`, `_accumulate_measurements!`, trajectory primitives
+- `src/convergence.jl` (387 lines) — `build_convergence_observables`, `run_trajectories_convergence`, observable builders and basis transforms
+- `src/furnace.jl` (163 lines) — `run_lindbladian`, `LindbladianResult.spectral_gap`, Arpack eigenvalue extraction
+- `src/structs.jl` (358 lines) — `LindbladianResult`, `TrajectoryResult`, `ConvergenceData`, struct definitions
+- `src/QuantumFurnace.jl` — module structure, exports, dependency imports
+- `Project.toml` — current dependencies (Optim.jl, Arpack, etc.)
+- `.planning/quick/20-debug-gns-trotterdomain-0-83-gap-suspect/20-SUMMARY.md` — documented basis mismatch bug (0.83 gap instead of 0.0807)
 
-### Tertiary (domain knowledge, established methodology)
-- **Welford's online algorithm** — Numerically stable streaming variance. Used by NumPy, Rust statistical crates, OnlineStats.jl internally.
-- **Monte Carlo ensemble averaging** — Standard error scales as 1/sqrt(N). Batch means with proper batch size for variance estimation.
-- **MCWF trajectory methodology** — Established in quantum optics since 1990s. QuantumOptics.jl and QuTiP use same patterns.
+**External dependencies:**
+- [LsqFit.jl Documentation](https://julianlsolvers.github.io/LsqFit.jl/latest/) — API reference, tutorials, curve_fit usage
+- [LsqFit.jl GitHub v0.15.1](https://github.com/JuliaNLSolvers/LsqFit.jl) — Dependencies, Project.toml, release history, Julia compat
+- [LsqFit.jl Tutorial](https://julianlsolvers.github.io/LsqFit.jl/latest/tutorial/) — Exponential model example, parameter bounds, confidence intervals
+- [Distributions.jl v0.25 docs](https://juliastats.org/Distributions.jl/v0.25/) — Generated with Julia 1.11.7, confirming compatibility
+- [Distributions.jl v0.25.123 on Zenodo](https://zenodo.org/records/18145493) — Latest release Jan 2026
+
+### Secondary (HIGH confidence, domain knowledge)
+
+**Quantum open systems theory:**
+- Lindbladian spectral decomposition: `rho(t) = rho_ss + sum c_k R_k exp(lambda_k t)` — textbook result
+- Observable decay rate = `-real(lambda)` where `lambda` is Liouvillian eigenvalue — standard open quantum systems
+- KMS detailed balance implies real eigenvalues w.r.t. GNS inner product — Chen, Kastoryano, Gilyen (2025) arXiv:2311.09207
+
+**Numerical methods:**
+- Exponential fitting of sums of exponentials is ill-conditioned — classic numerical analysis result
+- Log-linear initial guess for nonlinear exponential fitting — standard practice in spectroscopy, NMR
+- Levenberg-Marquardt for nonlinear least squares — Nocedal & Wright, Numerical Optimization
+- Late-time fitting extracts slowest decay mode — standard in quantum Monte Carlo gap estimation
+
+**Physics literature:**
+- [Sandvik (2011) "Excitation Gap from Optimized Correlation Functions in QMC"](https://ar5iv.labs.arxiv.org/html/1112.2269) — Signal-to-noise in extracting gaps from Monte Carlo, multi-exponential fitting window selection
+- [Nachtergaele, Sims (2006) "Spectral Gap and Exponential Decay of Correlations"](https://link.springer.com/article/10.1007/s00220-006-0030-4) — Mathematical foundation: spectral gap implies exponential correlation decay
+- [Fast Mixing of Quantum Spin Chains at All Temperatures](https://arxiv.org/html/2510.08533) — System-size independent gap for 1D chains at finite temperature (testable prediction for gap vs n scaling)
+
+### Tertiary (MEDIUM confidence, methodological references)
+
+- [HypothesisTests.jl parametric tests](https://juliastats.org/HypothesisTests.jl/stable/parametric/) — OneSampleTTest for gap validation (existing test dependency)
+- [Mixing Time of Open Quantum Systems via Hypocoercivity](https://arxiv.org/abs/2404.11503) — Relationship between spectral gap, mixing time, and observable autocorrelation
+- [Mori (2022) "Liouvillian analysis of relaxation time"](https://www2.yukawa.kyoto-u.ac.jp/~nqs2022/slide/4th/Mori.pdf) — Complex eigenvalue structure, decay rate vs oscillation frequency
+- Julia Discourse on weighted LsqFit — Weight parameter usage patterns
 
 ---
-*Research completed: 2026-02-15*
+*Research completed: 2026-02-16*
 *Ready for roadmap: YES*
