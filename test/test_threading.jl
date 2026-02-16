@@ -115,3 +115,67 @@ end
         @test true
     end
 end
+
+@testset "Threading speedup" begin
+    if Threads.nthreads() >= 2
+        dim = size(SMALL_HAM.data, 1)
+        CT = ComplexF64
+        psi0 = zeros(CT, dim)
+        psi0[1] = 1.0
+
+        # Use longer mixing_time and more trajectories to amortize threading overhead.
+        # At dim=8 each step is very fast, so we need enough total work to see speedup.
+        therm_config = make_small_thermalize_config(TimeDomain();
+            delta=0.01, mixing_time=5.0, with_coherent=false)
+
+        ntraj = 200
+
+        # Warmup both paths
+        run_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+            delta=0.01, ntraj=ntraj, seed=1)
+
+        # Measure threaded execution time (automatic with nthreads > 1)
+        t_threaded = @elapsed begin
+            for _ in 1:3  # average over 3 runs
+                run_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+                    delta=0.01, ntraj=ntraj, seed=42)
+            end
+        end
+        t_threaded /= 3
+
+        # Measure serial execution time: force single-thread behavior by running
+        # trajectories one at a time in a loop, calling _evolve_along_trajectory! directly
+        # This simulates serial execution regardless of thread count
+        precomputed = QuantumFurnace._precompute_data(therm_config, SMALL_HAM)
+        scratch = QuantumFurnace.KrausScratch(CT, dim)
+        fw = build_trajectoryframework(SMALL_JUMPS, SMALL_HAM, therm_config, precomputed, scratch, 0.01)
+
+        # Warmup serial path
+        ws_s = QuantumFurnace.TrajectoryWorkspace(CT, dim)
+        psi_s = copy(psi0)
+        rng_s = Random.Xoshiro(1)
+        QuantumFurnace._evolve_along_trajectory!(psi_s, fw, ws_s, rng_s, 5.0)
+
+        t_serial = @elapsed begin
+            for _ in 1:3
+                rho_acc = zeros(CT, dim, dim)
+                for traj_id in 1:ntraj
+                    ws_loop = QuantumFurnace.TrajectoryWorkspace(CT, dim)
+                    rng_loop = Random.Xoshiro(42 + traj_id)
+                    psi_loop = copy(psi0)
+                    QuantumFurnace._evolve_along_trajectory!(psi_loop, fw, ws_loop, rng_loop, 5.0)
+                    QuantumFurnace._accumulate_density_matrix!(rho_acc, psi_loop)
+                end
+            end
+        end
+        t_serial /= 3
+
+        @info "Threading performance" nthreads=Threads.nthreads() t_serial t_threaded speedup=t_serial/t_threaded
+
+        # Threaded should be faster than serial (no regression from threading overhead)
+        @test t_threaded < t_serial
+    else
+        @info "Skipping threading speedup test (nthreads=$(Threads.nthreads()))"
+        @test true
+    end
+end
