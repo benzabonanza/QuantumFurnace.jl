@@ -12,6 +12,7 @@
 # Generated files
 /results/
 /hamiltonians/
+/experiments/
 
 # OS-specific files
 /docs/.DS_Store
