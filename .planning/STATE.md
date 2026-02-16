@@ -46,7 +46,7 @@ Recent decisions affecting current work:
 - Phase 19 Plan 02: _run_batch_no_obs! encapsulates serial/threaded dispatch, shared by all callers
 - Phase 19 Plan 02: Convergence runners call _run_batch_no_obs! directly (not run_trajectories)
 - Phase 19 Plan 01: trotter.eigvecs for TrotterDomain JumpOp basis, hamiltonian.eigvecs for all others (LOCKED)
-- Phase 19 Plan 01: transform_jumps_to_basis kept as public API, zero internal callers
+- Phase 19 Plan 01: transform_jumps_to_basis removed entirely (Quick-21: deleted from exports and tests)
 - Phase 19 Plan 01: TEST_TROTTER_JUMPS and SMALL_TROTTER_JUMPS constants for TrotterDomain test call sites
 - Phase 18 Plan 01: mixing_time = 2.0 * beta (scales with inverse temperature for sufficient mixing)
 - Phase 18 Plan 01: Phase 17 defaults for adaptive: batch_size=200, threshold=0.01, patience=3, window_size=3, min_batches=5
@@ -111,9 +111,10 @@ None
 |---|-------------|------|--------|-----------|
 | 19 | Fix failing test after EnergyDomain to TrotterDomain rename in GNS trajectory | 2026-02-16 | 0683acc | [19-fix-failing-test-after-energydomain-to-t](./quick/19-fix-failing-test-after-energydomain-to-t/) |
 | 20 | Fix basis mismatch in GNS TrotterDomain tests (0.83 -> 0.08 gap) | 2026-02-16 | 0161e01 | [20-debug-gns-trotterdomain-0-83-gap-suspect](./quick/20-debug-gns-trotterdomain-0-83-gap-suspect/) |
+| 21 | Fix test errors after removing transform_jumps_to_basis | 2026-02-16 | b2e4123 | [21-fix-test-errors-after-removing-transform](./quick/21-fix-test-errors-after-removing-transform/) |
 
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Completed 19-03-PLAN.md (simplify result struct hierarchy) -- Phase 19 COMPLETE
+Stopped at: Completed quick task 21 (fix test errors after removing transform_jumps_to_basis)
 Resume file: None
