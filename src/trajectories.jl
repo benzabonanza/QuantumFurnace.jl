@@ -312,38 +312,6 @@ end
     return nothing
 end
 
-"""
-    _evolve_along_trajectory!(psi, fw, ws, rng, total_time) -> Vector{<:Complex}
-
-    Runs `num_steps = ceil(total_time/δ)` full δ-steps using `step_along_trajectory!`.
-    Does not allocate inside the loop (beyond RNG internals); all workspace is in `ws`.
-
-    Normalization: each step normalizes in the branch logic (and after U_B if present).
-"""
-function _evolve_along_trajectory!(
-    psi::Vector{<:Complex},
-    fw::TrajectoryFramework{<:Complex},
-    ws::TrajectoryWorkspace{<:Complex},
-    rng::AbstractRNG,
-    total_time::Real,
-)
-
-    delta = fw.delta
-    @assert delta > 0
-    @assert total_time >= 0
-
-    num_steps = ceil(Int, total_time / delta)
-    # ensure normalized input (optional, but makes probabilities consistent)
-    psi_norm2 = _norm2(psi)
-    rmul!(psi, 1.0 / sqrt(max(psi_norm2, eps(Float64))))
-
-    @inbounds for _ in 1:num_steps
-        step_along_trajectory!(psi, fw, ws, rng)  # dispatches to EnergyDomain or Time/Trotter variant
-    end
-
-    return psi
-end
-
 # Allocation-free measure-add (writes into `acc[:, save_idx]` by +=)
 function _accumulate_measurements!(
     acc::AbstractMatrix{<:Real},
@@ -384,6 +352,7 @@ end
 
 Run a chunk of trajectories without observables, accumulating density matrices in ws.rho_acc.
 Each trajectory gets Xoshiro(master_seed + traj_id) for reproducibility.
+Step loop is inlined (no intermediate _evolve_along_trajectory! wrapper).
 """
 function _run_chunk_no_obs!(
     ws::TrajectoryWorkspace{<:Complex},
@@ -393,11 +362,19 @@ function _run_chunk_no_obs!(
     master_seed::Int,
     total_time::Real,
 )
+    delta = fw.delta
+    num_steps = ceil(Int, total_time / delta)
     psi = copy(psi0)
     for traj_id in chunk
         rng = Random.Xoshiro(master_seed + traj_id)
         copyto!(psi, psi0)
-        _evolve_along_trajectory!(psi, fw, ws, rng, total_time)
+        # Normalize once per trajectory
+        psi_norm2 = _norm2(psi)
+        rmul!(psi, 1.0 / sqrt(max(psi_norm2, eps(Float64))))
+        # Step loop (was _evolve_along_trajectory!)
+        @inbounds for _ in 1:num_steps
+            step_along_trajectory!(psi, fw, ws, rng)
+        end
         _accumulate_density_matrix!(ws.rho_acc, psi)
     end
     return nothing
@@ -451,6 +428,49 @@ function _run_chunk_with_obs!(
 end
 
 """
+    _build_framework_and_seed(jumps, config, psi0, hamiltonian; trotter, delta, seed)
+
+One-time setup: validates config, chooses ham_or_trott, precomputes data, builds
+TrajectoryFramework, and generates actual seed. Returns `(fw, actual_seed)`.
+
+This is extracted so convergence/adaptive runners can build the framework ONCE
+and reuse it across batches.
+"""
+function _build_framework_and_seed(
+    jumps::Vector{JumpOp},
+    config::AbstractThermalizeConfig,
+    psi0::Vector{<:Complex},
+    hamiltonian::HamHam;
+    trotter::Union{TrottTrott,Nothing}=nothing,
+    delta::Real = config.delta,
+    seed::Union{Int,Nothing} = nothing,
+)
+    validate_config!(config)
+    _print_press(config)
+
+    CT = eltype(psi0)
+
+    # Choose evolution object consistent with domain
+    ham_or_trott = if config.domain isa TrotterDomain
+        trotter === nothing && error("TrotterDomain requires `trotter`.")
+        trotter
+    else
+        hamiltonian
+    end
+
+    precomputed_data = _precompute_data(config, ham_or_trott)
+
+    dim = size(hamiltonian.data, 1)
+    builder_scratch = KrausScratch(CT, dim)
+
+    fw = build_trajectoryframework(jumps, ham_or_trott, config, precomputed_data, builder_scratch, delta)
+
+    actual_seed = seed === nothing ? Int(rand(Random.RandomDevice(), UInt64) >> 1) : seed
+
+    return fw, actual_seed
+end
+
+"""
     run_trajectories(jumps, config, psi0, hamiltonian; trotter=nothing,
                      total_time=config.mixing_time, delta=config.delta,
                      ntraj=1, observables=nothing, save_every=1, seed=nothing)
@@ -477,32 +497,16 @@ function run_trajectories(
     seed::Union{Int,Nothing} = nothing,
 )
 
-    validate_config!(config)
-    _print_press(config)
-
     @assert ntraj >= 1
     @assert save_every >= 1
 
+    fw, actual_seed = _build_framework_and_seed(
+        jumps, config, psi0, hamiltonian;
+        trotter=trotter, delta=delta, seed=seed,
+    )
+
     CT = eltype(psi0)
-
-    # Choose evolution object consistent with domain
-    ham_or_trott = if config.domain isa TrotterDomain
-        trotter === nothing && error("TrotterDomain requires `trotter`.")
-        trotter
-    else
-        hamiltonian
-    end
-
-    precomputed_data = _precompute_data(config, ham_or_trott)
-
     dim = size(hamiltonian.data, 1)
-    builder_scratch = KrausScratch(CT, dim)
-
-    fw = build_trajectoryframework(jumps, ham_or_trott, config, precomputed_data, builder_scratch, delta)
-
-    # Create workspace and RNG separately from the framework
-    actual_seed = seed === nothing ? Int(rand(Random.RandomDevice(), UInt64) >> 1) : seed
-    rng = Random.Xoshiro(actual_seed)
     ws = TrajectoryWorkspace(CT, dim)
 
     # ------------------------------------------------------------------
@@ -531,16 +535,25 @@ function run_trajectories(
             hermitianize!(rho_result)
         else
             # Serial path (per-trajectory seeding for consistency with threaded path)
+            num_steps_serial = ceil(Int, total_time / fw.delta)
             psi = copy(psi0)
             if ntraj == 1
                 rng_serial = Random.Xoshiro(actual_seed + 1)
-                _evolve_along_trajectory!(psi, fw, ws, rng_serial, total_time)
+                psi_norm2 = _norm2(psi)
+                rmul!(psi, 1.0 / sqrt(max(psi_norm2, eps(Float64))))
+                @inbounds for _ in 1:num_steps_serial
+                    step_along_trajectory!(psi, fw, ws, rng_serial)
+                end
                 _accumulate_density_matrix!(ws.rho_acc, psi)
             else
                 for traj_id in 1:ntraj
                     rng_serial = Random.Xoshiro(actual_seed + traj_id)
                     copyto!(psi, psi0)
-                    _evolve_along_trajectory!(psi, fw, ws, rng_serial, total_time)
+                    psi_norm2 = _norm2(psi)
+                    rmul!(psi, 1.0 / sqrt(max(psi_norm2, eps(Float64))))
+                    @inbounds for _ in 1:num_steps_serial
+                        step_along_trajectory!(psi, fw, ws, rng_serial)
+                    end
                     _accumulate_density_matrix!(ws.rho_acc, psi)
                 end
             end
