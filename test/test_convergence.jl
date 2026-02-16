@@ -347,4 +347,337 @@ using BSON
         @test length(h_curve) == 2
     end
 
+    # -----------------------------------------------------------------------
+    # Testset 11: ConvergenceData backward-compatible constructor
+    # -----------------------------------------------------------------------
+    @testset "ConvergenceData backward-compatible constructor" begin
+        # 6-argument constructor (Phase 16 pattern)
+        obs_vals = rand(2, 3)
+        conv6 = ConvergenceData(
+            [100, 100, 100],
+            [100, 200, 300],
+            [0.4, 0.3, 0.2],
+            ["ZZ_12", "H"],
+            obs_vals,
+            [0.1, -1.5],
+        )
+
+        # Defaults for Phase 17 fields
+        @test conv6.converged == false
+        @test isnan(conv6.final_relative_change)
+        @test conv6.consecutive_stable_batches == 0
+        @test conv6.total_batches == length(conv6.batch_sizes)
+
+        # 10-argument constructor (Phase 17 full constructor)
+        conv10 = ConvergenceData(
+            [200, 200],
+            [200, 400],
+            [0.3, 0.15],
+            ["ZZ_12", "H"],
+            rand(2, 2),
+            [0.05, -2.0],
+            true,
+            0.02,
+            3,
+            2,
+        )
+
+        @test conv10.converged == true
+        @test conv10.final_relative_change == 0.02
+        @test conv10.consecutive_stable_batches == 3
+        @test conv10.total_batches == 2
+    end
+
+    # -----------------------------------------------------------------------
+    # Testset 12: _windowed_relative_change unit tests
+    # -----------------------------------------------------------------------
+    @testset "_windowed_relative_change unit tests" begin
+        # Insufficient data: 2 points, window_size=3 needs 6
+        @test QuantumFurnace._windowed_relative_change([0.5, 0.4], 3) == Inf
+
+        # Exactly 2*window_size data points returns a finite positive value
+        result = QuantumFurnace._windowed_relative_change([0.5, 0.45, 0.4, 0.38, 0.37, 0.36], 3)
+        @test isfinite(result) && result > 0
+
+        # Known values: [1.0, 1.0, 1.0, 0.5, 0.5, 0.5] with window_size=3
+        # mean_previous = mean([1.0, 1.0, 1.0]) = 1.0
+        # mean_recent   = mean([0.5, 0.5, 0.5]) = 0.5
+        # relative_change = abs(0.5 - 1.0) / max(abs(1.0), eps()) = 0.5
+        @test isapprox(QuantumFurnace._windowed_relative_change([1.0, 1.0, 1.0, 0.5, 0.5, 0.5], 3), 0.5; atol=1e-12)
+
+        # Converged values: all identical -> relative change ~0.0
+        @test QuantumFurnace._windowed_relative_change([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], 3) < 1e-10
+
+        # window_size=1: two-element data [0.4, 0.3]
+        # mean_previous = 0.4, mean_recent = 0.3
+        # relative_change = abs(0.3 - 0.4) / max(0.4, eps()) = 0.1/0.4 = 0.25
+        @test isapprox(QuantumFurnace._windowed_relative_change([0.4, 0.3], 1), 0.25; atol=1e-12)
+
+        # Edge: window_size=2 with exactly 4 elements [2.0, 2.0, 1.0, 1.0]
+        # mean_previous = 2.0, mean_recent = 1.0, relative_change = 1.0/2.0 = 0.5
+        @test isapprox(QuantumFurnace._windowed_relative_change([2.0, 2.0, 1.0, 1.0], 2), 0.5; atol=1e-12)
+    end
+
+    # -----------------------------------------------------------------------
+    # Testset 13: run_trajectories_adaptive convergence (CONV-04)
+    # -----------------------------------------------------------------------
+    @testset "run_trajectories_adaptive convergence (CONV-04)" begin
+        config = make_thermalize_config(EnergyDomain(); with_coherent=true, delta=0.01, mixing_time=5.0)
+        observables, names = build_convergence_observables(TEST_HAM, NUM_QUBITS)
+
+        # Ground state in eigenbasis
+        psi0 = zeros(ComplexF64, DIM)
+        psi0[1] = 1.0
+
+        traj_result, conv_data = run_trajectories_adaptive(
+            TEST_JUMPS, config, psi0, TEST_HAM;
+            gibbs=TEST_GIBBS,
+            observables=observables,
+            observable_names=names,
+            batch_size=200,
+            n_max=20_000,
+            convergence_threshold=0.05,
+            patience=3,
+            min_batches=5,
+            window_size=3,
+            seed=42,
+        )
+
+        # System should converge with generous threshold
+        @test conv_data.converged == true
+
+        # Converged before hitting hard cap: cld(20000, 200) = 100
+        @test conv_data.total_batches < 100
+
+        # Patience was met
+        @test conv_data.consecutive_stable_batches >= 3
+
+        # Final relative change is below threshold
+        @test conv_data.final_relative_change < 0.05
+        @test isfinite(conv_data.final_relative_change)
+
+        # Trace distances are all positive and finite
+        @test all(isfinite, conv_data.trace_distances)
+        @test all(x -> x >= 0, conv_data.trace_distances)
+
+        # Observable values matrix shape matches
+        @test size(conv_data.observable_values) == (NUM_QUBITS + 1, conv_data.total_batches)
+
+        # TrajectoryResult has valid density matrix
+        @test isapprox(real(tr(traj_result.rho_mean)), 1.0; atol=1e-6)
+        @test isapprox(traj_result.rho_mean, traj_result.rho_mean'; atol=1e-10)
+
+        # Total trajectories match batch accounting
+        @test traj_result.n_trajectories == conv_data.total_batches * 200
+    end
+
+    # -----------------------------------------------------------------------
+    # Testset 14: run_trajectories_adaptive hard cap (CONV-05)
+    # -----------------------------------------------------------------------
+    @testset "run_trajectories_adaptive hard cap (CONV-05)" begin
+        config = make_thermalize_config(EnergyDomain(); with_coherent=true, delta=0.01, mixing_time=5.0)
+        observables, names = build_convergence_observables(TEST_HAM, NUM_QUBITS)
+
+        psi0 = zeros(ComplexF64, DIM)
+        psi0[1] = 1.0
+
+        # n_max=500, batch_size=50 -> max_batches=10, threshold=0.0001 is nearly impossible
+        traj_result, conv_data = run_trajectories_adaptive(
+            TEST_JUMPS, config, psi0, TEST_HAM;
+            gibbs=TEST_GIBBS,
+            observables=observables,
+            observable_names=names,
+            batch_size=50,
+            n_max=500,
+            convergence_threshold=0.0001,
+            patience=3,
+            min_batches=5,
+            window_size=3,
+            seed=99,
+        )
+
+        # Should NOT converge with 0.01% threshold and only 500 trajectories
+        @test conv_data.converged == false
+
+        # Ran all batches to the cap: cld(500, 50) = 10
+        @test conv_data.total_batches == cld(500, 50)
+
+        # Total trajectories match
+        @test traj_result.n_trajectories == 500
+
+        # Patience NOT met
+        @test conv_data.consecutive_stable_batches < 3
+
+        # All trace distances positive and finite
+        @test all(isfinite, conv_data.trace_distances)
+        @test all(x -> x >= 0, conv_data.trace_distances)
+    end
+
+    # -----------------------------------------------------------------------
+    # Testset 15: run_trajectories_adaptive determinism
+    # -----------------------------------------------------------------------
+    @testset "run_trajectories_adaptive determinism" begin
+        config = make_thermalize_config(EnergyDomain(); with_coherent=true, delta=0.01, mixing_time=5.0)
+        observables, names = build_convergence_observables(TEST_HAM, NUM_QUBITS)
+
+        psi0 = zeros(ComplexF64, DIM)
+        psi0[1] = 1.0
+
+        _, conv1 = run_trajectories_adaptive(
+            TEST_JUMPS, config, psi0, TEST_HAM;
+            gibbs=TEST_GIBBS,
+            observables=observables,
+            observable_names=names,
+            batch_size=100,
+            n_max=5000,
+            convergence_threshold=0.05,
+            patience=3,
+            seed=12345,
+        )
+
+        _, conv2 = run_trajectories_adaptive(
+            TEST_JUMPS, config, psi0, TEST_HAM;
+            gibbs=TEST_GIBBS,
+            observables=observables,
+            observable_names=names,
+            batch_size=100,
+            n_max=5000,
+            convergence_threshold=0.05,
+            patience=3,
+            seed=12345,
+        )
+
+        # Bitwise identical
+        @test conv1.trace_distances == conv2.trace_distances
+        @test conv1.observable_values == conv2.observable_values
+        @test conv1.converged == conv2.converged
+        @test conv1.total_batches == conv2.total_batches
+    end
+
+    # -----------------------------------------------------------------------
+    # Testset 16: ConvergenceData serialization with adaptive fields
+    # -----------------------------------------------------------------------
+    @testset "ConvergenceData serialization with adaptive fields" begin
+        # Create ConvergenceData with all 10 fields populated
+        conv = ConvergenceData(
+            [200, 200, 200],
+            [200, 400, 600],
+            [0.35, 0.20, 0.12],
+            ["ZZ_12", "ZZ_23", "H"],
+            rand(3, 3),
+            [0.05, -0.1, -2.0],
+            true,     # converged
+            0.03,     # final_relative_change
+            3,        # consecutive_stable_batches
+            3,        # total_batches
+        )
+
+        d = QuantumFurnace._convergence_to_dict(conv)
+
+        # Verify Dict has all 10 keys including Phase 17 fields
+        @test haskey(d, :converged)
+        @test haskey(d, :final_relative_change)
+        @test haskey(d, :consecutive_stable_batches)
+        @test haskey(d, :total_batches)
+
+        # Round-trip through Dict
+        conv2 = QuantumFurnace._dict_to_convergence(d)
+
+        @test conv2.batch_sizes == conv.batch_sizes
+        @test conv2.cumulative_n_traj == conv.cumulative_n_traj
+        @test conv2.trace_distances == conv.trace_distances
+        @test conv2.observable_names == conv.observable_names
+        @test isapprox(conv2.observable_values, conv.observable_values)
+        @test conv2.observable_gibbs_values == conv.observable_gibbs_values
+        @test conv2.converged == true
+        @test conv2.final_relative_change == 0.03
+        @test conv2.consecutive_stable_batches == 3
+        @test conv2.total_batches == 3
+
+        # Forward compatibility: Dict WITHOUT the 4 new keys (simulating old Phase 16 data)
+        d_old = Dict{Symbol, Any}(
+            :batch_sizes => [100, 100],
+            :cumulative_n_traj => [100, 200],
+            :trace_distances => [0.5, 0.3],
+            :observable_names => ["ZZ_12"],
+            :observable_values => rand(1, 2),
+            :observable_gibbs_values => [0.1],
+        )
+        conv_old = QuantumFurnace._dict_to_convergence(d_old)
+        @test conv_old.converged == false
+        @test isnan(conv_old.final_relative_change)
+        @test conv_old.consecutive_stable_batches == 0
+        @test conv_old.total_batches == 2
+    end
+
+    # -----------------------------------------------------------------------
+    # Testset 17: ConvergenceData BSON round-trip with adaptive fields
+    # -----------------------------------------------------------------------
+    @testset "ConvergenceData BSON round-trip with adaptive fields" begin
+        mktempdir() do tmpdir
+            conv = ConvergenceData(
+                [150, 150, 150, 150],
+                [150, 300, 450, 600],
+                [0.4, 0.25, 0.15, 0.10],
+                ["ZZ_12", "ZZ_23", "H"],
+                rand(3, 4),
+                [0.05, -0.1, -2.0],
+                true,     # converged
+                0.018,    # final_relative_change
+                3,        # consecutive_stable_batches
+                4,        # total_batches
+            )
+
+            d = QuantumFurnace._convergence_to_dict(conv)
+            bson_path = joinpath(tmpdir, "conv_adaptive_test.bson")
+            BSON.bson(bson_path, d)
+
+            loaded_d = BSON.load(bson_path)
+            conv2 = QuantumFurnace._dict_to_convergence(loaded_d)
+
+            @test conv2.batch_sizes == conv.batch_sizes
+            @test conv2.cumulative_n_traj == conv.cumulative_n_traj
+            @test isapprox(conv2.trace_distances, conv.trace_distances)
+            @test conv2.observable_names == conv.observable_names
+            @test isapprox(conv2.observable_values, conv.observable_values)
+            @test isapprox(conv2.observable_gibbs_values, conv.observable_gibbs_values)
+            @test conv2.converged == true
+            @test isapprox(conv2.final_relative_change, 0.018; atol=1e-12)
+            @test conv2.consecutive_stable_batches == 3
+            @test conv2.total_batches == 4
+        end
+    end
+
+    # -----------------------------------------------------------------------
+    # Testset 18: Adaptive result programmatic access (CONV-04 extended)
+    # -----------------------------------------------------------------------
+    @testset "Adaptive result programmatic access (CONV-04 extended)" begin
+        config = make_thermalize_config(EnergyDomain(); with_coherent=true, delta=0.01, mixing_time=5.0)
+        observables, names = build_convergence_observables(TEST_HAM, NUM_QUBITS)
+
+        psi0 = zeros(ComplexF64, DIM)
+        psi0[1] = 1.0
+
+        _, conv_data = run_trajectories_adaptive(
+            TEST_JUMPS, config, psi0, TEST_HAM;
+            gibbs=TEST_GIBBS,
+            observables=observables,
+            observable_names=names,
+            batch_size=50,
+            n_max=1000,
+            convergence_threshold=0.1,
+            seed=77,
+        )
+
+        # New diagnostic fields are accessible and correctly typed
+        @test conv_data.converged isa Bool
+        @test conv_data.final_relative_change isa Float64
+        @test conv_data.consecutive_stable_batches isa Int
+        @test conv_data.total_batches isa Int
+        @test conv_data.total_batches > 0
+
+        # Cumulative trajectory count matches batch accounting
+        @test conv_data.cumulative_n_traj[end] == conv_data.total_batches * 50
+    end
+
 end  # @testset "Convergence tracking"
