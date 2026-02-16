@@ -43,3 +43,26 @@
 
 ---
 
+
+## v1.2 Multi-threading (Shipped: 2026-02-16)
+
+**Started:** 2026-02-15 | **Shipped:** 2026-02-16
+**Phases:** 12-19 (15 plans + 3 quick tasks) | **Tests:** 231 → 539 | **Commits:** ~60
+**Julia LOC:** 5,479 src + 3,796 test | **Timeline:** 2 days
+
+**Delivered:** Multi-threaded trajectory sampling engine with GNS comparison path, adaptive convergence-driven batching, BSON experiment serialization, and paper-ready KMS-vs-GNS parameter sweep experiments. All 539 tests passing.
+
+**Key accomplishments:**
+1. Thread-safe workspace separation (read-only TrajectoryFramework, explicit workspace/RNG) enabling concurrent trajectory execution
+2. Multi-threaded trajectory engine with per-thread Xoshiro seeding, BLAS thread control, and zero-allocation hot path via concrete-typed framework fields
+3. GNS (approximate detailed balance) trajectory path verified end-to-end with convergence toward GNS fixed point
+4. BSON-based ExperimentResult serialization with full metadata capture (git hash, timestamp, seed, thread count)
+5. Convergence tracking: batch-level trace distance to Gibbs + per-observable (ZZ correlations, energy) monitoring
+6. Adaptive sampling with automatic stopping (relative change <1% for 3 consecutive batches) and hard trajectory cap
+7. KMS-vs-GNS parameter sweep (n=4 x beta=5,10,20 x {KMS, GNS@1/beta, GNS@0.5/beta}) confirming KMS achieves lower trace distance
+8. Post-milestone cleanup: flattened 5-level call chain to 3, eliminated redundant basis transforms, simplified result structs (LindbladianResult, DMSimulationResult)
+
+**Archives:** [v1.2-ROADMAP.md](milestones/v1.2-ROADMAP.md) | [v1.2-REQUIREMENTS.md](milestones/v1.2-REQUIREMENTS.md)
+
+---
+

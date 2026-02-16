@@ -2,7 +2,7 @@
 
 ## What This Is
 
-A Julia package for simulating quantum Gibbs sampling via Lindbladian evolution. It implements multiple Lindbladian constructions (GNS and KMS detailed balance) across a hierarchy of approximation domains (Bohr, Energy, Time, Trotter), enabling both density matrix and trajectory-based simulation of quantum thermalization. Both simulation modes are validated against each other and against theoretical predictions from Chen et al. (2023, 2025). Core structs are parameterized on element type `{T<:AbstractFloat}` for precision flexibility. The package targets researchers and students working on quantum Gibbs sampling, providing both fast numerical simulations and pedagogic documentation grounded in the theoretical literature.
+A Julia package for simulating quantum Gibbs sampling via Lindbladian evolution. It implements multiple Lindbladian constructions (GNS and KMS detailed balance) across a hierarchy of approximation domains (Bohr, Energy, Time, Trotter), enabling both density matrix and trajectory-based simulation of quantum thermalization. The package features multi-threaded trajectory sampling with adaptive convergence-driven batching, BSON experiment serialization, and validated KMS-vs-GNS comparison capabilities. Core structs are parameterized on element type `{T<:AbstractFloat}` for precision flexibility. The package targets researchers and students working on quantum Gibbs sampling, providing both fast numerical simulations and pedagogic documentation grounded in the theoretical literature.
 
 ## Core Value
 
@@ -27,33 +27,31 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 - ✓ Trajectory compilation and correctness fixes (U_B ordering, PSD guard, normalization) -- v1.0
 - ✓ CPTP channel completeness verification for Energy, Time, Trotter domains -- v1.0
 - ✓ BohrDomain detailed balance (Gibbs fixed point to 1.6e-15 trace distance) -- v1.0
-- ✓ Domain error hierarchy: dist_bohr ≤ dist_energy ≤ dist_time ≤ dist_trotter -- v1.0
-- ✓ DM step error scaling: O(δ²) single-step, O(δ) multi-step accumulation -- v1.0
+- ✓ Domain error hierarchy: dist_bohr <= dist_energy <= dist_time <= dist_trotter -- v1.0
+- ✓ DM step error scaling: O(delta^2) single-step, O(delta) multi-step accumulation -- v1.0
 - ✓ Coherent term B and OFT consistency across domains -- v1.0
 - ✓ Trajectory-vs-DM cross-validation for Energy, Time, Trotter domains -- v1.0
 - ✓ Per-operator Lie-Trotter splitting in trajectory simulation -- v1.0
 - ✓ TrotterDomain Gibbs convergence with coherent term -- v1.0
-- ✓ 1/√N trajectory convergence rate verification -- v1.0
+- ✓ 1/sqrt(N) trajectory convergence rate verification -- v1.0
 - ✓ DM-based regression tests (portable across Julia versions and platforms) -- v1.0
 - ✓ Aqua.jl package quality gate with compat bounds -- v1.0
 - ✓ Test infrastructure with shared fixtures and tiered tolerances -- v1.0
 - ✓ Dead code pruning: ~987 lines commented code, ~35 unused functions, 3 dead structs removed -- v1.1
-- ✓ DRY helpers: hermitianize!, transform_jumps_to_basis, apply_cptp_channel!, apply_coherent_unitary! -- v1.1
+- ✓ DRY helpers: hermitianize!, apply_cptp_channel!, apply_coherent_unitary! -- v1.1
 - ✓ Struct simplification: immutable TrottTrott, fully-initialized HamHam, deduplicated config constructors -- v1.1
 - ✓ Type parameterization: HamHam{T}, TrottTrott{T}, Config{D,T}, LindbladianWorkspace{T} -- v1.1
 - ✓ API surface cleanup: organized exports, ~18 internals _-prefixed, trace_distance_h exported -- v1.1
 - ✓ Allocation optimization: index-based B_bohr, in-place phase rotations, precomputed basis transforms -- v1.1
+- ✓ Multi-threaded trajectory sampling with per-thread workspace, BLAS control, and deterministic Xoshiro seeding -- v1.2
+- ✓ GNS (approximate, no B term) trajectory path via ThermalizeConfigGNS, converging to GNS fixed point -- v1.2
+- ✓ Adaptive trajectory sampling with convergence-driven batching (relative change <1% for 3 consecutive batches, hard cap) -- v1.2
+- ✓ Convergence tracking: trace distance to Gibbs + per-observable (ZZ correlations, energy) at batch checkpoints -- v1.2
+- ✓ BSON-based ExperimentResult serialization with metadata (git hash, timestamp, seed, thread count) -- v1.2
+- ✓ KMS-vs-GNS parameter sweep experiments confirming KMS achieves lower trace distance than GNS -- v1.2
+- ✓ Logic simplification: flattened call chain (5->3 levels), domain-aware JumpOp construction, simplified result structs -- v1.2
 
 ### Active
-
-**Current Milestone v1.2 Multi-threading:**
-- [ ] Multi-threaded trajectory sampling with shared precomputed data (n=12-ready architecture)
-- [ ] GNS (approximate, no B term) trajectory path via ThermalizeConfigGNS
-- [ ] Adaptive trajectory sampling (run until convergence criterion met)
-- [ ] Convergence tracking: trace distance to Gibbs of averaged trajectories
-- [ ] Per-observable trajectory convergence (observable TBD — research best choice for Heisenberg chain)
-- [ ] Data architecture for saving experiment results (convergence data, configs)
-- [ ] KMS-vs-GNS paper experiments: beta=5,10,20 (maybe 30), n=4,6,8, TrotterDomain, delta~1e-3
 
 **Future milestones:**
 - [ ] 1D Ising model Hamiltonian generation
@@ -83,14 +81,19 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 
 ## Context
 
-**Current State (v1.1 shipped):**
-- 4,422 LOC src + 2,222 LOC test (Julia), 231 tests passing
-- Tech stack: Julia, LinearAlgebra, FINUFFT, Arpack, BSON, StableRNGs
+**Current State (v1.2 shipped):**
+- 5,479 LOC src + 3,796 LOC test (Julia), 539 tests passing
+- Tech stack: Julia, LinearAlgebra, FINUFFT, Arpack, BSON, StableRNGs, LibGit2, Dates
 - Both DM and trajectory simulation validated and cross-checked
+- Multi-threaded trajectory engine with per-thread workspace/RNG, BLAS control, deterministic seeding
+- GNS and KMS trajectory paths both functional and tested
+- Adaptive convergence-driven batching with configurable threshold, patience, and hard cap
+- Batch-level convergence tracking (trace distance, ZZ correlations, energy)
+- BSON experiment serialization with full metadata for reproducibility
+- KMS-vs-GNS sweep script for n=4,6,8 x beta=5,10,20 parameter grid
+- Simplified result structs (LindbladianResult, DMSimulationResult) and 3-level call chain
 - Core structs parameterized on `{T<:AbstractFloat}` (Float64 default, Float32-ready)
 - API organized: physics building blocks exported, implementation details `_`-prefixed
-- Hot-path allocations eliminated: index-based sparse accumulation, in-place phase rotations
-- 4 DRY helpers replace 24+ duplicated code patterns
 
 **Theoretical Foundation:**
 The package implements quantum Gibbs samplers from three key papers:
@@ -105,7 +108,7 @@ The package implements quantum Gibbs samplers from three key papers:
 - Single-node execution on cluster (up to 512 GB RAM), multi-core parallelism
 
 **Paper Goals:**
-Results needed for publication: convergence curves (trace distance vs. steps), mixing time scaling with system size and temperature, comparison across approximation domains (Bohr vs Energy vs Time vs Trotter), trajectory vs density matrix agreement.
+Results needed for publication: convergence curves (trace distance vs. steps), mixing time scaling with system size and temperature, comparison across approximation domains (Bohr vs Energy vs Time vs Trotter), trajectory vs density matrix agreement, KMS-vs-GNS comparison data.
 
 ## Constraints
 
@@ -130,20 +133,16 @@ Results needed for publication: convergence curves (trace distance vs. steps), m
 | Immutable TrottTrott + fully-initialized HamHam | Eliminates two-step init patterns and mutable state bugs | ✓ Good -- cleaner construction, BSON backward compat preserved |
 | Internal functions _-prefixed (not unexported) | Visible in qualified access for tests; clear public/internal boundary | ✓ Good -- 18 internals prefixed, tests use QuantumFurnace._name |
 | Index-based sparse accumulation in B_bohr | Avoid per-iteration sparse matrix allocation in hot loop | ✓ Good -- allocation regression tests confirm zero sparse alloc |
+| Read-only TrajectoryFramework + explicit workspace/RNG | Enables thread-safe concurrent trajectory execution from shared framework | ✓ Good -- workspace independence verified, threading works correctly |
+| Per-trajectory Xoshiro(seed + traj_id) seeding | Deterministic reproducibility independent of thread count; same results serial vs threaded | ✓ Good -- bitwise identical results across runs |
+| BLAS.set_num_threads(1) during threaded execution | Prevents thread oversubscription from BLAS competing with Julia threads | ✓ Good -- restored in try/finally, performance tests confirm speedup |
+| Concrete-typed TrajectoryFramework fields (F,P params) | Zero-allocation hot path via function barrier; avoids abstract type access in inner loop | ✓ Good -- allocation regression tests confirm zero alloc in step |
+| Separate run_trajectories_convergence (not modifying run_trajectories) | Avoids API bloat on core function; convergence is a distinct use case | ✓ Good -- clean separation, shared _run_batch_no_obs! backend |
+| Dict-based BSON serialization for ExperimentResult | Avoids parametric struct pitfalls in BSON; Dict round-trips reliably | ✓ Good -- all round-trip tests pass |
+| Domain-aware JumpOp basis at construction (trotter.eigvecs for TrotterDomain) | Eliminates redundant transform_jumps_to_basis calls downstream | ✓ Good -- one transform at source, flatter call chain |
+| LindbladianResult/DMSimulationResult replacing HotSpectralResults/HotAlgorithmResults | Simpler 3-4 field structs without hamiltonian/config/trotter baggage | ✓ Good -- cleaner API, less coupling |
 | Qiskit for circuit generation (Python interop) | Qiskit is the standard for quantum circuit representation; Julia quantum circuit ecosystem less mature | -- Pending |
-| Single-node multi-core for trajectories | Shared memory for precomputed data avoids serialization overhead; cluster nodes have enough RAM | -- Pending benchmarks |
-
-## Current Milestone: v1.2 Multi-threading
-
-**Goal:** Multi-threaded trajectory sampling engine with GNS comparison path, enabling paper-ready KMS-vs-GNS convergence experiments across temperature regimes and system sizes.
-
-**Target features:**
-- Multi-threaded trajectory engine with shared precomputed data (n=12-ready)
-- GNS (approximate, no B term) trajectory simulation path
-- Adaptive sampling until convergence criterion met
-- Convergence tracking (trace distance to Gibbs, per-observable)
-- Data saving architecture for experiment results
-- KMS-vs-GNS comparison experiments (beta sweep, n=4,6,8, TrotterDomain)
+| Single-node multi-core for trajectories | Shared memory for precomputed data avoids serialization overhead; cluster nodes have enough RAM | ✓ Good -- multi-threaded engine operational |
 
 ---
-*Last updated: 2026-02-15 after v1.2 Multi-threading milestone started*
+*Last updated: 2026-02-16 after v1.2 Multi-threading milestone shipped*
