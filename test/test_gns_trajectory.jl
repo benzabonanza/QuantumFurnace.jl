@@ -32,16 +32,21 @@ using Random
     @test isapprox(ss_dm, ss_dm', atol=1e-12)   # Hermitian
     @test all(eigvals(Hermitian(ss_dm)) .>= -1e-12)  # PSD
 
-    # GNS fixed point is NOT the exact Gibbs state -- measure the approximation gap
-    gap = trace_distance_h(Hermitian(ss_dm), SMALL_GIBBS)
+    # GNS fixed point is NOT the exact Gibbs state -- measure the approximation gap.
+    # The Lindbladian is built in the Trotter eigenbasis, so transform the fixed point
+    # to the energy eigenbasis before comparing with SMALL_GIBBS.
+    U_t2e = SMALL_HAM.eigvecs' * SMALL_TROTTER.eigvecs  # Trotter-to-energy change of basis
+    ss_dm_energy = U_t2e * ss_dm * U_t2e'
+    ss_dm_energy = (ss_dm_energy + ss_dm_energy') / 2  # re-Hermitianize after basis change
+    gap = trace_distance_h(Hermitian(ss_dm_energy), SMALL_GIBBS)
     @info "GNS-01: GNS fixed point to Gibbs trace distance (approximation gap)" gap
     @test gap > 1e-6     # Strictly positive (GNS does not reproduce exact Gibbs)
-    @test gap < 1.0      # Sanity bound (TrotterDomain gap ~0.83, larger than EnergyDomain ~0.08)
+    @test gap < 0.5      # Sanity bound (should be ~0.08, close to EnergyDomain)
 end
 
 @testset "GNS-01: CPTP completeness (TrotterDomain)" begin
     config = make_small_thermalize_config_gns(TrotterDomain(); delta=0.01)
-    precomputed = QuantumFurnace._precompute_data(config, SMALL_HAM)
+    precomputed = QuantumFurnace._precompute_data(config, SMALL_TROTTER)
     scratch = QuantumFurnace.KrausScratch(ComplexF64, SMALL_DIM)
     fw = build_trajectoryframework(
         SMALL_JUMPS, SMALL_TROTTER, config, precomputed, scratch, config.delta
@@ -85,8 +90,12 @@ end
     @test isapprox(result.rho_mean, result.rho_mean', atol=1e-10)  # Hermitian
     @test all(eigvals(Hermitian(result.rho_mean)) .>= -1e-10)      # PSD
 
-    # Log the GNS-to-Gibbs gap for Phase 18 baseline
-    gibbs_dist = trace_distance_h(Hermitian(gns_fp), SMALL_GIBBS)
+    # Log the GNS-to-Gibbs gap for Phase 18 baseline.
+    # Transform gns_fp from Trotter eigenbasis to energy eigenbasis for comparison.
+    U_t2e = SMALL_HAM.eigvecs' * SMALL_TROTTER.eigvecs
+    gns_fp_energy = U_t2e * gns_fp * U_t2e'
+    gns_fp_energy = (gns_fp_energy + gns_fp_energy') / 2
+    gibbs_dist = trace_distance_h(Hermitian(gns_fp_energy), SMALL_GIBBS)
     @info "GNS-02: GNS fixed point to Gibbs distance (Phase 18 baseline)" gibbs_dist
 end
 
