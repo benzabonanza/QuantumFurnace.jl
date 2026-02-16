@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.2 Multi-threading -- Phase 17 complete. Ready for Phase 18.
+**Current focus:** v1.2 Multi-threading -- Phase 18 Plan 01 complete. Experiment sweep verified.
 
 ## Current Position
 
-Phase: 17 of 18 (Adaptive Sampling) -- COMPLETE
-Plan: 2/2 complete
-Status: Phase 17 complete. Adaptive sampling implementation + tests (539 total tests). Ready for Phase 18 (Experiments).
-Last activity: 2026-02-16 - Completed 17-02: Adaptive sampling tests
+Phase: 18 of 18 (KMS-vs-GNS Experiments) -- Plan 01 COMPLETE
+Plan: 1/1 complete
+Status: Phase 18 Plan 01 complete. Sweep script created and verified on n=4 slice (9 experiments, EXPT-04 confirmed).
+Last activity: 2026-02-16 - Completed 18-01: KMS-vs-GNS experiment sweep
 
-Progress: [██████████████████████████████] 93% (42/TBD plans -- v1.0: 10, v1.1: 16+5q, v1.2: 11/TBD)
+Progress: [██████████████████████████████] 95% (43/TBD plans -- v1.0: 10, v1.1: 16+5q, v1.2: 12/TBD)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 42 (v1.0: 10, v1.1: 16, quick: 5, v1.2: 11)
+- Total plans completed: 43 (v1.0: 10, v1.1: 16, quick: 5, v1.2: 12)
 
 **By Milestone:**
 
@@ -27,7 +27,7 @@ Progress: [███████████████████████
 |-----------|--------|-------|----------|
 | v1.0 Trajectories | 1-5 | 10 | 2026-02-13 to 2026-02-14 |
 | v1.1 Reduce | 6-11 | 16 (+5 quick) | 2026-02-15 |
-| v1.2 Multi-threading | 12-18 | 11/TBD | 2026-02-15 to ... |
+| v1.2 Multi-threading | 12-18 | 12/TBD | 2026-02-15 to 2026-02-16 |
 
 ## Accumulated Context
 
@@ -36,6 +36,12 @@ Progress: [███████████████████████
 All decisions logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- Phase 18 Plan 01: mixing_time = 2.0 * beta (scales with inverse temperature for sufficient mixing)
+- Phase 18 Plan 01: Phase 17 defaults for adaptive: batch_size=200, threshold=0.01, patience=3, window_size=3, min_batches=5
+- Phase 18 Plan 01: seed=42 for deterministic reproducible experiments
+- Phase 18 Plan 01: JumpOp[] (unparameterized) needed for Vector{JumpOp} signature compatibility
+- Phase 18 Plan 01: main() wrapper avoids Julia global-scope scoping ambiguity
+- Phase 18 Plan 01: EXPT-04 confirmed at n=4: KMS td < GNS@1/beta td for all betas (0.12<0.17, 0.08<0.20, 0.02<0.20)
 - Phase 17 Plan 02: 539 total tests (470 existing + 69 new adaptive sampling tests), 18 convergence testsets
 - Phase 17 Plan 02: Generous 5% threshold in convergence integration test for reliable stochastic convergence proof
 - Phase 17 Plan 02: Hard cap test uses 0.01% threshold with 500 trajectories to guarantee non-convergence path
@@ -93,5 +99,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Completed 17-02-PLAN.md. Phase 17 (Adaptive Sampling) fully complete. Ready for Phase 18 (Experiments).
+Stopped at: Completed 18-01-PLAN.md. Phase 18 Plan 01 (KMS-vs-GNS Experiment Sweep) complete. Sweep script verified on n=4 slice.
 Resume file: None
