@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.2 Multi-threading -- Phase 16 in progress (Plan 01 complete)
+**Current focus:** v1.2 Multi-threading -- Phase 16 complete, ready for Phase 17
 
 ## Current Position
 
-Phase: 16 of 18 (Convergence Tracking) -- IN PROGRESS
-Plan: 1/2 complete
-Status: Phase 16 Plan 01 complete. ConvergenceData struct, observable builders, batch convergence runner, and Dict serialization implemented. 364 tests pass.
-Last activity: 2026-02-16 - Completed 16-01: Convergence tracking infrastructure
+Phase: 16 of 18 (Convergence Tracking) -- COMPLETE
+Plan: 2/2 complete
+Status: Phase 16 complete. Convergence tracking infrastructure + comprehensive tests (470 total). Ready for Phase 17 (Adaptive Stopping).
+Last activity: 2026-02-16 - Completed 16-02: Convergence tracking tests
 
-Progress: [███████████████████████████░░░] 87% (39/TBD plans -- v1.0: 10, v1.1: 16+5q, v1.2: 8/TBD)
+Progress: [████████████████████████████░░] 89% (40/TBD plans -- v1.0: 10, v1.1: 16+5q, v1.2: 9/TBD)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 39 (v1.0: 10, v1.1: 16, quick: 5, v1.2: 8)
+- Total plans completed: 40 (v1.0: 10, v1.1: 16, quick: 5, v1.2: 9)
 
 **By Milestone:**
 
@@ -27,7 +27,7 @@ Progress: [███████████████████████
 |-----------|--------|-------|----------|
 | v1.0 Trajectories | 1-5 | 10 | 2026-02-13 to 2026-02-14 |
 | v1.1 Reduce | 6-11 | 16 (+5 quick) | 2026-02-15 |
-| v1.2 Multi-threading | 12-18 | 8/TBD | 2026-02-15 to ... |
+| v1.2 Multi-threading | 12-18 | 9/TBD | 2026-02-15 to ... |
 
 ## Accumulated Context
 
@@ -36,6 +36,9 @@ Progress: [███████████████████████
 All decisions logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- Phase 16 Plan 02: 470 total tests (364 existing + 106 new convergence tests), 10 testsets
+- Phase 16 Plan 02: Integration test uses 1000 trajectories (200x5 batches) with mixing_time=5.0 for convergence proof
+- Phase 16 Plan 02: Convergence assertion uses generous "last < first" tolerance (not strict monotonic)
 - Phase 16 Plan 01: Observables built in eigenbasis (not computational) to match run_trajectories rho output basis
 - Phase 16 Plan 01: Separate run_trajectories_convergence function (not modifying existing run_trajectories) to avoid API bloat
 - Phase 16 Plan 01: Scalar-only ConvergenceData (no density matrix snapshots) for O(n_batches) memory
@@ -84,5 +87,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Completed 16-01-PLAN.md. Phase 16 Plan 01 complete. Ready for Phase 16 Plan 02 (convergence tracking tests).
+Stopped at: Completed 16-02-PLAN.md. Phase 16 complete (both plans). Ready for Phase 17 (Adaptive Stopping).
 Resume file: None
