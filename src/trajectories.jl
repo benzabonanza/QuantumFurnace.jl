@@ -428,6 +428,57 @@ function _run_chunk_with_obs!(
 end
 
 """
+    _run_batch_no_obs!(fw, psi0, ntraj, master_seed, total_time) -> Matrix{CT}
+
+Run `ntraj` trajectories using pre-built `fw`, returning the averaged density matrix.
+Handles serial vs multi-threaded dispatch internally. The master_seed is the base
+seed; each trajectory gets Xoshiro(master_seed + traj_id) where traj_id is 1:ntraj.
+
+This is the shared batch execution function used by `run_trajectories` (no-observables
+path), `run_trajectories_convergence`, and `run_trajectories_adaptive`.
+"""
+function _run_batch_no_obs!(
+    fw::TrajectoryFramework{<:Complex},
+    psi0::Vector{<:Complex},
+    ntraj::Int,
+    master_seed::Int,
+    total_time::Real,
+)
+    CT = eltype(psi0)
+    dim = length(psi0)
+
+    if ntraj > 1 && Threads.nthreads() > 1
+        # Multi-threaded path
+        nt = min(Threads.nthreads(), ntraj)
+        chunks = _partition_trajectories(1:ntraj, nt)
+        ws_per_task = [TrajectoryWorkspace(CT, dim) for _ in 1:length(chunks)]
+
+        old_blas = BLAS.get_num_threads()
+        BLAS.set_num_threads(1)
+        try
+            @sync for (idx, chunk) in enumerate(chunks)
+                Threads.@spawn _run_chunk_no_obs!(
+                    ws_per_task[idx], fw, psi0, chunk, master_seed, total_time)
+            end
+        finally
+            BLAS.set_num_threads(old_blas)
+        end
+
+        rho_total = sum(ws.rho_acc for ws in ws_per_task)
+        rho_result = rho_total ./ ntraj
+        hermitianize!(rho_result)
+    else
+        # Serial path
+        ws = TrajectoryWorkspace(CT, dim)
+        _run_chunk_no_obs!(ws, fw, psi0, 1:ntraj, master_seed, total_time)
+        rho_result = ws.rho_acc ./ ntraj
+        hermitianize!(rho_result)
+    end
+
+    return rho_result
+end
+
+"""
     _build_framework_and_seed(jumps, config, psi0, hamiltonian; trotter, delta, seed)
 
 One-time setup: validates config, chooses ham_or_trott, precomputes data, builds
@@ -507,65 +558,19 @@ function run_trajectories(
 
     CT = eltype(psi0)
     dim = size(hamiltonian.data, 1)
-    ws = TrajectoryWorkspace(CT, dim)
 
     # ------------------------------------------------------------------
-    # No measurements: just run and accumulate density matrix
+    # No measurements: use shared _run_batch_no_obs!
     # ------------------------------------------------------------------
     if observables === nothing
-        if ntraj > 1 && Threads.nthreads() > 1
-            # Multi-threaded path
-            nt = min(Threads.nthreads(), ntraj)
-            chunks = _partition_trajectories(1:ntraj, nt)
-            ws_per_task = [TrajectoryWorkspace(CT, dim) for _ in 1:length(chunks)]
-
-            old_blas = BLAS.get_num_threads()
-            BLAS.set_num_threads(1)
-            try
-                @sync for (idx, chunk) in enumerate(chunks)
-                    Threads.@spawn _run_chunk_no_obs!(
-                        ws_per_task[idx], fw, psi0, chunk, actual_seed, total_time)
-                end
-            finally
-                BLAS.set_num_threads(old_blas)
-            end
-
-            rho_total = sum(ws.rho_acc for ws in ws_per_task)
-            rho_result = rho_total ./ ntraj
-            hermitianize!(rho_result)
-        else
-            # Serial path (per-trajectory seeding for consistency with threaded path)
-            num_steps_serial = ceil(Int, total_time / fw.delta)
-            psi = copy(psi0)
-            if ntraj == 1
-                rng_serial = Random.Xoshiro(actual_seed + 1)
-                psi_norm2 = _norm2(psi)
-                rmul!(psi, 1.0 / sqrt(max(psi_norm2, eps(Float64))))
-                @inbounds for _ in 1:num_steps_serial
-                    step_along_trajectory!(psi, fw, ws, rng_serial)
-                end
-                _accumulate_density_matrix!(ws.rho_acc, psi)
-            else
-                for traj_id in 1:ntraj
-                    rng_serial = Random.Xoshiro(actual_seed + traj_id)
-                    copyto!(psi, psi0)
-                    psi_norm2 = _norm2(psi)
-                    rmul!(psi, 1.0 / sqrt(max(psi_norm2, eps(Float64))))
-                    @inbounds for _ in 1:num_steps_serial
-                        step_along_trajectory!(psi, fw, ws, rng_serial)
-                    end
-                    _accumulate_density_matrix!(ws.rho_acc, psi)
-                end
-            end
-            rho_result = ws.rho_acc ./ ntraj
-            hermitianize!(rho_result)
-        end
+        rho_result = _run_batch_no_obs!(fw, psi0, ntraj, actual_seed, total_time)
         return TrajectoryResult(rho_result, ntraj, actual_seed, nothing, nothing)
     end
 
     # ------------------------------------------------------------------
     # With measurements: average <O> over trajectories, saved every `save_every`
     # ------------------------------------------------------------------
+    ws = TrajectoryWorkspace(CT, dim)
     delta_step = fw.delta
     num_steps = ceil(Int, total_time / delta_step)
     num_saves = div(num_steps, save_every) + 1

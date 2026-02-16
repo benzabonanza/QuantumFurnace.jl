@@ -209,7 +209,11 @@ function run_trajectories_convergence(
     total_time::Real = config.mixing_time,
     delta::Real = config.delta,
 )
-    actual_seed = seed === nothing ? Int(rand(Random.RandomDevice(), UInt64) >> 1) : seed
+    # Build framework ONCE (not per batch)
+    fw, actual_seed = _build_framework_and_seed(
+        jumps, config, psi0, hamiltonian;
+        trotter=trotter, delta=delta, seed=seed,
+    )
 
     CT = eltype(psi0)
     dim = length(psi0)
@@ -232,19 +236,11 @@ function run_trajectories_convergence(
         # Seed offset ensures non-overlapping trajectory seed sequences
         batch_seed = actual_seed + n_total
 
-        # Run batch using existing run_trajectories (observables=nothing to avoid
-        # time-resolved measurement tracking, which is different from batch-level convergence)
-        result = run_trajectories(
-            jumps, config, psi0, hamiltonian;
-            trotter = trotter,
-            total_time = total_time,
-            delta = delta,
-            ntraj = batch_size,
-            seed = batch_seed,
-        )
+        # Run batch using pre-built framework (no rebuild per batch)
+        rho_batch = _run_batch_no_obs!(fw, psi0, batch_size, batch_seed, total_time)
 
         # Accumulate running sum (not average)
-        rho_acc .+= result.rho_mean .* batch_size
+        rho_acc .+= rho_batch .* batch_size
         n_total += batch_size
 
         # Compute running average
@@ -346,7 +342,12 @@ function run_trajectories_adaptive(
     total_time::Real = config.mixing_time,
     delta::Real = config.delta,
 )
-    actual_seed = seed === nothing ? Int(rand(Random.RandomDevice(), UInt64) >> 1) : seed
+    # Build framework ONCE (not per batch)
+    fw, actual_seed = _build_framework_and_seed(
+        jumps, config, psi0, hamiltonian;
+        trotter=trotter, delta=delta, seed=seed,
+    )
+
     max_batches = cld(n_max, batch_size)
 
     # Ensure enough data for two full windows before convergence checking
@@ -377,17 +378,11 @@ function run_trajectories_adaptive(
         # Seed offset ensures non-overlapping trajectory seed sequences
         batch_seed = actual_seed + n_total
 
-        result = run_trajectories(
-            jumps, config, psi0, hamiltonian;
-            trotter = trotter,
-            total_time = total_time,
-            delta = delta,
-            ntraj = batch_size,
-            seed = batch_seed,
-        )
+        # Run batch using pre-built framework (no rebuild per batch)
+        rho_batch = _run_batch_no_obs!(fw, psi0, batch_size, batch_seed, total_time)
 
         # Accumulate running sum (not average)
-        rho_acc .+= result.rho_mean .* batch_size
+        rho_acc .+= rho_batch .* batch_size
         n_total += batch_size
 
         # Compute running average
