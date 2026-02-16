@@ -53,13 +53,23 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 
 ### Active
 
+## Current Milestone: v1.3 Mixing Time Estimation
+
+**Goal:** Estimate the Lindbladian spectral gap from trajectory-based observable decay, cross-validated against exact Liouvillian eigenvalues for small systems.
+
+**Target features:**
+- Observable-only trajectory runner (no mid-simulation DM reconstruction, DM once at end)
+- Total magnetization observable alongside energy
+- Exponential fit to extract spectral gap from observable decay
+- Cross-validation vs exact Liouvillian spectral gap for n=4,6
+- Reusable `spectral_gap_estimate` function for larger systems
+
 **Future milestones:**
 - [ ] 1D Ising model Hamiltonian generation
 - [ ] 2D Heisenberg Hamiltonian generation (lattice graph support)
 - [ ] General k-local Hamiltonian construction on arbitrary graphs
 - [ ] Hamiltonian simulation time counter (total Hamiltonian simulation cost per Gibbs sample)
 - [ ] Gate complexity counter for Trotter-based circuit implementations
-- [ ] Mixing time estimation (trajectory-based, for n>8 where full Lindbladian infeasible)
 - [ ] Qiskit circuit generation for resource estimation (gate count, circuit depth)
 - [ ] Documentation: API docs via Documenter.jl, theory tutorials via Literate.jl
 - [ ] Paper-ready plotting: convergence curves, sim time plots, gate complexity, mixing time
@@ -145,4 +155,4 @@ Results needed for publication: convergence curves (trace distance vs. steps), m
 | Single-node multi-core for trajectories | Shared memory for precomputed data avoids serialization overhead; cluster nodes have enough RAM | ✓ Good -- multi-threaded engine operational |
 
 ---
-*Last updated: 2026-02-16 after v1.2 Multi-threading milestone shipped*
+*Last updated: 2026-02-16 after v1.3 Mixing Time Estimation milestone started*

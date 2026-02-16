@@ -5,15 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-02-16)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** Planning next milestone
+**Current focus:** Milestone v1.3 Mixing Time Estimation
 
 ## Current Position
 
-Phase: All complete (v1.0 + v1.1 + v1.2 shipped)
-Status: Milestone v1.2 Multi-threading shipped. 539/539 tests pass.
-Last activity: 2026-02-16 - Completed v1.2 milestone archival
-
-Progress: [██████████████████████████████] 100% (46 plans -- v1.0: 10, v1.1: 16+5q, v1.2: 15+3q)
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-02-16 — Milestone v1.3 started
 
 ## Performance Metrics
 
@@ -57,5 +56,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Completed v1.2 milestone archival
+Stopped at: Milestone v1.3 started, defining requirements
 Resume file: None
