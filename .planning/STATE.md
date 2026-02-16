@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-15)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.2 Multi-threading -- Phase 14 complete, ready for Phase 15
+**Current focus:** v1.2 Multi-threading -- Phase 15 in progress
 
 ## Current Position
 
-Phase: 14 of 18 (GNS Trajectory Path) -- COMPLETE
-Plan: 1/1 complete
-Status: Phase 14 complete. GNS trajectory path validated end-to-end with 284 tests passing.
-Last activity: 2026-02-16 - Completed quick task 20: Fix basis mismatch in GNS TrotterDomain tests
+Phase: 15 of 18 (Data Architecture)
+Plan: 1/2 complete
+Status: Phase 15 Plan 01 complete. ExperimentResult struct and save/load infrastructure implemented.
+Last activity: 2026-02-16 - Completed 15-01: ExperimentResult struct + save/load
 
-Progress: [████████████████████████░░░░░░] 81% (31/TBD plans -- v1.0: 10, v1.1: 16+5q, v1.2: 5/TBD)
+Progress: [█████████████████████████░░░░░] 83% (37/TBD plans -- v1.0: 10, v1.1: 16+5q, v1.2: 6/TBD)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 36 (v1.0: 10, v1.1: 16, quick: 5, v1.2: 5)
+- Total plans completed: 37 (v1.0: 10, v1.1: 16, quick: 5, v1.2: 6)
 
 **By Milestone:**
 
@@ -27,7 +27,7 @@ Progress: [███████████████████████
 |-----------|--------|-------|----------|
 | v1.0 Trajectories | 1-5 | 10 | 2026-02-13 to 2026-02-14 |
 | v1.1 Reduce | 6-11 | 16 (+5 quick) | 2026-02-15 |
-| v1.2 Multi-threading | 12-18 | 5/TBD | 2026-02-15 to ... |
+| v1.2 Multi-threading | 12-18 | 6/TBD | 2026-02-15 to ... |
 
 ## Accumulated Context
 
@@ -36,6 +36,10 @@ Progress: [███████████████████████
 All decisions logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- Phase 15 Plan 01: Dict-based BSON serialization for ExperimentResult (avoids parametric struct pitfalls)
+- Phase 15 Plan 01: TrajectoryResult embedded as field, domain singletons stored as strings
+- Phase 15 Plan 01: LibGit2 for git hash capture, Dates for timestamps (both stdlibs)
+- Phase 15 Plan 01: Hamiltonian params store only reproduction-relevant subset (no eigendecomposition)
 - Quick-20: GNS-to-Gibbs gap at sigma=0.1: EnergyDomain=0.081, TrotterDomain=0.081, BohrDomain=0.035 (Phase 18 baselines)
 - Quick-20: TrotterDomain Lindbladian is in Trotter eigenbasis; must transform fixed point to energy eigenbasis before comparing to Gibbs
 - Phase 14 Plan 01: Trajectory convergence params: ntraj=1000, delta=0.01, mixing_time=5.0 -> 0.029 trace distance
@@ -73,5 +77,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Phase 14 complete. Ready for Phase 15.
+Stopped at: Completed 15-01-PLAN.md. Ready for 15-02.
 Resume file: None
