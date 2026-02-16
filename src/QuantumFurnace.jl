@@ -44,7 +44,7 @@ export TrajectoryFramework, TrajectoryResult, build_trajectoryframework, step_al
 export ExperimentResult, save_experiment, load_experiment
 
 # Convergence tracking
-export ConvergenceData, run_trajectories_convergence, build_convergence_observables, build_convergence_observables_trotter
+export ConvergenceData, run_trajectories_convergence, run_trajectories_adaptive, build_convergence_observables, build_convergence_observables_trotter
 
 # Simulation
 export run_lindbladian, run_thermalization, construct_lindbladian,

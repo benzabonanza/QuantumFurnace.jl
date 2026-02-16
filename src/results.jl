@@ -229,12 +229,17 @@ Convert a ConvergenceData to a plain Dict for BSON serialization.
 """
 function _convergence_to_dict(conv::ConvergenceData)
     return Dict{Symbol, Any}(
-        :batch_sizes           => conv.batch_sizes,
-        :cumulative_n_traj     => conv.cumulative_n_traj,
-        :trace_distances       => conv.trace_distances,
-        :observable_names      => conv.observable_names,
-        :observable_values     => conv.observable_values,
-        :observable_gibbs_values => conv.observable_gibbs_values,
+        :batch_sizes              => conv.batch_sizes,
+        :cumulative_n_traj        => conv.cumulative_n_traj,
+        :trace_distances          => conv.trace_distances,
+        :observable_names         => conv.observable_names,
+        :observable_values        => conv.observable_values,
+        :observable_gibbs_values  => conv.observable_gibbs_values,
+        # Phase 17: adaptive diagnostics
+        :converged                => conv.converged,
+        :final_relative_change    => conv.final_relative_change,
+        :consecutive_stable_batches => conv.consecutive_stable_batches,
+        :total_batches            => conv.total_batches,
     )
 end
 
@@ -252,6 +257,11 @@ function _dict_to_convergence(d::Dict)
         d[:observable_names],
         d[:observable_values],
         get(d, :observable_gibbs_values, Float64[]),
+        # Phase 17: adaptive diagnostics (backward-compatible defaults for pre-Phase 17 data)
+        get(d, :converged, false),
+        get(d, :final_relative_change, NaN),
+        get(d, :consecutive_stable_batches, 0),
+        get(d, :total_batches, length(d[:batch_sizes])),
     )
 end
 
