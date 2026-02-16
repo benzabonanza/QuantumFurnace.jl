@@ -76,29 +76,29 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| OBS-01 | — | Pending |
-| OBS-02 | — | Pending |
-| OBS-03 | — | Pending |
-| TRAJ-01 | — | Pending |
-| TRAJ-02 | — | Pending |
-| TRAJ-03 | — | Pending |
-| FIT-01 | — | Pending |
-| FIT-02 | — | Pending |
-| FIT-03 | — | Pending |
-| FIT-04 | — | Pending |
-| FIT-05 | — | Pending |
-| GAP-01 | — | Pending |
-| GAP-02 | — | Pending |
-| GAP-03 | — | Pending |
-| VAL-01 | — | Pending |
-| VAL-02 | — | Pending |
-| VAL-03 | — | Pending |
+| OBS-01 | Phase 20 | Pending |
+| OBS-02 | Phase 20 | Pending |
+| OBS-03 | Phase 20 | Pending |
+| TRAJ-01 | Phase 22 | Pending |
+| TRAJ-02 | Phase 22 | Pending |
+| TRAJ-03 | Phase 22 | Pending |
+| FIT-01 | Phase 21 | Pending |
+| FIT-02 | Phase 21 | Pending |
+| FIT-03 | Phase 21 | Pending |
+| FIT-04 | Phase 21 | Pending |
+| FIT-05 | Phase 21 | Pending |
+| GAP-01 | Phase 23 | Pending |
+| GAP-02 | Phase 23 | Pending |
+| GAP-03 | Phase 23 | Pending |
+| VAL-01 | Phase 24 | Pending |
+| VAL-02 | Phase 24 | Pending |
+| VAL-03 | Phase 24 | Pending |
 
 **Coverage:**
 - v1.3 requirements: 17 total
-- Mapped to phases: 0
-- Unmapped: 17 ⚠️
+- Mapped to phases: 17
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-16*
-*Last updated: 2026-02-16 after initial definition*
+*Last updated: 2026-02-16 after roadmap creation*
