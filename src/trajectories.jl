@@ -366,6 +366,97 @@ function _accumulate_measurements!(
 end
 
 """
+    _partition_trajectories(range, n_chunks) -> Vector{UnitRange{Int}}
+
+Partition a range into n_chunks approximately equal chunks. Earlier chunks get the remainder.
+"""
+function _partition_trajectories(range::UnitRange{Int}, n_chunks::Int)
+    len = length(range)
+    n_chunks = min(n_chunks, len)  # no more chunks than items
+    base = div(len, n_chunks)
+    remainder = rem(len, n_chunks)
+    chunks = Vector{UnitRange{Int}}(undef, n_chunks)
+    start = first(range)
+    for i in 1:n_chunks
+        chunk_size = base + (i <= remainder ? 1 : 0)
+        chunks[i] = start:(start + chunk_size - 1)
+        start += chunk_size
+    end
+    return chunks
+end
+
+"""
+    _run_chunk_no_obs!(ws, fw, psi0, chunk, master_seed, total_time)
+
+Run a chunk of trajectories without observables, accumulating density matrices in ws.rho_acc.
+Each trajectory gets Xoshiro(master_seed + traj_id) for reproducibility.
+"""
+function _run_chunk_no_obs!(
+    ws::TrajectoryWorkspace{<:Complex},
+    fw::TrajectoryFramework{<:Complex},
+    psi0::Vector{<:Complex},
+    chunk::UnitRange{Int},
+    master_seed::Int,
+    total_time::Real,
+)
+    psi = copy(psi0)
+    for traj_id in chunk
+        rng = Random.Xoshiro(master_seed + traj_id)
+        copyto!(psi, psi0)
+        _evolve_along_trajectory!(psi, fw, ws, rng, total_time)
+        _accumulate_density_matrix!(ws.rho_acc, psi)
+    end
+    return nothing
+end
+
+"""
+    _run_chunk_with_obs!(ws, fw, psi0, chunk, master_seed, total_time,
+                          observables, save_every, num_steps, num_saves, mean_data_local)
+
+Run a chunk of trajectories with observable measurements, accumulating density matrices
+in ws.rho_acc and measurements in mean_data_local.
+"""
+function _run_chunk_with_obs!(
+    ws::TrajectoryWorkspace{<:Complex},
+    fw::TrajectoryFramework{<:Complex},
+    psi0::Vector{<:Complex},
+    chunk::UnitRange{Int},
+    master_seed::Int,
+    total_time::Real,
+    observables::Vector{<:Matrix{<:Complex}},
+    save_every::Int,
+    num_steps::Int,
+    num_saves::Int,
+    mean_data_local::Matrix{Float64},
+)
+    psi = copy(psi0)
+    tmp_meas = ws.psi_tmp  # reuse workspace vector as gemv buffer
+
+    for traj_id in chunk
+        rng = Random.Xoshiro(master_seed + traj_id)
+        copyto!(psi, psi0)
+
+        # normalize once per trajectory
+        n2 = real(dot(psi, psi))
+        rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
+
+        # save at t=0
+        _accumulate_measurements!(mean_data_local, 1, psi, observables, tmp_meas)
+
+        save_idx = 1
+        for step in 1:num_steps
+            step_along_trajectory!(psi, fw, ws, rng)
+            if step % save_every == 0
+                save_idx += 1
+                _accumulate_measurements!(mean_data_local, save_idx, psi, observables, tmp_meas)
+            end
+        end
+        _accumulate_density_matrix!(ws.rho_acc, psi)
+    end
+    return nothing
+end
+
+"""
     run_trajectories(jumps, config, psi0, hamiltonian; trotter=nothing,
                      total_time=config.mixing_time, delta=config.delta,
                      ntraj=1, observables=nothing, save_every=1, seed=nothing)
@@ -424,68 +515,113 @@ function run_trajectories(
     # No measurements: just run and accumulate density matrix
     # ------------------------------------------------------------------
     if observables === nothing
-        psi = copy(psi0)
+        if ntraj > 1 && Threads.nthreads() > 1
+            # Multi-threaded path
+            nt = min(Threads.nthreads(), ntraj)
+            chunks = _partition_trajectories(1:ntraj, nt)
+            ws_per_task = [TrajectoryWorkspace(CT, dim) for _ in 1:length(chunks)]
 
-        if ntraj == 1
-            _evolve_along_trajectory!(psi, fw, ws, rng, total_time)
-            _accumulate_density_matrix!(ws.rho_acc, psi)
-        else
-            @inbounds for trajectory in 1:ntraj
-                copyto!(psi, psi0)
-                _evolve_along_trajectory!(psi, fw, ws, rng, total_time)
-                _accumulate_density_matrix!(ws.rho_acc, psi)
+            old_blas = BLAS.get_num_threads()
+            BLAS.set_num_threads(1)
+            try
+                @sync for (idx, chunk) in enumerate(chunks)
+                    Threads.@spawn _run_chunk_no_obs!(
+                        ws_per_task[idx], fw, psi0, chunk, actual_seed, total_time)
+                end
+            finally
+                BLAS.set_num_threads(old_blas)
             end
-        end
 
-        rho_result = ws.rho_acc ./ ntraj
-        hermitianize!(rho_result)
+            rho_total = sum(ws.rho_acc for ws in ws_per_task)
+            rho_result = rho_total ./ ntraj
+            hermitianize!(rho_result)
+        else
+            # Serial path (per-trajectory seeding for consistency with threaded path)
+            psi = copy(psi0)
+            if ntraj == 1
+                rng_serial = Random.Xoshiro(actual_seed + 1)
+                _evolve_along_trajectory!(psi, fw, ws, rng_serial, total_time)
+                _accumulate_density_matrix!(ws.rho_acc, psi)
+            else
+                for traj_id in 1:ntraj
+                    rng_serial = Random.Xoshiro(actual_seed + traj_id)
+                    copyto!(psi, psi0)
+                    _evolve_along_trajectory!(psi, fw, ws, rng_serial, total_time)
+                    _accumulate_density_matrix!(ws.rho_acc, psi)
+                end
+            end
+            rho_result = ws.rho_acc ./ ntraj
+            hermitianize!(rho_result)
+        end
         return TrajectoryResult(rho_result, ntraj, actual_seed, nothing, nothing)
     end
 
     # ------------------------------------------------------------------
     # With measurements: average <O> over trajectories, saved every `save_every`
     # ------------------------------------------------------------------
-    delta = fw.delta
-    num_steps = ceil(Int, total_time / delta)
+    delta_step = fw.delta
+    num_steps = ceil(Int, total_time / delta_step)
     num_saves = div(num_steps, save_every) + 1
     num_obs   = length(observables)
 
     times = Vector{Float64}(undef, num_saves)
     @inbounds for s in 1:num_saves
-        times[s] = (s - 1) * save_every * delta
+        times[s] = (s - 1) * save_every * delta_step
     end
 
-    mean_data = zeros(Float64, num_obs, num_saves)
+    if ntraj > 1 && Threads.nthreads() > 1
+        # Multi-threaded observable path
+        nt = min(Threads.nthreads(), ntraj)
+        chunks = _partition_trajectories(1:ntraj, nt)
+        ws_per_task = [TrajectoryWorkspace(CT, dim) for _ in 1:length(chunks)]
+        mean_data_per_task = [zeros(Float64, num_obs, num_saves) for _ in 1:length(chunks)]
 
-    # reuse workspace vector as gemv buffer for measurement (safe between steps)
-    tmp_meas = ws.psi_tmp
-    psi = copy(psi0)
-
-    @inbounds for _ in 1:ntraj
-        copyto!(psi, psi0)
-
-        # normalize once per trajectory
-        n2 = real(dot(psi, psi))
-        rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
-
-        # save at t=0
-        _accumulate_measurements!(mean_data, 1, psi, observables, tmp_meas)
-
-        save_idx = 1
-        for step in 1:num_steps
-            step_along_trajectory!(psi, fw, ws, rng)
-
-            if step % save_every == 0
-                save_idx += 1
-                _accumulate_measurements!(mean_data, save_idx, psi, observables, tmp_meas)
+        old_blas = BLAS.get_num_threads()
+        BLAS.set_num_threads(1)
+        try
+            @sync for (idx, chunk) in enumerate(chunks)
+                Threads.@spawn _run_chunk_with_obs!(
+                    ws_per_task[idx], fw, psi0, chunk, actual_seed, total_time,
+                    observables, save_every, num_steps, num_saves, mean_data_per_task[idx])
             end
+        finally
+            BLAS.set_num_threads(old_blas)
         end
-        _accumulate_density_matrix!(ws.rho_acc, psi)
-    end
 
-    mean_data ./= ntraj
-    rho_result = ws.rho_acc ./ ntraj
-    hermitianize!(rho_result)
+        mean_data = sum(mean_data_per_task)
+        mean_data ./= ntraj
+        rho_total = sum(ws.rho_acc for ws in ws_per_task)
+        rho_result = rho_total ./ ntraj
+        hermitianize!(rho_result)
+    else
+        # Serial observable path
+        mean_data = zeros(Float64, num_obs, num_saves)
+        psi = copy(psi0)
+
+        for traj_id in 1:ntraj
+            rng_serial = Random.Xoshiro(actual_seed + traj_id)
+            copyto!(psi, psi0)
+
+            n2 = real(dot(psi, psi))
+            rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
+
+            _accumulate_measurements!(mean_data, 1, psi, observables, ws.psi_tmp)
+
+            save_idx = 1
+            for step in 1:num_steps
+                step_along_trajectory!(psi, fw, ws, rng_serial)
+                if step % save_every == 0
+                    save_idx += 1
+                    _accumulate_measurements!(mean_data, save_idx, psi, observables, ws.psi_tmp)
+                end
+            end
+            _accumulate_density_matrix!(ws.rho_acc, psi)
+        end
+
+        mean_data ./= ntraj
+        rho_result = ws.rho_acc ./ ntraj
+        hermitianize!(rho_result)
+    end
 
     return TrajectoryResult(rho_result, ntraj, actual_seed, times, mean_data)
 end
