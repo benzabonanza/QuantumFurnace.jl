@@ -43,7 +43,7 @@ Full details: [milestones/v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 - [x] **Phase 13: Multi-Threaded Trajectory Engine** - Parallel trajectory sampling with per-thread workspaces, BLAS control, and deterministic seeding -- completed 2026-02-16
 - [x] **Phase 14: GNS Trajectory Path** - Verify and test GNS (approximate detailed balance) trajectory simulation end-to-end -- completed 2026-02-16
 - [x] **Phase 15: Data Architecture** - Experiment result serialization and round-trip via BSON -- completed 2026-02-16
-- [ ] **Phase 16: Convergence Tracking** - Batch-level trace distance and per-observable convergence metrics during trajectory sampling
+- [x] **Phase 16: Convergence Tracking** - Batch-level trace distance and per-observable convergence metrics during trajectory sampling -- completed 2026-02-16
 - [ ] **Phase 17: Adaptive Sampling** - Convergence-driven trajectory batching with automatic stopping and hard cap
 - [ ] **Phase 18: KMS-vs-GNS Experiments** - Parameter sweep experiments comparing KMS and GNS across system sizes and temperatures
 
@@ -109,8 +109,8 @@ Plans:
   4. Convergence data (trace distance curve, observable curves) is accessible programmatically after a trajectory run completes
 **Plans**: 2 plans
 Plans:
-  - [ ] 16-01-PLAN.md -- ConvergenceData struct, observable builders, run_trajectories_convergence batch runner, Dict serialization
-  - [ ] 16-02-PLAN.md -- Convergence tracking tests: unit tests, serialization round-trip, integration with real trajectories
+  - [x] 16-01-PLAN.md -- ConvergenceData struct, observable builders, run_trajectories_convergence batch runner, Dict serialization
+  - [x] 16-02-PLAN.md -- Convergence tracking tests: unit tests, serialization round-trip, integration with real trajectories
 
 ### Phase 17: Adaptive Sampling
 **Goal**: Trajectory sampling automatically runs enough batches to reach convergence without the user specifying a fixed trajectory count
@@ -157,6 +157,6 @@ Phases execute in numeric order: 12 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18
 | 13. Multi-Threaded Trajectory Engine | v1.2 | 2/2 | Complete | 2026-02-16 |
 | 14. GNS Trajectory Path | v1.2 | 1/1 | Complete | 2026-02-16 |
 | 15. Data Architecture | v1.2 | 2/2 | Complete | 2026-02-16 |
-| 16. Convergence Tracking | v1.2 | 0/2 | Not started | - |
+| 16. Convergence Tracking | v1.2 | 2/2 | Complete | 2026-02-16 |
 | 17. Adaptive Sampling | v1.2 | 0/TBD | Not started | - |
 | 18. KMS-vs-GNS Experiments | v1.2 | 0/TBD | Not started | - |
