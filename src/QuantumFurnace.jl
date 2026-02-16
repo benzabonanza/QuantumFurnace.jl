@@ -43,6 +43,9 @@ export TrajectoryFramework, TrajectoryResult, build_trajectoryframework, step_al
 # Results / Data persistence
 export ExperimentResult, save_experiment, load_experiment
 
+# Convergence tracking
+export ConvergenceData, run_trajectories_convergence, build_convergence_observables, build_convergence_observables_trotter
+
 # Simulation
 export run_lindbladian, run_thermalization, construct_lindbladian,
        run_trajectories
@@ -97,6 +100,7 @@ include("furnace.jl")
 include("log_sobolev.jl")
 include("log_sobolev_manopt.jl")
 include("linearmaps_liouv.jl")
+include("convergence.jl")
 include("results.jl")
 
 end
