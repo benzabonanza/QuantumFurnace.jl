@@ -109,7 +109,7 @@ Returns a named tuple with:
 - `jumps`: Vector{JumpOp} of 12 jump operators
 - `gibbs`: the Gibbs state matrix (Hermitian, trace 1)
 """
-function make_test_system()
+function make_test_system(; trotter::Union{Nothing, TrottTrott}=nothing)
     # Load Hamiltonian directly using the source tree path
     # (load_hamiltonian uses Pkg.project().path which points to a temp dir during Pkg.test())
     source_root = dirname(@__DIR__)
@@ -122,12 +122,15 @@ function make_test_system()
     num_of_jumps = length(jump_paulis) * length(jump_sites)
     jump_normalization = sqrt(num_of_jumps)
 
+    # Select basis: trotter.eigvecs for TrotterDomain, hamiltonian.eigvecs otherwise
+    basis_unitary = trotter !== nothing ? trotter.eigvecs : hamiltonian.eigvecs
+
     jumps = JumpOp[]
     for pauli in jump_paulis
         for site in jump_sites
             jump_op = Matrix(pad_term(pauli, NUM_QUBITS, site)) ./ jump_normalization
 
-            jump_in_eigen = hamiltonian.eigvecs' * jump_op * hamiltonian.eigvecs
+            jump_in_eigen = basis_unitary' * jump_op * basis_unitary
             orthogonal = (jump_op == transpose(jump_op))
             herm = (jump_op == jump_op')
             push!(jumps, JumpOp(jump_op, jump_in_eigen, orthogonal, herm))
@@ -160,7 +163,7 @@ Returns a named tuple with:
 - `jumps`: Vector{JumpOp} of 9 jump operators
 - `gibbs`: the Gibbs state matrix (Hermitian, trace 1)
 """
-function make_small_test_system()
+function make_small_test_system(; trotter::Union{Nothing, TrottTrott}=nothing)
     small_num_qubits = 3
     source_root = dirname(@__DIR__)
     ham_path = joinpath(source_root, "hamiltonians", "heis_disordered_periodic_n$(small_num_qubits).bson")
@@ -172,12 +175,15 @@ function make_small_test_system()
     num_of_jumps = length(jump_paulis) * length(jump_sites)
     jump_normalization = sqrt(num_of_jumps)
 
+    # Select basis: trotter.eigvecs for TrotterDomain, hamiltonian.eigvecs otherwise
+    basis_unitary = trotter !== nothing ? trotter.eigvecs : hamiltonian.eigvecs
+
     jumps = JumpOp[]
     for pauli in jump_paulis
         for site in jump_sites
             jump_op = Matrix(pad_term(pauli, small_num_qubits, site)) ./ jump_normalization
 
-            jump_in_eigen = hamiltonian.eigvecs' * jump_op * hamiltonian.eigvecs
+            jump_in_eigen = basis_unitary' * jump_op * basis_unitary
             orthogonal = (jump_op == transpose(jump_op))
             herm = (jump_op == jump_op')
             push!(jumps, JumpOp(jump_op, jump_in_eigen, orthogonal, herm))
@@ -208,6 +214,7 @@ function make_test_trotter()
 end
 
 const TEST_TROTTER = make_test_trotter()
+const TEST_TROTTER_JUMPS = make_test_system(; trotter=TEST_TROTTER).jumps
 
 # ---------------------------------------------------------------------------
 # Factory functions for configs
@@ -270,6 +277,7 @@ function make_small_test_trotter()
 end
 
 const SMALL_TROTTER = make_small_test_trotter()
+const SMALL_TROTTER_JUMPS = make_small_test_system(; trotter=SMALL_TROTTER).jumps
 
 # ---------------------------------------------------------------------------
 # Small config factories (3-qubit)
