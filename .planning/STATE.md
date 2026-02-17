@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-16)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.3 Mixing Time Estimation -- Phase 22 (Observable-Only Trajectory Runner)
+**Current focus:** v1.3 Mixing Time Estimation -- Phase 23 (Gap Estimation API)
 
 ## Current Position
 
-Phase: 22 of 24 (Observable-Only Trajectory Runner)
+Phase: 23 of 24 (Gap Estimation API)
 Plan: 1 of 1 in current phase (COMPLETE)
-Status: Phase 22 complete, ready for Phase 23
-Last activity: 2026-02-17 -- Phase 22 Plan 01 executed (observable-only trajectory runner)
+Status: Phase 23 complete, ready for Phase 24
+Last activity: 2026-02-17 -- Phase 23 Plan 01 executed (gap estimation API)
 
-Progress: [#######################.......] 44/47 plans (v1.0-v1.2 complete, v1.3 Phases 20-22 done)
+Progress: [########################......] 45/47 plans (v1.0-v1.2 complete, v1.3 Phases 20-23 done)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 49 (v1.0: 10, v1.1: 16, quick: 8, v1.2: 12, cleanup: 3, v1.3: 3)
+- Total plans completed: 50 (v1.0: 10, v1.1: 16, quick: 8, v1.2: 12, cleanup: 3, v1.3: 4)
 
 **By Milestone:**
 
@@ -46,6 +46,9 @@ Key context for v1.3:
 - Phase 21: R-squared not clamped (negative = valid diagnostic); no weight vector to curve_fit
 - Phase 22: ObservableTrajectoryResult in trajectories.jl (not structs.jl); inner/outer constructor pattern for Aqua compliance
 - Phase 22: reconstruct_dm=true reuses _run_chunk_with_obs!; reconstruct_dm=false uses new _run_chunk_obs_only!
+- Phase 23: SpectralGapResult uses concrete types only (no type parameter) for Aqua compliance
+- Phase 23: Best observable selected by converged + gap > 0 + highest R-squared; fallback to highest R-squared if no valid fit
+- Phase 23: gap_estimation.jl included after fitting.jl and before results.jl for correct dependency order
 
 ### Pending Todos
 
@@ -66,5 +69,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-17
-Stopped at: Completed 22-01-PLAN.md (Observable-Only Trajectory Runner). Phase 22 done. Ready for Phase 23.
+Stopped at: Completed 23-01-PLAN.md (Gap Estimation API). Phase 23 done. Ready for Phase 24.
 Resume file: None
