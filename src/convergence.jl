@@ -76,6 +76,74 @@ function build_convergence_observables_trotter(hamiltonian::HamHam, trotter::Tro
     return observables, names
 end
 
+"""
+    build_total_magnetization(hamiltonian::HamHam, num_qubits::Int; trotter=nothing)
+
+Build the per-site total magnetization observable M_z = sum(Z_i) / n,
+transformed into the Hamiltonian eigenbasis (default) or the Trotter eigenbasis
+(when `trotter` is supplied).
+
+Per-site normalization (division by `num_qubits`) is applied so that the
+amplitude is system-size-independent.  The decay rate (spectral gap) is
+unaffected by normalization.
+
+Returns `(observables::Vector{Matrix{ComplexF64}}, names::Vector{String})`
+matching the existing observable builder convention.
+"""
+function build_total_magnetization(hamiltonian::HamHam, num_qubits::Int;
+                                    trotter::Union{TrottTrott, Nothing}=nothing)
+    dim = size(hamiltonian.data, 1)
+
+    # Build M_z in computational basis: sum(Z_i) / n
+    Mz_comp = zeros(ComplexF64, dim, dim)
+    for i in 1:num_qubits
+        Mz_comp .+= Matrix{ComplexF64}(pad_term([Z], num_qubits, i))
+    end
+    Mz_comp ./= num_qubits  # Per-site normalization (locked decision)
+
+    # Select basis transformation matrix
+    V = trotter !== nothing ? trotter.eigvecs : hamiltonian.eigvecs
+
+    # Transform to eigenbasis: O_eigen = V' * O_comp * V
+    Mz_eigen = Matrix{ComplexF64}(V' * Mz_comp * V)
+
+    return [Mz_eigen], ["Mz"]
+end
+
+"""
+    build_gap_estimation_observables(hamiltonian::HamHam, num_qubits::Int; trotter=nothing)
+
+Build the H + M_z observable bundle for spectral gap estimation, in the
+Hamiltonian eigenbasis (default) or the Trotter eigenbasis (when `trotter`
+is supplied).
+
+Returns `(observables::Vector{Matrix{ComplexF64}}, names::Vector{String})`
+with `observables[1] = H` and `observables[2] = M_z`.
+
+Note: ZZ correlations are intentionally excluded (deferred decision).
+H and M_z are chosen to overlap with the first excited mode of the
+Lindbladian for spectral gap capture.
+"""
+function build_gap_estimation_observables(hamiltonian::HamHam, num_qubits::Int;
+                                           trotter::Union{TrottTrott, Nothing}=nothing)
+    # Get M_z from the dedicated builder (DRY)
+    mz_obs, mz_names = build_total_magnetization(hamiltonian, num_qubits; trotter=trotter)
+
+    # Build H in the correct basis
+    if trotter !== nothing
+        # H is NOT diagonal in Trotter basis — full basis transform required
+        H = Matrix{ComplexF64}(trotter.eigvecs' * hamiltonian.data * trotter.eigvecs)
+    else
+        # H IS diagonal in its own eigenbasis
+        H = Matrix{ComplexF64}(diagm(ComplexF64.(hamiltonian.eigvals)))
+    end
+
+    observables = vcat([H], mz_obs)
+    names = vcat(["H"], mz_names)
+
+    return observables, names
+end
+
 # ---------------------------------------------------------------------------
 # Gibbs state helpers
 # ---------------------------------------------------------------------------
