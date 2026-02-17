@@ -39,7 +39,7 @@ export BohrDomain, EnergyDomain, TimeDomain, TrotterDomain
 export LSIFramework, compute_LSI_alpha2
 
 # Trajectory
-export TrajectoryFramework, TrajectoryResult, build_trajectoryframework, step_along_trajectory!
+export TrajectoryFramework, TrajectoryResult, ObservableTrajectoryResult, build_trajectoryframework, step_along_trajectory!, run_observable_trajectories
 
 # Results / Data persistence
 export ExperimentResult, save_experiment, load_experiment

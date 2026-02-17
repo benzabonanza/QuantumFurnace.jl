@@ -30,6 +30,42 @@ struct TrajectoryResult{T}
 end
 
 """
+Result of an observable-only trajectory run.
+
+Unlike `TrajectoryResult`, density matrix reconstruction is optional (`rho_mean` may be `nothing`).
+"""
+struct ObservableTrajectoryResult{T}
+    times::Vector{Float64}
+    measurements_mean::Matrix{Float64}  # n_obs x n_saves
+    n_trajectories::Int
+    seed::Int
+    rho_mean::Union{Nothing, Matrix{T}}  # nothing when reconstruct_dm=false
+
+    # Inner constructor: explicit T (used when rho_mean is a Matrix{T})
+    function ObservableTrajectoryResult{T}(
+        times, measurements_mean, n_trajectories, seed, rho_mean
+    ) where {T}
+        new{T}(times, measurements_mean, n_trajectories, seed, rho_mean)
+    end
+end
+
+# Outer constructor: infer T from rho_mean when it is a matrix
+function ObservableTrajectoryResult(
+    times::Vector{Float64}, measurements_mean::Matrix{Float64},
+    n_trajectories::Int, seed::Int, rho_mean::Matrix{T},
+) where {T}
+    ObservableTrajectoryResult{T}(times, measurements_mean, n_trajectories, seed, rho_mean)
+end
+
+# Outer constructor: default T=ComplexF64 when rho_mean=nothing
+function ObservableTrajectoryResult(
+    times::Vector{Float64}, measurements_mean::Matrix{Float64},
+    n_trajectories::Int, seed::Int, rho_mean::Nothing,
+)
+    ObservableTrajectoryResult{ComplexF64}(times, measurements_mean, n_trajectories, seed, nothing)
+end
+
+"""
 Per-operator Kraus data for Lie-Trotter splitting.
 Each operator `a` has its own R_a, K0_a, U_residual_a, U_B_a.
 """
@@ -429,6 +465,53 @@ function _run_chunk_with_obs!(
 end
 
 """
+    _run_chunk_obs_only!(ws, fw, psi0, chunk, master_seed, total_time,
+                          observables, save_every, num_steps, num_saves, mean_data_local)
+
+Run a chunk of trajectories with observable measurements but WITHOUT density matrix accumulation.
+Each trajectory gets Xoshiro(master_seed + traj_id) for reproducibility.
+"""
+function _run_chunk_obs_only!(
+    ws::TrajectoryWorkspace{<:Complex},
+    fw::TrajectoryFramework{<:Complex},
+    psi0::Vector{<:Complex},
+    chunk::UnitRange{Int},
+    master_seed::Int,
+    total_time::Real,
+    observables::Vector{<:Matrix{<:Complex}},
+    save_every::Int,
+    num_steps::Int,
+    num_saves::Int,
+    mean_data_local::Matrix{Float64},
+)
+    psi = copy(psi0)
+    tmp_meas = ws.psi_tmp  # reuse workspace vector as gemv buffer
+
+    for traj_id in chunk
+        rng = Random.Xoshiro(master_seed + traj_id)
+        copyto!(psi, psi0)
+
+        # normalize once per trajectory
+        n2 = real(dot(psi, psi))
+        rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
+
+        # save at t=0
+        _accumulate_measurements!(mean_data_local, 1, psi, observables, tmp_meas)
+
+        save_idx = 1
+        for step in 1:num_steps
+            step_along_trajectory!(psi, fw, ws, rng)
+            if step % save_every == 0
+                save_idx += 1
+                _accumulate_measurements!(mean_data_local, save_idx, psi, observables, tmp_meas)
+            end
+        end
+        # NO _accumulate_density_matrix! call here
+    end
+    return nothing
+end
+
+"""
     _run_batch_no_obs!(fw, psi0, ntraj, master_seed, total_time) -> Matrix{CT}
 
 Run `ntraj` trajectories using pre-built `fw`, returning the averaged density matrix.
@@ -637,6 +720,132 @@ function run_trajectories(
     end
 
     return TrajectoryResult(rho_result, ntraj, actual_seed, times, mean_data, nothing)
+end
+
+"""
+    run_observable_trajectories(jumps, config, psi0, hamiltonian;
+        trotter=nothing, total_time=config.mixing_time, delta=config.delta,
+        ntraj=1, observables, save_every=1, seed=nothing, reconstruct_dm=false)
+
+Run trajectory simulations measuring time-resolved observables without per-trajectory
+density matrix reconstruction. When `reconstruct_dm=true`, also accumulates the averaged
+density matrix (using the existing `_run_chunk_with_obs!` path).
+
+Returns an `ObservableTrajectoryResult` with `rho_mean=nothing` when `reconstruct_dm=false`.
+"""
+function run_observable_trajectories(
+    jumps::Vector{JumpOp},
+    config::AbstractThermalizeConfig,
+    psi0::Vector{<:Complex},
+    hamiltonian::HamHam;
+    trotter::Union{TrottTrott,Nothing}=nothing,
+    total_time::Real = config.mixing_time,
+    delta::Real = config.delta,
+    ntraj::Int = 1,
+    observables::Vector{<:Matrix{<:Complex}},
+    save_every::Int = 1,
+    seed::Union{Int,Nothing} = nothing,
+    reconstruct_dm::Bool = false,
+)
+    @assert ntraj >= 1
+    @assert save_every >= 1
+
+    fw, actual_seed = _build_framework_and_seed(
+        jumps, config, psi0, hamiltonian;
+        trotter=trotter, delta=delta, seed=seed,
+    )
+
+    CT = eltype(psi0)
+    dim = size(hamiltonian.data, 1)
+
+    delta_step = fw.delta
+    num_steps = ceil(Int, total_time / delta_step)
+    num_saves = div(num_steps, save_every) + 1
+    num_obs   = length(observables)
+
+    times = Vector{Float64}(undef, num_saves)
+    @inbounds for s in 1:num_saves
+        times[s] = (s - 1) * save_every * delta_step
+    end
+
+    if ntraj > 1 && Threads.nthreads() > 1
+        # Multi-threaded path
+        nt = min(Threads.nthreads(), ntraj)
+        chunks = _partition_trajectories(1:ntraj, nt)
+        ws_per_task = [TrajectoryWorkspace(CT, dim) for _ in 1:length(chunks)]
+        mean_data_per_task = [zeros(Float64, num_obs, num_saves) for _ in 1:length(chunks)]
+
+        old_blas = BLAS.get_num_threads()
+        BLAS.set_num_threads(1)
+        try
+            if reconstruct_dm
+                @sync for (idx, chunk) in enumerate(chunks)
+                    Threads.@spawn _run_chunk_with_obs!(
+                        ws_per_task[idx], fw, psi0, chunk, actual_seed, total_time,
+                        observables, save_every, num_steps, num_saves, mean_data_per_task[idx])
+                end
+            else
+                @sync for (idx, chunk) in enumerate(chunks)
+                    Threads.@spawn _run_chunk_obs_only!(
+                        ws_per_task[idx], fw, psi0, chunk, actual_seed, total_time,
+                        observables, save_every, num_steps, num_saves, mean_data_per_task[idx])
+                end
+            end
+        finally
+            BLAS.set_num_threads(old_blas)
+        end
+
+        mean_data = sum(mean_data_per_task)
+        mean_data ./= ntraj
+
+        if reconstruct_dm
+            rho_total = sum(ws.rho_acc for ws in ws_per_task)
+            rho_result = rho_total ./ ntraj
+            hermitianize!(rho_result)
+            rho_mean = rho_result
+        else
+            rho_mean = nothing
+        end
+    else
+        # Serial path
+        ws = TrajectoryWorkspace(CT, dim)
+        mean_data = zeros(Float64, num_obs, num_saves)
+        psi = copy(psi0)
+
+        for traj_id in 1:ntraj
+            rng_serial = Random.Xoshiro(actual_seed + traj_id)
+            copyto!(psi, psi0)
+
+            n2 = real(dot(psi, psi))
+            rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
+
+            _accumulate_measurements!(mean_data, 1, psi, observables, ws.psi_tmp)
+
+            save_idx = 1
+            for step in 1:num_steps
+                step_along_trajectory!(psi, fw, ws, rng_serial)
+                if step % save_every == 0
+                    save_idx += 1
+                    _accumulate_measurements!(mean_data, save_idx, psi, observables, ws.psi_tmp)
+                end
+            end
+            if reconstruct_dm
+                _accumulate_density_matrix!(ws.rho_acc, psi)
+            end
+        end
+
+        mean_data ./= ntraj
+
+        if reconstruct_dm
+            rho_result = ws.rho_acc ./ ntraj
+            hermitianize!(rho_result)
+            rho_mean = rho_result
+        else
+            rho_mean = nothing
+        end
+    end
+
+    return ObservableTrajectoryResult{CT}(times, mean_data, ntraj, actual_seed, rho_mean)
 end
 
 """
