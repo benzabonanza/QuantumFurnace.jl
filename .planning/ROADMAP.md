@@ -128,10 +128,11 @@ Plans:
   1. User can call `cross_validate_gap(estimated, exact_result)` comparing fitted gap against `abs(real(exact_result.spectral_gap))`, with relative error reported
   2. Cross-validation warns when the imaginary part of the exact eigenvalue is significant (`|Im/Re| > 0.1`), indicating oscillatory decay that pure exponential fitting cannot capture
   3. Validation script demonstrates gap estimation agreement for n=4 and n=6 Heisenberg chains, with fitted gap within confidence interval of exact gap (or within documented tolerance)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 24-01: TBD
+- [ ] 24-01-PLAN.md -- Implement CrossValidationResult struct, cross_validate_gap function (two methods), and unit tests
+- [ ] 24-02-PLAN.md -- Validation script for n=4 and n=6 Heisenberg chain gap cross-validation
 
 ## Progress
 
@@ -169,4 +170,4 @@ Phase 21 (fitting)      ---+-----------------------------+--> Phase 23 (API) -->
 | 21. Exponential Fitting | v1.3 | 1/1 | Complete | 2026-02-17 |
 | 22. Observable-Only Trajectory Runner | v1.3 | 1/1 | Complete | 2026-02-17 |
 | 23. Gap Estimation API | v1.3 | 1/1 | Complete | 2026-02-17 |
-| 24. Cross-Validation | v1.3 | 0/? | Not started | - |
+| 24. Cross-Validation | v1.3 | 0/2 | Planned | - |
