@@ -102,10 +102,10 @@ Plans:
   2. Observable-only runner produces identical observable time series as the existing `run_trajectories` with observables (cross-check for correctness)
   3. User can optionally reconstruct the averaged density matrix at the end of the run (but not during), via `reconstruct_dm=true`
   4. Multi-threaded execution works with the same per-thread workspace/RNG pattern as existing `run_trajectories`
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 22-01: TBD
+- [ ] 22-01-PLAN.md -- Implement run_observable_trajectories with ObservableTrajectoryResult struct and cross-validation tests
 
 ### Phase 23: Gap Estimation API
 **Goal**: Users can estimate the Lindbladian spectral gap from a single function call that orchestrates trajectory simulation, multi-observable fitting, and best-estimate selection
@@ -167,6 +167,6 @@ Phase 21 (fitting)      ---+-----------------------------+--> Phase 23 (API) -->
 | 19. Logic Simplification | v1.2 | 3/3 | Complete | 2026-02-16 |
 | 20. Observable Infrastructure | v1.3 | 1/1 | Complete | 2026-02-17 |
 | 21. Exponential Fitting | v1.3 | 1/1 | Complete | 2026-02-17 |
-| 22. Observable-Only Trajectory Runner | v1.3 | 0/? | Not started | - |
+| 22. Observable-Only Trajectory Runner | v1.3 | 0/1 | Not started | - |
 | 23. Gap Estimation API | v1.3 | 0/? | Not started | - |
 | 24. Cross-Validation | v1.3 | 0/? | Not started | - |
