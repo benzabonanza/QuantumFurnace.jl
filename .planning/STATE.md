@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-16)
 Phase: 24 of 24 (Cross-Validation) -- COMPLETE
 Plan: 3 of 3 in current phase (COMPLETE)
 Status: Phase 24 complete (gap closure plan 03 executed). v1.3 Mixing Time Estimation milestone complete.
-Last activity: 2026-02-17 -- Quick task 24 executed (add two-site correlations to gap estimation)
+Last activity: 2026-02-17 -- Quick task 24 executed + validated (ZZ_avg: n=6 factor 1.46x→0.92x, n=4 factor 1.17x→0.87x)
 
 Progress: [##############################] 48/48 plans (v1.0-v1.3 ALL COMPLETE)
 
@@ -82,5 +82,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-17
-Stopped at: Completed quick task 24 (add two-site correlations to spectral gap estimation). All milestones complete.
+Stopped at: Completed quick task 24 + validation. ZZ_avg dramatically improves n=6 (0.92x vs 1.46x). n=4 slightly under-estimates (0.87x). Pass criterion [0.8, 1.5] may need widening on lower end. Discussion deferred to next session.
 Resume file: None
