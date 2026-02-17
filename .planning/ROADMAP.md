@@ -57,7 +57,7 @@ Full details: [milestones/v1.2-ROADMAP.md](milestones/v1.2-ROADMAP.md)
 **Milestone Goal:** Estimate the Lindbladian spectral gap from trajectory-based observable decay, cross-validated against exact Liouvillian eigenvalues for small systems.
 
 - [x] **Phase 20: Observable Infrastructure** - Total magnetization and combined gap estimation observables in both eigenbasis and Trotter basis -- completed 2026-02-17
-- [ ] **Phase 21: Exponential Fitting** - LsqFit.jl-based single-exponential decay fitting with auto-initialization, window selection, and quality metrics
+- [x] **Phase 21: Exponential Fitting** - LsqFit.jl-based single-exponential decay fitting with auto-initialization, window selection, and quality metrics -- completed 2026-02-17
 - [ ] **Phase 22: Observable-Only Trajectory Runner** - Time-resolved observable measurement from trajectories without mid-simulation DM reconstruction
 - [ ] **Phase 23: Gap Estimation API** - Unified `estimate_spectral_gap` function orchestrating trajectories, multi-observable fitting, and best-estimate selection
 - [ ] **Phase 24: Cross-Validation** - Verify trajectory-fitted gap against exact Liouvillian spectral gap for n=4 and n=6
@@ -88,10 +88,10 @@ Plans:
   3. User can specify `skip_initial` fraction to exclude early transient, and the fitted gap changes measurably (demonstrating window selection works)
   4. Fit result includes R-squared, confidence interval on gap, and standard error; gap is always constrained positive (gap > 0 enforced via parameter bounds)
   5. LsqFit.jl is added to Project.toml with proper compat bounds
-**Plans**: 1 plan
+**Plans**: 1 plan -- completed 2026-02-17
 
 Plans:
-- [ ] 21-01-PLAN.md -- Implement FitResult struct, fit_exponential_decay with LsqFit.jl, and synthetic data test suite
+- [x] 21-01-PLAN.md -- Implement FitResult struct, fit_exponential_decay with LsqFit.jl, and synthetic data test suite
 
 ### Phase 22: Observable-Only Trajectory Runner
 **Goal**: Users can run trajectory simulations that measure time-resolved observables efficiently, without the overhead of per-trajectory density matrix reconstruction
@@ -166,7 +166,7 @@ Phase 21 (fitting)      ---+-----------------------------+--> Phase 23 (API) -->
 | 18. KMS-vs-GNS Experiments | v1.2 | 1/1 | Complete | 2026-02-16 |
 | 19. Logic Simplification | v1.2 | 3/3 | Complete | 2026-02-16 |
 | 20. Observable Infrastructure | v1.3 | 1/1 | Complete | 2026-02-17 |
-| 21. Exponential Fitting | v1.3 | 0/1 | Not started | - |
+| 21. Exponential Fitting | v1.3 | 1/1 | Complete | 2026-02-17 |
 | 22. Observable-Only Trajectory Runner | v1.3 | 0/? | Not started | - |
 | 23. Gap Estimation API | v1.3 | 0/? | Not started | - |
 | 24. Cross-Validation | v1.3 | 0/? | Not started | - |
