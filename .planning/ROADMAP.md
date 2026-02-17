@@ -58,7 +58,7 @@ Full details: [milestones/v1.2-ROADMAP.md](milestones/v1.2-ROADMAP.md)
 
 - [x] **Phase 20: Observable Infrastructure** - Total magnetization and combined gap estimation observables in both eigenbasis and Trotter basis -- completed 2026-02-17
 - [x] **Phase 21: Exponential Fitting** - LsqFit.jl-based single-exponential decay fitting with auto-initialization, window selection, and quality metrics -- completed 2026-02-17
-- [ ] **Phase 22: Observable-Only Trajectory Runner** - Time-resolved observable measurement from trajectories without mid-simulation DM reconstruction
+- [x] **Phase 22: Observable-Only Trajectory Runner** - Time-resolved observable measurement from trajectories without mid-simulation DM reconstruction -- completed 2026-02-17
 - [ ] **Phase 23: Gap Estimation API** - Unified `estimate_spectral_gap` function orchestrating trajectories, multi-observable fitting, and best-estimate selection
 - [ ] **Phase 24: Cross-Validation** - Verify trajectory-fitted gap against exact Liouvillian spectral gap for n=4 and n=6
 
@@ -102,10 +102,10 @@ Plans:
   2. Observable-only runner produces identical observable time series as the existing `run_trajectories` with observables (cross-check for correctness)
   3. User can optionally reconstruct the averaged density matrix at the end of the run (but not during), via `reconstruct_dm=true`
   4. Multi-threaded execution works with the same per-thread workspace/RNG pattern as existing `run_trajectories`
-**Plans**: 1 plan
+**Plans**: 1 plan -- completed 2026-02-17
 
 Plans:
-- [ ] 22-01-PLAN.md -- Implement run_observable_trajectories with ObservableTrajectoryResult struct and cross-validation tests
+- [x] 22-01-PLAN.md -- Implement run_observable_trajectories with ObservableTrajectoryResult struct and cross-validation tests
 
 ### Phase 23: Gap Estimation API
 **Goal**: Users can estimate the Lindbladian spectral gap from a single function call that orchestrates trajectory simulation, multi-observable fitting, and best-estimate selection
@@ -167,6 +167,6 @@ Phase 21 (fitting)      ---+-----------------------------+--> Phase 23 (API) -->
 | 19. Logic Simplification | v1.2 | 3/3 | Complete | 2026-02-16 |
 | 20. Observable Infrastructure | v1.3 | 1/1 | Complete | 2026-02-17 |
 | 21. Exponential Fitting | v1.3 | 1/1 | Complete | 2026-02-17 |
-| 22. Observable-Only Trajectory Runner | v1.3 | 0/1 | Not started | - |
+| 22. Observable-Only Trajectory Runner | v1.3 | 1/1 | Complete | 2026-02-17 |
 | 23. Gap Estimation API | v1.3 | 0/? | Not started | - |
 | 24. Cross-Validation | v1.3 | 0/? | Not started | - |
