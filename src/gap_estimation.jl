@@ -53,36 +53,49 @@ end
 # Internal helper: best-observable selection (GAP-03)
 # ---------------------------------------------------------------------------
 
-#TODO: We need to select the smallest gap result but of course of good quality.
 """
     _select_best_observable(fits, names) -> (best_idx, best_name, best_r_squared)
 
-Select the best observable by fit quality. Selection criteria:
-1. Converged (`fit.converged == true`)
-2. Positive gap (`fit.gap > 0.0`)
-3. Highest R-squared among valid fits
+Select the best observable for spectral gap estimation. The true spectral gap
+is the slowest-decaying mode, so among fits with acceptable quality we pick the
+one with the **smallest positive gap** (not the highest R-squared).
 
-Fallback: if no fit is both converged and has gap > 0, select the observable
-with the highest R-squared regardless (for diagnostic purposes).
+Selection criteria (in priority order):
+1. **Primary:** Among fits where `converged && gap > 0 && R-squared > 0.8`,
+   select the one with the smallest `gap`.
+2. **Fallback 1:** If no fit passes the R-squared threshold, among fits where
+   `converged && gap > 0`, select the one with the smallest `gap`.
+3. **Fallback 2:** If still none, select the fit with the highest `R-squared`
+   overall (for diagnostic purposes).
 """
 function _select_best_observable(fits::Vector{FitResult}, names::Vector{String})
+    # Primary: smallest gap among high-quality fits (converged, gap > 0, R² > 0.8)
     best_idx = 0
-    best_r2 = -Inf
+    best_gap = Inf
 
     for (i, fit) in enumerate(fits)
-        if fit.converged && fit.gap > 0.0 && fit.r_squared > best_r2
+        if fit.converged && fit.gap > 0.0 && fit.r_squared > 0.8 && fit.gap < best_gap
             best_idx = i
-            best_r2 = fit.r_squared
+            best_gap = fit.gap
         end
     end
 
-    # Fallback: if no valid fit, pick highest R-squared regardless
+    # Fallback 1: smallest gap among converged fits with positive gap (any R²)
     if best_idx == 0
-        best_idx = argmax(fit.r_squared for fit in fits)
-        best_r2 = fits[best_idx].r_squared
+        for (i, fit) in enumerate(fits)
+            if fit.converged && fit.gap > 0.0 && fit.gap < best_gap
+                best_idx = i
+                best_gap = fit.gap
+            end
+        end
     end
 
-    return best_idx, names[best_idx], best_r2
+    # Fallback 2: highest R-squared regardless (diagnostic)
+    if best_idx == 0
+        best_idx = argmax(fit.r_squared for fit in fits)
+    end
+
+    return best_idx, names[best_idx], fits[best_idx].r_squared
 end
 
 # ---------------------------------------------------------------------------

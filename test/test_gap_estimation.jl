@@ -147,7 +147,8 @@ using LinearAlgebra
         )
 
         # Test selection: should pick fit_converged_good (index 1)
-        # because it's the only one that is converged AND has gap > 0
+        # because it's the only valid fit (converged AND gap > 0), so trivially
+        # the smallest gap among valid fits under the new selection criterion
         idx, name, r2 = QuantumFurnace._select_best_observable(
             [fit_converged_good, fit_unconverged_high_r2, fit_converged_zero_gap],
             ["A", "B", "C"],
@@ -164,6 +165,30 @@ using LinearAlgebra
         @test idx2 == 1   # fit_unconverged_high_r2 has R2=0.99 > 0.90
         @test name2 == "B"
         @test r2_2 == 0.99
+
+        # Test smallest-gap selection: when two fits are both valid (converged,
+        # gap > 0, R² > 0.8), the one with the smaller gap should be selected
+        # (not the one with higher R-squared). The true spectral gap is the
+        # slowest-decaying mode, so the smallest positive gap wins.
+        fit_high_r2_high_gap = FitResult(
+            0.8, 2.0, 0.3,        # gap=0.8, amplitude, offset
+            (0.7, 0.9), 0.05,     # gap_ci, gap_se
+            0.98, true,            # r_squared=0.98, converged
+            zeros(10), collect(0.0:1.0:9.0), ones(10),
+        )
+        fit_lower_r2_small_gap = FitResult(
+            0.3, 1.5, 0.2,        # gap=0.3, amplitude, offset
+            (0.2, 0.4), 0.05,     # gap_ci, gap_se
+            0.92, true,            # r_squared=0.92, converged
+            zeros(10), collect(0.0:1.0:9.0), ones(10),
+        )
+        idx3, name3, r2_3 = QuantumFurnace._select_best_observable(
+            [fit_high_r2_high_gap, fit_lower_r2_small_gap],
+            ["high_r2", "small_gap"],
+        )
+        @test idx3 == 2          # smallest gap wins, not highest R²
+        @test name3 == "small_gap"
+        @test r2_3 == 0.92
     end
 
     # -----------------------------------------------------------------
