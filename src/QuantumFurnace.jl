@@ -50,6 +50,9 @@ export ConvergenceData, run_trajectories_convergence, run_trajectories_adaptive,
 # Fitting
 export fit_exponential_decay, FitResult
 
+# Gap estimation
+export SpectralGapResult, estimate_spectral_gap
+
 # Simulation
 export run_lindbladian, run_thermalization, construct_lindbladian,
        run_trajectories
@@ -106,6 +109,7 @@ include("log_sobolev_manopt.jl")
 include("linearmaps_liouv.jl")
 include("convergence.jl")
 include("fitting.jl")
+include("gap_estimation.jl")
 include("results.jl")
 
 end

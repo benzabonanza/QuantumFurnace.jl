@@ -1,0 +1,191 @@
+# ============================================================================
+# Gap Estimation API: single-call spectral gap estimation from trajectories
+# ============================================================================
+#
+# Composes:
+#   - build_gap_estimation_observables (convergence.jl, Phase 20)
+#   - run_observable_trajectories (trajectories.jl, Phase 22)
+#   - fit_exponential_decay (fitting.jl, Phase 21)
+# into a single estimate_spectral_gap function.
+
+# ---------------------------------------------------------------------------
+# SpectralGapResult struct
+# ---------------------------------------------------------------------------
+
+"""
+    SpectralGapResult
+
+Result of spectral gap estimation via trajectory-based exponential decay fitting.
+
+Returned by [`estimate_spectral_gap`](@ref). Contains the best gap estimate,
+per-observable fit details, and metadata for reproducibility.
+
+# Fields
+- `gap::Float64`: Gap estimate from the best-fit observable.
+- `gap_ci::Tuple{Float64, Float64}`: 95% confidence interval on the gap.
+- `gap_se::Float64`: Standard error on the gap.
+- `best_observable::String`: Name of the observable selected as best.
+- `best_r_squared::Float64`: R-squared of the best fit.
+- `per_observable::Vector{FitResult}`: All fits, one per observable.
+- `observable_names::Vector{String}`: Names matching `per_observable` order.
+- `ntraj::Int`: Number of trajectories used.
+- `total_time::Float64`: Total simulation time.
+- `save_every::Int`: Save interval in steps.
+- `seed::Int`: RNG seed used (for reproducibility).
+- `skip_initial::Float64`: Fraction of initial data skipped for fitting.
+"""
+struct SpectralGapResult
+    gap::Float64
+    gap_ci::Tuple{Float64, Float64}
+    gap_se::Float64
+    best_observable::String
+    best_r_squared::Float64
+    per_observable::Vector{FitResult}
+    observable_names::Vector{String}
+    ntraj::Int
+    total_time::Float64
+    save_every::Int
+    seed::Int
+    skip_initial::Float64
+end
+
+# ---------------------------------------------------------------------------
+# Internal helper: best-observable selection (GAP-03)
+# ---------------------------------------------------------------------------
+
+"""
+    _select_best_observable(fits, names) -> (best_idx, best_name, best_r_squared)
+
+Select the best observable by fit quality. Selection criteria:
+1. Converged (`fit.converged == true`)
+2. Positive gap (`fit.gap > 0.0`)
+3. Highest R-squared among valid fits
+
+Fallback: if no fit is both converged and has gap > 0, select the observable
+with the highest R-squared regardless (for diagnostic purposes).
+"""
+function _select_best_observable(fits::Vector{FitResult}, names::Vector{String})
+    best_idx = 0
+    best_r2 = -Inf
+
+    for (i, fit) in enumerate(fits)
+        if fit.converged && fit.gap > 0.0 && fit.r_squared > best_r2
+            best_idx = i
+            best_r2 = fit.r_squared
+        end
+    end
+
+    # Fallback: if no valid fit, pick highest R-squared regardless
+    if best_idx == 0
+        best_idx = argmax(fit.r_squared for fit in fits)
+        best_r2 = fits[best_idx].r_squared
+    end
+
+    return best_idx, names[best_idx], best_r2
+end
+
+# ---------------------------------------------------------------------------
+# Main API function
+# ---------------------------------------------------------------------------
+
+"""
+    estimate_spectral_gap(jumps, config, psi0, hamiltonian; kwargs...) -> SpectralGapResult
+
+Estimate the Lindbladian spectral gap from trajectory simulations. This is
+the single-call API that composes observable construction, trajectory
+simulation, exponential fitting, and best-observable selection.
+
+# Arguments
+- `jumps::Vector{JumpOp}`: Jump operators.
+- `config::AbstractThermalizeConfig`: Thermalization configuration.
+- `psi0::Vector{<:Complex}`: Initial state vector.
+- `hamiltonian::HamHam`: Hamiltonian data.
+
+# Keyword Arguments
+- `observables`: Custom observable matrices (default: `nothing`, uses H + Mz bundle).
+- `observable_names`: Names for custom observables (required when `observables` is provided).
+- `ntraj::Int=1000`: Number of trajectories.
+- `save_every::Int=10`: Save interval in steps.
+- `total_time::Real=config.mixing_time`: Total simulation time.
+- `delta::Real=config.delta`: Time step.
+- `seed::Union{Int, Nothing}=nothing`: RNG seed (random if `nothing`).
+- `trotter::Union{TrottTrott, Nothing}=nothing`: Trotter object (required for TrotterDomain).
+- `skip_initial::Float64=0.0`: Fraction of initial data to skip for fitting.
+
+# Returns
+A [`SpectralGapResult`](@ref) containing the gap estimate, confidence interval,
+per-observable fits, and simulation metadata.
+
+# Example
+```julia
+psi0 = zeros(ComplexF64, dim); psi0[1] = 1.0
+result = estimate_spectral_gap(jumps, config, psi0, hamiltonian;
+    ntraj=1000, save_every=10, seed=42)
+println("gap = \$(result.gap), best observable = \$(result.best_observable)")
+```
+"""
+function estimate_spectral_gap(
+    jumps::Vector{JumpOp},
+    config::AbstractThermalizeConfig,
+    psi0::Vector{<:Complex},
+    hamiltonian::HamHam;
+    observables::Union{Nothing, Vector{<:Matrix{<:Complex}}} = nothing,
+    observable_names::Union{Nothing, Vector{String}} = nothing,
+    ntraj::Int = 1000,
+    save_every::Int = 10,
+    total_time::Real = config.mixing_time,
+    delta::Real = config.delta,
+    seed::Union{Int, Nothing} = nothing,
+    trotter::Union{TrottTrott, Nothing} = nothing,
+    skip_initial::Float64 = 0.0,
+)
+    # 1. Build default observables if not provided
+    if observables === nothing
+        observables, observable_names = build_gap_estimation_observables(
+            hamiltonian, config.num_qubits; trotter=trotter)
+    end
+
+    # Validate: names must be provided with custom observables
+    observable_names === nothing && throw(ArgumentError(
+        "observable_names must be provided when custom observables are given"))
+    length(observables) == length(observable_names) || throw(ArgumentError(
+        "observables and observable_names must have same length " *
+        "(got $(length(observables)) observables and $(length(observable_names)) names)"))
+
+    # 2. Run observable-only trajectories
+    traj_result = run_observable_trajectories(
+        jumps, config, psi0, hamiltonian;
+        observables=observables, save_every=save_every,
+        ntraj=ntraj, total_time=total_time, delta=delta,
+        seed=seed, trotter=trotter,
+    )
+
+    # 3. Fit each observable's time series
+    fits = FitResult[]
+    for i in eachindex(observables)
+        obs_series = Float64.(traj_result.measurements_mean[i, :])
+        fit = fit_exponential_decay(traj_result.times, obs_series;
+                                     skip_initial=skip_initial)
+        push!(fits, fit)
+    end
+
+    # 4. Select best observable (GAP-03)
+    best_idx, best_name, best_r2 = _select_best_observable(fits, observable_names)
+    best_fit = fits[best_idx]
+
+    # 5. Build and return result
+    return SpectralGapResult(
+        best_fit.gap,
+        best_fit.gap_ci,
+        best_fit.gap_se,
+        best_name,
+        best_r2,
+        fits,
+        observable_names,
+        traj_result.n_trajectories,
+        Float64(total_time),
+        save_every,
+        traj_result.seed,
+        skip_initial,
+    )
+end
