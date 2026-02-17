@@ -1,6 +1,7 @@
 using Test
 using QuantumFurnace
 using LinearAlgebra
+using Logging
 
 # ============================================================================
 # Tests for estimate_spectral_gap (Phase 23)
@@ -165,5 +166,116 @@ using LinearAlgebra
         @test name2 == "B"
         @test r2_2 == 0.99
     end
+
+    # -----------------------------------------------------------------
+    # Cross-Validation tests (Phase 24)
+    # -----------------------------------------------------------------
+
+    # Helper to create a SpectralGapResult with controlled gap and gap_ci
+    function _make_test_spectral_gap_result(; gap=0.5, gap_ci=(0.3, 0.7), gap_se=0.1)
+        fit = FitResult(gap, 1.0, 0.0, gap_ci, gap_se, 0.95, true, Float64[], Float64[], Float64[])
+        SpectralGapResult(gap, gap_ci, gap_se, "H", 0.95, [fit], ["H"], 1000, 10.0, 10, 42, 0.0)
+    end
+
+    @testset "Cross-Validation" begin
+
+        # -----------------------------------------------------------------
+        @testset "CrossValidationResult fields are correct for known inputs" begin
+            sgr = _make_test_spectral_gap_result(gap=0.48, gap_ci=(0.3, 0.7))
+            cv = cross_validate_gap(sgr, -0.5 + 0.1im)
+
+            @test cv.exact_gap == 0.5
+            @test cv.fitted_gap == 0.48
+            @test cv.absolute_error ≈ 0.02
+            @test cv.relative_error ≈ 0.02 / 0.5
+            @test cv.within_ci == true  # 0.5 in [0.3, 0.7]
+            @test cv.imaginary_ratio ≈ 0.2   # |0.1| / |0.5|
+            @test cv.imaginary_warning == true
+        end
+
+        # -----------------------------------------------------------------
+        @testset "within_ci is true when exact gap falls inside CI" begin
+            sgr = _make_test_spectral_gap_result(gap=0.5, gap_ci=(0.3, 0.7))
+            cv = cross_validate_gap(sgr, -0.5 + 0.0im)
+
+            @test cv.within_ci == true
+        end
+
+        # -----------------------------------------------------------------
+        @testset "within_ci is false when exact gap falls outside CI" begin
+            sgr = _make_test_spectral_gap_result(gap=0.7, gap_ci=(0.6, 0.8))
+            cv = cross_validate_gap(sgr, -0.5 + 0.0im)
+
+            @test cv.within_ci == false  # exact_gap=0.5 is outside [0.6, 0.8]
+        end
+
+        # -----------------------------------------------------------------
+        @testset "imaginary_warning is false when |Im/Re| <= 0.1" begin
+            sgr = _make_test_spectral_gap_result()
+            cv = cross_validate_gap(sgr, -0.5 + 0.04im)  # ratio = 0.08
+
+            @test cv.imaginary_ratio ≈ 0.08
+            @test cv.imaginary_warning == false
+        end
+
+        # -----------------------------------------------------------------
+        @testset "imaginary_warning is true when |Im/Re| > 0.1" begin
+            sgr = _make_test_spectral_gap_result()
+            cv = cross_validate_gap(sgr, -0.5 + 0.1im)  # ratio = 0.2
+
+            @test cv.imaginary_ratio ≈ 0.2
+            @test cv.imaginary_warning == true
+        end
+
+        # -----------------------------------------------------------------
+        @testset "LindbladianResult dispatch extracts spectral_gap" begin
+            sgr = _make_test_spectral_gap_result(gap=0.48, gap_ci=(0.3, 0.7))
+
+            # Construct a minimal LindbladianResult with known spectral_gap
+            dim = 2
+            dummy_L = zeros(ComplexF64, dim^2, dim^2)
+            dummy_dm = zeros(ComplexF64, dim, dim)
+            dummy_dm[1, 1] = 1.0
+            exact = LindbladianResult(
+                liouvillian = dummy_L,
+                fixed_point = dummy_dm,
+                gap_mode = dummy_dm,
+                spectral_gap = -0.5 + 0.1im,
+            )
+
+            cv = cross_validate_gap(sgr, exact)
+            @test cv.exact_gap == 0.5
+            @test cv.fitted_gap == 0.48
+            @test cv.imaginary_warning == true
+        end
+
+        # -----------------------------------------------------------------
+        @testset "@warn is emitted for significant imaginary part" begin
+            sgr = _make_test_spectral_gap_result()
+
+            @test_logs (:warn, r"significant imaginary part") begin
+                cross_validate_gap(sgr, -0.5 + 0.1im)
+            end
+        end
+
+        # -----------------------------------------------------------------
+        @testset "No warning for small imaginary part" begin
+            sgr = _make_test_spectral_gap_result()
+
+            @test_logs cross_validate_gap(sgr, -0.5 + 0.04im)
+        end
+
+        # -----------------------------------------------------------------
+        @testset "Edge case: Re(eigenvalue) == 0 gives Inf" begin
+            sgr = _make_test_spectral_gap_result()
+            cv = cross_validate_gap(sgr, 0.0 + 0.5im)
+
+            @test cv.exact_gap == 0.0
+            @test cv.relative_error == Inf
+            @test cv.imaginary_ratio == Inf
+            @test cv.imaginary_warning == true
+        end
+
+    end  # Cross-Validation
 
 end
