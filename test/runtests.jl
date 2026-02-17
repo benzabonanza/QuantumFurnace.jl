@@ -19,4 +19,5 @@ include("test_helpers.jl")
     include("test_gns_trajectory.jl")
     include("test_results.jl")
     include("test_convergence.jl")
+    include("test_fitting.jl")
 end
