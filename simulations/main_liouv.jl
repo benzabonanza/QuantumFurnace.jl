@@ -110,10 +110,8 @@ function main()
         for pauli in jump_paulis
                 for site in jump_sites
                         jump_op = Matrix(pad_term(pauli, num_qubits, site)) / jump_normalization
-
                         basis_unitary = (domain isa TrotterDomain) ? trotter.eigvecs : hamiltonian.eigvecs
                         jump_op_in_eigenbasis = basis_unitary' * jump_op * basis_unitary
-
                         orthogonal = (jump_op == transpose(jump_op))
                         hermitian = (jump_op == jump_op')
                         jump = JumpOp(jump_op,

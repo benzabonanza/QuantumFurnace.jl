@@ -76,12 +76,12 @@ function build_trotter_system(hamiltonian::HamHam, num_qubits::Int)
 end
 
 """
-    run_experiment(; kwargs...) -> (ExperimentResult, ConvergenceData, Float64)
+    conduct_experiment(; kwargs...) -> (ExperimentResult, ConvergenceData, Float64)
 
 Run a single adaptive trajectory experiment and save the result to BSON.
 Returns (result, convergence_data, wall_time_seconds).
 """
-function run_experiment(;
+function conduct_experiment(;
     jumps::Vector{JumpOp},
     hamiltonian::HamHam,
     trotter::TrottTrott,
@@ -216,7 +216,7 @@ function main()
                     Dates.format(now(), "HH:MM:SS"), experiment_count, total_experiments, label)
 
                 try
-                    result, conv_data, wall_time = run_experiment(;
+                    result, conv_data, wall_time = conduct_experiment(;
                         jumps=jumps,
                         hamiltonian=hamiltonian,
                         trotter=trotter,

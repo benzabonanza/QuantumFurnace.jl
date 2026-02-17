@@ -15,16 +15,6 @@ function hermitianize!(A::AbstractMatrix)
 end
 
 """
-    transform_jumps_to_basis(jumps, eigvecs) -> Vector{JumpOp}
-
-Transform jump operators from computational basis to a new eigenbasis.
-Used for Trotter basis transforms in TrotterDomain simulations.
-"""
-function transform_jumps_to_basis(jumps::AbstractVector{<:JumpOp}, eigvecs::AbstractMatrix)
-    return JumpOp[JumpOp(j.data, eigvecs' * j.data * eigvecs, j.orthogonal, j.hermitian) for j in jumps]
-end
-
-"""
     Computes C .+= alpha .* kron(A, B) completely in-place, without allocating
     the result of the Kronecker product. Speed.
 """

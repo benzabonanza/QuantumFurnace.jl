@@ -252,8 +252,7 @@ function B_trotter(jump::JumpOp, trotter::TrottTrott, b_minus, b_plus, beta, sig
     d = size(trotter.eigvecs, 1)
     CT = Complex{eltype(trotter.bohr_freqs)}
 
-    # Use jump.in_eigenbasis directly -- callers construct JumpOps
-    # with trotter.eigvecs as the basis for TrotterDomain
+    # In Trotter eigenbasis:
     jump_eig = jump.in_eigenbasis
 
     # Pre-allocated diagonal vector buffers (replace Diagonal wrappers)
@@ -319,8 +318,7 @@ function B_trotter(jumps::Vector{JumpOp}, trotter::TrottTrott, b_minus, b_plus, 
         diag_u_row = transpose(diag_u)
 
         for jump_a in jumps
-            # Use jump_a.in_eigenbasis directly -- callers construct JumpOps
-            # with trotter.eigvecs as the basis for TrotterDomain
+            # In Trotter basis:
             jump_a_eig = jump_a.in_eigenbasis
             # tmp = diag(u2) * A  (row-scale A by u2)
             @. tmp = diag_u2 * jump_a_eig
@@ -345,7 +343,6 @@ function B_trotter(jumps::Vector{JumpOp}, trotter::TrottTrott, b_minus, b_plus, 
 end
 
 #* B1 AND B2 ---------------------------------------------------------------------------------------------------------------
-#TODO: Reintroduce sigmas here
 function _compute_b_minus(t::Real, beta::Real, sigma::Real)  # 2pi sqrt(pi) * f_minus(t / sigma_E)
     f1(t) = 1 / cosh(2 * pi * t / (beta * sigma))
     f2(t) = sin(-t * beta * sigma) * exp(-2 * t^2)

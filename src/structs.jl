@@ -6,21 +6,6 @@ struct EnergyDomain <: AbstractDomain end
 struct TimeDomain <: AbstractDomain end
 struct TrotterDomain <: AbstractDomain end
 
-# Became obsolete with NUFFTCaches. But used for debugging.
-struct OFTCaches{T<:AbstractFloat}
-    prefactors::Vector{Complex{T}}
-    U::Diagonal{Complex{T}, Vector{Complex{T}}}
-    temp_op::Matrix{Complex{T}}
-
-    function OFTCaches{T}(dim::Int) where {T<:AbstractFloat}
-        CT = Complex{T}
-        prefactors = zeros(CT, 0) # Will be resized later
-        U = Diagonal(zeros(CT, dim))
-        temp_op = zeros(CT, dim, dim)
-        new{T}(prefactors, U, temp_op)
-    end
-end
-
 """Workspace for building a dense Liouvillian matrix with minimal allocations.
 
 Used by `construct_liouvillian` when accumulating the full vectorized Lindbladian
@@ -356,4 +341,19 @@ function LSIFramework(dim::Int)
         Matrix{T}(undef, dim, dim), Matrix{T}(undef, dim, dim), Matrix{T}(undef, dim, dim),
         Vector{T}(undef, dim2), Vector{T}(undef, dim2)
     )
+end
+
+# Became obsolete with NUFFTCaches. But used for debugging.
+struct OFTCaches{T<:AbstractFloat}
+    prefactors::Vector{Complex{T}}
+    U::Diagonal{Complex{T}, Vector{Complex{T}}}
+    temp_op::Matrix{Complex{T}}
+
+    function OFTCaches{T}(dim::Int) where {T<:AbstractFloat}
+        CT = Complex{T}
+        prefactors = zeros(CT, 0) # Will be resized later
+        U = Diagonal(zeros(CT, dim))
+        temp_op = zeros(CT, dim, dim)
+        new{T}(prefactors, U, temp_op)
+    end
 end
