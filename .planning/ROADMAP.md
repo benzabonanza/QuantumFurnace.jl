@@ -88,10 +88,10 @@ Plans:
   3. User can specify `skip_initial` fraction to exclude early transient, and the fitted gap changes measurably (demonstrating window selection works)
   4. Fit result includes R-squared, confidence interval on gap, and standard error; gap is always constrained positive (gap > 0 enforced via parameter bounds)
   5. LsqFit.jl is added to Project.toml with proper compat bounds
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 21-01: TBD
+- [ ] 21-01-PLAN.md -- Implement FitResult struct, fit_exponential_decay with LsqFit.jl, and synthetic data test suite
 
 ### Phase 22: Observable-Only Trajectory Runner
 **Goal**: Users can run trajectory simulations that measure time-resolved observables efficiently, without the overhead of per-trajectory density matrix reconstruction
@@ -166,7 +166,7 @@ Phase 21 (fitting)      ---+-----------------------------+--> Phase 23 (API) -->
 | 18. KMS-vs-GNS Experiments | v1.2 | 1/1 | Complete | 2026-02-16 |
 | 19. Logic Simplification | v1.2 | 3/3 | Complete | 2026-02-16 |
 | 20. Observable Infrastructure | v1.3 | 1/1 | Complete | 2026-02-17 |
-| 21. Exponential Fitting | v1.3 | 0/? | Not started | - |
+| 21. Exponential Fitting | v1.3 | 0/1 | Not started | - |
 | 22. Observable-Only Trajectory Runner | v1.3 | 0/? | Not started | - |
 | 23. Gap Estimation API | v1.3 | 0/? | Not started | - |
 | 24. Cross-Validation | v1.3 | 0/? | Not started | - |
