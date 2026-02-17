@@ -21,4 +21,5 @@ include("test_helpers.jl")
     include("test_convergence.jl")
     include("test_fitting.jl")
     include("test_observable_trajectories.jl")
+    include("test_gap_estimation.jl")
 end
