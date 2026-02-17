@@ -195,11 +195,17 @@ function fit_exponential_decay(
     A       = params[_IDX_A]
     C       = params[_IDX_C]
 
-    se      = stderror(fit)                       # standard errors
-    gap_se  = se[_IDX_GAP]
-
-    ci      = confint(fit; level=level)            # confidence intervals
-    gap_ci  = (ci[_IDX_GAP][1], ci[_IDX_GAP][2])  # Tuple{Float64,Float64}
+    # Standard errors and confidence intervals may fail with SingularException
+    # when the Jacobian is rank-deficient (e.g., flat time series after skip_initial).
+    # In that case, report Inf/NaN to signal unreliable uncertainty estimates.
+    gap_se, gap_ci = try
+        se = stderror(fit)
+        ci = confint(fit; level=level)
+        se[_IDX_GAP], (ci[_IDX_GAP][1], ci[_IDX_GAP][2])
+    catch e
+        e isa LinearAlgebra.SingularException || rethrow(e)
+        Inf, (-Inf, Inf)
+    end
 
     resid   = residuals(fit)                       # Vector{Float64}
     conv    = fit.converged                        # Bool

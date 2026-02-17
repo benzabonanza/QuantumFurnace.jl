@@ -753,18 +753,18 @@ using BSON
     @testset "build_gap_estimation_observables (eigenbasis)" begin
         observables, names = build_gap_estimation_observables(TEST_HAM, NUM_QUBITS)
 
-        # Returns exactly 2 observables and 2 names
-        @test length(observables) == 2
-        @test length(names) == 2
-        @test names == ["H", "Mz"]
+        # Returns exactly 5 observables and 5 names
+        @test length(observables) == 5
+        @test length(names) == 5
+        @test names == ["H", "Mz", "XX_avg", "YY_avg", "ZZ_avg"]
 
-        # Both matrices are DIM x DIM ComplexF64
+        # All matrices are DIM x DIM ComplexF64
         for obs in observables
             @test size(obs) == (DIM, DIM)
             @test eltype(obs) == ComplexF64
         end
 
-        # Both matrices are Hermitian
+        # All matrices are Hermitian
         for obs in observables
             @test isapprox(obs, obs'; atol=1e-12)
         end
@@ -781,6 +781,18 @@ using BSON
         # M_z observable (second) matches standalone build_total_magnetization output exactly
         mz_standalone, _ = build_total_magnetization(TEST_HAM, NUM_QUBITS)
         @test isapprox(observables[2], mz_standalone[1]; atol=1e-14)
+
+        # XX_avg, YY_avg, ZZ_avg (indices 3-5) are per-bond averaged correlations
+        V = TEST_HAM.eigvecs
+        for (idx, pauli_pair) in [(3, [X, X]), (4, [Y, Y]), (5, [Z, Z])]
+            PP_sum = zeros(ComplexF64, DIM, DIM)
+            for i in 1:NUM_QUBITS
+                PP_sum .+= Matrix{ComplexF64}(pad_term(pauli_pair, NUM_QUBITS, i; periodic=true))
+            end
+            PP_sum ./= NUM_QUBITS
+            PP_expected = Matrix{ComplexF64}(V' * PP_sum * V)
+            @test isapprox(observables[idx], PP_expected; atol=1e-14)
+        end
     end
 
     # -----------------------------------------------------------------------
@@ -789,18 +801,18 @@ using BSON
     @testset "build_gap_estimation_observables (Trotter basis)" begin
         observables, names = build_gap_estimation_observables(TEST_HAM, NUM_QUBITS; trotter=TEST_TROTTER)
 
-        # Returns exactly 2 observables and 2 names
-        @test length(observables) == 2
-        @test length(names) == 2
-        @test names == ["H", "Mz"]
+        # Returns exactly 5 observables and 5 names
+        @test length(observables) == 5
+        @test length(names) == 5
+        @test names == ["H", "Mz", "XX_avg", "YY_avg", "ZZ_avg"]
 
-        # Both matrices are DIM x DIM ComplexF64
+        # All matrices are DIM x DIM ComplexF64
         for obs in observables
             @test size(obs) == (DIM, DIM)
             @test eltype(obs) == ComplexF64
         end
 
-        # Both matrices are Hermitian
+        # All matrices are Hermitian
         for obs in observables
             @test isapprox(obs, obs'; atol=1e-12)
         end
@@ -830,6 +842,18 @@ using BSON
             for i in 1:NUM_QUBITS
         ) / NUM_QUBITS
         @test isapprox(real(tr(Matrix(gibbs_trotter) * observables[2])), mz_analytical; atol=1e-10)
+
+        # XX_avg, YY_avg, ZZ_avg (indices 3-5) are per-bond averaged correlations in Trotter basis
+        V_T = TEST_TROTTER.eigvecs
+        for (idx, pauli_pair) in [(3, [X, X]), (4, [Y, Y]), (5, [Z, Z])]
+            PP_sum = zeros(ComplexF64, DIM, DIM)
+            for i in 1:NUM_QUBITS
+                PP_sum .+= Matrix{ComplexF64}(pad_term(pauli_pair, NUM_QUBITS, i; periodic=true))
+            end
+            PP_sum ./= NUM_QUBITS
+            PP_expected = Matrix{ComplexF64}(V_T' * PP_sum * V_T)
+            @test isapprox(observables[idx], PP_expected; atol=1e-14)
+        end
     end
 
 end  # @testset "Convergence tracking"

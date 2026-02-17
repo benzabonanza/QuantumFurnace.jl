@@ -27,11 +27,11 @@ using LinearAlgebra
         @test result.gap > 0.0
         @test result.gap_ci[1] < result.gap < result.gap_ci[2]
         @test result.gap_se > 0.0
-        @test result.best_observable in ["H", "Mz"]
+        @test result.best_observable in ["H", "Mz", "XX_avg", "YY_avg", "ZZ_avg"]
         @test result.best_r_squared > 0.0
-        @test length(result.per_observable) == 2
-        @test length(result.observable_names) == 2
-        @test result.observable_names == ["H", "Mz"]
+        @test length(result.per_observable) == 5
+        @test length(result.observable_names) == 5
+        @test result.observable_names == ["H", "Mz", "XX_avg", "YY_avg", "ZZ_avg"]
         @test result.ntraj == 500
         @test result.save_every == 5
         @test result.seed == 42
@@ -69,8 +69,9 @@ using LinearAlgebra
 
         @test r1.gap == r2.gap
         @test r1.best_observable == r2.best_observable
-        @test r1.per_observable[1].gap == r2.per_observable[1].gap
-        @test r1.per_observable[2].gap == r2.per_observable[2].gap
+        for i in eachindex(r1.per_observable)
+            @test r1.per_observable[i].gap == r2.per_observable[i].gap
+        end
     end
 
     # -----------------------------------------------------------------
@@ -92,6 +93,7 @@ using LinearAlgebra
     # -----------------------------------------------------------------
     @testset "Custom observables with names" begin
         obs, names = build_gap_estimation_observables(SMALL_HAM, 3)
+        @test length(obs) == 5
         result = estimate_spectral_gap(
             SMALL_JUMPS, config, psi0, SMALL_HAM;
             observables=obs, observable_names=names,
