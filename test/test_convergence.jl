@@ -683,4 +683,150 @@ using BSON
         @test conv_data.cumulative_n_traj[end] == conv_data.total_batches * 50
     end
 
+    # -----------------------------------------------------------------------
+    # Testset 19: build_total_magnetization (eigenbasis)
+    # -----------------------------------------------------------------------
+    @testset "build_total_magnetization (eigenbasis)" begin
+        observables, names = build_total_magnetization(TEST_HAM, NUM_QUBITS)
+
+        # Returns exactly 1 observable and 1 name
+        @test length(observables) == 1
+        @test length(names) == 1
+        @test names[1] == "Mz"
+
+        # Matrix is DIM x DIM ComplexF64
+        @test size(observables[1]) == (DIM, DIM)
+        @test eltype(observables[1]) == ComplexF64
+
+        # Matrix is Hermitian
+        @test isapprox(observables[1], observables[1]'; atol=1e-12)
+
+        # Gibbs trace check: compute analytical M_z value
+        gibbs_comp = TEST_HAM.eigvecs * Matrix(TEST_GIBBS) * TEST_HAM.eigvecs'
+        mz_analytical = sum(
+            real(tr(gibbs_comp * Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, i))))
+            for i in 1:NUM_QUBITS
+        ) / NUM_QUBITS
+
+        mz_from_obs = real(tr(Matrix(TEST_GIBBS) * observables[1]))
+        @test isapprox(mz_from_obs, mz_analytical; atol=1e-10)
+    end
+
+    # -----------------------------------------------------------------------
+    # Testset 20: build_total_magnetization (Trotter basis)
+    # -----------------------------------------------------------------------
+    @testset "build_total_magnetization (Trotter basis)" begin
+        observables, names = build_total_magnetization(TEST_HAM, NUM_QUBITS; trotter=TEST_TROTTER)
+
+        # Returns exactly 1 observable and 1 name
+        @test length(observables) == 1
+        @test length(names) == 1
+        @test names[1] == "Mz"
+
+        # Matrix is DIM x DIM ComplexF64
+        @test size(observables[1]) == (DIM, DIM)
+        @test eltype(observables[1]) == ComplexF64
+
+        # Matrix is Hermitian
+        @test isapprox(observables[1], observables[1]'; atol=1e-12)
+
+        # Trotter Gibbs trace check
+        gibbs_trotter = QuantumFurnace._gibbs_in_trotter_basis(TEST_HAM, TEST_TROTTER)
+
+        # Analytical M_z (same as eigenbasis — physical observable is basis-independent)
+        gibbs_comp = TEST_HAM.eigvecs * Matrix(TEST_GIBBS) * TEST_HAM.eigvecs'
+        mz_analytical = sum(
+            real(tr(gibbs_comp * Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, i))))
+            for i in 1:NUM_QUBITS
+        ) / NUM_QUBITS
+
+        mz_from_obs = real(tr(Matrix(gibbs_trotter) * observables[1]))
+        @test isapprox(mz_from_obs, mz_analytical; atol=1e-10)
+    end
+
+    # -----------------------------------------------------------------------
+    # Testset 21: build_gap_estimation_observables (eigenbasis)
+    # -----------------------------------------------------------------------
+    @testset "build_gap_estimation_observables (eigenbasis)" begin
+        observables, names = build_gap_estimation_observables(TEST_HAM, NUM_QUBITS)
+
+        # Returns exactly 2 observables and 2 names
+        @test length(observables) == 2
+        @test length(names) == 2
+        @test names == ["H", "Mz"]
+
+        # Both matrices are DIM x DIM ComplexF64
+        for obs in observables
+            @test size(obs) == (DIM, DIM)
+            @test eltype(obs) == ComplexF64
+        end
+
+        # Both matrices are Hermitian
+        for obs in observables
+            @test isapprox(obs, obs'; atol=1e-12)
+        end
+
+        # H observable (first) is diagonal in eigenbasis
+        H = observables[1]
+        @test maximum(abs.(H - diagm(diag(H)))) < 1e-12
+
+        # H Gibbs trace matches analytical
+        boltz = exp.(-BETA .* TEST_HAM.eigvals)
+        gibbs_energy_analytical = sum(TEST_HAM.eigvals .* boltz) / sum(boltz)
+        @test isapprox(real(tr(Matrix(TEST_GIBBS) * observables[1])), gibbs_energy_analytical; atol=1e-10)
+
+        # M_z observable (second) matches standalone build_total_magnetization output exactly
+        mz_standalone, _ = build_total_magnetization(TEST_HAM, NUM_QUBITS)
+        @test isapprox(observables[2], mz_standalone[1]; atol=1e-14)
+    end
+
+    # -----------------------------------------------------------------------
+    # Testset 22: build_gap_estimation_observables (Trotter basis)
+    # -----------------------------------------------------------------------
+    @testset "build_gap_estimation_observables (Trotter basis)" begin
+        observables, names = build_gap_estimation_observables(TEST_HAM, NUM_QUBITS; trotter=TEST_TROTTER)
+
+        # Returns exactly 2 observables and 2 names
+        @test length(observables) == 2
+        @test length(names) == 2
+        @test names == ["H", "Mz"]
+
+        # Both matrices are DIM x DIM ComplexF64
+        for obs in observables
+            @test size(obs) == (DIM, DIM)
+            @test eltype(obs) == ComplexF64
+        end
+
+        # Both matrices are Hermitian
+        for obs in observables
+            @test isapprox(obs, obs'; atol=1e-12)
+        end
+
+        # H observable (first) is built via full basis transform V_T' * H_data * V_T,
+        # NOT as diagm(eigvals) (which would only be valid in the Hamiltonian eigenbasis).
+        # For this test system the Trotter error is small so off-diagonal elements may
+        # be near zero, but the matrix should still match the explicit transform.
+        H = observables[1]
+        H_expected = Matrix{ComplexF64}(TEST_TROTTER.eigvecs' * TEST_HAM.data * TEST_TROTTER.eigvecs)
+        @test isapprox(H, H_expected; atol=1e-12)
+
+        # H Gibbs trace
+        gibbs_trotter = QuantumFurnace._gibbs_in_trotter_basis(TEST_HAM, TEST_TROTTER)
+        boltz = exp.(-BETA .* TEST_HAM.eigvals)
+        gibbs_energy_analytical = sum(TEST_HAM.eigvals .* boltz) / sum(boltz)
+        @test isapprox(real(tr(Matrix(gibbs_trotter) * observables[1])), gibbs_energy_analytical; atol=1e-10)
+
+        # M_z observable (second) matches standalone build_total_magnetization output
+        mz_standalone, _ = build_total_magnetization(TEST_HAM, NUM_QUBITS; trotter=TEST_TROTTER)
+        @test isapprox(observables[2], mz_standalone[1]; atol=1e-14)
+
+        # Cross-basis consistency: M_z Gibbs trace matches analytical
+        gibbs_comp = TEST_HAM.eigvecs * Matrix(TEST_GIBBS) * TEST_HAM.eigvecs'
+        mz_analytical = sum(
+            real(tr(gibbs_comp * Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, i))))
+            for i in 1:NUM_QUBITS
+        ) / NUM_QUBITS
+        @test isapprox(real(tr(Matrix(gibbs_trotter) * observables[2])), mz_analytical; atol=1e-10)
+    end
+
 end  # @testset "Convergence tracking"
