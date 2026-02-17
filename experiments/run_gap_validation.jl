@@ -50,7 +50,7 @@ function main()
         end
     end
 
-    # Config
+    # Trajectory config (ThermalizeConfig for estimate_spectral_gap)
     config = ThermalizeConfig(
         num_qubits=n, with_coherent=true, with_linear_combination=true,
         domain=TrotterDomain(), beta=beta, sigma=1.0 / beta,
@@ -60,10 +60,20 @@ function main()
         mixing_time=mixing_time, delta=DELTA,
     )
 
-    # Initial state
+    # Liouvillian config (LiouvConfig for exact gap computation)
+    liouv_config = LiouvConfig(
+        num_qubits=n, with_coherent=true, with_linear_combination=true,
+        domain=TrotterDomain(), beta=beta, sigma=1.0 / beta,
+        a=beta / 30.0, b=0.4,
+        num_energy_bits=NUM_ENERGY_BITS, w0=W0, t0=T0,
+        num_trotter_steps_per_t0=NUM_TROTTER_STEPS_PER_T0,
+    )
+
+    # Initial state -- use excited state (psi0[end]=1) for validation
+    # Ground state at high beta is near Gibbs, giving no decay signal
     dim = 2^n
     psi0 = zeros(ComplexF64, dim)
-    psi0[1] = 1.0
+    psi0[end] = 1.0
 
     # Estimate spectral gap (uses all 5 observables now)
     println("Running estimate_spectral_gap with ntraj=$ntraj...")
@@ -76,9 +86,9 @@ function main()
     wall = time() - t0_wall
     @printf("Wall time: %.1fs\n\n", wall)
 
-    # Exact gap
+    # Exact gap via Liouvillian eigendecomposition
     println("Computing exact Liouvillian gap...")
-    exact_result = build_liouvillian(jumps, config, hamiltonian; trotter=trotter)
+    exact_result = run_lindbladian(jumps, liouv_config, hamiltonian; trotter=trotter)
 
     # Cross-validate
     cv = cross_validate_gap(result, exact_result)

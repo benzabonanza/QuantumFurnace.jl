@@ -217,6 +217,13 @@ function validate_system(num_qubits::Int; ntraj::Int, total_time::Float64)
     @printf("  Best R-squared: %.4f\n", estimated.best_r_squared)
     @printf("  Trajectory estimation time: %.1fs\n", t_traj)
 
+    # Per-observable fit details
+    @printf("\n  Per-Observable Fits:\n")
+    @printf("  %-10s %10s %10s %10s\n", "Name", "Gap", "R-squared", "Converged")
+    for (name, fit) in zip(estimated.observable_names, estimated.per_observable)
+        @printf("  %-10s %10.6f %10.4f %10s\n", name, fit.gap, fit.r_squared, fit.converged)
+    end
+
     # 6. Cross-validate (direct comparison -- no n_jumps normalization needed)
     @printf("[%s] Cross-validating...\n", Dates.format(now(), "HH:MM:SS"))
     cv = cross_validate_gap(estimated, exact_result)
