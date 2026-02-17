@@ -12,14 +12,14 @@ See: .planning/PROJECT.md (updated 2026-02-16)
 Phase: 24 of 24 (Cross-Validation) -- COMPLETE
 Plan: 3 of 3 in current phase (COMPLETE)
 Status: Phase 24 complete (gap closure plan 03 executed). v1.3 Mixing Time Estimation milestone complete.
-Last activity: 2026-02-17 -- Phase 24 Plan 03 executed (gap closure: n_jumps normalization)
+Last activity: 2026-02-17 -- Quick task 22 executed (fix trajectory delta_eff double-counting)
 
 Progress: [##############################] 48/48 plans (v1.0-v1.3 ALL COMPLETE)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 53 (v1.0: 10, v1.1: 16, quick: 8, v1.2: 12, cleanup: 3, v1.3: 7)
+- Total plans completed: 54 (v1.0: 10, v1.1: 16, quick: 9, v1.2: 12, cleanup: 3, v1.3: 7)
 
 **By Milestone:**
 
@@ -53,9 +53,9 @@ Key context for v1.3:
 - Phase 24: Two-method dispatch for cross_validate_gap (LindbladianResult delegates to Complex)
 - Phase 24: abs(real(spectral_gap)) enforced in cross_validate_gap (locked decision)
 - Phase 24: Excited initial state (psi0[end]=1) for validation -- ground state at high beta is near Gibbs, no decay signal
-- Phase 24: Normalization factor (~20x n=4, ~28x n=6) between trajectory rate and Liouvillian gap is a physics finding (delta_eff = delta * n_jumps)
 - Phase 24: Two-tier pass criterion (R-squared > 0.9 AND residual_factor in [1.0, 3.0]) constitutes "documented tolerance" per ROADMAP success criterion 3
-- Phase 24: Residual factor after n_jumps correction is ~1.66 (n=4) and ~1.57 (n=6) -- consistent across system sizes
+- Quick-22: Fixed delta_eff double-counting -- trajectory CPTP channel now uses bare delta (matching DM), R_a scaled by n_jumps is the single compensation
+- Quick-22: Residual factor ~1.6x (n=4) and ~1.5x (n=6) between fitted and exact gap is discrete-step Kraus effect (was ~20x before fix)
 
 ### Pending Todos
 
@@ -72,9 +72,10 @@ None
 | 19 | Fix failing test after EnergyDomain to TrotterDomain rename in GNS trajectory | 2026-02-16 | 0683acc | [19-fix-failing-test-after-energydomain-to-t](./quick/19-fix-failing-test-after-energydomain-to-t/) |
 | 20 | Fix basis mismatch in GNS TrotterDomain tests (0.83 -> 0.08 gap) | 2026-02-16 | 0161e01 | [20-debug-gns-trotterdomain-0-83-gap-suspect](./quick/20-debug-gns-trotterdomain-0-83-gap-suspect/) |
 | 21 | Fix test errors after removing transform_jumps_to_basis | 2026-02-16 | b2e4123 | [21-fix-test-errors-after-removing-transform](./quick/21-fix-test-errors-after-removing-transform/) |
+| 22 | Fix trajectory delta_eff double-counting (bare delta for CPTP channel) | 2026-02-17 | dc83bf0 | [22-fix-trajectory-delta-eff-double-counting](./quick/22-fix-trajectory-delta-eff-double-counting/) |
 
 ## Session Continuity
 
 Last session: 2026-02-17
-Stopped at: Completed 24-03-PLAN.md (Gap Closure). Phase 24 fully complete. v1.3 milestone complete.
+Stopped at: Completed quick task 22 (fix trajectory delta_eff double-counting). All milestones complete.
 Resume file: None
