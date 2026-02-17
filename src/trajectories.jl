@@ -89,8 +89,8 @@ struct TrajectoryFramework{T,D<:AbstractDomain,F,P}
 
     # Step parameters
     delta::Float64           # original delta (for time stepping / num_steps)
-    delta_eff::Float64       # delta / p_jump = delta * n_jumps (for per-operator Kraus probabilities)
-    alpha::Float64           # α = 1 - sqrt(1-δ_eff)
+    delta_eff::Float64       # CPTP channel time parameter (equals delta; R scaling handles 1/p_jump compensation)
+    alpha::Float64           # α = 1 - sqrt(1-δ)
 
     # Hot-path fields with concrete types (avoid accessing abstract-typed config/precomputed_data in step loop)
     scaled_prefactor::Float64   # rate prefactor with 1/p_jump rescaling, domain-specific
@@ -117,11 +117,14 @@ function build_trajectoryframework(
     dim = size(jumps[1].data, 1)
     n_jumps = length(jumps)
     p_jump = 1.0 / n_jumps
-    delta_eff = delta / p_jump   # = delta * n_jumps
 
-    @assert delta_eff < 1.0 "delta_eff = $(delta_eff) >= 1.0: delta=$(delta) * n_jumps=$(n_jumps) is too large for per-operator splitting"
+    # The per-operator CPTP channel uses bare delta (NOT delta*n_jumps).
+    # R_a is already scaled by 1/p_jump = n_jumps to compensate for random
+    # operator selection. Using delta*n_jumps would double-count.
+    # (The DM _finalize_kraus_step! uses the same approach: scaled R, bare delta.)
+    @assert delta < 1.0 "delta = $(delta) >= 1.0: too large for CPTP channel"
 
-    alpha = 1 - sqrt(1 - delta_eff)
+    alpha = 1 - sqrt(1 - delta)
 
     # Convert to concrete element type for zero-allocation access in hot loop
     # (jumps arrive in the correct basis: trotter.eigvecs for TrotterDomain,
@@ -137,7 +140,8 @@ function build_trajectoryframework(
             single_jump = JumpOp[jumps[a]]  # Force Vector{JumpOp} for dispatch compatibility
             B_a = _precompute_coherent_total_B(single_jump, ham_or_trott, config, precomputed_data)
             hermitianize!(B_a)
-            per_op_U_B[a] = exp(-1im * delta_eff * Hermitian(B_a))
+            # Coherent uses delta/p_jump = delta*n_jumps (matching DM coherent_unitaries scaling)
+            per_op_U_B[a] = exp(-1im * (delta / p_jump) * Hermitian(B_a))
         end
     else
         fill!(per_op_U_B, nothing)
@@ -159,9 +163,9 @@ function build_trajectoryframework(
             K0_a[i,i] += 1
         end
 
-        # S_a = (2*alpha - delta_eff)*R_a - alpha^2 * R_a^2
+        # S_a = (2*alpha - delta)*R_a - alpha^2 * R_a^2
         mul!(scratch.tmp1, R_a, R_a)   # tmp1 := R_a^2
-        s1 = 2 * alpha - delta_eff
+        s1 = 2 * alpha - delta
         s2 = alpha * alpha
         @. scratch.tmp2 = s1 * R_a - s2 * scratch.tmp1
 
@@ -204,7 +208,7 @@ function build_trajectoryframework(
         per_operator,
         n_jumps,
         Float64(delta),
-        Float64(delta_eff),
+        Float64(delta),       # delta_eff field = delta (R scaling handles 1/p_jump)
         Float64(alpha),
         Float64(scaled_prefactor),
         Float64(config.sigma),
@@ -862,10 +866,10 @@ end
 
     # Per-operator channel structure (Chen 2023, adapted for Lie-Trotter splitting):
     #   Pick a ∈ {1,...,N_jumps} uniformly at random
-    #   K0_a = I - alpha*R_a, where alpha = 1 - sqrt(1-delta_eff), delta_eff = delta*N_jumps
-    #   K_{a,w} = sqrt(delta_eff * scaled_rate(w)) * L_{a,w}  (jump operators for operator a)
+    #   K0_a = I - alpha*R_a, where alpha = 1 - sqrt(1-delta), R_a scaled by n_jumps
+    #   K_{a,w} = sqrt(delta * scaled_rate(w)) * L_{a,w}  (jump operators for operator a)
     #   U_res_a: U_res_a'*U_res_a = S_a  (residual for operator a)
-    # Rates rescaled by 1/p_jump so net effect per unit time matches DM run_thermalization.
+    # R_a rates rescaled by 1/p_jump; CPTP channel uses bare delta (matching DM).
 """
 function step_along_trajectory!(
     psi::Vector{<:Complex},
@@ -875,7 +879,7 @@ function step_along_trajectory!(
     ) where {D<:Union{TimeDomain,TrotterDomain}}
 
     # All hot-path data lives in concrete-typed fields of fw (no abstract access)
-    delta_eff = fw.delta_eff
+    delta = fw.delta
     scaled_prefactor = fw.scaled_prefactor
     transition = fw.transition
     energy_labels = fw.energy_labels
@@ -904,7 +908,7 @@ function step_along_trajectory!(
     mul!(ws.psi_tmp, per_op.K0, psi)                # K0_a * psi
     p_nojump = _norm2(ws.psi_tmp)
 
-    p_jump_total = delta_eff * expR                  # delta_eff, NOT delta
+    p_jump_total = delta * expR                     # bare delta (R_a already scaled by n_jumps)
 
     mul!(ws.Rpsi, per_op.U_residual, psi)           # U_res_a * psi (reuse buffer)
     p_res = _norm2(ws.Rpsi)
@@ -948,7 +952,7 @@ function step_along_trajectory!(
                 mul!(ws.Rpsi, ws.jump_oft, psi)
                 n2 = _norm2(ws.Rpsi)
                 last_norm2 = n2
-                p = delta_eff * (scaled_prefactor * transition(w)) * n2
+                p = delta * (scaled_prefactor * transition(w)) * n2
                 csum += p
                 if csum >= target
                     copyto!(psi, ws.Rpsi)
@@ -962,7 +966,7 @@ function step_along_trajectory!(
                     mul!(ws.Rpsi, ws.jump_oft', psi)
                     n2 = _norm2(ws.Rpsi)
                     last_norm2 = n2
-                    p = delta_eff * (scaled_prefactor * transition(-w)) * n2
+                    p = delta * (scaled_prefactor * transition(-w)) * n2
                     csum += p
                     if csum >= target
                         copyto!(psi, ws.Rpsi)
@@ -980,7 +984,7 @@ function step_along_trajectory!(
                 mul!(ws.Rpsi, ws.jump_oft, psi)
                 n2 = _norm2(ws.Rpsi)
                 last_norm2 = n2
-                p = delta_eff * (scaled_prefactor * transition(w)) * n2
+                p = delta * (scaled_prefactor * transition(w)) * n2
                 csum += p
                 if csum >= target
                     copyto!(psi, ws.Rpsi)
@@ -1013,7 +1017,7 @@ function step_along_trajectory!(
     )
 
     # All hot-path data lives in concrete-typed fields of fw (no abstract access)
-    delta_eff = fw.delta_eff
+    delta = fw.delta
     scaled_prefactor = fw.scaled_prefactor
     sigma = fw.sigma
     transition = fw.transition
@@ -1042,7 +1046,7 @@ function step_along_trajectory!(
     mul!(ws.psi_tmp, per_op.K0, psi)
     p_nojump = _norm2(ws.psi_tmp)
 
-    p_jump_total = delta_eff * expR
+    p_jump_total = delta * expR                     # bare delta (R_a already scaled by n_jumps)
 
     mul!(ws.Rpsi, per_op.U_residual, psi)
     p_res = _norm2(ws.Rpsi)
@@ -1086,7 +1090,7 @@ function step_along_trajectory!(
                 mul!(ws.Rpsi, ws.jump_oft, psi)
                 n2 = _norm2(ws.Rpsi)
                 last_norm2 = n2
-                p = delta_eff * (scaled_prefactor * transition(w)) * n2
+                p = delta * (scaled_prefactor * transition(w)) * n2
                 csum += p
                 if csum >= target
                     copyto!(psi, ws.Rpsi)
@@ -1099,7 +1103,7 @@ function step_along_trajectory!(
                     mul!(ws.Rpsi, ws.jump_oft', psi)
                     n2 = _norm2(ws.Rpsi)
                     last_norm2 = n2
-                    p = delta_eff * (scaled_prefactor * transition(-w)) * n2
+                    p = delta * (scaled_prefactor * transition(-w)) * n2
                     csum += p
                     if csum >= target
                         copyto!(psi, ws.Rpsi)
@@ -1116,7 +1120,7 @@ function step_along_trajectory!(
                 mul!(ws.Rpsi, ws.jump_oft, psi)
                 n2 = _norm2(ws.Rpsi)
                 last_norm2 = n2
-                p = delta_eff * (scaled_prefactor * transition(w)) * n2
+                p = delta * (scaled_prefactor * transition(w)) * n2
                 csum += p
                 if csum >= target
                     copyto!(psi, ws.Rpsi)
