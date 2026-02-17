@@ -113,16 +113,16 @@ end
 """
     build_gap_estimation_observables(hamiltonian::HamHam, num_qubits::Int; trotter=nothing)
 
-Build the H + M_z observable bundle for spectral gap estimation, in the
-Hamiltonian eigenbasis (default) or the Trotter eigenbasis (when `trotter`
-is supplied).
+Build the observable bundle for spectral gap estimation, in the Hamiltonian
+eigenbasis (default) or the Trotter eigenbasis (when `trotter` is supplied).
 
 Returns `(observables::Vector{Matrix{ComplexF64}}, names::Vector{String})`
-with `observables[1] = H` and `observables[2] = M_z`.
+with 5 observables: `["H", "Mz", "XX_avg", "YY_avg", "ZZ_avg"]`.
 
-Note: ZZ correlations are intentionally excluded (deferred decision).
-H and M_z are chosen to overlap with the first excited mode of the
-Lindbladian for spectral gap capture.
+- `H`: Energy observable.
+- `Mz`: Per-site total magnetization (sum of Z_i / n).
+- `XX_avg`, `YY_avg`, `ZZ_avg`: Per-bond averaged nearest-neighbor two-site
+  correlations (sum over all periodic bonds, divided by n).
 """
 function build_gap_estimation_observables(hamiltonian::HamHam, num_qubits::Int;
                                            trotter::Union{TrottTrott, Nothing}=nothing)
@@ -138,8 +138,25 @@ function build_gap_estimation_observables(hamiltonian::HamHam, num_qubits::Int;
         H = Matrix{ComplexF64}(diagm(ComplexF64.(hamiltonian.eigvals)))
     end
 
-    observables = vcat([H], mz_obs)
-    names = vcat(["H"], mz_names)
+    # Mutable collections for push! in the correlation loop below
+    observables = Matrix{ComplexF64}[H]
+    names = String["H"]
+    append!(observables, mz_obs)
+    append!(names, mz_names)
+
+    # Averaged two-site correlations (nearest-neighbor, periodic)
+    V = trotter !== nothing ? trotter.eigvecs : hamiltonian.eigvecs
+    for (pauli_pair, pair_name) in [([X, X], "XX_avg"), ([Y, Y], "YY_avg"), ([Z, Z], "ZZ_avg")]
+        dim = size(hamiltonian.data, 1)
+        PP_sum = zeros(ComplexF64, dim, dim)
+        for i in 1:num_qubits
+            PP_sum .+= Matrix{ComplexF64}(pad_term(pauli_pair, num_qubits, i; periodic=true))
+        end
+        PP_sum ./= num_qubits  # Per-bond average
+        PP_eigen = Matrix{ComplexF64}(V' * PP_sum * V)
+        push!(observables, PP_eigen)
+        push!(names, pair_name)
+    end
 
     return observables, names
 end
