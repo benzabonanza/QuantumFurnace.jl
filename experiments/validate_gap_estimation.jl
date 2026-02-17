@@ -5,14 +5,14 @@
 # Validates trajectory-fitted spectral gap against exact Liouvillian eigenvalues
 # for n=4 and n=6 uniform Heisenberg XX chains using TimeDomain.
 #
-# With the corrected trajectory CPTP channel (bare delta, R_a scaled by n_jumps),
-# the fitted decay rate directly approximates the continuous-time Liouvillian
-# spectral gap without any n_jumps normalization. A system-dependent residual
-# factor of ~1.5-1.7x remains due to discrete-step Kraus decomposition effects.
+# The smallest-gap selection criterion picks the observable whose fitted decay
+# rate best approximates the true Lindbladian spectral gap (the slowest-decaying
+# mode). Among fits with acceptable quality (R-squared > 0.8), the one with the
+# smallest positive gap is selected. This yields a residual factor of ~1.0-1.1x.
 #
 # Pass criterion (two-tier):
 #   1. Fit quality: R-squared > 0.9 (exponential model captures true decay)
-#   2. Factor consistency: fitted_gap / exact_gap in [1.0, 3.0]
+#   2. Factor consistency: fitted_gap / exact_gap in [0.8, 1.5]
 #
 # Usage:
 #   julia --project=. experiments/validate_gap_estimation.jl
@@ -231,26 +231,25 @@ function validate_system(num_qubits::Int; ntraj::Int, total_time::Float64)
     @printf("  Imaginary warning:%s\n", cv.imaginary_warning ? " YES" : " NO")
 
     # 7. Residual factor analysis
-    # The discrete-step Kraus decomposition introduces a factor between the
-    # fitted trajectory rate and the continuous Liouvillian gap. With the
-    # corrected CPTP channel (bare delta), this factor is ~1.5-1.7x.
+    # The smallest-gap selection picks the observable with the best physical
+    # overlap with the gap mode, so the residual factor should be close to 1.0.
     r_squared = estimated.best_r_squared
     residual_factor = cv.fitted_gap / cv.exact_gap
 
     @printf("\n--- Analysis ---\n")
-    @printf("  Residual factor (fitted/exact): %.4f  (expected ~1.5-1.7)\n", residual_factor)
+    @printf("  Residual factor (fitted/exact): %.4f  (expected ~1.0-1.1)\n", residual_factor)
     @printf("  Fit quality (R-sq):             %.4f\n", r_squared)
 
     # 8. Two-tier pass criterion:
     # 1. Fit quality: R-squared > 0.9 (exponential model captures true decay)
-    # 2. Factor consistency: residual_factor in [1.0, 3.0]
+    # 2. Factor consistency: residual_factor in [0.8, 1.5]
     good_fit = r_squared > 0.9
-    factor_in_range = 1.0 <= residual_factor <= 3.0
+    factor_in_range = 0.8 <= residual_factor <= 1.5
     passed = good_fit && factor_in_range
 
     @printf("\n  Two-tier pass criterion:\n")
     @printf("    Good fit (R-sq > 0.9):          %s (%.4f)\n", good_fit ? "YES" : "NO", r_squared)
-    @printf("    Factor in range [1.0, 3.0]:     %s (%.4f)\n", factor_in_range ? "YES" : "NO", residual_factor)
+    @printf("    Factor in range [0.8, 1.5]:     %s (%.4f)\n", factor_in_range ? "YES" : "NO", residual_factor)
     @printf("\n  >>> %s <<<\n", passed ? "PASS" : "FAIL")
 
     analysis = (
