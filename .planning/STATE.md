@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-16)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.3 Mixing Time Estimation -- Phase 21 (Exponential Fitting)
+**Current focus:** v1.3 Mixing Time Estimation -- Phase 22 (Observable-Only Trajectory Runner)
 
 ## Current Position
 
-Phase: 21 of 24 (Exponential Fitting)
+Phase: 22 of 24 (Observable-Only Trajectory Runner)
 Plan: 1 of 1 in current phase (COMPLETE)
-Status: Phase 21 complete, ready for Phase 22
-Last activity: 2026-02-17 -- Phase 21 Plan 01 executed (exponential fitting)
+Status: Phase 22 complete, ready for Phase 23
+Last activity: 2026-02-17 -- Phase 22 Plan 01 executed (observable-only trajectory runner)
 
-Progress: [######################........] 43/47 plans (v1.0-v1.2 complete, v1.3 Phases 20-21 done)
+Progress: [#######################.......] 44/47 plans (v1.0-v1.2 complete, v1.3 Phases 20-22 done)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 48 (v1.0: 10, v1.1: 16, quick: 8, v1.2: 12, cleanup: 3, v1.3: 2)
+- Total plans completed: 49 (v1.0: 10, v1.1: 16, quick: 8, v1.2: 12, cleanup: 3, v1.3: 3)
 
 **By Milestone:**
 
@@ -44,6 +44,8 @@ Key context for v1.3:
 - Phase 20: M_z = sum(Z_i)/n per-site normalization, H + M_z bundle (no ZZ correlations)
 - Phase 21: FitResult struct wraps LsqFit output; _IDX_A=1, _IDX_GAP=2, _IDX_C=3 parameter ordering
 - Phase 21: R-squared not clamped (negative = valid diagnostic); no weight vector to curve_fit
+- Phase 22: ObservableTrajectoryResult in trajectories.jl (not structs.jl); inner/outer constructor pattern for Aqua compliance
+- Phase 22: reconstruct_dm=true reuses _run_chunk_with_obs!; reconstruct_dm=false uses new _run_chunk_obs_only!
 
 ### Pending Todos
 
@@ -64,5 +66,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-17
-Stopped at: Completed 21-01-PLAN.md (Exponential Fitting). Phase 21 done. Ready for Phase 22.
+Stopped at: Completed 22-01-PLAN.md (Observable-Only Trajectory Runner). Phase 22 done. Ready for Phase 23.
 Resume file: None
