@@ -19,6 +19,7 @@ using Base.Threads
 using LinearMaps
 using SharedArrays
 using FINUFFT
+using LsqFit
 using LibGit2
 using Dates
 
@@ -45,6 +46,9 @@ export ExperimentResult, save_experiment, load_experiment
 
 # Convergence tracking
 export ConvergenceData, run_trajectories_convergence, run_trajectories_adaptive, build_convergence_observables, build_convergence_observables_trotter, build_total_magnetization, build_gap_estimation_observables
+
+# Fitting
+export fit_exponential_decay, FitResult
 
 # Simulation
 export run_lindbladian, run_thermalization, construct_lindbladian,
@@ -101,6 +105,7 @@ include("log_sobolev.jl")
 include("log_sobolev_manopt.jl")
 include("linearmaps_liouv.jl")
 include("convergence.jl")
+include("fitting.jl")
 include("results.jl")
 
 end
