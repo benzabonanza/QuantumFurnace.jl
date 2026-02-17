@@ -56,7 +56,7 @@ end
 
     identity = Matrix{ComplexF64}(I, SMALL_DIM, SMALL_DIM)
     for (a, per_op) in enumerate(fw.per_operator)
-        completeness = per_op.K0' * per_op.K0 + fw.delta_eff * per_op.R + per_op.U_residual' * per_op.U_residual
+        completeness = per_op.K0' * per_op.K0 + fw.delta * per_op.R + per_op.U_residual' * per_op.U_residual
         @test isapprox(completeness, identity; atol=1e-10)
         @test per_op.U_B === nothing  # No coherent term for GNS
     end

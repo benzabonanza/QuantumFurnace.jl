@@ -56,9 +56,9 @@ using Random
         @test isapprox(norm(psi), 1.0; atol=1e-12)
 
         # Verify total_weight is approximately 1.0 by checking per-operator CPTP property
-        # (if K0_a'K0_a + delta_eff*R_a + U_res_a'U_res_a = I, then total_weight must be ~1.0)
+        # (if K0_a'K0_a + delta*R_a + U_res_a'U_res_a = I, then total_weight must be ~1.0)
         for per_op in fw.per_operator
-            completeness = per_op.K0' * per_op.K0 + fw.delta_eff * per_op.R + per_op.U_residual' * per_op.U_residual
+            completeness = per_op.K0' * per_op.K0 + fw.delta * per_op.R + per_op.U_residual' * per_op.U_residual
             @test isapprox(completeness, Matrix{ComplexF64}(I, DIM, DIM); atol=1e-10)
         end
     end
@@ -110,7 +110,7 @@ using Random
                 K0_psi = per_op.K0 * psi
                 p_nojump = real(dot(K0_psi, K0_psi))
                 p_res = real(dot(per_op.U_residual * psi, per_op.U_residual * psi))
-                p_jump_total = fw.delta_eff * real(dot(psi, per_op.R * psi))
+                p_jump_total = fw.delta * real(dot(psi, per_op.R * psi))
 
                 total = p_nojump + p_res + p_jump_total
                 @test isapprox(total, 1.0; atol=1e-10)
