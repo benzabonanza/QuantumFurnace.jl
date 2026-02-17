@@ -5,7 +5,7 @@
 - ✅ **v1.0 Trajectories** -- Phases 1-5 (shipped 2026-02-14)
 - ✅ **v1.1 Reduce** -- Phases 6-11 (shipped 2026-02-15)
 - ✅ **v1.2 Multi-threading** -- Phases 12-19 (shipped 2026-02-16)
-- 🚧 **v1.3 Mixing Time Estimation** -- Phases 20-24 (in progress)
+- ✅ **v1.3 Mixing Time Estimation** -- Phases 20-24 (shipped 2026-02-17)
 
 ## Phases
 
@@ -52,7 +52,7 @@ Full details: [milestones/v1.2-ROADMAP.md](milestones/v1.2-ROADMAP.md)
 
 </details>
 
-### 🚧 v1.3 Mixing Time Estimation (In Progress)
+### ✅ v1.3 Mixing Time Estimation (Shipped 2026-02-17)
 
 **Milestone Goal:** Estimate the Lindbladian spectral gap from trajectory-based observable decay, cross-validated against exact Liouvillian eigenvalues for small systems.
 
@@ -60,7 +60,7 @@ Full details: [milestones/v1.2-ROADMAP.md](milestones/v1.2-ROADMAP.md)
 - [x] **Phase 21: Exponential Fitting** - LsqFit.jl-based single-exponential decay fitting with auto-initialization, window selection, and quality metrics -- completed 2026-02-17
 - [x] **Phase 22: Observable-Only Trajectory Runner** - Time-resolved observable measurement from trajectories without mid-simulation DM reconstruction -- completed 2026-02-17
 - [x] **Phase 23: Gap Estimation API** - Unified `estimate_spectral_gap` function orchestrating trajectories, multi-observable fitting, and best-estimate selection -- completed 2026-02-17
-- [ ] **Phase 24: Cross-Validation** - Verify trajectory-fitted gap against exact Liouvillian spectral gap for n=4 and n=6
+- [x] **Phase 24: Cross-Validation** - Verify trajectory-fitted gap against exact Liouvillian spectral gap for n=4 and n=6 -- completed 2026-02-17
 
 ## Phase Details
 
@@ -131,9 +131,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 24-01-PLAN.md -- Implement CrossValidationResult struct, cross_validate_gap function (two methods), and unit tests
-- [ ] 24-02-PLAN.md -- Validation script for n=4 and n=6 Heisenberg chain gap cross-validation
-- [ ] 24-03-PLAN.md -- Gap closure: apply n_jumps normalization to validation script pass criterion
+- [x] 24-01-PLAN.md -- Implement CrossValidationResult struct, cross_validate_gap function (two methods), and unit tests
+- [x] 24-02-PLAN.md -- Validation script for n=4 and n=6 Heisenberg chain gap cross-validation
+- [x] 24-03-PLAN.md -- Gap closure: apply n_jumps normalization to validation script pass criterion
 
 ## Progress
 
@@ -171,4 +171,4 @@ Phase 21 (fitting)      ---+-----------------------------+--> Phase 23 (API) -->
 | 21. Exponential Fitting | v1.3 | 1/1 | Complete | 2026-02-17 |
 | 22. Observable-Only Trajectory Runner | v1.3 | 1/1 | Complete | 2026-02-17 |
 | 23. Gap Estimation API | v1.3 | 1/1 | Complete | 2026-02-17 |
-| 24. Cross-Validation | v1.3 | 0/2 | Planned | - |
+| 24. Cross-Validation | v1.3 | 3/3 | Complete | 2026-02-17 |
