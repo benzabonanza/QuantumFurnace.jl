@@ -56,7 +56,7 @@ Full details: [milestones/v1.2-ROADMAP.md](milestones/v1.2-ROADMAP.md)
 
 **Milestone Goal:** Estimate the Lindbladian spectral gap from trajectory-based observable decay, cross-validated against exact Liouvillian eigenvalues for small systems.
 
-- [ ] **Phase 20: Observable Infrastructure** - Total magnetization and combined gap estimation observables in both eigenbasis and Trotter basis
+- [x] **Phase 20: Observable Infrastructure** - Total magnetization and combined gap estimation observables in both eigenbasis and Trotter basis -- completed 2026-02-17
 - [ ] **Phase 21: Exponential Fitting** - LsqFit.jl-based single-exponential decay fitting with auto-initialization, window selection, and quality metrics
 - [ ] **Phase 22: Observable-Only Trajectory Runner** - Time-resolved observable measurement from trajectories without mid-simulation DM reconstruction
 - [ ] **Phase 23: Gap Estimation API** - Unified `estimate_spectral_gap` function orchestrating trajectories, multi-observable fitting, and best-estimate selection
@@ -73,10 +73,10 @@ Full details: [milestones/v1.2-ROADMAP.md](milestones/v1.2-ROADMAP.md)
   2. User can call `build_total_magnetization(ham, n; trotter)` and get M_z in Trotter eigenbasis for TrotterDomain simulations
   3. User can call `build_gap_estimation_observables(ham, n)` and receive all gap-relevant observables (H, M_z, ZZ correlations) in one call, ready to pass to trajectory runner
   4. All observables pass basis-transform regression tests (trace against Gibbs state matches expected physical values)
-**Plans**: 1 plan
+**Plans**: 1 plan -- completed 2026-02-17
 
 Plans:
-- [ ] 20-01-PLAN.md -- Implement build_total_magnetization and build_gap_estimation_observables with exports and regression tests
+- [x] 20-01-PLAN.md -- Implement build_total_magnetization and build_gap_estimation_observables with exports and regression tests
 
 ### Phase 21: Exponential Fitting
 **Goal**: Users can fit exponential decay curves to time-series data and extract decay rates with confidence intervals, validated on synthetic data before touching real trajectories
@@ -165,7 +165,7 @@ Phase 21 (fitting)      ---+-----------------------------+--> Phase 23 (API) -->
 | 17. Adaptive Sampling | v1.2 | 2/2 | Complete | 2026-02-16 |
 | 18. KMS-vs-GNS Experiments | v1.2 | 1/1 | Complete | 2026-02-16 |
 | 19. Logic Simplification | v1.2 | 3/3 | Complete | 2026-02-16 |
-| 20. Observable Infrastructure | v1.3 | 0/1 | Not started | - |
+| 20. Observable Infrastructure | v1.3 | 1/1 | Complete | 2026-02-17 |
 | 21. Exponential Fitting | v1.3 | 0/? | Not started | - |
 | 22. Observable-Only Trajectory Runner | v1.3 | 0/? | Not started | - |
 | 23. Gap Estimation API | v1.3 | 0/? | Not started | - |
