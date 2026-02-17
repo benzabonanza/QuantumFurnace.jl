@@ -1,7 +1,6 @@
 using Test
 using QuantumFurnace
 using LinearAlgebra
-using Logging
 
 # ============================================================================
 # Tests for estimate_spectral_gap (Phase 23)
@@ -15,7 +14,7 @@ using Logging
     psi0 = zeros(ComplexF64, SMALL_DIM)
     psi0[1] = 1.0
     config = make_small_thermalize_config(TimeDomain();
-        delta=0.01, mixing_time=2.0, with_coherent=false)
+        delta=0.01, mixing_time=10.0, with_coherent=false)
 
     # -----------------------------------------------------------------
     @testset "Basic estimate_spectral_gap returns SpectralGapResult" begin

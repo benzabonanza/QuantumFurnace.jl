@@ -218,7 +218,10 @@ using BSON
     # Testset 8: run_trajectories_convergence integration (CONV-01, CONV-02, CONV-03)
     # -----------------------------------------------------------------------
     @testset "run_trajectories_convergence integration" begin
-        config = make_thermalize_config(EnergyDomain(); with_coherent=true, delta=0.01, mixing_time=5.0)
+        # mixing_time=60.0 accounts for the corrected (slower) trajectory evolution rate
+        # (the per-step CPTP channel uses bare delta, not delta*n_jumps).
+        # Previous mixing_time=5.0 was sufficient when delta_eff=delta*n_jumps=0.12.
+        config = make_thermalize_config(EnergyDomain(); with_coherent=true, delta=0.01, mixing_time=60.0)
         observables, names = build_convergence_observables(TEST_HAM, NUM_QUBITS)
         obs_gibbs = QuantumFurnace._compute_gibbs_observable_values(TEST_GIBBS, observables)
 

@@ -131,7 +131,7 @@ end
         # Use longer mixing_time and more trajectories to amortize threading overhead.
         # At dim=8 each step is very fast, so we need enough total work to see speedup.
         therm_config = make_small_thermalize_config(TimeDomain();
-            delta=0.01, mixing_time=5.0, with_coherent=false)
+            delta=0.01, mixing_time=10.0, with_coherent=false)
 
         ntraj = 2000
 
