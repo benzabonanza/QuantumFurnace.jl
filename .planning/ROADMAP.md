@@ -115,10 +115,10 @@ Plans:
   1. User can call `estimate_spectral_gap(jumps, config, psi0, ham; ...)` and receive a `SpectralGapResult` containing the gap estimate, confidence interval, and per-observable fit details
   2. `SpectralGapResult` struct contains: gap estimate, CI, per-observable gaps, R-squared values, best observable name, and fit metadata (ntraj, total_time, save_every)
   3. Best observable is automatically selected by fit quality (R-squared, convergence status, gap > 0), and the selection is explainable from the per-observable results
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 23-01: TBD
+- [ ] 23-01-PLAN.md -- Implement SpectralGapResult, estimate_spectral_gap orchestration, and integration tests with SMALL system
 
 ### Phase 24: Cross-Validation
 **Goal**: Users can verify that trajectory-fitted spectral gap agrees with exact Liouvillian eigenvalues, establishing trust in the method for systems where exact diagonalization is infeasible
@@ -168,5 +168,5 @@ Phase 21 (fitting)      ---+-----------------------------+--> Phase 23 (API) -->
 | 20. Observable Infrastructure | v1.3 | 1/1 | Complete | 2026-02-17 |
 | 21. Exponential Fitting | v1.3 | 1/1 | Complete | 2026-02-17 |
 | 22. Observable-Only Trajectory Runner | v1.3 | 1/1 | Complete | 2026-02-17 |
-| 23. Gap Estimation API | v1.3 | 0/? | Not started | - |
+| 23. Gap Estimation API | v1.3 | 0/1 | Not started | - |
 | 24. Cross-Validation | v1.3 | 0/? | Not started | - |
