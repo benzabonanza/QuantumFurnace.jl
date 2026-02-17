@@ -10,16 +10,16 @@ See: .planning/PROJECT.md (updated 2026-02-16)
 ## Current Position
 
 Phase: 20 of 24 (Observable Infrastructure)
-Plan: 0 of ? in current phase
-Status: Ready to plan
-Last activity: 2026-02-16 -- Roadmap created for v1.3 Mixing Time Estimation (5 phases, 17 requirements)
+Plan: 1 of 1 in current phase (COMPLETE)
+Status: Phase 20 complete, ready for Phase 21
+Last activity: 2026-02-17 -- Phase 20 Plan 01 executed (observable infrastructure)
 
-Progress: [####################..........] 41/46 plans (v1.0-v1.2 complete, v1.3 not started)
+Progress: [#####################.........] 42/47 plans (v1.0-v1.2 complete, v1.3 Phase 20 done)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 46 (v1.0: 10, v1.1: 16, quick: 8, v1.2: 12, cleanup: 3)
+- Total plans completed: 47 (v1.0: 10, v1.1: 16, quick: 8, v1.2: 12, cleanup: 3, v1.3: 1)
 
 **By Milestone:**
 
@@ -40,6 +40,8 @@ Key context for v1.3:
 - Follow `build_convergence_observables` pattern for basis transforms (avoids pitfall from quick-task-20)
 - LsqFit.jl is the single new dependency (Levenberg-Marquardt + CIs + bounds)
 - Phases 20 and 21 can execute in parallel (independent work)
+- Phase 20: Unified trotter keyword pattern (not separate _trotter suffix) for new observable builders
+- Phase 20: M_z = sum(Z_i)/n per-site normalization, H + M_z bundle (no ZZ correlations)
 
 ### Pending Todos
 
@@ -59,6 +61,6 @@ None
 
 ## Session Continuity
 
-Last session: 2026-02-16
-Stopped at: v1.3 roadmap created, ready to plan Phase 20 or Phase 21
+Last session: 2026-02-17
+Stopped at: Completed 20-01-PLAN.md (Observable Infrastructure). Phase 20 done. Ready for Phase 21.
 Resume file: None
