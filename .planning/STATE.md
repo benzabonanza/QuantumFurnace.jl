@@ -12,14 +12,14 @@ See: .planning/PROJECT.md (updated 2026-02-16)
 Phase: 24 of 24 (Cross-Validation) -- COMPLETE
 Plan: 3 of 3 in current phase (COMPLETE)
 Status: Phase 24 complete (gap closure plan 03 executed). v1.3 Mixing Time Estimation milestone complete.
-Last activity: 2026-02-17 -- Quick task 22 executed (fix trajectory delta_eff double-counting)
+Last activity: 2026-02-17 -- Quick task 23 executed (improve spectral gap estimation observable selection)
 
 Progress: [##############################] 48/48 plans (v1.0-v1.3 ALL COMPLETE)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 54 (v1.0: 10, v1.1: 16, quick: 9, v1.2: 12, cleanup: 3, v1.3: 7)
+- Total plans completed: 55 (v1.0: 10, v1.1: 16, quick: 10, v1.2: 12, cleanup: 3, v1.3: 7)
 
 **By Milestone:**
 
@@ -47,15 +47,16 @@ Key context for v1.3:
 - Phase 22: ObservableTrajectoryResult in trajectories.jl (not structs.jl); inner/outer constructor pattern for Aqua compliance
 - Phase 22: reconstruct_dm=true reuses _run_chunk_with_obs!; reconstruct_dm=false uses new _run_chunk_obs_only!
 - Phase 23: SpectralGapResult uses concrete types only (no type parameter) for Aqua compliance
-- Phase 23: Best observable selected by converged + gap > 0 + highest R-squared; fallback to highest R-squared if no valid fit
+- Phase 23: Best observable selected by smallest gap among converged + gap > 0 + R-squared > 0.8 fits (quick-23 fix)
 - Phase 23: gap_estimation.jl included after fitting.jl and before results.jl for correct dependency order
 - Phase 24: CrossValidationResult uses concrete types only (no type parameter) for Aqua compliance
 - Phase 24: Two-method dispatch for cross_validate_gap (LindbladianResult delegates to Complex)
 - Phase 24: abs(real(spectral_gap)) enforced in cross_validate_gap (locked decision)
 - Phase 24: Excited initial state (psi0[end]=1) for validation -- ground state at high beta is near Gibbs, no decay signal
-- Phase 24: Two-tier pass criterion (R-squared > 0.9 AND residual_factor in [1.0, 3.0]) constitutes "documented tolerance" per ROADMAP success criterion 3
+- Phase 24: Two-tier pass criterion (R-squared > 0.9 AND residual_factor in [0.8, 1.5]) tightened in quick-23
 - Quick-22: Fixed delta_eff double-counting -- trajectory CPTP channel now uses bare delta (matching DM), R_a scaled by n_jumps is the single compensation
 - Quick-22: Residual factor ~1.6x (n=4) and ~1.5x (n=6) between fitted and exact gap is discrete-step Kraus effect (was ~20x before fix)
+- Quick-23: Smallest-gap selection reduces n=4 factor from ~1.6x to ~1.17x; n=6 at ~1.46x; both pass [0.8, 1.5]
 
 ### Pending Todos
 
@@ -73,9 +74,10 @@ None
 | 20 | Fix basis mismatch in GNS TrotterDomain tests (0.83 -> 0.08 gap) | 2026-02-16 | 0161e01 | [20-debug-gns-trotterdomain-0-83-gap-suspect](./quick/20-debug-gns-trotterdomain-0-83-gap-suspect/) |
 | 21 | Fix test errors after removing transform_jumps_to_basis | 2026-02-16 | b2e4123 | [21-fix-test-errors-after-removing-transform](./quick/21-fix-test-errors-after-removing-transform/) |
 | 22 | Fix trajectory delta_eff double-counting (bare delta for CPTP channel) | 2026-02-17 | dc83bf0 | [22-fix-trajectory-delta-eff-double-counting](./quick/22-fix-trajectory-delta-eff-double-counting/) |
+| 23 | Improve spectral gap estimation: smallest-gap selection criterion | 2026-02-17 | c5f6c68 | [23-improve-spectral-gap-estimation-by-findi](./quick/23-improve-spectral-gap-estimation-by-findi/) |
 
 ## Session Continuity
 
 Last session: 2026-02-17
-Stopped at: Completed quick task 22 (fix trajectory delta_eff double-counting). All milestones complete.
+Stopped at: Completed quick task 23 (improve spectral gap estimation observable selection). All milestones complete.
 Resume file: None
