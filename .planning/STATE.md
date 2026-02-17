@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-16)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.3 Mixing Time Estimation -- Phase 23 (Gap Estimation API)
+**Current focus:** v1.3 Mixing Time Estimation -- Phase 24 (Cross-Validation)
 
 ## Current Position
 
-Phase: 23 of 24 (Gap Estimation API)
-Plan: 1 of 1 in current phase (COMPLETE)
-Status: Phase 23 complete, ready for Phase 24
-Last activity: 2026-02-17 -- Phase 23 Plan 01 executed (gap estimation API)
+Phase: 24 of 24 (Cross-Validation)
+Plan: 1 of 2 in current phase (COMPLETE)
+Status: Phase 24 Plan 01 complete, ready for Plan 02
+Last activity: 2026-02-17 -- Phase 24 Plan 01 executed (cross-validation API)
 
-Progress: [########################......] 45/47 plans (v1.0-v1.2 complete, v1.3 Phases 20-23 done)
+Progress: [#########################.....] 46/47 plans (v1.0-v1.2 complete, v1.3 Phases 20-23 done, 24 plan 1/2)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 50 (v1.0: 10, v1.1: 16, quick: 8, v1.2: 12, cleanup: 3, v1.3: 4)
+- Total plans completed: 51 (v1.0: 10, v1.1: 16, quick: 8, v1.2: 12, cleanup: 3, v1.3: 5)
 
 **By Milestone:**
 
@@ -49,6 +49,9 @@ Key context for v1.3:
 - Phase 23: SpectralGapResult uses concrete types only (no type parameter) for Aqua compliance
 - Phase 23: Best observable selected by converged + gap > 0 + highest R-squared; fallback to highest R-squared if no valid fit
 - Phase 23: gap_estimation.jl included after fitting.jl and before results.jl for correct dependency order
+- Phase 24: CrossValidationResult uses concrete types only (no type parameter) for Aqua compliance
+- Phase 24: Two-method dispatch for cross_validate_gap (LindbladianResult delegates to Complex)
+- Phase 24: abs(real(spectral_gap)) enforced in cross_validate_gap (locked decision)
 
 ### Pending Todos
 
@@ -69,5 +72,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-17
-Stopped at: Completed 23-01-PLAN.md (Gap Estimation API). Phase 23 done. Ready for Phase 24.
+Stopped at: Completed 24-01-PLAN.md (Cross-Validation API). Ready for 24-02-PLAN.md.
 Resume file: None
