@@ -35,7 +35,7 @@ const DELTA = 0.01
 const NTRAJ = 20_000
 const SAVE_EVERY = 10
 const TARGET_REL_ERROR_N4 = 1e-2   # 1% for n=4 (k=0 gap mode, strong overlap)
-const TARGET_REL_ERROR_N6 = 0.12   # 12% for n=6 (k=pi gap mode, weak staggered overlap)
+const TARGET_REL_ERROR_N6 = 0.12   # 12% for n=6 (k=pi gap, SU(2)-protected; XZ_stagg also has zero overlap)
 const SEED = 42
 
 # Grid parameters matching test suite conventions
