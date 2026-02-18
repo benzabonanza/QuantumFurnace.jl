@@ -45,13 +45,13 @@ export TrajectoryFramework, TrajectoryResult, ObservableTrajectoryResult, build_
 export ExperimentResult, save_experiment, load_experiment
 
 # Convergence tracking
-export ConvergenceData, run_trajectories_convergence, run_trajectories_adaptive, build_convergence_observables, build_convergence_observables_trotter, build_total_magnetization, build_gap_estimation_observables
+export ConvergenceData, run_trajectories_convergence, run_trajectories_adaptive, build_preset_trajectory_observables
 
 # Fitting
 export fit_exponential_decay, FitResult
 
 # Gap estimation
-export SpectralGapResult, estimate_spectral_gap, CrossValidationResult, cross_validate_gap
+export SpectralGapResult, estimate_spectral_gap
 
 # Simulation
 export run_lindbladian, run_thermalization, construct_lindbladian,

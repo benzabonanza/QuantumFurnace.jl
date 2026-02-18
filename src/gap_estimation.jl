@@ -3,7 +3,7 @@
 # ============================================================================
 #
 # Composes:
-#   - build_gap_estimation_observables (convergence.jl, Phase 20)
+#   - build_preset_trajectory_observables (convergence.jl)
 #   - run_observable_trajectories (trajectories.jl, Phase 22)
 #   - fit_exponential_decay (fitting.jl, Phase 21)
 # into a single estimate_spectral_gap function.
@@ -155,7 +155,7 @@ function estimate_spectral_gap(
 )
     # 1. Build default observables if not provided
     if observables === nothing
-        observables, observable_names = build_gap_estimation_observables(
+        observables, observable_names = build_preset_trajectory_observables(
             hamiltonian, config.num_qubits; trotter=trotter)
     end
 

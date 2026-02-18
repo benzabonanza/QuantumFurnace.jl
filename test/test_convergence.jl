@@ -49,65 +49,6 @@ using BSON
     end
 
     # -----------------------------------------------------------------------
-    # Testset 2: build_convergence_observables (eigenbasis)
-    # -----------------------------------------------------------------------
-    @testset "build_convergence_observables (eigenbasis)" begin
-        observables, names = build_convergence_observables(TEST_HAM, NUM_QUBITS)
-
-        # Correct count: NUM_QUBITS ZZ pairs + 1 H
-        @test length(observables) == NUM_QUBITS + 1
-        @test length(names) == length(observables)
-
-        # Name pattern check
-        @test names == ["ZZ_12", "ZZ_23", "ZZ_34", "ZZ_41", "H"]
-
-        # Matrix dimensions and type
-        for obs in observables
-            @test size(obs) == (DIM, DIM)
-            @test eltype(obs) == ComplexF64
-        end
-
-        # ZZ matrices are Hermitian
-        for i in 1:NUM_QUBITS
-            @test isapprox(observables[i], observables[i]'; atol=1e-12)
-        end
-
-        # Energy observable (last one) is diagonal in eigenbasis
-        H_eigen = observables[end]
-        H_offdiag = H_eigen - diagm(diag(H_eigen))
-        @test maximum(abs.(H_offdiag)) < 1e-12
-
-        # Gibbs energy: tr(gibbs * H_eigen) matches analytical
-        boltz = exp.(-BETA .* TEST_HAM.eigvals)
-        gibbs_energy_analytical = sum(TEST_HAM.eigvals .* boltz) / sum(boltz)
-        gibbs_energy_from_obs = real(tr(Matrix(TEST_GIBBS) * H_eigen))
-        @test isapprox(gibbs_energy_from_obs, gibbs_energy_analytical; atol=1e-10)
-    end
-
-    # -----------------------------------------------------------------------
-    # Testset 3: build_convergence_observables_trotter
-    # -----------------------------------------------------------------------
-    @testset "build_convergence_observables_trotter" begin
-        observables_t, names_t = build_convergence_observables_trotter(TEST_HAM, TEST_TROTTER, NUM_QUBITS)
-
-        # Same structure
-        @test length(observables_t) == NUM_QUBITS + 1
-        @test length(names_t) == length(observables_t)
-        @test names_t == ["ZZ_12", "ZZ_23", "ZZ_34", "ZZ_41", "H"]
-
-        # Matrix dimensions and type
-        for obs in observables_t
-            @test size(obs) == (DIM, DIM)
-            @test eltype(obs) == ComplexF64
-        end
-
-        # ZZ matrices are Hermitian in Trotter basis
-        for i in 1:NUM_QUBITS
-            @test isapprox(observables_t[i], observables_t[i]'; atol=1e-12)
-        end
-    end
-
-    # -----------------------------------------------------------------------
     # Testset 4: _gibbs_in_trotter_basis
     # -----------------------------------------------------------------------
     @testset "_gibbs_in_trotter_basis" begin
@@ -128,17 +69,17 @@ using BSON
     # Testset 5: _compute_gibbs_observable_values
     # -----------------------------------------------------------------------
     @testset "_compute_gibbs_observable_values" begin
-        observables, _ = build_convergence_observables(TEST_HAM, NUM_QUBITS)
+        observables, _ = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS)
         obs_gibbs = QuantumFurnace._compute_gibbs_observable_values(TEST_GIBBS, observables)
 
         @test length(obs_gibbs) == length(observables)
         @test all(isfinite, obs_gibbs)
         @test all(x -> isa(x, Real), obs_gibbs)
 
-        # Energy value (last entry) matches analytical Gibbs energy
+        # Energy value (first entry, H) matches analytical Gibbs energy
         boltz = exp.(-BETA .* TEST_HAM.eigvals)
         gibbs_energy_analytical = sum(TEST_HAM.eigvals .* boltz) / sum(boltz)
-        @test isapprox(obs_gibbs[end], gibbs_energy_analytical; atol=1e-10)
+        @test isapprox(obs_gibbs[1], gibbs_energy_analytical; atol=1e-10)
     end
 
     # -----------------------------------------------------------------------
@@ -222,7 +163,7 @@ using BSON
         # (the per-step CPTP channel uses bare delta, not delta*n_jumps).
         # Previous mixing_time=5.0 was sufficient when delta_eff=delta*n_jumps=0.12.
         config = make_thermalize_config(EnergyDomain(); with_coherent=true, delta=0.01, mixing_time=60.0)
-        observables, names = build_convergence_observables(TEST_HAM, NUM_QUBITS)
+        observables, names = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS)
         obs_gibbs = QuantumFurnace._compute_gibbs_observable_values(TEST_GIBBS, observables)
 
         # Ground state in eigenbasis: first basis vector
@@ -253,12 +194,12 @@ using BSON
         @test conv_data.trace_distances[end] < conv_data.trace_distances[1]
 
         # Observable values structure
-        @test size(conv_data.observable_values) == (NUM_QUBITS + 1, 5)
+        @test size(conv_data.observable_values) == (5, 5)
         @test conv_data.observable_names == names
-        @test length(conv_data.observable_gibbs_values) == NUM_QUBITS + 1
+        @test length(conv_data.observable_gibbs_values) == 5
 
         # CONV-02/CONV-03: Energy observable converges toward Gibbs value
-        energy_idx = length(names)  # H is the last observable
+        energy_idx = findfirst(==("H"), names)
         @test abs(conv_data.observable_values[energy_idx, end] - obs_gibbs[energy_idx]) <
               abs(conv_data.observable_values[energy_idx, 1] - obs_gibbs[energy_idx])
 
@@ -278,7 +219,7 @@ using BSON
     # -----------------------------------------------------------------------
     @testset "run_trajectories_convergence determinism" begin
         config = make_thermalize_config(EnergyDomain(); with_coherent=true, delta=0.01, mixing_time=5.0)
-        observables, names = build_convergence_observables(TEST_HAM, NUM_QUBITS)
+        observables, names = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS)
 
         psi0 = zeros(ComplexF64, DIM)
         psi0[1] = 1.0
@@ -313,7 +254,7 @@ using BSON
     # -----------------------------------------------------------------------
     @testset "Convergence data accessible programmatically" begin
         config = make_thermalize_config(EnergyDomain(); with_coherent=true, delta=0.01, mixing_time=5.0)
-        observables, names = build_convergence_observables(TEST_HAM, NUM_QUBITS)
+        observables, names = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS)
 
         psi0 = zeros(ComplexF64, DIM)
         psi0[1] = 1.0
@@ -341,7 +282,7 @@ using BSON
         @test length(row_slice) == 2
         col_slice = conv_data.observable_values[:, 1]  # all observables at first batch
         @test col_slice isa Vector{Float64}
-        @test length(col_slice) == NUM_QUBITS + 1
+        @test length(col_slice) == 5
 
         # observable_names can be used to look up specific observables
         idx = findfirst(==("H"), conv_data.observable_names)
@@ -427,7 +368,7 @@ using BSON
     # -----------------------------------------------------------------------
     @testset "run_trajectories_adaptive convergence (CONV-04)" begin
         config = make_thermalize_config(EnergyDomain(); with_coherent=true, delta=0.01, mixing_time=5.0)
-        observables, names = build_convergence_observables(TEST_HAM, NUM_QUBITS)
+        observables, names = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS)
 
         # Ground state in eigenbasis
         psi0 = zeros(ComplexF64, DIM)
@@ -466,7 +407,7 @@ using BSON
         @test all(x -> x >= 0, conv_data.trace_distances)
 
         # Observable values matrix shape matches
-        @test size(conv_data.observable_values) == (NUM_QUBITS + 1, conv_data.total_batches)
+        @test size(conv_data.observable_values) == (5, conv_data.total_batches)
 
         # TrajectoryResult has valid density matrix
         @test isapprox(real(tr(traj_result.rho_mean)), 1.0; atol=1e-6)
@@ -481,7 +422,7 @@ using BSON
     # -----------------------------------------------------------------------
     @testset "run_trajectories_adaptive hard cap (CONV-05)" begin
         config = make_thermalize_config(EnergyDomain(); with_coherent=true, delta=0.01, mixing_time=5.0)
-        observables, names = build_convergence_observables(TEST_HAM, NUM_QUBITS)
+        observables, names = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS)
 
         psi0 = zeros(ComplexF64, DIM)
         psi0[1] = 1.0
@@ -524,7 +465,7 @@ using BSON
     # -----------------------------------------------------------------------
     @testset "run_trajectories_adaptive determinism" begin
         config = make_thermalize_config(EnergyDomain(); with_coherent=true, delta=0.01, mixing_time=5.0)
-        observables, names = build_convergence_observables(TEST_HAM, NUM_QUBITS)
+        observables, names = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS)
 
         psi0 = zeros(ComplexF64, DIM)
         psi0[1] = 1.0
@@ -659,7 +600,7 @@ using BSON
     # -----------------------------------------------------------------------
     @testset "Adaptive result programmatic access (CONV-04 extended)" begin
         config = make_thermalize_config(EnergyDomain(); with_coherent=true, delta=0.01, mixing_time=5.0)
-        observables, names = build_convergence_observables(TEST_HAM, NUM_QUBITS)
+        observables, names = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS)
 
         psi0 = zeros(ComplexF64, DIM)
         psi0[1] = 1.0
@@ -687,71 +628,10 @@ using BSON
     end
 
     # -----------------------------------------------------------------------
-    # Testset 19: build_total_magnetization (eigenbasis)
+    # Testset 21: build_preset_trajectory_observables (eigenbasis)
     # -----------------------------------------------------------------------
-    @testset "build_total_magnetization (eigenbasis)" begin
-        observables, names = build_total_magnetization(TEST_HAM, NUM_QUBITS)
-
-        # Returns exactly 1 observable and 1 name
-        @test length(observables) == 1
-        @test length(names) == 1
-        @test names[1] == "Mz"
-
-        # Matrix is DIM x DIM ComplexF64
-        @test size(observables[1]) == (DIM, DIM)
-        @test eltype(observables[1]) == ComplexF64
-
-        # Matrix is Hermitian
-        @test isapprox(observables[1], observables[1]'; atol=1e-12)
-
-        # Gibbs trace check: compute analytical M_z value
-        gibbs_comp = TEST_HAM.eigvecs * Matrix(TEST_GIBBS) * TEST_HAM.eigvecs'
-        mz_analytical = sum(
-            real(tr(gibbs_comp * Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, i))))
-            for i in 1:NUM_QUBITS
-        ) / NUM_QUBITS
-
-        mz_from_obs = real(tr(Matrix(TEST_GIBBS) * observables[1]))
-        @test isapprox(mz_from_obs, mz_analytical; atol=1e-10)
-    end
-
-    # -----------------------------------------------------------------------
-    # Testset 20: build_total_magnetization (Trotter basis)
-    # -----------------------------------------------------------------------
-    @testset "build_total_magnetization (Trotter basis)" begin
-        observables, names = build_total_magnetization(TEST_HAM, NUM_QUBITS; trotter=TEST_TROTTER)
-
-        # Returns exactly 1 observable and 1 name
-        @test length(observables) == 1
-        @test length(names) == 1
-        @test names[1] == "Mz"
-
-        # Matrix is DIM x DIM ComplexF64
-        @test size(observables[1]) == (DIM, DIM)
-        @test eltype(observables[1]) == ComplexF64
-
-        # Matrix is Hermitian
-        @test isapprox(observables[1], observables[1]'; atol=1e-12)
-
-        # Trotter Gibbs trace check
-        gibbs_trotter = QuantumFurnace._gibbs_in_trotter_basis(TEST_HAM, TEST_TROTTER)
-
-        # Analytical M_z (same as eigenbasis — physical observable is basis-independent)
-        gibbs_comp = TEST_HAM.eigvecs * Matrix(TEST_GIBBS) * TEST_HAM.eigvecs'
-        mz_analytical = sum(
-            real(tr(gibbs_comp * Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, i))))
-            for i in 1:NUM_QUBITS
-        ) / NUM_QUBITS
-
-        mz_from_obs = real(tr(Matrix(gibbs_trotter) * observables[1]))
-        @test isapprox(mz_from_obs, mz_analytical; atol=1e-10)
-    end
-
-    # -----------------------------------------------------------------------
-    # Testset 21: build_gap_estimation_observables (eigenbasis)
-    # -----------------------------------------------------------------------
-    @testset "build_gap_estimation_observables (eigenbasis)" begin
-        observables, names = build_gap_estimation_observables(TEST_HAM, NUM_QUBITS)
+    @testset "build_preset_trajectory_observables (eigenbasis)" begin
+        observables, names = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS)
 
         # Returns exactly 5 observables and 5 names
         @test length(observables) == 5
@@ -778,9 +658,11 @@ using BSON
         gibbs_energy_analytical = sum(TEST_HAM.eigvals .* boltz) / sum(boltz)
         @test isapprox(real(tr(Matrix(TEST_GIBBS) * observables[1])), gibbs_energy_analytical; atol=1e-10)
 
-        # M_z observable (second) matches standalone build_total_magnetization output exactly
-        mz_standalone, _ = build_total_magnetization(TEST_HAM, NUM_QUBITS)
-        @test isapprox(observables[2], mz_standalone[1]; atol=1e-14)
+        # M_z observable (second) matches inline reference construction
+        V = TEST_HAM.eigvecs
+        Mz_comp = sum(Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, i)) for i in 1:NUM_QUBITS) / NUM_QUBITS
+        Mz_expected = Matrix{ComplexF64}(V' * Mz_comp * V)
+        @test isapprox(observables[2], Mz_expected; atol=1e-14)
 
         # XX_avg, YY_avg, ZZ_avg (indices 3-5) are per-bond averaged correlations
         V = TEST_HAM.eigvecs
@@ -796,10 +678,10 @@ using BSON
     end
 
     # -----------------------------------------------------------------------
-    # Testset 22: build_gap_estimation_observables (Trotter basis)
+    # Testset 22: build_preset_trajectory_observables (Trotter basis)
     # -----------------------------------------------------------------------
-    @testset "build_gap_estimation_observables (Trotter basis)" begin
-        observables, names = build_gap_estimation_observables(TEST_HAM, NUM_QUBITS; trotter=TEST_TROTTER)
+    @testset "build_preset_trajectory_observables (Trotter basis)" begin
+        observables, names = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS; trotter=TEST_TROTTER)
 
         # Returns exactly 5 observables and 5 names
         @test length(observables) == 5
@@ -831,9 +713,11 @@ using BSON
         gibbs_energy_analytical = sum(TEST_HAM.eigvals .* boltz) / sum(boltz)
         @test isapprox(real(tr(Matrix(gibbs_trotter) * observables[1])), gibbs_energy_analytical; atol=1e-10)
 
-        # M_z observable (second) matches standalone build_total_magnetization output
-        mz_standalone, _ = build_total_magnetization(TEST_HAM, NUM_QUBITS; trotter=TEST_TROTTER)
-        @test isapprox(observables[2], mz_standalone[1]; atol=1e-14)
+        # M_z observable (second) matches inline reference construction
+        V_T = TEST_TROTTER.eigvecs
+        Mz_comp = sum(Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, i)) for i in 1:NUM_QUBITS) / NUM_QUBITS
+        Mz_expected = Matrix{ComplexF64}(V_T' * Mz_comp * V_T)
+        @test isapprox(observables[2], Mz_expected; atol=1e-14)
 
         # Cross-basis consistency: M_z Gibbs trace matches analytical
         gibbs_comp = TEST_HAM.eigvecs * Matrix(TEST_GIBBS) * TEST_HAM.eigvecs'

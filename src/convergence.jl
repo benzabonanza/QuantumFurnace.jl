@@ -11,87 +11,22 @@
 # ---------------------------------------------------------------------------
 
 """
-    build_convergence_observables(hamiltonian::HamHam, num_qubits::Int)
+    build_preset_trajectory_observables(hamiltonian::HamHam, num_qubits::Int; trotter=nothing)
 
-Build nearest-neighbor Z_iZ_{i+1} correlation matrices and the energy observable <H>,
-all in the Hamiltonian eigenbasis.
-
-Returns `(observables::Vector{Matrix{ComplexF64}}, names::Vector{String})`.
-
-CRITICAL: All observables are in the Hamiltonian eigenbasis because `run_trajectories`
-returns `rho_mean` in the eigenbasis for EnergyDomain. The Gibbs state `hamiltonian.gibbs`
-is also in eigenbasis. Using computational basis observables would give wrong `tr(rho * O)` values.
-"""
-function build_convergence_observables(hamiltonian::HamHam, num_qubits::Int)
-    V = hamiltonian.eigvecs
-    observables = Matrix{ComplexF64}[]
-    names = String[]
-
-    # Nearest-neighbor Z_iZ_{i+1} correlations (periodic)
-    for i in 1:num_qubits
-        ZZ_comp = Matrix{ComplexF64}(pad_term([Z, Z], num_qubits, i; periodic=true))
-        # Transform to eigenbasis: O_eigen = V' * O_comp * V
-        ZZ_eigen = V' * ZZ_comp * V
-        push!(observables, ZZ_eigen)
-        j = (i % num_qubits) + 1
-        push!(names, "ZZ_$(i)$(j)")
-    end
-
-    # Energy observable: diagonal matrix of eigenvalues in eigenbasis
-    H_eigen = Matrix{ComplexF64}(diagm(ComplexF64.(hamiltonian.eigvals)))
-    push!(observables, H_eigen)
-    push!(names, "H")
-
-    return observables, names
-end
-
-"""
-    build_convergence_observables_trotter(hamiltonian::HamHam, trotter::TrottTrott, num_qubits::Int)
-
-Build nearest-neighbor Z_iZ_{i+1} correlation matrices and the energy observable <H>,
-all in the Trotter eigenbasis (for TrotterDomain simulations).
-
-Returns `(observables::Vector{Matrix{ComplexF64}}, names::Vector{String})`.
-"""
-function build_convergence_observables_trotter(hamiltonian::HamHam, trotter::TrottTrott, num_qubits::Int)
-    V_T = trotter.eigvecs
-    observables = Matrix{ComplexF64}[]
-    names = String[]
-
-    # Nearest-neighbor Z_iZ_{i+1} correlations (periodic)
-    for i in 1:num_qubits
-        ZZ_comp = Matrix{ComplexF64}(pad_term([Z, Z], num_qubits, i; periodic=true))
-        # Transform to Trotter eigenbasis: O_trotter = V_T' * O_comp * V_T
-        ZZ_trotter = V_T' * ZZ_comp * V_T
-        push!(observables, ZZ_trotter)
-        j = (i % num_qubits) + 1
-        push!(names, "ZZ_$(i)$(j)")
-    end
-
-    # Energy observable in Trotter basis: V_T' * H_comp * V_T (NOT diagonal)
-    H_trotter = V_T' * hamiltonian.data * V_T
-    push!(observables, Matrix{ComplexF64}(H_trotter))
-    push!(names, "H")
-
-    return observables, names
-end
-
-"""
-    build_total_magnetization(hamiltonian::HamHam, num_qubits::Int; trotter=nothing)
-
-Build the per-site total magnetization observable M_z = sum(Z_i) / n,
-transformed into the Hamiltonian eigenbasis (default) or the Trotter eigenbasis
-(when `trotter` is supplied).
-
-Per-site normalization (division by `num_qubits`) is applied so that the
-amplitude is system-size-independent.  The decay rate (spectral gap) is
-unaffected by normalization.
+Build the standard observable bundle for trajectory-based spectral gap
+estimation and convergence monitoring, in the Hamiltonian eigenbasis (default)
+or the Trotter eigenbasis (when `trotter` is supplied).
 
 Returns `(observables::Vector{Matrix{ComplexF64}}, names::Vector{String})`
-matching the existing observable builder convention.
+with 5 observables: `["H", "Mz", "XX_avg", "YY_avg", "ZZ_avg"]`.
+
+- `H`: Energy observable.
+- `Mz`: Per-site total magnetization (sum of Z_i / n).
+- `XX_avg`, `YY_avg`, `ZZ_avg`: Per-bond averaged nearest-neighbor two-site
+  correlations (sum over all periodic bonds, divided by n).
 """
-function build_total_magnetization(hamiltonian::HamHam, num_qubits::Int;
-                                    trotter::Union{TrottTrott, Nothing}=nothing)
+function build_preset_trajectory_observables(hamiltonian::HamHam, num_qubits::Int;
+                                              trotter::Union{TrottTrott, Nothing}=nothing)
     dim = size(hamiltonian.data, 1)
 
     # Build M_z in computational basis: sum(Z_i) / n
@@ -104,30 +39,8 @@ function build_total_magnetization(hamiltonian::HamHam, num_qubits::Int;
     # Select basis transformation matrix
     V = trotter !== nothing ? trotter.eigvecs : hamiltonian.eigvecs
 
-    # Transform to eigenbasis: O_eigen = V' * O_comp * V
+    # Transform M_z to eigenbasis: O_eigen = V' * O_comp * V
     Mz_eigen = Matrix{ComplexF64}(V' * Mz_comp * V)
-
-    return [Mz_eigen], ["Mz"]
-end
-
-"""
-    build_gap_estimation_observables(hamiltonian::HamHam, num_qubits::Int; trotter=nothing)
-
-Build the observable bundle for spectral gap estimation, in the Hamiltonian
-eigenbasis (default) or the Trotter eigenbasis (when `trotter` is supplied).
-
-Returns `(observables::Vector{Matrix{ComplexF64}}, names::Vector{String})`
-with 5 observables: `["H", "Mz", "XX_avg", "YY_avg", "ZZ_avg"]`.
-
-- `H`: Energy observable.
-- `Mz`: Per-site total magnetization (sum of Z_i / n).
-- `XX_avg`, `YY_avg`, `ZZ_avg`: Per-bond averaged nearest-neighbor two-site
-  correlations (sum over all periodic bonds, divided by n).
-"""
-function build_gap_estimation_observables(hamiltonian::HamHam, num_qubits::Int;
-                                           trotter::Union{TrottTrott, Nothing}=nothing)
-    # Get M_z from the dedicated builder (DRY)
-    mz_obs, mz_names = build_total_magnetization(hamiltonian, num_qubits; trotter=trotter)
 
     # Build H in the correct basis
     if trotter !== nothing
@@ -139,15 +52,11 @@ function build_gap_estimation_observables(hamiltonian::HamHam, num_qubits::Int;
     end
 
     # Mutable collections for push! in the correlation loop below
-    observables = Matrix{ComplexF64}[H]
-    names = String["H"]
-    append!(observables, mz_obs)
-    append!(names, mz_names)
+    observables = Matrix{ComplexF64}[H, Mz_eigen]
+    names = String["H", "Mz"]
 
     # Averaged two-site correlations (nearest-neighbor, periodic)
-    V = trotter !== nothing ? trotter.eigvecs : hamiltonian.eigvecs
     for (pauli_pair, pair_name) in [([X, X], "XX_avg"), ([Y, Y], "YY_avg"), ([Z, Z], "ZZ_avg")]
-        dim = size(hamiltonian.data, 1)
         PP_sum = zeros(ComplexF64, dim, dim)
         for i in 1:num_qubits
             PP_sum .+= Matrix{ComplexF64}(pad_term(pauli_pair, num_qubits, i; periodic=true))
