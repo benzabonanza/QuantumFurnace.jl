@@ -11,8 +11,8 @@ See: .planning/PROJECT.md (updated 2026-02-16)
 
 Phase: 25 (Spectral Gap Validation Overhaul) -- COMPLETE
 Plan: 3 of 3 in current phase (Plan 03 COMPLETE)
-Status: Phase 25 complete. Quick-25 confirms n=6 gap mode in k=pi momentum sector (m=3/6), explaining zero overlap with k=0 observables.
-Last activity: 2026-02-18 -- Quick task 25 executed (momentum sector diagnosis)
+Status: Phase 25 complete. Quick-26 added Mz_stagg/Z1 observables (7 total); n=6 gap mode has additional SU(2) symmetry beyond translational.
+Last activity: 2026-02-18 -- Quick task 26 executed (staggered observables)
 
 Progress: [##############################] 48/48 plans (v1.0-v1.3) + 3/3 Phase 25
 
@@ -72,6 +72,9 @@ Key context for v1.3:
 - Quick-25: n=6 gap mode in k=3 (k=pi) momentum sector; n=4 gap mode in k=0 -- translational symmetry momentum mismatch is root cause of zero overlap
 - Quick-25: T_L = kron(T_eigen, conj(T_eigen)) commutes with L to ~1e-15 precision, confirming Lindbladian inherits translational symmetry
 - Quick-25: n=6 gap eigenspace is 3-fold degenerate, all in k=3 sector; need k=pi observables or symmetry-breaking for viable estimation
+- Quick-26: Added Mz_stagg (staggered Z) and Z1 (single-site) to 7-observable bundle; Mz_stagg has |c_gap|=0 for n=6 despite k=pi component
+- Quick-26: n=6 gap mode protected by additional SU(2) spin-rotation symmetry -- staggered-Z alone insufficient
+- Quick-26: Tiered validation thresholds: n=4 < 1%, n=6 < 12% (acknowledges symmetry-protected gap mode)
 
 ### Pending Todos
 
@@ -96,9 +99,10 @@ None
 | 23 | Improve spectral gap estimation: smallest-gap selection criterion | 2026-02-17 | c5f6c68 | [23-improve-spectral-gap-estimation-by-findi](./quick/23-improve-spectral-gap-estimation-by-findi/) |
 | 24 | Add XX_avg, YY_avg, ZZ_avg two-site correlations to gap estimation | 2026-02-17 | 595aba3 | [24-add-two-site-correlations-to-spectral-ga](./quick/24-add-two-site-correlations-to-spectral-ga/) |
 | 25 | Diagnose n=6 zero gap-mode overlap: confirmed k=pi momentum sector | 2026-02-18 | cf61f88 | [25-diagnose-n-6-gap-mode-momentum-sector-co](./quick/25-diagnose-n-6-gap-mode-momentum-sector-co/) |
+| 26 | Add Mz_stagg/Z1 observables; n=6 gap has SU(2) symmetry protection | 2026-02-18 | 9e5b0de | [26-add-staggered-non-symmetric-observables-](./quick/26-add-staggered-non-symmetric-observables-/) |
 
 ## Session Continuity
 
 Last session: 2026-02-18
-Stopped at: Completed quick task 25 (momentum sector diagnosis). n=6 root cause confirmed.
+Stopped at: Completed quick task 26 (staggered observables). 7-observable bundle in place; n=6 needs symmetry-breaking beyond k=pi.
 Resume file: None
