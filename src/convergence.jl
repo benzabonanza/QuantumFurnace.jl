@@ -18,7 +18,7 @@ estimation and convergence monitoring, in the Hamiltonian eigenbasis (default)
 or the Trotter eigenbasis (when `trotter` is supplied).
 
 Returns `(observables::Vector{Matrix{ComplexF64}}, names::Vector{String})`
-with 7 observables: `["H", "Mz", "XX_avg", "YY_avg", "ZZ_avg", "Mz_stagg", "Z1"]`.
+with 8 observables: `["H", "Mz", "XX_avg", "YY_avg", "ZZ_avg", "Mz_stagg", "Z1", "XZ_stagg"]`.
 
 - `H`: Energy observable.
 - `Mz`: Per-site total magnetization (sum of Z_i / n).
@@ -28,6 +28,9 @@ with 7 observables: `["H", "Mz", "XX_avg", "YY_avg", "ZZ_avg", "Mz_stagg", "Z1"]
   k=pi momentum component for coupling to gap modes in non-zero momentum sectors.
 - `Z1`: Single-site Z on qubit 1 (not translation-averaged). Has components
   in all momentum sectors.
+- `XZ_stagg`: Per-bond staggered nearest-neighbor XZ correlation (sum of
+  (-1)^i X_i Z_{i+1} / n). Has k=pi momentum component and breaks SU(2)
+  spin-rotation symmetry, enabling coupling to symmetry-protected gap modes.
 """
 function build_preset_trajectory_observables(hamiltonian::HamHam, num_qubits::Int;
                                               trotter::Union{TrottTrott, Nothing}=nothing)
@@ -87,6 +90,17 @@ function build_preset_trajectory_observables(hamiltonian::HamHam, num_qubits::In
     Z1_eigen = Matrix{ComplexF64}(V' * Z1_comp * V)
     push!(observables, Z1_eigen)
     push!(names, "Z1")
+
+    # Staggered XZ correlation: sum((-1)^i * X_i Z_{i+1}) / n  (breaks SU(2), has k=pi)
+    XZ_stagg_comp = zeros(ComplexF64, dim, dim)
+    for i in 1:num_qubits
+        sign = (-1)^i
+        XZ_stagg_comp .+= sign .* Matrix{ComplexF64}(pad_term([X, Z], num_qubits, i; periodic=true))
+    end
+    XZ_stagg_comp ./= num_qubits  # Per-bond normalization (consistent with XX_avg, YY_avg, ZZ_avg)
+    XZ_stagg_eigen = Matrix{ComplexF64}(V' * XZ_stagg_comp * V)
+    push!(observables, XZ_stagg_eigen)
+    push!(names, "XZ_stagg")
 
     return observables, names
 end
