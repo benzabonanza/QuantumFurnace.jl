@@ -11,15 +11,15 @@ See: .planning/PROJECT.md (updated 2026-02-16)
 
 Phase: 25 (Spectral Gap Validation Overhaul) -- COMPLETE
 Plan: 3 of 3 in current phase (Plan 03 COMPLETE)
-Status: Phase 25 complete. Quick-28 confirmed disorder breaks n=6 symmetry protection (Mz_stagg |c_gap|=0.120); gap estimation biased at 34% due to selection artifact.
-Last activity: 2026-02-18 -- Quick task 28 executed (disordered Heisenberg gap validation)
+Status: Phase 25 complete. Quick-29: XX_stagg has zero gap-mode overlap for disordered Heisenberg (|c_gap|=2.5e-5 n=4, 3.5e-6 n=6). XX two-site correlations do not couple to gap mode.
+Last activity: 2026-02-18 -- Quick task 29 executed (XX_stagg disordered Heisenberg gap validation)
 
 Progress: [##############################] 48/48 plans (v1.0-v1.3) + 3/3 Phase 25
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 62 (v1.0: 10, v1.1: 16, quick: 14, v1.2: 12, cleanup: 3, v1.3: 7, Phase 25: 3)
+- Total plans completed: 63 (v1.0: 10, v1.1: 16, quick: 15, v1.2: 12, cleanup: 3, v1.3: 7, Phase 25: 3)
 
 **By Milestone:**
 
@@ -82,6 +82,10 @@ Key context for v1.3:
 - Quick-28: Gap estimation still biased with disorder: n=4 at 48.7%, n=6 at 34.1% -- smallest-gap selection picks Mz_stagg which underestimates (gap/exact = 0.51x, 0.66x)
 - Quick-28: XZ_stagg has zero overlap even with disorder -- residual symmetry prevents coupling
 - Quick-28: Disordered Hamiltonians have different gap values: n=4: 0.173 (vs pure ~0.120); n=6: 0.113 (vs pure ~0.046)
+- Quick-29: XX_stagg (staggered nearest-neighbor XX) has zero gap-mode overlap even with disorder: |c_gap|=2.5e-5 (n=4), 3.5e-6 (n=6)
+- Quick-29: XX_stagg dominant modes at k~42-43 (2x gap rate) -- XX two-site correlation fundamentally misaligned with gap mode
+- Quick-29: Gap mode has Z-character selectivity: Mz_stagg/Z1 couple (Quick-28) but XX_stagg does not
+- Quick-29: H alone gives gap/exact = 1.21x (n=4), 1.63x (n=6) -- discrete-step Kraus overestimation confirmed
 
 ### Pending Todos
 
@@ -109,9 +113,10 @@ None
 | 26 | Add Mz_stagg/Z1 observables; n=6 gap has SU(2) symmetry protection | 2026-02-18 | 9e5b0de | [26-add-staggered-non-symmetric-observables-](./quick/26-add-staggered-non-symmetric-observables-/) |
 | 27 | Add XZ_stagg observable; n=6 gap protected beyond SU(2) | 2026-02-18 | a0f4c62 | [27-add-symmetry-breaking-observable-for-n-6](./quick/27-add-symmetry-breaking-observable-for-n-6/) |
 | 28 | Disorder breaks n=6 gap-mode symmetry; estimation biased at 34% | 2026-02-18 | 82a8014 | [28-test-gap-mode-coupling-with-random-field](./quick/28-test-gap-mode-coupling-with-random-field/) |
+| 29 | XX_stagg has zero gap-mode overlap; XX correlations don't couple to gap | 2026-02-18 | 4914103 | [29-rigorous-disordered-heisenberg-gap-estim](./quick/29-rigorous-disordered-heisenberg-gap-estim/) |
 
 ## Session Continuity
 
 Last session: 2026-02-18
-Stopped at: Completed quick task 28 (disordered Heisenberg gap validation). Disorder breaks n=6 symmetry protection (Mz_stagg |c_gap|=0.120); gap estimation biased at 34% due to smallest-gap selection artifact.
+Stopped at: Completed quick task 29 (XX_stagg disordered Heisenberg gap validation). XX_stagg has zero gap-mode overlap (|c_gap|~1e-5) for disordered Heisenberg. XX two-site correlations fundamentally misaligned with gap mode. Gap mode has Z-character selectivity.
 Resume file: None
