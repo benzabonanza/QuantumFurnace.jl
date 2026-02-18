@@ -11,15 +11,15 @@ See: .planning/PROJECT.md (updated 2026-02-16)
 
 Phase: 25 (Spectral Gap Validation Overhaul) -- COMPLETE
 Plan: 3 of 3 in current phase (Plan 03 COMPLETE)
-Status: Phase 25 complete. Quick-27 added XZ_stagg (8 observables); n=6 gap mode protected beyond SU(2) -- all 8 observables have zero gap-mode overlap.
-Last activity: 2026-02-18 -- Quick task 27 executed (XZ_stagg symmetry-breaking observable)
+Status: Phase 25 complete. Quick-28 confirmed disorder breaks n=6 symmetry protection (Mz_stagg |c_gap|=0.120); gap estimation biased at 34% due to selection artifact.
+Last activity: 2026-02-18 -- Quick task 28 executed (disordered Heisenberg gap validation)
 
 Progress: [##############################] 48/48 plans (v1.0-v1.3) + 3/3 Phase 25
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 61 (v1.0: 10, v1.1: 16, quick: 13, v1.2: 12, cleanup: 3, v1.3: 7, Phase 25: 3)
+- Total plans completed: 62 (v1.0: 10, v1.1: 16, quick: 14, v1.2: 12, cleanup: 3, v1.3: 7, Phase 25: 3)
 
 **By Milestone:**
 
@@ -78,6 +78,10 @@ Key context for v1.3:
 - Quick-27: XZ_stagg (staggered XZ correlation) added as 8th observable; has |c_gap|=0 for n=6 despite breaking SU(2) and having k=pi
 - Quick-27: n=6 gap mode protection is stronger than SU(2) spin-rotation -- likely involves discrete symmetries (parity, spin-flip) of Heisenberg chain
 - Quick-27: n=4 at 0.72%, n=6 at 10.71% -- no change from adding XZ_stagg; threshold stays at 12%
+- Quick-28: Disorder breaks ALL n=6 symmetry protection: Mz_stagg achieves |c_gap|=0.120 (was 0.000 for pure Heisenberg)
+- Quick-28: Gap estimation still biased with disorder: n=4 at 48.7%, n=6 at 34.1% -- smallest-gap selection picks Mz_stagg which underestimates (gap/exact = 0.51x, 0.66x)
+- Quick-28: XZ_stagg has zero overlap even with disorder -- residual symmetry prevents coupling
+- Quick-28: Disordered Hamiltonians have different gap values: n=4: 0.173 (vs pure ~0.120); n=6: 0.113 (vs pure ~0.046)
 
 ### Pending Todos
 
@@ -104,9 +108,10 @@ None
 | 25 | Diagnose n=6 zero gap-mode overlap: confirmed k=pi momentum sector | 2026-02-18 | cf61f88 | [25-diagnose-n-6-gap-mode-momentum-sector-co](./quick/25-diagnose-n-6-gap-mode-momentum-sector-co/) |
 | 26 | Add Mz_stagg/Z1 observables; n=6 gap has SU(2) symmetry protection | 2026-02-18 | 9e5b0de | [26-add-staggered-non-symmetric-observables-](./quick/26-add-staggered-non-symmetric-observables-/) |
 | 27 | Add XZ_stagg observable; n=6 gap protected beyond SU(2) | 2026-02-18 | a0f4c62 | [27-add-symmetry-breaking-observable-for-n-6](./quick/27-add-symmetry-breaking-observable-for-n-6/) |
+| 28 | Disorder breaks n=6 gap-mode symmetry; estimation biased at 34% | 2026-02-18 | 82a8014 | [28-test-gap-mode-coupling-with-random-field](./quick/28-test-gap-mode-coupling-with-random-field/) |
 
 ## Session Continuity
 
 Last session: 2026-02-18
-Stopped at: Completed quick task 27 (XZ_stagg observable). 8-observable bundle; n=6 gap mode protected beyond SU(2) -- all observables have zero overlap.
+Stopped at: Completed quick task 28 (disordered Heisenberg gap validation). Disorder breaks n=6 symmetry protection (Mz_stagg |c_gap|=0.120); gap estimation biased at 34% due to smallest-gap selection artifact.
 Resume file: None
