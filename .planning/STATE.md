@@ -11,8 +11,8 @@ See: .planning/PROJECT.md (updated 2026-02-16)
 
 Phase: 25 (Spectral Gap Validation Overhaul) -- COMPLETE
 Plan: 3 of 3 in current phase (Plan 03 COMPLETE)
-Status: Phase 25 complete. Quick-30: Gap error NOT O(delta) -- error/delta varies 96x. Richardson extrapolation ineffective (1.0x). Dominant error is systematic observable bias, not Trotter discretization.
-Last activity: 2026-02-18 -- Quick task 30 executed (delta-scaling validation and Richardson extrapolation)
+Status: Phase 25 complete. Quick-31: Longer mixing (20) + uniform psi0 does NOT fix O(delta) scaling -- ratio spread worsens to 199x. Richardson still ineffective. Observable bias is parameter-independent.
+Last activity: 2026-02-18 -- Quick task 31 executed (delta-scaling revalidation with longer mixing and uniform psi0)
 
 Progress: [##############################] 48/48 plans (v1.0-v1.3) + 3/3 Phase 25
 
@@ -90,6 +90,10 @@ Key context for v1.3:
 - Quick-30: Richardson extrapolation provides 1.0x improvement (ineffective) -- error not dominated by O(delta) Trotter term
 - Quick-30: Dominant error source is systematic observable bias, not Trotter discretization; YY_avg achieves 2-6% error vs Mz_stagg at 37-49%
 - Quick-30: Non-monotonic error in delta (49% at 0.01 vs 37% at 0.001 vs 39% at 0.1) rules out simple O(delta^p) scaling
+- Quick-31: Longer mixing (20) + uniform psi0 does NOT fix O(delta) scaling -- error/delta ratio spread 199x (worse than v1's 96x)
+- Quick-31: Richardson extrapolation still ineffective: 1.1x and 0.9x improvement (negligible)
+- Quick-31: Mz_stagg error changes sign and grows with smaller delta (+0.6% at 0.1, -6.5% at 0.01, -19.7% at 0.001)
+- Quick-31: Observable bias is parameter-independent -- not fixed by mixing time, initial state, or skip_initial
 
 ### Pending Todos
 
@@ -119,9 +123,10 @@ None
 | 28 | Disorder breaks n=6 gap-mode symmetry; estimation biased at 34% | 2026-02-18 | 82a8014 | [28-test-gap-mode-coupling-with-random-field](./quick/28-test-gap-mode-coupling-with-random-field/) |
 | 29 | XX_stagg has zero gap-mode overlap; XX correlations don't couple to gap | 2026-02-18 | 4914103 | [29-rigorous-disordered-heisenberg-gap-estim](./quick/29-rigorous-disordered-heisenberg-gap-estim/) |
 | 30 | Gap error NOT O(delta); Richardson extrapolation ineffective (1.0x) | 2026-02-18 | 502afe4 | [30-validate-trotter-delta-order-gap-error-a](./quick/30-validate-trotter-delta-order-gap-error-a/) |
+| 31 | Longer mixing + uniform psi0 does NOT fix O(delta) scaling (199x ratio spread) | 2026-02-18 | 06fcff8 | [31-delta-scaling-revalidation-with-longer-m](./quick/31-delta-scaling-revalidation-with-longer-m/) |
 
 ## Session Continuity
 
 Last session: 2026-02-18
-Stopped at: Completed quick task 30 (delta-scaling validation and Richardson extrapolation). Gap estimation error is NOT O(delta) -- error/delta varies 96x. Richardson extrapolation ineffective (1.0x improvement). Dominant error is systematic observable bias, not Trotter discretization. YY_avg most accurate at 2-6%.
+Stopped at: Completed quick task 31 (delta-scaling revalidation with longer mixing and uniform psi0). Longer mixing (20) + uniform psi0 does NOT fix O(delta) scaling -- ratio spread worsens to 199x (was 96x in v1). Richardson still ineffective (1.1x/0.9x). Observable bias is parameter-independent.
 Resume file: None
