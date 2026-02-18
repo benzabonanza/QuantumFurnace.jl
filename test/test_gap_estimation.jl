@@ -193,4 +193,55 @@ using LinearAlgebra
         @test r2_3 == 0.92
     end
 
+    # -----------------------------------------------------------------
+    @testset "Eigenbasis Overlap Analysis" begin
+
+        # Shared setup: construct Liouvillian for the 3-qubit SMALL system
+        config_l = make_small_liouv_config(TimeDomain(); with_coherent=false)
+        liouv_result = run_lindbladian(SMALL_JUMPS, config_l, SMALL_HAM)
+        L = liouv_result.liouvillian
+
+        # Build observables
+        obs, names = build_preset_trajectory_observables(SMALL_HAM, 3)
+
+        # Initial state: excited state (far from Gibbs at high beta)
+        psi0 = zeros(ComplexF64, SMALL_DIM)
+        psi0[end] = 1.0
+        rho0 = psi0 * psi0'
+
+        # Call the analysis function
+        result = eigenbasis_overlap_analysis(L, obs, names, rho0)
+
+        @testset "Basic return type and structure" begin
+            @test result isa OverlapAnalysisResult
+            @test length(result.eigenvalues) == SMALL_DIM^2
+            @test result.exact_gap > 0.0
+            @test length(result.observable_names) == 5
+            @test result.observable_names == names
+            @test size(result.overlap_coefficients) == (5, SMALL_DIM^2)
+            @test length(result.gap_mode_overlap) == 5
+            @test length(result.relative_gap_overlap) == 5
+            @test all(x -> x >= 0.0, result.gap_mode_overlap)
+            @test all(x -> 0.0 <= x <= 1.0, result.relative_gap_overlap)
+        end
+
+        @testset "Exact gap matches run_lindbladian" begin
+            # ARPACK (shift-invert) and dense eigen agree to ~1e-10;
+            # use atol=1e-8 to allow for numerical method differences
+            @test isapprox(result.exact_gap, abs(real(liouv_result.spectral_gap)); atol=1e-8)
+        end
+
+        @testset "Overlap coefficients reconstruct time series at t=0" begin
+            # At t=0: <O>(0) = sum_k c_k = tr(O * rho0)
+            c_sum = sum(result.overlap_coefficients[1, :])
+            tr_O_rho0 = tr(obs[1] * rho0)
+            @test isapprox(real(c_sum), real(tr_O_rho0); atol=1e-10)
+        end
+
+        @testset "Steady state mode has zero decay" begin
+            @test abs(real(result.eigenvalues[1])) < 1e-10
+        end
+
+    end
+
 end
