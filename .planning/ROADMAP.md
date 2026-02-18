@@ -172,14 +172,15 @@ Phase 21 (fitting)      ---+-----------------------------+--> Phase 23 (API) -->
 | 22. Observable-Only Trajectory Runner | v1.3 | 1/1 | Complete | 2026-02-17 |
 | 23. Gap Estimation API | v1.3 | 1/1 | Complete | 2026-02-17 |
 | 24. Cross-Validation | v1.3 | 3/3 | Complete | 2026-02-17 |
+| 25. Spectral Gap Validation Overhaul | v1.3 | 3/3 | Complete | 2026-02-18 |
 
 ### Phase 25: Spectral Gap Validation Overhaul — consolidate validation, verify ARPACK vs eigen, eigenbasis overlap analysis, high-ntraj estimation
 
 **Goal:** Clean-slate rebuild of spectral gap validation: delete old code, consolidate to single observable builder, add eigenbasis overlap diagnostic, verify ARPACK vs eigen, run 20k-trajectory estimation targeting <1% relative error
 **Depends on:** Phase 24
-**Plans:** 3 plans
+**Plans:** 3 plans -- completed 2026-02-18
 
 Plans:
-- [ ] 25-01-PLAN.md -- Delete old validation code, consolidate 4 observable builders into build_preset_trajectory_observables, update all tests
-- [ ] 25-02-PLAN.md -- Implement OverlapAnalysisResult struct and eigenbasis_overlap_analysis exported function with tests
-- [ ] 25-03-PLAN.md -- Unified validation script: ARPACK check, overlap analysis, 20k-trajectory estimation for n=4 and n=6
+- [x] 25-01-PLAN.md -- Delete old validation code, consolidate 4 observable builders into build_preset_trajectory_observables, update all tests
+- [x] 25-02-PLAN.md -- Implement OverlapAnalysisResult struct and eigenbasis_overlap_analysis exported function with tests
+- [x] 25-03-PLAN.md -- Unified validation script: ARPACK check, overlap analysis, 20k-trajectory estimation for n=4 and n=6
