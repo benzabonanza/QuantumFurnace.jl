@@ -11,15 +11,15 @@ See: .planning/PROJECT.md (updated 2026-02-16)
 
 Phase: 25 (Spectral Gap Validation Overhaul) -- COMPLETE
 Plan: 3 of 3 in current phase (Plan 03 COMPLETE)
-Status: Phase 25 complete. Quick-26 added Mz_stagg/Z1 observables (7 total); n=6 gap mode has additional SU(2) symmetry beyond translational.
-Last activity: 2026-02-18 -- Quick task 26 executed (staggered observables)
+Status: Phase 25 complete. Quick-27 added XZ_stagg (8 observables); n=6 gap mode protected beyond SU(2) -- all 8 observables have zero gap-mode overlap.
+Last activity: 2026-02-18 -- Quick task 27 executed (XZ_stagg symmetry-breaking observable)
 
 Progress: [##############################] 48/48 plans (v1.0-v1.3) + 3/3 Phase 25
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 60 (v1.0: 10, v1.1: 16, quick: 12, v1.2: 12, cleanup: 3, v1.3: 7, Phase 25: 3)
+- Total plans completed: 61 (v1.0: 10, v1.1: 16, quick: 13, v1.2: 12, cleanup: 3, v1.3: 7, Phase 25: 3)
 
 **By Milestone:**
 
@@ -75,6 +75,9 @@ Key context for v1.3:
 - Quick-26: Added Mz_stagg (staggered Z) and Z1 (single-site) to 7-observable bundle; Mz_stagg has |c_gap|=0 for n=6 despite k=pi component
 - Quick-26: n=6 gap mode protected by additional SU(2) spin-rotation symmetry -- staggered-Z alone insufficient
 - Quick-26: Tiered validation thresholds: n=4 < 1%, n=6 < 12% (acknowledges symmetry-protected gap mode)
+- Quick-27: XZ_stagg (staggered XZ correlation) added as 8th observable; has |c_gap|=0 for n=6 despite breaking SU(2) and having k=pi
+- Quick-27: n=6 gap mode protection is stronger than SU(2) spin-rotation -- likely involves discrete symmetries (parity, spin-flip) of Heisenberg chain
+- Quick-27: n=4 at 0.72%, n=6 at 10.71% -- no change from adding XZ_stagg; threshold stays at 12%
 
 ### Pending Todos
 
@@ -100,9 +103,10 @@ None
 | 24 | Add XX_avg, YY_avg, ZZ_avg two-site correlations to gap estimation | 2026-02-17 | 595aba3 | [24-add-two-site-correlations-to-spectral-ga](./quick/24-add-two-site-correlations-to-spectral-ga/) |
 | 25 | Diagnose n=6 zero gap-mode overlap: confirmed k=pi momentum sector | 2026-02-18 | cf61f88 | [25-diagnose-n-6-gap-mode-momentum-sector-co](./quick/25-diagnose-n-6-gap-mode-momentum-sector-co/) |
 | 26 | Add Mz_stagg/Z1 observables; n=6 gap has SU(2) symmetry protection | 2026-02-18 | 9e5b0de | [26-add-staggered-non-symmetric-observables-](./quick/26-add-staggered-non-symmetric-observables-/) |
+| 27 | Add XZ_stagg observable; n=6 gap protected beyond SU(2) | 2026-02-18 | a0f4c62 | [27-add-symmetry-breaking-observable-for-n-6](./quick/27-add-symmetry-breaking-observable-for-n-6/) |
 
 ## Session Continuity
 
 Last session: 2026-02-18
-Stopped at: Completed quick task 26 (staggered observables). 7-observable bundle in place; n=6 needs symmetry-breaking beyond k=pi.
+Stopped at: Completed quick task 27 (XZ_stagg observable). 8-observable bundle; n=6 gap mode protected beyond SU(2) -- all observables have zero overlap.
 Resume file: None
