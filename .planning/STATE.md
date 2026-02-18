@@ -11,15 +11,15 @@ See: .planning/PROJECT.md (updated 2026-02-16)
 
 Phase: 25 (Spectral Gap Validation Overhaul) -- COMPLETE
 Plan: 3 of 3 in current phase (Plan 03 COMPLETE)
-Status: Phase 25 complete. Quick-31: Longer mixing (20) + uniform psi0 does NOT fix O(delta) scaling -- ratio spread worsens to 199x. Richardson still ineffective. Observable bias is parameter-independent.
-Last activity: 2026-02-18 -- Quick task 31 executed (delta-scaling revalidation with longer mixing and uniform psi0)
+Status: Phase 25 complete. Quick-32: Trajectory simulation confirmed CORRECT. Non-monotonic gap estimation (Quick-30/31) originates in single-exponential fitting procedure, not CPTP channel simulation. 7/8 observable errors decrease monotonically with delta.
+Last activity: 2026-02-18 -- Quick task 32 executed (investigate non-monotonic delta scaling root cause)
 
 Progress: [##############################] 48/48 plans (v1.0-v1.3) + 3/3 Phase 25
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 64 (v1.0: 10, v1.1: 16, quick: 16, v1.2: 12, cleanup: 3, v1.3: 7, Phase 25: 3)
+- Total plans completed: 65 (v1.0: 10, v1.1: 16, quick: 17, v1.2: 12, cleanup: 3, v1.3: 7, Phase 25: 3)
 
 **By Milestone:**
 
@@ -94,6 +94,10 @@ Key context for v1.3:
 - Quick-31: Richardson extrapolation still ineffective: 1.1x and 0.9x improvement (negligible)
 - Quick-31: Mz_stagg error changes sign and grows with smaller delta (+0.6% at 0.1, -6.5% at 0.01, -19.7% at 0.001)
 - Quick-31: Observable bias is parameter-independent -- not fixed by mixing time, initial state, or skip_initial
+- Quick-32: Trajectory simulation CORRECT: 7/8 observable errors decrease monotonically with delta (O(1e-3) magnitude)
+- Quick-32: Multi-step trace distance non-monotonicity at delta=0.001 is statistical noise floor (50k traj, 20k steps)
+- Quick-32: Non-monotonic gap estimation (37-49% errors) originates in single-exponential fitting, not CPTP channel simulation
+- Quick-32: No code bug found -- gap estimation improvement requires better fitting model (multi-exponential, Prony/ESPRIT, matrix pencil)
 
 ### Pending Todos
 
@@ -124,9 +128,10 @@ None
 | 29 | XX_stagg has zero gap-mode overlap; XX correlations don't couple to gap | 2026-02-18 | 4914103 | [29-rigorous-disordered-heisenberg-gap-estim](./quick/29-rigorous-disordered-heisenberg-gap-estim/) |
 | 30 | Gap error NOT O(delta); Richardson extrapolation ineffective (1.0x) | 2026-02-18 | 502afe4 | [30-validate-trotter-delta-order-gap-error-a](./quick/30-validate-trotter-delta-order-gap-error-a/) |
 | 31 | Longer mixing + uniform psi0 does NOT fix O(delta) scaling (199x ratio spread) | 2026-02-18 | 06fcff8 | [31-delta-scaling-revalidation-with-longer-m](./quick/31-delta-scaling-revalidation-with-longer-m/) |
+| 32 | Trajectory simulation confirmed correct; non-monotonic gap estimation is fitting artifact | 2026-02-18 | dfd3baf | [32-investigate-and-fix-non-monotonic-delta-](./quick/32-investigate-and-fix-non-monotonic-delta-/) |
 
 ## Session Continuity
 
 Last session: 2026-02-18
-Stopped at: Completed quick task 31 (delta-scaling revalidation with longer mixing and uniform psi0). Longer mixing (20) + uniform psi0 does NOT fix O(delta) scaling -- ratio spread worsens to 199x (was 96x in v1). Richardson still ineffective (1.1x/0.9x). Observable bias is parameter-independent.
+Stopped at: Completed quick task 32 (investigate non-monotonic delta scaling root cause). Trajectory simulation confirmed CORRECT. Non-monotonic gap estimation originates in single-exponential fitting, not simulation. 7/8 observable errors decrease monotonically with delta. No code changes needed.
 Resume file: None
