@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-16)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** Phase 25 (Spectral Gap Validation Overhaul) -- Plan 02 complete
+**Current focus:** Phase 25 (Spectral Gap Validation Overhaul) -- COMPLETE
 
 ## Current Position
 
-Phase: 25 (Spectral Gap Validation Overhaul)
-Plan: 2 of 3 in current phase (Plan 02 COMPLETE)
-Status: Plan 02 eigenbasis overlap analysis complete. OverlapAnalysisResult struct and eigenbasis_overlap_analysis function implemented and tested. All 666 tests pass.
-Last activity: 2026-02-18 -- Plan 25-02 executed (eigenbasis overlap analysis)
+Phase: 25 (Spectral Gap Validation Overhaul) -- COMPLETE
+Plan: 3 of 3 in current phase (Plan 03 COMPLETE)
+Status: Phase 25 complete. Unified validation script created. n=4 pipeline validated end-to-end (0.72% relative error). n=6 fails (10.7%) due to zero gap-mode overlap -- diagnosed with evidence.
+Last activity: 2026-02-18 -- Plan 25-03 executed (unified validation script)
 
-Progress: [##############################] 48/48 plans (v1.0-v1.3) + 2/3 Phase 25
+Progress: [##############################] 48/48 plans (v1.0-v1.3) + 3/3 Phase 25
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 58 (v1.0: 10, v1.1: 16, quick: 11, v1.2: 12, cleanup: 3, v1.3: 7, Phase 25: 2)
+- Total plans completed: 59 (v1.0: 10, v1.1: 16, quick: 11, v1.2: 12, cleanup: 3, v1.3: 7, Phase 25: 3)
 
 **By Milestone:**
 
@@ -65,6 +65,10 @@ Key context for v1.3:
 - Phase 25-02: ARPACK vs dense eigen gap agrees to ~1.8e-10 for 3-qubit system (test atol=1e-8)
 - Phase 25-02: dot(O_vec, V[:,k]) computes vec(O)^H * v_k -- correct for Hermitian observable eigenbasis projection
 - Phase 25-02: Relative gap overlap excludes steady-state mode (k=1) from denominator
+- Phase 25-03: n=4 ARPACK vs eigen agrees to 1.2e-10 (well within 1e-8 threshold)
+- Phase 25-03: n=4 gap estimation passes with 0.72% relative error (ZZ_avg best, 20k trajectories)
+- Phase 25-03: n=6 all observables have zero gap-mode overlap -- estimation fails at 10.7% relative error
+- Phase 25-03: /experiments/ is gitignored; validation script force-added to git
 
 ### Pending Todos
 
@@ -92,5 +96,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-18
-Stopped at: Completed 25-02-PLAN.md (eigenbasis overlap analysis). Ready for 25-03 (high-ntraj validation script).
+Stopped at: Completed 25-03-PLAN.md (unified validation script). Phase 25 complete.
 Resume file: None
