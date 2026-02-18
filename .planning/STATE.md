@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-16)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.3 Mixing Time Estimation -- Phase 24 (Cross-Validation)
+**Current focus:** Phase 25 (Spectral Gap Validation Overhaul) -- Plan 01 complete
 
 ## Current Position
 
-Phase: 24 of 24 (Cross-Validation) -- COMPLETE
-Plan: 3 of 3 in current phase (COMPLETE)
-Status: Phase 24 complete (gap closure plan 03 executed). v1.3 Mixing Time Estimation milestone complete.
-Last activity: 2026-02-17 -- Quick task 24 executed + validated (ZZ_avg: n=6 factor 1.46x→0.92x, n=4 factor 1.17x→0.87x)
+Phase: 25 (Spectral Gap Validation Overhaul)
+Plan: 1 of 3 in current phase (Plan 01 COMPLETE)
+Status: Plan 01 consolidation complete. 4 experiment scripts deleted, 4 observable builders merged into 1, cross-validation code removed. All 653 tests pass.
+Last activity: 2026-02-18 -- Plan 25-01 executed (consolidation)
 
-Progress: [##############################] 48/48 plans (v1.0-v1.3 ALL COMPLETE)
+Progress: [##############################] 48/48 plans (v1.0-v1.3) + 1/3 Phase 25
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 56 (v1.0: 10, v1.1: 16, quick: 11, v1.2: 12, cleanup: 3, v1.3: 7)
+- Total plans completed: 57 (v1.0: 10, v1.1: 16, quick: 11, v1.2: 12, cleanup: 3, v1.3: 7, Phase 25: 1)
 
 **By Milestone:**
 
@@ -59,6 +59,9 @@ Key context for v1.3:
 - Quick-23: Smallest-gap selection reduces n=4 factor from ~1.6x to ~1.17x; n=6 at ~1.46x; both pass [0.8, 1.5]
 - Quick-24: Added XX_avg, YY_avg, ZZ_avg per-bond averaged correlations to gap estimation (5 observables total)
 - Quick-24: SingularException in LsqFit.stderror handled gracefully with Inf/(-Inf,Inf) fallback
+- Phase 25-01: Single observable builder (build_preset_trajectory_observables) replaces 4 old builders
+- Phase 25-01: Mz construction inlined into single builder (was delegated to deleted build_total_magnetization)
+- Phase 25-01: CrossValidationResult and cross_validate_gap removed from source and exports
 
 ### Pending Todos
 
@@ -67,6 +70,10 @@ None
 ### Blockers/Concerns
 
 None
+
+### Roadmap Evolution
+
+- Phase 25 added: Spectral Gap Validation Overhaul — consolidate validation, verify ARPACK vs eigen, eigenbasis overlap analysis, high-ntraj estimation
 
 ### Quick Tasks Completed
 
@@ -81,6 +88,6 @@ None
 
 ## Session Continuity
 
-Last session: 2026-02-17
-Stopped at: Completed quick task 24 + validation. ZZ_avg dramatically improves n=6 (0.92x vs 1.46x). n=4 slightly under-estimates (0.87x). Pass criterion [0.8, 1.5] may need widening on lower end. Discussion deferred to next session.
+Last session: 2026-02-18
+Stopped at: Completed 25-01-PLAN.md (consolidation). Ready for 25-02 (ARPACK vs eigen verification).
 Resume file: None
