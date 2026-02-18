@@ -203,3 +203,125 @@ function estimate_spectral_gap(
         skip_initial,
     )
 end
+
+# ---------------------------------------------------------------------------
+# OverlapAnalysisResult struct
+# ---------------------------------------------------------------------------
+
+"""
+    OverlapAnalysisResult
+
+Result of eigenbasis overlap analysis for observable-Lindbladian coupling diagnostics.
+
+Returned by [`eigenbasis_overlap_analysis`](@ref). Decomposes each observable into
+the Lindbladian eigenbasis to quantify how strongly each observable couples to the
+spectral gap mode (first excited eigenmode).
+
+# Fields
+- `eigenvalues::Vector{ComplexF64}`: Liouvillian eigenvalues sorted by |Re(lambda)|.
+- `exact_gap::Float64`: `abs(real(eigenvalues[2]))` -- the exact spectral gap.
+- `observable_names::Vector{String}`: Names of the observables analyzed.
+- `overlap_coefficients::Matrix{ComplexF64}`: `n_obs x n_modes` matrix of expansion
+  coefficients `c_k = <O|v_k> * alpha_k` where `v_k` is the k-th eigenmode and
+  `alpha_k` is the initial state projection onto mode k.
+- `gap_mode_overlap::Vector{Float64}`: `|c_2|` for each observable (mode 2 = gap mode).
+- `relative_gap_overlap::Vector{Float64}`: `|c_2| / sum(|c_k| for k>=2)` for each
+  observable, excluding the steady-state mode.
+"""
+struct OverlapAnalysisResult
+    eigenvalues::Vector{ComplexF64}
+    exact_gap::Float64
+    observable_names::Vector{String}
+    overlap_coefficients::Matrix{ComplexF64}
+    gap_mode_overlap::Vector{Float64}
+    relative_gap_overlap::Vector{Float64}
+end
+
+# ---------------------------------------------------------------------------
+# Eigenbasis overlap analysis
+# ---------------------------------------------------------------------------
+
+"""
+    eigenbasis_overlap_analysis(L, observables, observable_names, rho0) -> OverlapAnalysisResult
+
+Decompose observables into the Lindbladian eigenbasis and measure coupling to
+the spectral gap mode.
+
+This is the key diagnostic for gap estimation: an observable that does not overlap
+with the first excited eigenmode of L cannot estimate the spectral gap, regardless
+of trajectory count. Larger `gap_mode_overlap` means the observable is better suited
+for gap estimation.
+
+# Arguments
+- `L::Matrix{<:Complex}`: Full dense Liouvillian superoperator matrix.
+- `observables::Vector{<:Matrix{<:Complex}}`: Observable matrices (in the same basis as L).
+- `observable_names::Vector{String}`: Names matching each observable.
+- `rho0::Matrix{<:Complex}`: Initial density matrix (in the same basis as L).
+
+# Returns
+An [`OverlapAnalysisResult`](@ref) containing eigenvalues, overlap coefficients,
+and per-observable gap mode coupling metrics.
+
+# Mathematical Details
+The time-dependent expectation value is `<O>(t) = sum_k c_k * exp(lambda_k * t)`
+where `c_k = vec(O)^dagger * v_k * alpha_k`, `v_k` are Liouvillian eigenvectors,
+and `alpha_k = (V \\ vec(rho0))_k` is the initial state expansion coefficient.
+
+# Example
+```julia
+L = Matrix(liouv_result.liouvillian)
+obs, names = build_preset_trajectory_observables(ham, n)
+rho0 = psi0 * psi0'
+result = eigenbasis_overlap_analysis(L, obs, names, rho0)
+println("Gap mode overlap: ", result.gap_mode_overlap)
+```
+"""
+function eigenbasis_overlap_analysis(
+    L::Matrix{<:Complex},
+    observables::Vector{<:Matrix{<:Complex}},
+    observable_names::Vector{String},
+    rho0::Matrix{<:Complex},
+)
+    # Full dense eigendecomposition
+    F = eigen(L)
+    perm = sortperm(abs.(real.(F.values)))
+    lambda = F.values[perm]
+    V = F.vectors[:, perm]
+
+    # Initial state expansion: alpha = V^{-1} * vec(rho0)
+    alpha = V \ reshape(rho0, :)
+
+    # Compute overlap coefficients: c[i, k] = vec(O_i)^H * v_k * alpha_k
+    n_obs = length(observables)
+    n_modes = length(lambda)
+    coeffs = zeros(ComplexF64, n_obs, n_modes)
+    for (i, O) in enumerate(observables)
+        O_vec = reshape(O, :)
+        for k in 1:n_modes
+            # dot(a, b) in Julia computes conj(a)' * b = sum(conj.(a) .* b)
+            # For Hermitian O, dot(O_vec, V[:, k]) = vec(O)^H * v_k
+            o_k = dot(O_vec, V[:, k])
+            coeffs[i, k] = o_k * alpha[k]
+        end
+    end
+
+    exact_gap = abs(real(lambda[2]))
+
+    # Gap mode overlap: |c_2| for each observable (index 2 = gap mode in sorted eigenvalues)
+    gap_overlap = Float64[abs(coeffs[i, 2]) for i in 1:n_obs]
+
+    # Relative gap overlap: |c_2| / sum(|c_k| for k >= 2), excluding steady state (k=1)
+    rel_overlap = Float64[]
+    for i in 1:n_obs
+        denom = sum(abs.(coeffs[i, 2:end]))
+        if denom > 0.0
+            push!(rel_overlap, abs(coeffs[i, 2]) / denom)
+        else
+            push!(rel_overlap, 0.0)
+        end
+    end
+
+    return OverlapAnalysisResult(
+        lambda, exact_gap, observable_names, coeffs, gap_overlap, rel_overlap,
+    )
+end

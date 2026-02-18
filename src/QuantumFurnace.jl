@@ -51,7 +51,7 @@ export ConvergenceData, run_trajectories_convergence, run_trajectories_adaptive,
 export fit_exponential_decay, FitResult
 
 # Gap estimation
-export SpectralGapResult, estimate_spectral_gap
+export SpectralGapResult, estimate_spectral_gap, OverlapAnalysisResult, eigenbasis_overlap_analysis
 
 # Simulation
 export run_lindbladian, run_thermalization, construct_lindbladian,
