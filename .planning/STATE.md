@@ -11,15 +11,15 @@ See: .planning/PROJECT.md (updated 2026-02-16)
 
 Phase: 25 (Spectral Gap Validation Overhaul) -- COMPLETE
 Plan: 3 of 3 in current phase (Plan 03 COMPLETE)
-Status: Phase 25 complete. Unified validation script created. n=4 pipeline validated end-to-end (0.72% relative error). n=6 fails (10.7%) due to zero gap-mode overlap -- diagnosed with evidence.
-Last activity: 2026-02-18 -- Plan 25-03 executed (unified validation script)
+Status: Phase 25 complete. Quick-25 confirms n=6 gap mode in k=pi momentum sector (m=3/6), explaining zero overlap with k=0 observables.
+Last activity: 2026-02-18 -- Quick task 25 executed (momentum sector diagnosis)
 
 Progress: [##############################] 48/48 plans (v1.0-v1.3) + 3/3 Phase 25
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 59 (v1.0: 10, v1.1: 16, quick: 11, v1.2: 12, cleanup: 3, v1.3: 7, Phase 25: 3)
+- Total plans completed: 60 (v1.0: 10, v1.1: 16, quick: 12, v1.2: 12, cleanup: 3, v1.3: 7, Phase 25: 3)
 
 **By Milestone:**
 
@@ -69,6 +69,9 @@ Key context for v1.3:
 - Phase 25-03: n=4 gap estimation passes with 0.72% relative error (ZZ_avg best, 20k trajectories)
 - Phase 25-03: n=6 all observables have zero gap-mode overlap -- estimation fails at 10.7% relative error
 - Phase 25-03: /experiments/ is gitignored; validation script force-added to git
+- Quick-25: n=6 gap mode in k=3 (k=pi) momentum sector; n=4 gap mode in k=0 -- translational symmetry momentum mismatch is root cause of zero overlap
+- Quick-25: T_L = kron(T_eigen, conj(T_eigen)) commutes with L to ~1e-15 precision, confirming Lindbladian inherits translational symmetry
+- Quick-25: n=6 gap eigenspace is 3-fold degenerate, all in k=3 sector; need k=pi observables or symmetry-breaking for viable estimation
 
 ### Pending Todos
 
@@ -92,9 +95,10 @@ None
 | 22 | Fix trajectory delta_eff double-counting (bare delta for CPTP channel) | 2026-02-17 | dc83bf0 | [22-fix-trajectory-delta-eff-double-counting](./quick/22-fix-trajectory-delta-eff-double-counting/) |
 | 23 | Improve spectral gap estimation: smallest-gap selection criterion | 2026-02-17 | c5f6c68 | [23-improve-spectral-gap-estimation-by-findi](./quick/23-improve-spectral-gap-estimation-by-findi/) |
 | 24 | Add XX_avg, YY_avg, ZZ_avg two-site correlations to gap estimation | 2026-02-17 | 595aba3 | [24-add-two-site-correlations-to-spectral-ga](./quick/24-add-two-site-correlations-to-spectral-ga/) |
+| 25 | Diagnose n=6 zero gap-mode overlap: confirmed k=pi momentum sector | 2026-02-18 | cf61f88 | [25-diagnose-n-6-gap-mode-momentum-sector-co](./quick/25-diagnose-n-6-gap-mode-momentum-sector-co/) |
 
 ## Session Continuity
 
 Last session: 2026-02-18
-Stopped at: Completed 25-03-PLAN.md (unified validation script). Phase 25 complete.
+Stopped at: Completed quick task 25 (momentum sector diagnosis). n=6 root cause confirmed.
 Resume file: None
