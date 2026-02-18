@@ -194,9 +194,9 @@ using BSON
         @test conv_data.trace_distances[end] < conv_data.trace_distances[1]
 
         # Observable values structure
-        @test size(conv_data.observable_values) == (5, 5)
+        @test size(conv_data.observable_values) == (7, 5)
         @test conv_data.observable_names == names
-        @test length(conv_data.observable_gibbs_values) == 5
+        @test length(conv_data.observable_gibbs_values) == 7
 
         # CONV-02/CONV-03: Energy observable converges toward Gibbs value
         energy_idx = findfirst(==("H"), names)
@@ -282,7 +282,7 @@ using BSON
         @test length(row_slice) == 2
         col_slice = conv_data.observable_values[:, 1]  # all observables at first batch
         @test col_slice isa Vector{Float64}
-        @test length(col_slice) == 5
+        @test length(col_slice) == 7
 
         # observable_names can be used to look up specific observables
         idx = findfirst(==("H"), conv_data.observable_names)
@@ -407,7 +407,7 @@ using BSON
         @test all(x -> x >= 0, conv_data.trace_distances)
 
         # Observable values matrix shape matches
-        @test size(conv_data.observable_values) == (5, conv_data.total_batches)
+        @test size(conv_data.observable_values) == (7, conv_data.total_batches)
 
         # TrajectoryResult has valid density matrix
         @test isapprox(real(tr(traj_result.rho_mean)), 1.0; atol=1e-6)
@@ -633,10 +633,10 @@ using BSON
     @testset "build_preset_trajectory_observables (eigenbasis)" begin
         observables, names = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS)
 
-        # Returns exactly 5 observables and 5 names
-        @test length(observables) == 5
-        @test length(names) == 5
-        @test names == ["H", "Mz", "XX_avg", "YY_avg", "ZZ_avg"]
+        # Returns exactly 7 observables and 7 names
+        @test length(observables) == 7
+        @test length(names) == 7
+        @test names == ["H", "Mz", "XX_avg", "YY_avg", "ZZ_avg", "Mz_stagg", "Z1"]
 
         # All matrices are DIM x DIM ComplexF64
         for obs in observables
@@ -675,6 +675,17 @@ using BSON
             PP_expected = Matrix{ComplexF64}(V' * PP_sum * V)
             @test isapprox(observables[idx], PP_expected; atol=1e-14)
         end
+
+        # Mz_stagg observable (index 6) matches inline staggered construction
+        V = TEST_HAM.eigvecs
+        Mz_stagg_comp = sum((-1)^i .* Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, i)) for i in 1:NUM_QUBITS) / NUM_QUBITS
+        Mz_stagg_expected = Matrix{ComplexF64}(V' * Mz_stagg_comp * V)
+        @test isapprox(observables[6], Mz_stagg_expected; atol=1e-14)
+
+        # Z1 observable (index 7) matches single-site construction
+        Z1_comp = Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, 1))
+        Z1_expected = Matrix{ComplexF64}(V' * Z1_comp * V)
+        @test isapprox(observables[7], Z1_expected; atol=1e-14)
     end
 
     # -----------------------------------------------------------------------
@@ -683,10 +694,10 @@ using BSON
     @testset "build_preset_trajectory_observables (Trotter basis)" begin
         observables, names = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS; trotter=TEST_TROTTER)
 
-        # Returns exactly 5 observables and 5 names
-        @test length(observables) == 5
-        @test length(names) == 5
-        @test names == ["H", "Mz", "XX_avg", "YY_avg", "ZZ_avg"]
+        # Returns exactly 7 observables and 7 names
+        @test length(observables) == 7
+        @test length(names) == 7
+        @test names == ["H", "Mz", "XX_avg", "YY_avg", "ZZ_avg", "Mz_stagg", "Z1"]
 
         # All matrices are DIM x DIM ComplexF64
         for obs in observables

@@ -18,12 +18,16 @@ estimation and convergence monitoring, in the Hamiltonian eigenbasis (default)
 or the Trotter eigenbasis (when `trotter` is supplied).
 
 Returns `(observables::Vector{Matrix{ComplexF64}}, names::Vector{String})`
-with 5 observables: `["H", "Mz", "XX_avg", "YY_avg", "ZZ_avg"]`.
+with 7 observables: `["H", "Mz", "XX_avg", "YY_avg", "ZZ_avg", "Mz_stagg", "Z1"]`.
 
 - `H`: Energy observable.
 - `Mz`: Per-site total magnetization (sum of Z_i / n).
 - `XX_avg`, `YY_avg`, `ZZ_avg`: Per-bond averaged nearest-neighbor two-site
   correlations (sum over all periodic bonds, divided by n).
+- `Mz_stagg`: Per-site staggered magnetization (sum of (-1)^i Z_i / n). Has
+  k=pi momentum component for coupling to gap modes in non-zero momentum sectors.
+- `Z1`: Single-site Z on qubit 1 (not translation-averaged). Has components
+  in all momentum sectors.
 """
 function build_preset_trajectory_observables(hamiltonian::HamHam, num_qubits::Int;
                                               trotter::Union{TrottTrott, Nothing}=nothing)
@@ -66,6 +70,23 @@ function build_preset_trajectory_observables(hamiltonian::HamHam, num_qubits::In
         push!(observables, PP_eigen)
         push!(names, pair_name)
     end
+
+    # Staggered magnetization: sum((-1)^i * Z_i) / n  (has k=pi component)
+    Mz_stagg_comp = zeros(ComplexF64, dim, dim)
+    for i in 1:num_qubits
+        sign = (-1)^i  # alternating sign: -1, +1, -1, +1, ...
+        Mz_stagg_comp .+= sign .* Matrix{ComplexF64}(pad_term([Z], num_qubits, i))
+    end
+    Mz_stagg_comp ./= num_qubits  # Per-site normalization (consistent with Mz)
+    Mz_stagg_eigen = Matrix{ComplexF64}(V' * Mz_stagg_comp * V)
+    push!(observables, Mz_stagg_eigen)
+    push!(names, "Mz_stagg")
+
+    # Single-site Z_1: not translation-averaged, has components in all k sectors
+    Z1_comp = Matrix{ComplexF64}(pad_term([Z], num_qubits, 1))
+    Z1_eigen = Matrix{ComplexF64}(V' * Z1_comp * V)
+    push!(observables, Z1_eigen)
+    push!(names, "Z1")
 
     return observables, names
 end
