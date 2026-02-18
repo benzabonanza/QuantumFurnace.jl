@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-16)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** Phase 25 (Spectral Gap Validation Overhaul) -- Plan 01 complete
+**Current focus:** Phase 25 (Spectral Gap Validation Overhaul) -- Plan 02 complete
 
 ## Current Position
 
 Phase: 25 (Spectral Gap Validation Overhaul)
-Plan: 1 of 3 in current phase (Plan 01 COMPLETE)
-Status: Plan 01 consolidation complete. 4 experiment scripts deleted, 4 observable builders merged into 1, cross-validation code removed. All 653 tests pass.
-Last activity: 2026-02-18 -- Plan 25-01 executed (consolidation)
+Plan: 2 of 3 in current phase (Plan 02 COMPLETE)
+Status: Plan 02 eigenbasis overlap analysis complete. OverlapAnalysisResult struct and eigenbasis_overlap_analysis function implemented and tested. All 666 tests pass.
+Last activity: 2026-02-18 -- Plan 25-02 executed (eigenbasis overlap analysis)
 
-Progress: [##############################] 48/48 plans (v1.0-v1.3) + 1/3 Phase 25
+Progress: [##############################] 48/48 plans (v1.0-v1.3) + 2/3 Phase 25
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 57 (v1.0: 10, v1.1: 16, quick: 11, v1.2: 12, cleanup: 3, v1.3: 7, Phase 25: 1)
+- Total plans completed: 58 (v1.0: 10, v1.1: 16, quick: 11, v1.2: 12, cleanup: 3, v1.3: 7, Phase 25: 2)
 
 **By Milestone:**
 
@@ -62,6 +62,9 @@ Key context for v1.3:
 - Phase 25-01: Single observable builder (build_preset_trajectory_observables) replaces 4 old builders
 - Phase 25-01: Mz construction inlined into single builder (was delegated to deleted build_total_magnetization)
 - Phase 25-01: CrossValidationResult and cross_validate_gap removed from source and exports
+- Phase 25-02: ARPACK vs dense eigen gap agrees to ~1.8e-10 for 3-qubit system (test atol=1e-8)
+- Phase 25-02: dot(O_vec, V[:,k]) computes vec(O)^H * v_k -- correct for Hermitian observable eigenbasis projection
+- Phase 25-02: Relative gap overlap excludes steady-state mode (k=1) from denominator
 
 ### Pending Todos
 
@@ -89,5 +92,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-18
-Stopped at: Completed 25-01-PLAN.md (consolidation). Ready for 25-02 (ARPACK vs eigen verification).
+Stopped at: Completed 25-02-PLAN.md (eigenbasis overlap analysis). Ready for 25-03 (high-ntraj validation script).
 Resume file: None
