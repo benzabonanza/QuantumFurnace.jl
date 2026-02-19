@@ -96,12 +96,11 @@ Full details: [milestones/v1.3-ROADMAP.md](milestones/v1.3-ROADMAP.md)
   3. Anti-Hermitian defect is computed via KMS similarity transform with Gibbs spectrum truncation, and the defect ratio ||A||/lambda_gap(H) determines whether real-exponential fitting is appropriate
   4. Delta-Sz symmetry sector labels are assigned to each eigenvector with near-degeneracy detection, explaining the n=6 zero-overlap mystery
   5. Observable overlap coefficients c_k are computed for leading modes using exact left/right eigenvectors, identifying which observables couple to the gap mode
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 26-01: TBD
-- [ ] 26-02: TBD
-- [ ] 26-03: TBD
+- [ ] 26-01-PLAN.md -- Diagnostics core: result structs, DIAG-01 through DIAG-06 functions, run_exact_diagnostics bundle, tests
+- [ ] 26-02-PLAN.md -- Observable set replacement (6 canonical) + eigenbasis_overlap_analysis corrected formula
 
 ### Phase 27: Two-Exponential Fitting Infrastructure
 **Goal**: Researchers can fit trajectory observable decay to a two-exponential model and trust the separation quality assessment before using the fitted rates
