@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-19)
 ## Current Position
 
 Phase: 26 of 30 (Exact Reference and Structural Diagnostics)
-Plan: 1 of 2 in current phase
-Status: Executing
-Last activity: 2026-02-19 -- Completed 26-01 (exact diagnostics infrastructure)
+Plan: 2 of 2 in current phase
+Status: Phase 26 complete
+Last activity: 2026-02-19 -- Completed 26-02 (canonical observables + overlap formula)
 
-Progress: [█████░░░░░] 50%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -43,6 +43,8 @@ Recent context for v1.4:
 - Lindbladian fixed point (not Gibbs state) must be used as steady-state for TrotterDomain lambda_eff
 - Dense eigen() used for DIAG-01 (Arpack cannot compute left eigenvectors needed for overlap formula)
 - DIAG-03/04 defect_ratio > 0.1 is advisory-only warning, does not gate computation
+- Canonical 6-observable set: Z1, X1, Z1_Zhalf, H, Rand_traceless, Mz_stagg (replaces v1.3 8-obs set)
+- Biorthogonal overlap formula: c_k = Tr[O R_k] * Tr[L_k^dagger (rho_0 - rho_beta)] via explicit left+right eigenvectors
 
 ### Pending Todos
 
@@ -76,5 +78,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-19
-Stopped at: Completed 26-01-PLAN.md (exact diagnostics infrastructure)
+Stopped at: Completed 26-02-PLAN.md (canonical observables + overlap formula)
 Resume file: None
