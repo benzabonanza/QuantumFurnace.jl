@@ -270,3 +270,280 @@ function compute_anti_hermitian_defect(L::Matrix{ComplexF64}, gibbs::Hermitian;
 
     return DefectResult(A_norm, H_gap, defect_ratio, warning, threshold)
 end
+
+# ---------------------------------------------------------------------------
+# DIAG-05: Observable overlap coefficients
+# ---------------------------------------------------------------------------
+
+"""
+    compute_overlap_coefficients(eigen_result, observables, observable_names, rho0, rho_beta;
+                                  n_modes=20, initial_state_name="custom") -> OverlapResult
+
+Compute overlap coefficients between observables and Lindbladian eigenmodes.
+
+Uses the formula: `c_k = Tr[O R_k] * Tr[L_k^dagger (rho_0 - rho_beta)]`
+where R_k are right eigenvectors and L_k are left eigenvectors (biorthonormal).
+
+The coefficient c_1 (steady-state mode) should be near zero due to the
+explicit subtraction of rho_beta.
+"""
+function compute_overlap_coefficients(
+    eigen_result::EigenDecompositionResult,
+    observables::Vector{<:Matrix{<:Complex}},
+    observable_names::Vector{String},
+    rho0::Matrix{<:Complex},
+    rho_beta::Hermitian;
+    n_modes::Int=20,
+    initial_state_name::String="custom",
+)
+    dim = size(rho0, 1)
+    n_modes_actual = min(n_modes, length(eigen_result.eigenvalues))
+    n_obs = length(observables)
+    rho_diff = rho0 - Matrix(rho_beta)
+
+    coeffs = zeros(ComplexF64, n_obs, n_modes_actual)
+
+    for k in 1:n_modes_actual
+        R_k = reshape(eigen_result.right_eigenvectors[:, k], dim, dim)
+        L_k = reshape(eigen_result.left_eigenvectors[:, k], dim, dim)
+
+        # Tr[L_k^dagger (rho_0 - rho_beta)] = dot(vec(L_k), vec(rho_diff))
+        # Julia's dot conjugates the first argument: dot(a,b) = sum(conj(a).*b)
+        lk_factor = dot(vec(L_k), vec(rho_diff))
+
+        for (i, O) in enumerate(observables)
+            ok_factor = tr(O * R_k)
+            coeffs[i, k] = ok_factor * lk_factor
+        end
+    end
+
+    gap_mode_overlap = Float64[abs(coeffs[i, 2]) for i in 1:n_obs]
+
+    return OverlapResult(coeffs, observable_names, initial_state_name, gap_mode_overlap)
+end
+
+# ---------------------------------------------------------------------------
+# DIAG-06: Delta_Sz symmetry sector labeling
+# ---------------------------------------------------------------------------
+
+"""
+    compute_sz_labels(eigen_result, hamiltonian; n_modes=20) -> Vector{SzSectorLabel}
+
+Assign Delta_Sz quantum numbers to each Lindbladian eigenvector based on the
+density matrix support structure.
+
+For each eigenvector R_k (reshaped as a dim x dim matrix), computes the weight
+in each (i,j) element and groups by Delta_Sz = Sz(E_i) - Sz(E_j). Reports the
+dominant sector and purity fraction.
+"""
+function compute_sz_labels(eigen_result::EigenDecompositionResult, hamiltonian::HamHam;
+                            n_modes::Int=20)
+    dim = size(hamiltonian.data, 1)
+    n = Int(log2(dim))
+    n_modes_actual = min(n_modes, length(eigen_result.eigenvalues))
+
+    # Build total Sz operator in computational basis: sum(Z_i)/2
+    Sz_comp = zeros(ComplexF64, dim, dim)
+    for site in 1:n
+        Sz_comp .+= Matrix{ComplexF64}(pad_term([Z], n, site))
+    end
+    Sz_comp ./= 2
+
+    # Transform to Hamiltonian eigenbasis
+    V = hamiltonian.eigvecs
+    Sz_eigen = V' * Sz_comp * V
+    sz_vals = real.(diag(Sz_eigen))
+
+    labels = Vector{SzSectorLabel}(undef, n_modes_actual)
+
+    for k in 1:n_modes_actual
+        M_k = reshape(eigen_result.right_eigenvectors[:, k], dim, dim)
+        weights = abs2.(M_k)
+
+        # Compute Delta_Sz weight map
+        delta_sz_map = Dict{Float64, Float64}()
+        for j in 1:dim, i in 1:dim
+            w = weights[i, j]
+            w < 1e-14 && continue
+            dsz = round(sz_vals[i] - sz_vals[j]; digits=6)
+            delta_sz_map[dsz] = get(delta_sz_map, dsz, 0.0) + w
+        end
+
+        total_weight = sum(values(delta_sz_map))
+
+        # Find dominant sector
+        dominant_dsz = 0.0
+        dominant_weight = 0.0
+        for (dsz, wt) in delta_sz_map
+            if wt > dominant_weight
+                dominant_weight = wt
+                dominant_dsz = dsz
+            end
+        end
+
+        purity = dominant_weight / max(total_weight, 1e-30)
+        is_pure = purity > 0.95
+
+        labels[k] = SzSectorLabel(dominant_dsz, purity, is_pure, delta_sz_map)
+    end
+
+    return labels
+end
+
+# ---------------------------------------------------------------------------
+# Multiplet detection: near-degenerate eigenvalue grouping
+# ---------------------------------------------------------------------------
+
+"""
+    detect_multiplets(eigenvalues::Vector{ComplexF64}; rel_tol=0.01) -> Vector{MultipletGroup}
+
+Group near-degenerate eigenvalues into multiplets.
+
+Two eigenvalues are in the same multiplet if
+`|lambda_i - lambda_j| / max(|lambda_i|, |lambda_j|, 1e-10) < rel_tol`.
+
+Uses sequential grouping on eigenvalues sorted by absolute value.
+"""
+function detect_multiplets(eigenvalues::Vector{ComplexF64}; rel_tol::Float64=0.01)
+    n = length(eigenvalues)
+    n == 0 && return MultipletGroup[]
+
+    # Sort by absolute value for sequential grouping
+    sorted_perm = sortperm(abs.(eigenvalues))
+    sorted_vals = eigenvalues[sorted_perm]
+
+    groups = Vector{MultipletGroup}()
+    current_indices = [sorted_perm[1]]
+    current_sum = sorted_vals[1]
+
+    for i in 2:n
+        idx = sorted_perm[i]
+        val = sorted_vals[i]
+        prev_val = sorted_vals[i-1]
+
+        denom = max(abs(val), abs(prev_val), 1e-10)
+        if abs(val - prev_val) / denom < rel_tol
+            push!(current_indices, idx)
+            current_sum += val
+        else
+            # Finalize current group
+            mean_val = current_sum / length(current_indices)
+            push!(groups, MultipletGroup(copy(current_indices), mean_val, SzSectorLabel[]))
+            current_indices = [idx]
+            current_sum = val
+        end
+    end
+
+    # Finalize last group
+    mean_val = current_sum / length(current_indices)
+    push!(groups, MultipletGroup(copy(current_indices), mean_val, SzSectorLabel[]))
+
+    return groups
+end
+
+# ---------------------------------------------------------------------------
+# Bundle: run_exact_diagnostics
+# ---------------------------------------------------------------------------
+
+"""
+    run_exact_diagnostics(L, hamiltonian, gibbs; kwargs...) -> ExactDiagnosticsResult
+
+Run all six DIAG diagnostics in a single call, returning a bundled result.
+
+# Arguments
+- `L::Matrix{ComplexF64}`: Full dense Lindbladian superoperator.
+- `hamiltonian::HamHam`: Hamiltonian with eigenbasis data.
+- `gibbs::Hermitian`: Gibbs state (in Hamiltonian eigenbasis).
+
+# Keyword Arguments
+- `observables`: Observable matrices (in eigenbasis). Default: [Z1, H_diag].
+- `observable_names`: Observable names. Default: ["Z1", "H"].
+- `initial_states`: Initial density matrices. Default: [|0>^n, |+>^n, I/dim].
+- `initial_state_names`: Names for initial states. Default: ["all_up", "all_plus", "maximally_mixed"].
+- `n_modes`: Number of leading modes to extract (default: 20).
+- `eps_trunc`: Truncation threshold for KMS transform (default: 1e-12).
+"""
+function run_exact_diagnostics(
+    L::Matrix{ComplexF64},
+    hamiltonian::HamHam,
+    gibbs::Hermitian;
+    observables::Union{Nothing, Vector{<:Matrix{<:Complex}}}=nothing,
+    observable_names::Union{Nothing, Vector{String}}=nothing,
+    initial_states::Union{Nothing, Vector{<:Matrix{<:Complex}}}=nothing,
+    initial_state_names::Union{Nothing, Vector{String}}=nothing,
+    n_modes::Int=20,
+    eps_trunc::Float64=1e-12,
+)
+    dim = size(hamiltonian.data, 1)
+    n = Int(log2(dim))
+
+    # DIAG-01: eigendata extraction
+    eigen_result = extract_leading_eigendata(L; n_modes=n_modes)
+
+    # DIAG-02: fixed point distance
+    fp_result = compute_fixed_point_distance(eigen_result, gibbs)
+
+    # DIAG-03/04: anti-Hermitian defect
+    defect_result = compute_anti_hermitian_defect(L, gibbs; eps_trunc=eps_trunc)
+
+    # Build default observables if not provided
+    if observables === nothing
+        V = hamiltonian.eigvecs
+        # Z1 in eigenbasis
+        Z1_comp = Matrix{ComplexF64}(pad_term([Z], n, 1))
+        Z1_eigen = Matrix{ComplexF64}(V' * Z1_comp * V)
+        # H diagonal in eigenbasis
+        H_eigen = Matrix{ComplexF64}(diagm(ComplexF64.(hamiltonian.eigvals)))
+        observables = Matrix{ComplexF64}[Z1_eigen, H_eigen]
+        observable_names = String["Z1", "H"]
+    end
+
+    # Build default initial states if not provided
+    if initial_states === nothing
+        V = hamiltonian.eigvecs
+        # |0>^n (all spins up) -- transform to eigenbasis
+        psi0_comp = zeros(ComplexF64, dim)
+        psi0_comp[1] = 1.0
+        psi0_eigen = V' * psi0_comp
+        rho_up = psi0_eigen * psi0_eigen'
+
+        # |+>^n (all X-plus) -- transform to eigenbasis
+        psi_plus_comp = fill(ComplexF64(1 / sqrt(2^n)), 2^n)
+        psi_plus_eigen = V' * psi_plus_comp
+        rho_plus = psi_plus_eigen * psi_plus_eigen'
+
+        # I/dim (maximally mixed) -- same in any basis
+        rho_mixed = Matrix{ComplexF64}(I(dim) / dim)
+
+        initial_states = Matrix{ComplexF64}[rho_up, rho_plus, rho_mixed]
+        initial_state_names = String["all_up", "all_plus", "maximally_mixed"]
+    end
+
+    # DIAG-05: overlap coefficients for each initial state
+    overlaps_vec = OverlapResult[]
+    for (rho0, name) in zip(initial_states, initial_state_names)
+        overlap = compute_overlap_coefficients(
+            eigen_result, observables, observable_names, rho0, gibbs;
+            n_modes=n_modes, initial_state_name=name,
+        )
+        push!(overlaps_vec, overlap)
+    end
+
+    # DIAG-06: symmetry sector labels
+    sz_labels = compute_sz_labels(eigen_result, hamiltonian; n_modes=n_modes)
+
+    # Multiplet detection
+    multiplets = detect_multiplets(eigen_result.eigenvalues)
+
+    # Fill multiplet sz_labels from computed labels
+    for group in multiplets
+        for idx in group.eigenvalue_indices
+            if idx <= length(sz_labels)
+                push!(group.sz_labels, sz_labels[idx])
+            end
+        end
+    end
+
+    return ExactDiagnosticsResult(eigen_result, fp_result, defect_result,
+                                   overlaps_vec, sz_labels, multiplets)
+end
