@@ -242,7 +242,7 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    eigenbasis_overlap_analysis(L, observables, observable_names, rho0) -> OverlapAnalysisResult
+    eigenbasis_overlap_analysis(L, observables, observable_names, rho0; rho_beta=nothing) -> OverlapAnalysisResult
 
 Decompose observables into the Lindbladian eigenbasis and measure coupling to
 the spectral gap mode.
@@ -258,21 +258,32 @@ for gap estimation.
 - `observable_names::Vector{String}`: Names matching each observable.
 - `rho0::Matrix{<:Complex}`: Initial density matrix (in the same basis as L).
 
+# Keyword Arguments
+- `rho_beta::Union{Hermitian, Nothing}=nothing`: Gibbs (steady) state for proper
+  steady-state subtraction. When provided, uses the exact biorthogonal formula
+  `c_k = Tr[O R_k] * Tr[L_k^dagger (rho_0 - rho_beta)]` with explicit left and
+  right eigenvectors. When `nothing`, uses the original simplified formula
+  `c_k = vec(O)^H * v_k * (V \\ vec(rho0))_k` (v1.3 behavior).
+
 # Returns
 An [`OverlapAnalysisResult`](@ref) containing eigenvalues, overlap coefficients,
 and per-observable gap mode coupling metrics.
 
 # Mathematical Details
-The time-dependent expectation value is `<O>(t) = sum_k c_k * exp(lambda_k * t)`
-where `c_k = vec(O)^dagger * v_k * alpha_k`, `v_k` are Liouvillian eigenvectors,
-and `alpha_k = (V \\ vec(rho0))_k` is the initial state expansion coefficient.
+When `rho_beta` is provided, the time-dependent expectation value is decomposed as
+`<O>(t) - <O>_beta = sum_{k>=2} c_k * exp(lambda_k * t)` where
+`c_k = Tr[O R_k] * Tr[L_k^dagger (rho_0 - rho_beta)]`, with `R_k` being right
+eigenvectors and `L_k` being left eigenvectors of the Liouvillian.
+
+When `rho_beta` is `nothing`, uses `<O>(t) = sum_k c_k * exp(lambda_k * t)` where
+`c_k = vec(O)^H * v_k * alpha_k` and `alpha_k = (V \\ vec(rho0))_k`.
 
 # Example
 ```julia
 L = Matrix(liouv_result.liouvillian)
 obs, names = build_preset_trajectory_observables(ham, n)
 rho0 = psi0 * psi0'
-result = eigenbasis_overlap_analysis(L, obs, names, rho0)
+result = eigenbasis_overlap_analysis(L, obs, names, rho0; rho_beta=ham.gibbs)
 println("Gap mode overlap: ", result.gap_mode_overlap)
 ```
 """
@@ -280,28 +291,51 @@ function eigenbasis_overlap_analysis(
     L::Matrix{<:Complex},
     observables::Vector{<:Matrix{<:Complex}},
     observable_names::Vector{String},
-    rho0::Matrix{<:Complex},
+    rho0::Matrix{<:Complex};
+    rho_beta::Union{Hermitian, Nothing}=nothing,
 )
     # Full dense eigendecomposition
     F = eigen(L)
     perm = sortperm(abs.(real.(F.values)))
     lambda = F.values[perm]
-    V = F.vectors[:, perm]
+    V_right = F.vectors[:, perm]
 
-    # Initial state expansion: alpha = V^{-1} * vec(rho0)
-    alpha = V \ reshape(rho0, :)
-
-    # Compute overlap coefficients: c[i, k] = vec(O_i)^H * v_k * alpha_k
     n_obs = length(observables)
     n_modes = length(lambda)
     coeffs = zeros(ComplexF64, n_obs, n_modes)
-    for (i, O) in enumerate(observables)
-        O_vec = reshape(O, :)
+
+    if rho_beta !== nothing
+        # Exact biorthogonal formula: c_k = Tr[O R_k] * Tr[L_k^dagger (rho_0 - rho_beta)]
+        # Left eigenvectors: rows of V_right^{-1}, as columns: (V_right^{-1})^T (transpose, not adjoint)
+        V_inv = inv(V_right)
+        V_left = transpose(V_inv)  # Left eigenvectors as columns (transpose, not conjugate transpose)
+
+        rho_diff = reshape(rho0, :) - reshape(Matrix(rho_beta), :)
+        dim = isqrt(size(V_right, 1))
+
         for k in 1:n_modes
-            # dot(a, b) in Julia computes conj(a)' * b = sum(conj.(a) .* b)
-            # For Hermitian O, dot(O_vec, V[:, k]) = vec(O)^H * v_k
-            o_k = dot(O_vec, V[:, k])
-            coeffs[i, k] = o_k * alpha[k]
+            R_k_mat = reshape(V_right[:, k], dim, dim)  # Right eigenvector as dim x dim operator
+            L_k_vec = V_left[:, k]                       # Left eigenvector (vectorized)
+            # Factor 2: Tr[L_k^dagger (rho_0 - rho_beta)] = dot(L_k_vec, rho_diff)
+            # Julia's dot conjugates first arg: dot(a,b) = conj(a)' * b
+            factor2 = dot(L_k_vec, rho_diff)
+            for (i, O) in enumerate(observables)
+                # Factor 1: Tr[O_i R_k] = tr(O_i * R_k_mat)
+                factor1 = tr(O * R_k_mat)
+                coeffs[i, k] = factor1 * factor2
+            end
+        end
+    else
+        # Original simplified formula (v1.3 backward compatibility)
+        # c[i, k] = vec(O_i)^H * v_k * alpha_k
+        alpha = V_right \ reshape(rho0, :)
+        for (i, O) in enumerate(observables)
+            O_vec = reshape(O, :)
+            for k in 1:n_modes
+                # dot(a, b) in Julia computes conj(a)' * b = sum(conj.(a) .* b)
+                o_k = dot(O_vec, V_right[:, k])
+                coeffs[i, k] = o_k * alpha[k]
+            end
         end
     end
 

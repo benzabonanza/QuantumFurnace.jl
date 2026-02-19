@@ -242,6 +242,38 @@ using LinearAlgebra
             @test abs(real(result.eigenvalues[1])) < 1e-10
         end
 
+        @testset "eigenbasis_overlap_analysis with rho_beta subtraction" begin
+            # Call with rho_beta: uses exact biorthogonal formula
+            result_beta = eigenbasis_overlap_analysis(L, obs, names, rho0; rho_beta=SMALL_GIBBS)
+
+            @test result_beta isa OverlapAnalysisResult
+            @test result_beta.exact_gap > 0.0
+            @test length(result_beta.observable_names) == 6
+            @test size(result_beta.overlap_coefficients) == (6, SMALL_DIM^2)
+
+            # c_1 should be near zero with rho_beta subtraction (steady state removed)
+            for i in 1:length(obs)
+                @test abs(result_beta.overlap_coefficients[i, 1]) < 1e-8
+            end
+
+            # Exact gap should match the original (same Liouvillian)
+            @test isapprox(result_beta.exact_gap, result.exact_gap; atol=1e-12)
+
+            # At t=0: sum_k c_k should equal tr(O * (rho0 - rho_beta))
+            for i in 1:length(obs)
+                c_sum = sum(result_beta.overlap_coefficients[i, :])
+                tr_O_diff = tr(obs[i] * (rho0 - Matrix(SMALL_GIBBS)))
+                @test isapprox(real(c_sum), real(tr_O_diff); atol=1e-8)
+            end
+        end
+
+        @testset "Backward compatibility: rho_beta=nothing matches original" begin
+            # Explicit rho_beta=nothing should give same results as no kwarg
+            result_no_beta = eigenbasis_overlap_analysis(L, obs, names, rho0; rho_beta=nothing)
+            @test isapprox(result_no_beta.overlap_coefficients, result.overlap_coefficients; atol=1e-12)
+            @test result_no_beta.exact_gap == result.exact_gap
+        end
+
     end
 
 end
