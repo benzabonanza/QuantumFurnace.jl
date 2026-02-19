@@ -78,7 +78,7 @@ Full details: [milestones/v1.3-ROADMAP.md](milestones/v1.3-ROADMAP.md)
 - Delta is the relevant Trotter parameter
 - Storage: ~40 GB free -- warn before large data operations (batch-level bootstrap ~3 MB, fine)
 
-- [ ] **Phase 26: Exact Reference and Structural Diagnostics** -- Exact Lindbladian eigenvalues, fixed point, anti-Hermitian defect, symmetry sector labels, and observable overlap analysis
+- [x] **Phase 26: Exact Reference and Structural Diagnostics** -- Exact Lindbladian eigenvalues, fixed point, anti-Hermitian defect, symmetry sector labels, and observable overlap analysis
 - [ ] **Phase 27: Two-Exponential Fitting Infrastructure** -- Robust two-exponential decay fitting with Prony initialization and separation quality checks
 - [ ] **Phase 28: Effective Rate Plot and Automatic Window Selection** -- Model-free lambda_eff(t) diagnostic with SNR-based t_max and stability-based t_min selection
 - [ ] **Phase 29: Batched Bootstrap and Richardson Extrapolation** -- Batch-level bootstrap uncertainty quantification and delta-convergence extrapolation with monotonicity gate
@@ -99,8 +99,8 @@ Full details: [milestones/v1.3-ROADMAP.md](milestones/v1.3-ROADMAP.md)
 **Plans**: 2 plans
 
 Plans:
-- [ ] 26-01-PLAN.md -- Diagnostics core: result structs, DIAG-01 through DIAG-06 functions, run_exact_diagnostics bundle, tests
-- [ ] 26-02-PLAN.md -- Observable set replacement (6 canonical) + eigenbasis_overlap_analysis corrected formula
+- [x] 26-01-PLAN.md -- Diagnostics core: result structs, DIAG-01 through DIAG-06 functions, run_exact_diagnostics bundle, tests
+- [x] 26-02-PLAN.md -- Observable set replacement (6 canonical) + eigenbasis_overlap_analysis corrected formula
 
 ### Phase 27: Two-Exponential Fitting Infrastructure
 **Goal**: Researchers can fit trajectory observable decay to a two-exponential model and trust the separation quality assessment before using the fitted rates
@@ -196,7 +196,7 @@ Phases execute in numeric order: 26 -> 27 -> 28 -> 29 -> 30
 | 23. Gap Estimation API | v1.3 | 1/1 | Complete | 2026-02-17 |
 | 24. Cross-Validation | v1.3 | 3/3 | Complete | 2026-02-17 |
 | 25. Spectral Gap Validation Overhaul | v1.3 | 3/3 | Complete | 2026-02-18 |
-| 26. Exact Reference and Structural Diagnostics | v1.4 | 0/TBD | Not started | - |
+| 26. Exact Reference and Structural Diagnostics | v1.4 | 2/2 | Complete | 2026-02-19 |
 | 27. Two-Exponential Fitting Infrastructure | v1.4 | 0/TBD | Not started | - |
 | 28. Effective Rate Plot and Window Selection | v1.4 | 0/TBD | Not started | - |
 | 29. Batched Bootstrap and Richardson Extrapolation | v1.4 | 0/TBD | Not started | - |
