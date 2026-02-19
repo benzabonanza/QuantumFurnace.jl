@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-02-19)
 
 ## Current Position
 
-Phase: 26 of 30 (Two-Exponential Fitting Infrastructure)
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-02-19 -- Roadmap created for v1.4 milestone
+Phase: 26 of 30 (Exact Reference and Structural Diagnostics)
+Plan: 1 of 2 in current phase
+Status: Executing
+Last activity: 2026-02-19 -- Completed 26-01 (exact diagnostics infrastructure)
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█████░░░░░] 50%
 
 ## Performance Metrics
 
@@ -29,7 +29,7 @@ Progress: [░░░░░░░░░░] 0%
 | v1.1 Reduce | 6-11 | 16 (+5 quick) | 2026-02-15 |
 | v1.2 Multi-threading | 12-19 | 15 (+3 quick) | 2026-02-15 to 2026-02-16 |
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
-| v1.4 Spectral Gap Refinement | 26-30 | TBD | 2026-02-19 to - |
+| v1.4 Spectral Gap Refinement | 26-30 | 2+ | 2026-02-19 to - |
 
 ## Accumulated Context
 
@@ -41,6 +41,8 @@ Recent context for v1.4:
 - Batch-level bootstrap (~3 MB) chosen over per-trajectory storage (~640 MB+) -- memory safe within 40 GB budget
 - Two-exponential fitting is the root cause fix for non-monotonic delta-scaling (Quick-32 conclusion)
 - Lindbladian fixed point (not Gibbs state) must be used as steady-state for TrotterDomain lambda_eff
+- Dense eigen() used for DIAG-01 (Arpack cannot compute left eigenvectors needed for overlap formula)
+- DIAG-03/04 defect_ratio > 0.1 is advisory-only warning, does not gate computation
 
 ### Pending Todos
 
@@ -74,5 +76,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-19
-Stopped at: v1.4 roadmap created -- ready to plan Phase 26
+Stopped at: Completed 26-01-PLAN.md (exact diagnostics infrastructure)
 Resume file: None
