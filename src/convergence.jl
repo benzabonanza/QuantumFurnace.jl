@@ -13,43 +13,47 @@
 """
     build_preset_trajectory_observables(hamiltonian::HamHam, num_qubits::Int; trotter=nothing)
 
-Build the standard observable bundle for trajectory-based spectral gap
+Build the canonical 6-observable bundle for trajectory-based spectral gap
 estimation and convergence monitoring, in the Hamiltonian eigenbasis (default)
 or the Trotter eigenbasis (when `trotter` is supplied).
 
 Returns `(observables::Vector{Matrix{ComplexF64}}, names::Vector{String})`
-with 8 observables: `["H", "Mz", "XX_avg", "YY_avg", "ZZ_avg", "Mz_stagg", "Z1", "XZ_stagg"]`.
+with 6 observables: `["Z1", "X1", "Z1_Zhalf", "H", "Rand_traceless", "Mz_stagg"]`.
 
-- `H`: Energy observable.
-- `Mz`: Per-site total magnetization (sum of Z_i / n).
-- `XX_avg`, `YY_avg`, `ZZ_avg`: Per-bond averaged nearest-neighbor two-site
-  correlations (sum over all periodic bonds, divided by n).
-- `Mz_stagg`: Per-site staggered magnetization (sum of (-1)^i Z_i / n). Has
+- `Z1`: Single-site Pauli-Z on qubit 1. Has components in all momentum sectors.
+- `X1`: Single-site Pauli-X on qubit 1. Breaks Z2 symmetry, couples to
+  off-diagonal gap modes.
+- `Z1_Zhalf`: Two-point Z correlator between site 1 and site `floor(n/2)`.
+  Probes spatial correlations at half-chain separation.
+- `H`: Energy observable (the Hamiltonian itself).
+- `Rand_traceless`: Random traceless Hermitian matrix, reproducible via
+  `MersenneTwister(12345)`. Normalized by operator norm. Serves as a
+  control observable with generic overlap across all eigenmodes.
+- `Mz_stagg`: Per-site staggered magnetization `sum((-1)^i Z_i) / n`. Has
   k=pi momentum component for coupling to gap modes in non-zero momentum sectors.
-- `Z1`: Single-site Z on qubit 1 (not translation-averaged). Has components
-  in all momentum sectors.
-- `XZ_stagg`: Per-bond staggered nearest-neighbor XZ correlation (sum of
-  (-1)^i X_i Z_{i+1} / n). Has k=pi momentum component and breaks SU(2)
-  spin-rotation symmetry, enabling coupling to symmetry-protected gap modes.
 """
 function build_preset_trajectory_observables(hamiltonian::HamHam, num_qubits::Int;
                                               trotter::Union{TrottTrott, Nothing}=nothing)
     dim = size(hamiltonian.data, 1)
 
-    # Build M_z in computational basis: sum(Z_i) / n
-    Mz_comp = zeros(ComplexF64, dim, dim)
-    for i in 1:num_qubits
-        Mz_comp .+= Matrix{ComplexF64}(pad_term([Z], num_qubits, i))
-    end
-    Mz_comp ./= num_qubits  # Per-site normalization (locked decision)
-
     # Select basis transformation matrix
     V = trotter !== nothing ? trotter.eigvecs : hamiltonian.eigvecs
 
-    # Transform M_z to eigenbasis: O_eigen = V' * O_comp * V
-    Mz_eigen = Matrix{ComplexF64}(V' * Mz_comp * V)
+    # --- Observable 1: Z1 (single-site Z on qubit 1) ---
+    Z1_comp = Matrix{ComplexF64}(pad_term([Z], num_qubits, 1))
+    Z1_eigen = Matrix{ComplexF64}(V' * Z1_comp * V)
 
-    # Build H in the correct basis
+    # --- Observable 2: X1 (single-site X on qubit 1) ---
+    X1_comp = Matrix{ComplexF64}(pad_term([X], num_qubits, 1))
+    X1_eigen = Matrix{ComplexF64}(V' * X1_comp * V)
+
+    # --- Observable 3: Z1_Zhalf (two-point Z correlator: Z_1 * Z_{floor(n/2)}) ---
+    half_site = floor(Int, num_qubits / 2)
+    Z1_Zhalf_comp = Matrix{ComplexF64}(pad_term([Z], num_qubits, 1)) *
+                    Matrix{ComplexF64}(pad_term([Z], num_qubits, half_site))
+    Z1_Zhalf_eigen = Matrix{ComplexF64}(V' * Z1_Zhalf_comp * V)
+
+    # --- Observable 4: H (energy) ---
     if trotter !== nothing
         # H is NOT diagonal in Trotter basis — full basis transform required
         H = Matrix{ComplexF64}(trotter.eigvecs' * hamiltonian.data * trotter.eigvecs)
@@ -58,49 +62,25 @@ function build_preset_trajectory_observables(hamiltonian::HamHam, num_qubits::In
         H = Matrix{ComplexF64}(diagm(ComplexF64.(hamiltonian.eigvals)))
     end
 
-    # Mutable collections for push! in the correlation loop below
-    observables = Matrix{ComplexF64}[H, Mz_eigen]
-    names = String["H", "Mz"]
+    # --- Observable 5: Rand_traceless (random traceless Hermitian, reproducible seed) ---
+    rng = Random.MersenneTwister(12345)
+    R = randn(rng, ComplexF64, dim, dim)
+    R = (R + R') / 2          # Hermitianize
+    R = R - tr(R) / dim * I   # Make traceless
+    R = R / opnorm(R)         # Normalize by operator norm
+    Rand_eigen = Matrix{ComplexF64}(V' * R * V)
 
-    # Averaged two-site correlations (nearest-neighbor, periodic)
-    for (pauli_pair, pair_name) in [([X, X], "XX_avg"), ([Y, Y], "YY_avg"), ([Z, Z], "ZZ_avg")]
-        PP_sum = zeros(ComplexF64, dim, dim)
-        for i in 1:num_qubits
-            PP_sum .+= Matrix{ComplexF64}(pad_term(pauli_pair, num_qubits, i; periodic=true))
-        end
-        PP_sum ./= num_qubits  # Per-bond average
-        PP_eigen = Matrix{ComplexF64}(V' * PP_sum * V)
-        push!(observables, PP_eigen)
-        push!(names, pair_name)
-    end
-
-    # Staggered magnetization: sum((-1)^i * Z_i) / n  (has k=pi component)
+    # --- Observable 6: Mz_stagg (staggered magnetization) ---
     Mz_stagg_comp = zeros(ComplexF64, dim, dim)
     for i in 1:num_qubits
         sign = (-1)^i  # alternating sign: -1, +1, -1, +1, ...
         Mz_stagg_comp .+= sign .* Matrix{ComplexF64}(pad_term([Z], num_qubits, i))
     end
-    Mz_stagg_comp ./= num_qubits  # Per-site normalization (consistent with Mz)
+    Mz_stagg_comp ./= num_qubits  # Per-site normalization
     Mz_stagg_eigen = Matrix{ComplexF64}(V' * Mz_stagg_comp * V)
-    push!(observables, Mz_stagg_eigen)
-    push!(names, "Mz_stagg")
 
-    # Single-site Z_1: not translation-averaged, has components in all k sectors
-    Z1_comp = Matrix{ComplexF64}(pad_term([Z], num_qubits, 1))
-    Z1_eigen = Matrix{ComplexF64}(V' * Z1_comp * V)
-    push!(observables, Z1_eigen)
-    push!(names, "Z1")
-
-    # Staggered XZ correlation: sum((-1)^i * X_i Z_{i+1}) / n  (breaks SU(2), has k=pi)
-    XZ_stagg_comp = zeros(ComplexF64, dim, dim)
-    for i in 1:num_qubits
-        sign = (-1)^i
-        XZ_stagg_comp .+= sign .* Matrix{ComplexF64}(pad_term([X, Z], num_qubits, i; periodic=true))
-    end
-    XZ_stagg_comp ./= num_qubits  # Per-bond normalization (consistent with XX_avg, YY_avg, ZZ_avg)
-    XZ_stagg_eigen = Matrix{ComplexF64}(V' * XZ_stagg_comp * V)
-    push!(observables, XZ_stagg_eigen)
-    push!(names, "XZ_stagg")
+    observables = Matrix{ComplexF64}[Z1_eigen, X1_eigen, Z1_Zhalf_eigen, H, Rand_eigen, Mz_stagg_eigen]
+    names = String["Z1", "X1", "Z1_Zhalf", "H", "Rand_traceless", "Mz_stagg"]
 
     return observables, names
 end

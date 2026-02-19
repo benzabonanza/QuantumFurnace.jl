@@ -27,11 +27,11 @@ using LinearAlgebra
         @test result.gap > 0.0
         @test result.gap_ci[1] < result.gap < result.gap_ci[2]
         @test result.gap_se > 0.0
-        @test result.best_observable in ["H", "Mz", "XX_avg", "YY_avg", "ZZ_avg", "Mz_stagg", "Z1", "XZ_stagg"]
+        @test result.best_observable in ["Z1", "X1", "Z1_Zhalf", "H", "Rand_traceless", "Mz_stagg"]
         @test result.best_r_squared > 0.0
-        @test length(result.per_observable) == 8
-        @test length(result.observable_names) == 8
-        @test result.observable_names == ["H", "Mz", "XX_avg", "YY_avg", "ZZ_avg", "Mz_stagg", "Z1", "XZ_stagg"]
+        @test length(result.per_observable) == 6
+        @test length(result.observable_names) == 6
+        @test result.observable_names == ["Z1", "X1", "Z1_Zhalf", "H", "Rand_traceless", "Mz_stagg"]
         @test result.ntraj == 500
         @test result.save_every == 5
         @test result.seed == 42
@@ -93,7 +93,7 @@ using LinearAlgebra
     # -----------------------------------------------------------------
     @testset "Custom observables with names" begin
         obs, names = build_preset_trajectory_observables(SMALL_HAM, 3)
-        @test length(obs) == 8
+        @test length(obs) == 6
         result = estimate_spectral_gap(
             SMALL_JUMPS, config, psi0, SMALL_HAM;
             observables=obs, observable_names=names,
@@ -216,11 +216,11 @@ using LinearAlgebra
             @test result isa OverlapAnalysisResult
             @test length(result.eigenvalues) == SMALL_DIM^2
             @test result.exact_gap > 0.0
-            @test length(result.observable_names) == 8
+            @test length(result.observable_names) == 6
             @test result.observable_names == names
-            @test size(result.overlap_coefficients) == (8, SMALL_DIM^2)
-            @test length(result.gap_mode_overlap) == 8
-            @test length(result.relative_gap_overlap) == 8
+            @test size(result.overlap_coefficients) == (6, SMALL_DIM^2)
+            @test length(result.gap_mode_overlap) == 6
+            @test length(result.relative_gap_overlap) == 6
             @test all(x -> x >= 0.0, result.gap_mode_overlap)
             @test all(x -> 0.0 <= x <= 1.0, result.relative_gap_overlap)
         end

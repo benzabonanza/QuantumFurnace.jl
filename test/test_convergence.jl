@@ -69,17 +69,18 @@ using BSON
     # Testset 5: _compute_gibbs_observable_values
     # -----------------------------------------------------------------------
     @testset "_compute_gibbs_observable_values" begin
-        observables, _ = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS)
+        observables, obs_names = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS)
         obs_gibbs = QuantumFurnace._compute_gibbs_observable_values(TEST_GIBBS, observables)
 
         @test length(obs_gibbs) == length(observables)
         @test all(isfinite, obs_gibbs)
         @test all(x -> isa(x, Real), obs_gibbs)
 
-        # Energy value (first entry, H) matches analytical Gibbs energy
+        # Energy value (H, index 4) matches analytical Gibbs energy
         boltz = exp.(-BETA .* TEST_HAM.eigvals)
         gibbs_energy_analytical = sum(TEST_HAM.eigvals .* boltz) / sum(boltz)
-        @test isapprox(obs_gibbs[1], gibbs_energy_analytical; atol=1e-10)
+        h_idx = findfirst(==("H"), obs_names)
+        @test isapprox(obs_gibbs[h_idx], gibbs_energy_analytical; atol=1e-10)
     end
 
     # -----------------------------------------------------------------------
@@ -194,9 +195,9 @@ using BSON
         @test conv_data.trace_distances[end] < conv_data.trace_distances[1]
 
         # Observable values structure
-        @test size(conv_data.observable_values) == (8, 5)
+        @test size(conv_data.observable_values) == (6, 5)
         @test conv_data.observable_names == names
-        @test length(conv_data.observable_gibbs_values) == 8
+        @test length(conv_data.observable_gibbs_values) == 6
 
         # CONV-02/CONV-03: Energy observable converges toward Gibbs value
         energy_idx = findfirst(==("H"), names)
@@ -282,7 +283,7 @@ using BSON
         @test length(row_slice) == 2
         col_slice = conv_data.observable_values[:, 1]  # all observables at first batch
         @test col_slice isa Vector{Float64}
-        @test length(col_slice) == 8
+        @test length(col_slice) == 6
 
         # observable_names can be used to look up specific observables
         idx = findfirst(==("H"), conv_data.observable_names)
@@ -407,7 +408,7 @@ using BSON
         @test all(x -> x >= 0, conv_data.trace_distances)
 
         # Observable values matrix shape matches
-        @test size(conv_data.observable_values) == (8, conv_data.total_batches)
+        @test size(conv_data.observable_values) == (6, conv_data.total_batches)
 
         # TrajectoryResult has valid density matrix
         @test isapprox(real(tr(traj_result.rho_mean)), 1.0; atol=1e-6)
@@ -633,10 +634,10 @@ using BSON
     @testset "build_preset_trajectory_observables (eigenbasis)" begin
         observables, names = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS)
 
-        # Returns exactly 8 observables and 8 names
-        @test length(observables) == 8
-        @test length(names) == 8
-        @test names == ["H", "Mz", "XX_avg", "YY_avg", "ZZ_avg", "Mz_stagg", "Z1", "XZ_stagg"]
+        # Returns exactly 6 observables and 6 names
+        @test length(observables) == 6
+        @test length(names) == 6
+        @test names == ["Z1", "X1", "Z1_Zhalf", "H", "Rand_traceless", "Mz_stagg"]
 
         # All matrices are DIM x DIM ComplexF64
         for obs in observables
@@ -649,53 +650,49 @@ using BSON
             @test isapprox(obs, obs'; atol=1e-12)
         end
 
-        # H observable (first) is diagonal in eigenbasis
-        H = observables[1]
+        V = TEST_HAM.eigvecs
+
+        # Z1 observable (index 1) matches single-site construction
+        Z1_comp = Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, 1))
+        Z1_expected = Matrix{ComplexF64}(V' * Z1_comp * V)
+        @test isapprox(observables[1], Z1_expected; atol=1e-14)
+
+        # X1 observable (index 2) matches single-site X construction
+        X1_comp = Matrix{ComplexF64}(pad_term([X], NUM_QUBITS, 1))
+        X1_expected = Matrix{ComplexF64}(V' * X1_comp * V)
+        @test isapprox(observables[2], X1_expected; atol=1e-14)
+
+        # Z1_Zhalf observable (index 3) matches two-point correlator
+        half_site = floor(Int, NUM_QUBITS / 2)
+        Z1_Zhalf_comp = Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, 1)) *
+                        Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, half_site))
+        Z1_Zhalf_expected = Matrix{ComplexF64}(V' * Z1_Zhalf_comp * V)
+        @test isapprox(observables[3], Z1_Zhalf_expected; atol=1e-14)
+
+        # H observable (index 4) is diagonal in eigenbasis
+        H = observables[4]
         @test maximum(abs.(H - diagm(diag(H)))) < 1e-12
 
         # H Gibbs trace matches analytical
         boltz = exp.(-BETA .* TEST_HAM.eigvals)
         gibbs_energy_analytical = sum(TEST_HAM.eigvals .* boltz) / sum(boltz)
-        @test isapprox(real(tr(Matrix(TEST_GIBBS) * observables[1])), gibbs_energy_analytical; atol=1e-10)
+        @test isapprox(real(tr(Matrix(TEST_GIBBS) * observables[4])), gibbs_energy_analytical; atol=1e-10)
 
-        # M_z observable (second) matches inline reference construction
-        V = TEST_HAM.eigvecs
-        Mz_comp = sum(Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, i)) for i in 1:NUM_QUBITS) / NUM_QUBITS
-        Mz_expected = Matrix{ComplexF64}(V' * Mz_comp * V)
-        @test isapprox(observables[2], Mz_expected; atol=1e-14)
-
-        # XX_avg, YY_avg, ZZ_avg (indices 3-5) are per-bond averaged correlations
-        V = TEST_HAM.eigvecs
-        for (idx, pauli_pair) in [(3, [X, X]), (4, [Y, Y]), (5, [Z, Z])]
-            PP_sum = zeros(ComplexF64, DIM, DIM)
-            for i in 1:NUM_QUBITS
-                PP_sum .+= Matrix{ComplexF64}(pad_term(pauli_pair, NUM_QUBITS, i; periodic=true))
-            end
-            PP_sum ./= NUM_QUBITS
-            PP_expected = Matrix{ComplexF64}(V' * PP_sum * V)
-            @test isapprox(observables[idx], PP_expected; atol=1e-14)
-        end
+        # Rand_traceless observable (index 5): Hermitian, traceless, operator-norm 1, reproducible
+        Rand = observables[5]
+        @test isapprox(Rand, Rand'; atol=1e-12)  # Hermitian (already checked above, but explicit)
+        # Tracelessness in eigenbasis: tr(V' * R * V) = tr(R) since V is unitary
+        @test abs(tr(Rand)) < 1e-10
+        # Operator norm 1 (in computational basis, preserved by unitary transform)
+        @test isapprox(opnorm(Rand), 1.0; atol=1e-10)
+        # Reproducibility: calling again gives the same matrix
+        obs2, _ = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS)
+        @test isapprox(observables[5], obs2[5]; atol=1e-14)
 
         # Mz_stagg observable (index 6) matches inline staggered construction
-        V = TEST_HAM.eigvecs
         Mz_stagg_comp = sum((-1)^i .* Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, i)) for i in 1:NUM_QUBITS) / NUM_QUBITS
         Mz_stagg_expected = Matrix{ComplexF64}(V' * Mz_stagg_comp * V)
         @test isapprox(observables[6], Mz_stagg_expected; atol=1e-14)
-
-        # Z1 observable (index 7) matches single-site construction
-        Z1_comp = Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, 1))
-        Z1_expected = Matrix{ComplexF64}(V' * Z1_comp * V)
-        @test isapprox(observables[7], Z1_expected; atol=1e-14)
-
-        # XZ_stagg observable (index 8) matches inline staggered XZ construction
-        XZ_stagg_comp = zeros(ComplexF64, DIM, DIM)
-        for i in 1:NUM_QUBITS
-            sign = (-1)^i
-            XZ_stagg_comp .+= sign .* Matrix{ComplexF64}(pad_term([X, Z], NUM_QUBITS, i; periodic=true))
-        end
-        XZ_stagg_comp ./= NUM_QUBITS
-        XZ_stagg_expected = Matrix{ComplexF64}(V' * XZ_stagg_comp * V)
-        @test isapprox(observables[8], XZ_stagg_expected; atol=1e-14)
     end
 
     # -----------------------------------------------------------------------
@@ -704,10 +701,10 @@ using BSON
     @testset "build_preset_trajectory_observables (Trotter basis)" begin
         observables, names = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS; trotter=TEST_TROTTER)
 
-        # Returns exactly 8 observables and 8 names
-        @test length(observables) == 8
-        @test length(names) == 8
-        @test names == ["H", "Mz", "XX_avg", "YY_avg", "ZZ_avg", "Mz_stagg", "Z1", "XZ_stagg"]
+        # Returns exactly 6 observables and 6 names
+        @test length(observables) == 6
+        @test length(names) == 6
+        @test names == ["Z1", "X1", "Z1_Zhalf", "H", "Rand_traceless", "Mz_stagg"]
 
         # All matrices are DIM x DIM ComplexF64
         for obs in observables
@@ -720,11 +717,28 @@ using BSON
             @test isapprox(obs, obs'; atol=1e-12)
         end
 
-        # H observable (first) is built via full basis transform V_T' * H_data * V_T,
+        V_T = TEST_TROTTER.eigvecs
+
+        # Z1 observable (index 1) matches single-site Z in Trotter basis
+        Z1_comp = Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, 1))
+        Z1_expected = Matrix{ComplexF64}(V_T' * Z1_comp * V_T)
+        @test isapprox(observables[1], Z1_expected; atol=1e-14)
+
+        # X1 observable (index 2) matches single-site X in Trotter basis
+        X1_comp = Matrix{ComplexF64}(pad_term([X], NUM_QUBITS, 1))
+        X1_expected = Matrix{ComplexF64}(V_T' * X1_comp * V_T)
+        @test isapprox(observables[2], X1_expected; atol=1e-14)
+
+        # Z1_Zhalf observable (index 3) matches two-point correlator in Trotter basis
+        half_site = floor(Int, NUM_QUBITS / 2)
+        Z1_Zhalf_comp = Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, 1)) *
+                        Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, half_site))
+        Z1_Zhalf_expected = Matrix{ComplexF64}(V_T' * Z1_Zhalf_comp * V_T)
+        @test isapprox(observables[3], Z1_Zhalf_expected; atol=1e-14)
+
+        # H observable (index 4) is built via full basis transform V_T' * H_data * V_T,
         # NOT as diagm(eigvals) (which would only be valid in the Hamiltonian eigenbasis).
-        # For this test system the Trotter error is small so off-diagonal elements may
-        # be near zero, but the matrix should still match the explicit transform.
-        H = observables[1]
+        H = observables[4]
         H_expected = Matrix{ComplexF64}(TEST_TROTTER.eigvecs' * TEST_HAM.data * TEST_TROTTER.eigvecs)
         @test isapprox(H, H_expected; atol=1e-12)
 
@@ -732,33 +746,18 @@ using BSON
         gibbs_trotter = QuantumFurnace._gibbs_in_trotter_basis(TEST_HAM, TEST_TROTTER)
         boltz = exp.(-BETA .* TEST_HAM.eigvals)
         gibbs_energy_analytical = sum(TEST_HAM.eigvals .* boltz) / sum(boltz)
-        @test isapprox(real(tr(Matrix(gibbs_trotter) * observables[1])), gibbs_energy_analytical; atol=1e-10)
+        @test isapprox(real(tr(Matrix(gibbs_trotter) * observables[4])), gibbs_energy_analytical; atol=1e-10)
 
-        # M_z observable (second) matches inline reference construction
-        V_T = TEST_TROTTER.eigvecs
-        Mz_comp = sum(Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, i)) for i in 1:NUM_QUBITS) / NUM_QUBITS
-        Mz_expected = Matrix{ComplexF64}(V_T' * Mz_comp * V_T)
-        @test isapprox(observables[2], Mz_expected; atol=1e-14)
+        # Rand_traceless observable (index 5): Hermitian, traceless, operator-norm 1
+        Rand = observables[5]
+        @test isapprox(Rand, Rand'; atol=1e-12)
+        @test abs(tr(Rand)) < 1e-10
+        @test isapprox(opnorm(Rand), 1.0; atol=1e-10)
 
-        # Cross-basis consistency: M_z Gibbs trace matches analytical
-        gibbs_comp = TEST_HAM.eigvecs * Matrix(TEST_GIBBS) * TEST_HAM.eigvecs'
-        mz_analytical = sum(
-            real(tr(gibbs_comp * Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, i))))
-            for i in 1:NUM_QUBITS
-        ) / NUM_QUBITS
-        @test isapprox(real(tr(Matrix(gibbs_trotter) * observables[2])), mz_analytical; atol=1e-10)
-
-        # XX_avg, YY_avg, ZZ_avg (indices 3-5) are per-bond averaged correlations in Trotter basis
-        V_T = TEST_TROTTER.eigvecs
-        for (idx, pauli_pair) in [(3, [X, X]), (4, [Y, Y]), (5, [Z, Z])]
-            PP_sum = zeros(ComplexF64, DIM, DIM)
-            for i in 1:NUM_QUBITS
-                PP_sum .+= Matrix{ComplexF64}(pad_term(pauli_pair, NUM_QUBITS, i; periodic=true))
-            end
-            PP_sum ./= NUM_QUBITS
-            PP_expected = Matrix{ComplexF64}(V_T' * PP_sum * V_T)
-            @test isapprox(observables[idx], PP_expected; atol=1e-14)
-        end
+        # Mz_stagg observable (index 6) matches inline staggered construction in Trotter basis
+        Mz_stagg_comp = sum((-1)^i .* Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, i)) for i in 1:NUM_QUBITS) / NUM_QUBITS
+        Mz_stagg_expected = Matrix{ComplexF64}(V_T' * Mz_stagg_comp * V_T)
+        @test isapprox(observables[6], Mz_stagg_expected; atol=1e-14)
     end
 
 end  # @testset "Convergence tracking"
