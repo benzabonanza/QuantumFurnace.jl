@@ -66,3 +66,25 @@
 
 ---
 
+
+## v1.3 Mixing Time Estimation (Shipped: 2026-02-19)
+
+**Started:** 2026-02-17 | **Shipped:** 2026-02-19
+**Phases:** 20-25 (10 plans + 11 quick tasks) | **Tests:** 539 → 666 | **Commits:** 98 since v1.2
+**Julia LOC:** 6,274 src + 4,366 test | **Files changed:** 93 (+16,804 / -2,329)
+**Git range:** feat(20-01)..docs(quick-32)
+
+**Delivered:** Spectral gap estimation from trajectory-based observable decay, with eigenbasis overlap diagnostics, cross-validated against exact Liouvillian eigenvalues. n=4 Heisenberg chain achieves 0.72% accuracy at 20k trajectories. Includes observable-only trajectory runner, exponential fitting, and unified validation pipeline.
+
+**Key accomplishments:**
+1. Single-call `estimate_spectral_gap` API orchestrating observable construction, trajectory simulation, exponential fitting, and best-observable selection
+2. 8-observable eigenbasis overlap diagnostic (`eigenbasis_overlap_analysis`) decomposing observables into Lindbladian eigenmodes to identify gap-mode coupling
+3. Observable-only trajectory runner (`run_observable_trajectories`) measuring time-resolved `<O>(t)` without per-trajectory DM reconstruction, bitwise cross-validated
+4. Exponential decay fitting (`fit_exponential_decay`) via LsqFit.jl with auto log-linear initial guess, confidence intervals, and R-squared quality metrics
+5. n=4 spectral gap validated to 0.72% accuracy (20k trajectories, beta=10); n=6 zero-overlap physics limitation diagnosed and documented
+6. Systematic investigation (Quick-22 through Quick-32) of gap estimation accuracy: delta_eff fix, observable selection improvements, symmetry analysis, and confirmation that trajectory simulation is correct
+
+**Archives:** [v1.3-ROADMAP.md](milestones/v1.3-ROADMAP.md) | [v1.3-REQUIREMENTS.md](milestones/v1.3-REQUIREMENTS.md)
+
+---
+

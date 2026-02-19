@@ -2,24 +2,24 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-02-16)
+See: .planning/PROJECT.md (updated 2026-02-19)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** Phase 25 (Spectral Gap Validation Overhaul) -- COMPLETE
+**Current focus:** v1.3 Mixing Time Estimation -- SHIPPED
 
 ## Current Position
 
-Phase: 25 (Spectral Gap Validation Overhaul) -- COMPLETE
-Plan: 3 of 3 in current phase (Plan 03 COMPLETE)
-Status: Phase 25 complete. Quick-32: Trajectory simulation confirmed CORRECT. Non-monotonic gap estimation (Quick-30/31) originates in single-exponential fitting procedure, not CPTP channel simulation. 7/8 observable errors decrease monotonically with delta.
-Last activity: 2026-02-18 -- Quick task 32 executed (investigate non-monotonic delta scaling root cause)
+Phase: v1.3 milestone complete
+Plan: All 10 plans across 6 phases complete
+Status: v1.3 Mixing Time Estimation shipped. Spectral gap estimation from trajectory-based observable decay, cross-validated against exact Liouvillian eigenvalues. n=4 achieves 0.72% accuracy.
+Last activity: 2026-02-19 -- v1.3 milestone archived
 
-Progress: [##############################] 48/48 plans (v1.0-v1.3) + 3/3 Phase 25
+Progress: [##############################] 51/51 plans (v1.0-v1.3)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 65 (v1.0: 10, v1.1: 16, quick: 17, v1.2: 12, cleanup: 3, v1.3: 7, Phase 25: 3)
+- Total plans completed: 68 (v1.0: 10, v1.1: 16, quick: 17, v1.2: 12, cleanup: 3, v1.3: 10)
 
 **By Milestone:**
 
@@ -28,76 +28,13 @@ Progress: [##############################] 48/48 plans (v1.0-v1.3) + 3/3 Phase 2
 | v1.0 Trajectories | 1-5 | 10 | 2026-02-13 to 2026-02-14 |
 | v1.1 Reduce | 6-11 | 16 (+5 quick) | 2026-02-15 |
 | v1.2 Multi-threading | 12-19 | 15 (+3 quick) | 2026-02-15 to 2026-02-16 |
-| v1.3 Mixing Time | 20-24 | 7 | 2026-02-16 to 2026-02-17 |
+| v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
 
 ## Accumulated Context
 
 ### Decisions
 
 All decisions logged in PROJECT.md Key Decisions table.
-Key context for v1.3:
-- Use `abs(real(spectral_gap))` not `abs(spectral_gap)` for cross-validation (complex eigenvalues)
-- Follow `build_convergence_observables` pattern for basis transforms (avoids pitfall from quick-task-20)
-- LsqFit.jl is the single new dependency (Levenberg-Marquardt + CIs + bounds)
-- Phases 20 and 21 can execute in parallel (independent work)
-- Phase 20: Unified trotter keyword pattern (not separate _trotter suffix) for new observable builders
-- Phase 20: M_z = sum(Z_i)/n per-site normalization, H + M_z bundle (no ZZ correlations)
-- Phase 21: FitResult struct wraps LsqFit output; _IDX_A=1, _IDX_GAP=2, _IDX_C=3 parameter ordering
-- Phase 21: R-squared not clamped (negative = valid diagnostic); no weight vector to curve_fit
-- Phase 22: ObservableTrajectoryResult in trajectories.jl (not structs.jl); inner/outer constructor pattern for Aqua compliance
-- Phase 22: reconstruct_dm=true reuses _run_chunk_with_obs!; reconstruct_dm=false uses new _run_chunk_obs_only!
-- Phase 23: SpectralGapResult uses concrete types only (no type parameter) for Aqua compliance
-- Phase 23: Best observable selected by smallest gap among converged + gap > 0 + R-squared > 0.8 fits (quick-23 fix)
-- Phase 23: gap_estimation.jl included after fitting.jl and before results.jl for correct dependency order
-- Phase 24: CrossValidationResult uses concrete types only (no type parameter) for Aqua compliance
-- Phase 24: Two-method dispatch for cross_validate_gap (LindbladianResult delegates to Complex)
-- Phase 24: abs(real(spectral_gap)) enforced in cross_validate_gap (locked decision)
-- Phase 24: Excited initial state (psi0[end]=1) for validation -- ground state at high beta is near Gibbs, no decay signal
-- Phase 24: Two-tier pass criterion (R-squared > 0.9 AND residual_factor in [0.8, 1.5]) tightened in quick-23
-- Quick-22: Fixed delta_eff double-counting -- trajectory CPTP channel now uses bare delta (matching DM), R_a scaled by n_jumps is the single compensation
-- Quick-22: Residual factor ~1.6x (n=4) and ~1.5x (n=6) between fitted and exact gap is discrete-step Kraus effect (was ~20x before fix)
-- Quick-23: Smallest-gap selection reduces n=4 factor from ~1.6x to ~1.17x; n=6 at ~1.46x; both pass [0.8, 1.5]
-- Quick-24: Added XX_avg, YY_avg, ZZ_avg per-bond averaged correlations to gap estimation (5 observables total)
-- Quick-24: SingularException in LsqFit.stderror handled gracefully with Inf/(-Inf,Inf) fallback
-- Phase 25-01: Single observable builder (build_preset_trajectory_observables) replaces 4 old builders
-- Phase 25-01: Mz construction inlined into single builder (was delegated to deleted build_total_magnetization)
-- Phase 25-01: CrossValidationResult and cross_validate_gap removed from source and exports
-- Phase 25-02: ARPACK vs dense eigen gap agrees to ~1.8e-10 for 3-qubit system (test atol=1e-8)
-- Phase 25-02: dot(O_vec, V[:,k]) computes vec(O)^H * v_k -- correct for Hermitian observable eigenbasis projection
-- Phase 25-02: Relative gap overlap excludes steady-state mode (k=1) from denominator
-- Phase 25-03: n=4 ARPACK vs eigen agrees to 1.2e-10 (well within 1e-8 threshold)
-- Phase 25-03: n=4 gap estimation passes with 0.72% relative error (ZZ_avg best, 20k trajectories)
-- Phase 25-03: n=6 all observables have zero gap-mode overlap -- estimation fails at 10.7% relative error
-- Phase 25-03: /experiments/ is gitignored; validation script force-added to git
-- Quick-25: n=6 gap mode in k=3 (k=pi) momentum sector; n=4 gap mode in k=0 -- translational symmetry momentum mismatch is root cause of zero overlap
-- Quick-25: T_L = kron(T_eigen, conj(T_eigen)) commutes with L to ~1e-15 precision, confirming Lindbladian inherits translational symmetry
-- Quick-25: n=6 gap eigenspace is 3-fold degenerate, all in k=3 sector; need k=pi observables or symmetry-breaking for viable estimation
-- Quick-26: Added Mz_stagg (staggered Z) and Z1 (single-site) to 7-observable bundle; Mz_stagg has |c_gap|=0 for n=6 despite k=pi component
-- Quick-26: n=6 gap mode protected by additional SU(2) spin-rotation symmetry -- staggered-Z alone insufficient
-- Quick-26: Tiered validation thresholds: n=4 < 1%, n=6 < 12% (acknowledges symmetry-protected gap mode)
-- Quick-27: XZ_stagg (staggered XZ correlation) added as 8th observable; has |c_gap|=0 for n=6 despite breaking SU(2) and having k=pi
-- Quick-27: n=6 gap mode protection is stronger than SU(2) spin-rotation -- likely involves discrete symmetries (parity, spin-flip) of Heisenberg chain
-- Quick-27: n=4 at 0.72%, n=6 at 10.71% -- no change from adding XZ_stagg; threshold stays at 12%
-- Quick-28: Disorder breaks ALL n=6 symmetry protection: Mz_stagg achieves |c_gap|=0.120 (was 0.000 for pure Heisenberg)
-- Quick-28: Gap estimation still biased with disorder: n=4 at 48.7%, n=6 at 34.1% -- smallest-gap selection picks Mz_stagg which underestimates (gap/exact = 0.51x, 0.66x)
-- Quick-28: XZ_stagg has zero overlap even with disorder -- residual symmetry prevents coupling
-- Quick-28: Disordered Hamiltonians have different gap values: n=4: 0.173 (vs pure ~0.120); n=6: 0.113 (vs pure ~0.046)
-- Quick-29: XX_stagg (staggered nearest-neighbor XX) has zero gap-mode overlap even with disorder: |c_gap|=2.5e-5 (n=4), 3.5e-6 (n=6)
-- Quick-29: XX_stagg dominant modes at k~42-43 (2x gap rate) -- XX two-site correlation fundamentally misaligned with gap mode
-- Quick-29: Gap mode has Z-character selectivity: Mz_stagg/Z1 couple (Quick-28) but XX_stagg does not
-- Quick-29: H alone gives gap/exact = 1.21x (n=4), 1.63x (n=6) -- discrete-step Kraus overestimation confirmed
-- Quick-30: Gap estimation error NOT O(delta) -- error/delta varies 96x across delta=0.1, 0.01, 0.001 for n=4 disordered Heisenberg
-- Quick-30: Richardson extrapolation provides 1.0x improvement (ineffective) -- error not dominated by O(delta) Trotter term
-- Quick-30: Dominant error source is systematic observable bias, not Trotter discretization; YY_avg achieves 2-6% error vs Mz_stagg at 37-49%
-- Quick-30: Non-monotonic error in delta (49% at 0.01 vs 37% at 0.001 vs 39% at 0.1) rules out simple O(delta^p) scaling
-- Quick-31: Longer mixing (20) + uniform psi0 does NOT fix O(delta) scaling -- error/delta ratio spread 199x (worse than v1's 96x)
-- Quick-31: Richardson extrapolation still ineffective: 1.1x and 0.9x improvement (negligible)
-- Quick-31: Mz_stagg error changes sign and grows with smaller delta (+0.6% at 0.1, -6.5% at 0.01, -19.7% at 0.001)
-- Quick-31: Observable bias is parameter-independent -- not fixed by mixing time, initial state, or skip_initial
-- Quick-32: Trajectory simulation CORRECT: 7/8 observable errors decrease monotonically with delta (O(1e-3) magnitude)
-- Quick-32: Multi-step trace distance non-monotonicity at delta=0.001 is statistical noise floor (50k traj, 20k steps)
-- Quick-32: Non-monotonic gap estimation (37-49% errors) originates in single-exponential fitting, not CPTP channel simulation
-- Quick-32: No code bug found -- gap estimation improvement requires better fitting model (multi-exponential, Prony/ESPRIT, matrix pencil)
 
 ### Pending Todos
 
@@ -109,7 +46,7 @@ None
 
 ### Roadmap Evolution
 
-- Phase 25 added: Spectral Gap Validation Overhaul — consolidate validation, verify ARPACK vs eigen, eigenbasis overlap analysis, high-ntraj estimation
+All milestones (v1.0-v1.3) complete and archived.
 
 ### Quick Tasks Completed
 
@@ -132,6 +69,6 @@ None
 
 ## Session Continuity
 
-Last session: 2026-02-18
-Stopped at: Completed quick task 32 (investigate non-monotonic delta scaling root cause). Trajectory simulation confirmed CORRECT. Non-monotonic gap estimation originates in single-exponential fitting, not simulation. 7/8 observable errors decrease monotonically with delta. No code changes needed.
+Last session: 2026-02-19
+Stopped at: v1.3 Mixing Time Estimation milestone archived and tagged.
 Resume file: None

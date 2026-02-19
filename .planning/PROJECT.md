@@ -2,7 +2,7 @@
 
 ## What This Is
 
-A Julia package for simulating quantum Gibbs sampling via Lindbladian evolution. It implements multiple Lindbladian constructions (GNS and KMS detailed balance) across a hierarchy of approximation domains (Bohr, Energy, Time, Trotter), enabling both density matrix and trajectory-based simulation of quantum thermalization. The package features multi-threaded trajectory sampling with adaptive convergence-driven batching, BSON experiment serialization, and validated KMS-vs-GNS comparison capabilities. Core structs are parameterized on element type `{T<:AbstractFloat}` for precision flexibility. The package targets researchers and students working on quantum Gibbs sampling, providing both fast numerical simulations and pedagogic documentation grounded in the theoretical literature.
+A Julia package for simulating quantum Gibbs sampling via Lindbladian evolution. It implements multiple Lindbladian constructions (GNS and KMS detailed balance) across a hierarchy of approximation domains (Bohr, Energy, Time, Trotter), enabling both density matrix and trajectory-based simulation of quantum thermalization. The package features multi-threaded trajectory sampling with adaptive convergence-driven batching, spectral gap estimation from trajectory-based observable decay with eigenbasis overlap diagnostics, BSON experiment serialization, and validated KMS-vs-GNS comparison capabilities. Core structs are parameterized on element type `{T<:AbstractFloat}` for precision flexibility. The package targets researchers and students working on quantum Gibbs sampling, providing both fast numerical simulations and pedagogic documentation grounded in the theoretical literature.
 
 ## Core Value
 
@@ -50,19 +50,15 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 - ✓ BSON-based ExperimentResult serialization with metadata (git hash, timestamp, seed, thread count) -- v1.2
 - ✓ KMS-vs-GNS parameter sweep experiments confirming KMS achieves lower trace distance than GNS -- v1.2
 - ✓ Logic simplification: flattened call chain (5->3 levels), domain-aware JumpOp construction, simplified result structs -- v1.2
+- ✓ Observable-only trajectory runner with optional DM reconstruction (`run_observable_trajectories`) -- v1.3
+- ✓ 8-observable bundle (`build_preset_trajectory_observables`): H, Mz, XX_avg, YY_avg, ZZ_avg, Mz_stagg, Z1, XZ_stagg -- v1.3
+- ✓ Single-exponential decay fitting with auto log-linear initial guess, CIs, R-squared (`fit_exponential_decay`) -- v1.3
+- ✓ Single-call spectral gap estimation API (`estimate_spectral_gap` → `SpectralGapResult`) -- v1.3
+- ✓ Eigenbasis overlap diagnostic (`eigenbasis_overlap_analysis` → `OverlapAnalysisResult`) -- v1.3
+- ✓ n=4 spectral gap cross-validated to 0.72% against exact Liouvillian eigenvalue (20k trajectories) -- v1.3
+- ✓ LsqFit.jl dependency for Levenberg-Marquardt fitting with bounded parameters -- v1.3
 
 ### Active
-
-## Current Milestone: v1.3 Mixing Time Estimation
-
-**Goal:** Estimate the Lindbladian spectral gap from trajectory-based observable decay, cross-validated against exact Liouvillian eigenvalues for small systems.
-
-**Target features:**
-- Observable-only trajectory runner (no mid-simulation DM reconstruction, DM once at end)
-- Total magnetization observable alongside energy
-- Exponential fit to extract spectral gap from observable decay
-- Cross-validation vs exact Liouvillian spectral gap for n=4,6
-- Reusable `spectral_gap_estimate` function for larger systems
 
 **Future milestones:**
 - [ ] 1D Ising model Hamiltonian generation
@@ -76,6 +72,8 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 - [ ] Ding et al. (2024) KMS Lindbladian construction with discrete jump operators (future addition)
 - [ ] Jump statistics histogram (empirical rates match theoretical predictions)
 - [ ] Confidence interval reporting (bootstrap CIs on trajectory-vs-DM trace distance)
+- [ ] Multi-exponential fitting for improved gap estimation accuracy (Prony/ESPRIT/matrix pencil methods)
+- [ ] Symmetry-adapted observables for gap estimation on symmetric Hamiltonians (n=6 Heisenberg limitation)
 
 ### Out of Scope
 
@@ -91,19 +89,26 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 
 ## Context
 
-**Current State (v1.2 shipped):**
-- 5,479 LOC src + 3,796 LOC test (Julia), 539 tests passing
-- Tech stack: Julia, LinearAlgebra, FINUFFT, Arpack, BSON, StableRNGs, LibGit2, Dates
+**Current State (v1.3 shipped):**
+- 6,274 LOC src + 4,366 LOC test (Julia), 666 tests passing
+- Tech stack: Julia, LinearAlgebra, FINUFFT, Arpack, LsqFit, BSON, StableRNGs, LibGit2, Dates
 - Both DM and trajectory simulation validated and cross-checked
 - Multi-threaded trajectory engine with per-thread workspace/RNG, BLAS control, deterministic seeding
 - GNS and KMS trajectory paths both functional and tested
 - Adaptive convergence-driven batching with configurable threshold, patience, and hard cap
 - Batch-level convergence tracking (trace distance, ZZ correlations, energy)
 - BSON experiment serialization with full metadata for reproducibility
-- KMS-vs-GNS sweep script for n=4,6,8 x beta=5,10,20 parameter grid
-- Simplified result structs (LindbladianResult, DMSimulationResult) and 3-level call chain
+- Spectral gap estimation from trajectory-based observable decay with 8-observable preset bundle
+- Eigenbasis overlap diagnostic for understanding which observables couple to Lindbladian gap mode
+- n=4 gap estimation achieves <1% accuracy; n=6 limited by symmetry-protected gap mode (documented)
+- Simplified result structs (LindbladianResult, DMSimulationResult, SpectralGapResult, OverlapAnalysisResult) and 3-level call chain
 - Core structs parameterized on `{T<:AbstractFloat}` (Float64 default, Float32-ready)
 - API organized: physics building blocks exported, implementation details `_`-prefixed
+
+**Known Limitations:**
+- n=6 periodic Heisenberg chain: all preset observables have zero overlap with gap mode due to translational + discrete symmetry protection. Gap estimation accuracy ~10.7% for this system.
+- Single-exponential fitting produces non-monotonic error at small delta. Multi-exponential methods (Prony/ESPRIT) would improve accuracy but are deferred.
+- Richardson extrapolation ineffective for gap estimation error (error is not O(delta^p)).
 
 **Theoretical Foundation:**
 The package implements quantum Gibbs samplers from three key papers:
@@ -118,14 +123,14 @@ The package implements quantum Gibbs samplers from three key papers:
 - Single-node execution on cluster (up to 512 GB RAM), multi-core parallelism
 
 **Paper Goals:**
-Results needed for publication: convergence curves (trace distance vs. steps), mixing time scaling with system size and temperature, comparison across approximation domains (Bohr vs Energy vs Time vs Trotter), trajectory vs density matrix agreement, KMS-vs-GNS comparison data.
+Results needed for publication: convergence curves (trace distance vs. steps), mixing time scaling with system size and temperature, comparison across approximation domains (Bohr vs Energy vs Time vs Trotter), trajectory vs density matrix agreement, KMS-vs-GNS comparison data, spectral gap estimation validation.
 
 ## Constraints
 
 - **Language**: Julia -- non-negotiable, leverages Julia's multiple dispatch for domain hierarchy and performance
 - **Correctness**: All Lindbladian constructions must be mathematically faithful to the source papers; detailed balance properties must hold to machine precision (for exact KMS) or documented approximation bounds (for GNS and for implemented KMS due to Trotterization or quadrature errors.)
 - **System size**: Practical limit ~12-14 qubits due to exponential Hilbert space scaling (density matrix 2^n x 2^n)
-- **Dependencies**: Minimize external dependencies; rely on Julia stdlib + established numerical packages (Arpack, FINUFFT)
+- **Dependencies**: Minimize external dependencies; rely on Julia stdlib + established numerical packages (Arpack, FINUFFT, LsqFit)
 - **Dual purpose**: Code must be both performant (for research results) and readable (for community pedagogy) -- well-documented functions with mathematical cross-references to papers
 
 ## Key Decisions
@@ -151,8 +156,14 @@ Results needed for publication: convergence curves (trace distance vs. steps), m
 | Dict-based BSON serialization for ExperimentResult | Avoids parametric struct pitfalls in BSON; Dict round-trips reliably | ✓ Good -- all round-trip tests pass |
 | Domain-aware JumpOp basis at construction (trotter.eigvecs for TrotterDomain) | Eliminates redundant transform_jumps_to_basis calls downstream | ✓ Good -- one transform at source, flatter call chain |
 | LindbladianResult/DMSimulationResult replacing HotSpectralResults/HotAlgorithmResults | Simpler 3-4 field structs without hamiltonian/config/trotter baggage | ✓ Good -- cleaner API, less coupling |
-| Qiskit for circuit generation (Python interop) | Qiskit is the standard for quantum circuit representation; Julia quantum circuit ecosystem less mature | -- Pending |
 | Single-node multi-core for trajectories | Shared memory for precomputed data avoids serialization overhead; cluster nodes have enough RAM | ✓ Good -- multi-threaded engine operational |
+| LsqFit.jl for exponential fitting (v1.3) | Levenberg-Marquardt with parameter bounds and covariance CIs; standard Julia choice | ✓ Good -- recovers synthetic decay rates within CIs; SingularException handled gracefully |
+| Single-exponential model A*exp(-gap*t)+C (v1.3) | Simplest model capturing dominant decay; multi-exponential deferred | ⚠️ Revisit -- works for n=4 (<1% error) but non-monotonic at small delta due to multi-mode contamination |
+| Smallest-gap selection for best observable (v1.3) | Gap mode is the slowest decaying; smallest fitted gap closest to true gap | ✓ Good -- reduces n=4 from ~1.6x to ~1.17x factor; Quick-23 validation |
+| Consolidated single observable builder (v1.3 Phase 25) | build_preset_trajectory_observables replaces 4 separate builders | ✓ Good -- cleaner API, single entry point, 8-observable bundle |
+| CrossValidationResult removed (v1.3 Phase 25) | Thin wrapper over manual comparison; eigenbasis_overlap_analysis more useful | ✓ Good -- simpler API surface, overlap analysis provides more insight |
+| abs(real(spectral_gap)) for exact gap (v1.3) | Complex eigenvalues: real part gives decay rate; imaginary part gives oscillation frequency | ✓ Good -- locked decision, enforced throughout |
+| Qiskit for circuit generation (Python interop) | Qiskit is the standard for quantum circuit representation; Julia quantum circuit ecosystem less mature | -- Pending |
 
 ---
-*Last updated: 2026-02-16 after v1.3 Mixing Time Estimation milestone started*
+*Last updated: 2026-02-19 after v1.3 milestone*
