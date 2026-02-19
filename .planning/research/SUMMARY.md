@@ -1,300 +1,180 @@
 # Project Research Summary
 
-**Project:** v1.3 Spectral Gap Estimation from Trajectory Observable Decay
-**Domain:** Quantum trajectory simulation + nonlinear exponential decay fitting + statistical cross-validation
-**Researched:** 2026-02-16
+**Project:** QuantumFurnace.jl v1.4 Spectral Gap Refinement Diagnostics
+**Domain:** Quantum Lindbladian simulation — spectral gap estimation diagnostics and improved estimators
+**Researched:** 2026-02-19
 **Confidence:** HIGH
 
 ## Executive Summary
 
-This milestone adds spectral gap estimation via exponential fitting to time-resolved observable decay from quantum trajectory simulations. The physics is well-established: for a Lindbladian with spectral gap λ, observable expectation values decay exponentially toward thermal equilibrium at rate λ. By running trajectory simulations with observable measurements at regular intervals, fitting `A * exp(-λ * t) + C` to the decay curve, and extracting λ, we estimate the spectral gap without constructing the full Liouvillian (which becomes infeasible at n≥8). Cross-validation against exact Liouvillian eigenvalues at n=4,6 establishes trust.
+QuantumFurnace.jl v1.4 is a diagnostic and improved-estimation milestone built on top of a working v1.3 single-exponential fitting pipeline. The core problem, confirmed by Quick-30 through Quick-32, is that trajectory-based spectral gap estimation achieves ~0.72% accuracy at n=4 but suffers 37-49% error at n=6. Root cause analysis (Quick-32) conclusively separated two error sources: trajectory simulation errors are O(1e-3) and monotonically decrease with Trotter step size delta, while fitting model errors are O(10-50%) and non-monotonic in delta. The v1.4 milestone attacks the fitting bottleneck directly through seven interlocking diagnostic capabilities: effective rate plots, two-exponential fitting with Prony initialization, bootstrap error bars, automatic fitting window selection, anti-Hermitian defect computation, Delta-Sz symmetry sector labeling, and Richardson extrapolation.
 
-The recommended approach is minimal and well-constrained: add LsqFit.jl (one new dependency) for Levenberg-Marquardt curve fitting with parameter bounds and built-in confidence intervals, create a new `spectral_gap.jl` module that wraps existing trajectory primitives with exponential fitting logic, extend observable builders to include total magnetization, and implement cross-validation helpers. The existing trajectory infrastructure (`run_trajectories` with observables, `step_along_trajectory!`, measurement accumulation) is reused as-is. The architecture follows established patterns from `run_trajectories_convergence`.
+The recommended approach is a pure additive layer on top of the existing simulation infrastructure. All new capabilities are post-hoc analyses of trajectory data and exact Lindbladian results — none require modifying the performance-critical trajectory step loop. The sole architectural exception is bootstrap error bars, which require a new batched trajectory runner variant that stores per-batch mean observable time series. The complete existing Julia dependency set (LsqFit.jl, LinearAlgebra stdlib, Arpack.jl, Plots.jl in extras, StatsBase in extras) is sufficient for all v1.4 features. Zero new production dependencies are needed.
 
-The key risk is multi-exponential contamination: the observable decay is a sum of exponentials (one per Liouvillian eigenmode), not a pure single exponential. Fitting the full time series biases the gap estimate high. The mitigation is late-time fitting (skip the first 10-20% of data where fast modes dominate) combined with multi-observable consistency checks (fit energy, magnetization, and ZZ correlations independently; the smallest fitted rate with good quality is the true gap). Secondary risks include basis mismatch for new observables (critical pitfall from v1.2 quick-task-20 experience), noise floor at late times (requires sufficient trajectories: 5000+ for n=4,6, 10000+ for n=8), and confusing complex Liouvillian eigenvalues with real decay rates (must compare against `-real(spectral_gap)`, not `abs(spectral_gap)`).
+The three critical risks are: (1) two-exponential fitting parameter non-identifiability when the two decay rates are within ~2x of each other, which requires two-stage initialization and a separation quality check before any downstream use of the fitted rates; (2) numerical blow-up of the rho^{-1/4} similarity transform at low temperature (beta > 5), which requires Gibbs eigenvalue spectrum truncation and must be validated against the BohrDomain ground truth; and (3) Richardson extrapolation amplifying fitting artifacts rather than correcting Trotter bias, which requires a monotonicity precondition test across 3+ delta values before any extrapolation is applied. These three pitfalls produce silently wrong results that look plausible, making proactive prevention essential.
 
 ## Key Findings
 
 ### Recommended Stack
 
-LsqFit.jl (v0.15+) is the single new production dependency. It provides Levenberg-Marquardt nonlinear least squares with parameter bounds (essential: gap > 0), confidence intervals via t-distribution from Jacobian covariance, standard errors, and weighted fitting (for non-uniform trajectory noise). It is pure Julia, actively maintained by JuliaNLSolvers, and adds minimal dependency footprint: its transitive deps (ForwardDiff, NLSolversBase, StatsAPI) are already resolved via the existing Optim.jl dependency. The only truly new package is Distributions.jl (used internally by LsqFit for t-quantiles in confidence intervals), which is a standard, lightweight, well-maintained statistics package.
+The existing dependency set covers all v1.4 needs without exception. Two-exponential fitting uses LsqFit.jl's `curve_fit` with a 5-parameter model — the same API already used for single-exponential fitting in v1.3. Matrix fourth roots for the KMS similarity transform are computed via `LinearAlgebra.eigen(Hermitian(...))` exploiting the diagonal structure of the Gibbs state in the energy eigenbasis, with a numerically stable path for TrotterDomain via general eigendecomposition. Expanding the eigenvalue extraction from nev=2 to nev=30 requires only a parameter change to the existing Arpack.jl shift-invert call. Bootstrap resampling uses `StatsBase.sample(replace=true)` already in the test extras. Diagnostic figures use Plots.jl already in extras.
 
 **Core technologies:**
-- **LsqFit.jl v0.15+**: Nonlinear curve fitting for `A * exp(-gap * t) + C` — provides `curve_fit` with bounds, `confidence_interval`, `standard_error`, and automatic Jacobian computation. The standard Julia package for this task; purpose-built for curve fitting unlike raw Optim.jl.
-- **Distributions.jl v0.25+ (transitive)**: t-distribution for confidence intervals — brought in by LsqFit, used internally, not directly imported by QuantumFurnace.
-- **Existing trajectory infrastructure (reused)**: `run_trajectories` with observables, `TrajectoryFramework`, `step_along_trajectory!`, `_accumulate_measurements!` — all primitives work as-is; no changes needed to core simulation engine.
-
-**Alternatives considered and rejected:**
-- Optim.jl alone: already a dependency, but lacks curve-fitting infrastructure (confidence intervals, covariance estimation). Would require manual implementation of what LsqFit provides.
-- Bootstrap.jl: LsqFit's Jacobian-based CIs are sufficient. Bootstrap would require storing per-trajectory data (massive memory) or re-running trajectories (prohibitively expensive).
-- Prony's method / matrix pencil: theoretically superior for multi-exponential decomposition but (a) no mature Julia package, (b) notoriously noise-sensitive without SVD regularization, (c) requires equally-spaced samples. Single-exponential fit with window selection is more robust.
+- **LsqFit.jl (0.15):** Two-exponential fitting — same `curve_fit` API with 5-parameter model `c1*exp(-g1*t) + c2*exp(-g2*t)`; Prony two-point method provides robust starting values for the ill-conditioned optimization
+- **LinearAlgebra (stdlib):** Matrix fourth root via `eigen(Hermitian(...))` exploiting diagonal Gibbs state structure; `opnorm` for anti-Hermitian defect norm; `Diagonal` for efficient similarity transforms in eigenbasis
+- **Arpack.jl (0.5.4):** Leading 20-30 eigenvalue extraction via shift-invert; only change is increasing `nev` from 2 to 30 in the existing `eigs` call; KrylovKit.jl explicitly rejected (no shift-invert mode for interior eigenvalues)
+- **StatsBase.jl (0.34, extras):** `sample(1:K, K; replace=true)` for batch-level bootstrap resampling; 10-line custom loop preferred over Bootstrap.jl for non-standard batch-level use case
+- **Plots.jl (1, extras):** 7-panel diagnostic dashboard via `plot(layout=...)` — sufficient for thesis-quality diagnostic figures; CairoMakie.jl deferred (adds ~30 transitive deps for marginal quality gain)
+- **Statistics (stdlib):** `mean`, `std` for bootstrap statistics and SNR computation — always available, no new dep entry needed
 
 ### Expected Features
 
+The feature landscape is precisely specified by the reference documents. All seven table-stakes features are required for the milestone to deliver value over v1.3. The effective rate plot is the keystone feature: it feeds initialization data into the two-exponential fit, defines the fitting window, and provides model-free validation of all fitted results. The dependency chain flows from the effective rate plot outward to bootstrap, then to Richardson extrapolation.
+
 **Must have (table stakes):**
-- **Observable-only trajectory runner**: Run trajectories with time-resolved observable measurements (`<O>(t)` at `save_every` intervals) without per-trajectory DM reconstruction. Existing `run_trajectories` with observables already does this; just need to clarify/simplify the API.
-- **Total magnetization observable**: `M_z = sum_i Z_i` in eigenbasis/Trotter basis, following the pattern of existing `build_convergence_observables`. Easy addition; one function.
-- **Single-exponential fit with bounds**: Model `f(t) = A * exp(-gap * t) + C`, constrain `gap > 0`, auto-initialize from log-linear estimate. Core of the milestone.
-- **Fit quality metrics**: R-squared, residual norm, confidence interval on gap. LsqFit provides these directly.
-- **Cross-validation against exact Liouvillian**: For n=4,6, compare trajectory-fitted gap vs `run_lindbladian().spectral_gap`. This is the validation that makes the method credible for n≥8.
-- **`estimate_spectral_gap` function**: Public API that orchestrates observable-trajectories + multi-observable fitting + best-fit selection + optional cross-validation. Returns `SpectralGapResult` with gap estimate, CI, per-observable results, and metadata.
+- **Effective rate plot lambda_eff(t)** — model-free diagnostic `lambda_eff(t) = -(1/tau)*ln|Delta(t+tau)/Delta(t)|` that reveals multi-exponential time regimes and identifies the golden fitting window without fitting assumptions; keystone for all other features
+- **Two-exponential fit with Prony initialization** — root cause fix from Quick-32; model `c1*exp(-g1*t) + c2*exp(-g2*t)` absorbs fast-mode contamination into the second term, analogous to lattice QCD multi-state analysis; Prony two-point method gives reliable initial rates without iteration
+- **Bootstrap error bars (batch-level)** — nonparametric uncertainty quantification using K~100 batches of trajectories, resampling at batch level to avoid 640 MB+ per-trajectory storage; provides correct confidence intervals for the ill-conditioned two-exponential fit
+- **Automatic fitting window selection (SNR + stability)** — removes fragile manual `skip_initial=0.1`; t_max via SNR > 3 threshold, t_min via gamma_1 stability test sweeping window starts
+- **Anti-Hermitian defect computation** — KMS similarity transform `D = rho^{-1/4} L[rho^{1/4}(.)rho^{1/4}] rho^{-1/4}`, decomposed as H+A; ratio ||A||/lambda_gap(H) determines whether real-exponential fitting is appropriate
+- **Delta-Sz symmetry sector labeling** — explains the n=6 zero-overlap mystery from Quick-25 through Quick-27; labels each Lindbladian eigenvector by the dominant Delta_Sz quantum number
+- **Richardson extrapolation for Trotter bias** — formula `gap_rich = 2*gap(delta/2) - gap(delta)` eliminates O(delta) Trotter error; only viable after two-exponential fitting validates monotonic error structure
 
-**Should have (competitive):**
-- **Multi-observable consistency check**: Fit gap from energy, M_z, and all ZZ correlations independently; report agreement. Minimal code, high scientific value.
-- **Fitting window selection**: Skip early transient (first 10-20%) and late noise floor. Improves fit quality significantly with minimal complexity.
-- **Variance-weighted fitting**: Weight by `1/var(O(t_i))` if per-time variance is available. LsqFit supports this via `wt` parameter. Optional refinement.
-- **Gap vs beta scaling plot**: For paper figures. Low complexity, deferred to simulation scripts (not library code).
+**Should have (add after core validation):**
+- **Summary dashboard (7-panel figure)** — composes all diagnostics into one thesis-quality communicable result
+- **External field comparison (h=0.1J)** — confirms symmetry sector restriction as dominant n=6 error source
+- **Multi-observable minimum-gap selector** — extend `_select_best_observable` to use two-exponential g1 estimates
 
-**Defer (v2+):**
-- **Damped oscillation model**: `A * exp(-gamma * t) * cos(omega * t + phi) + C` for complex eigenvalues with significant imaginary part. Only needed if pure exponential fits fail (unlikely for KMS-balanced Lindbladians which have real eigenvalues).
-- **Multi-exponential fit**: Extracts multiple decay rates simultaneously. Ill-conditioned; only needed if eigenvalue spectrum characterization (not just gap) is the goal.
-- **Bootstrap confidence intervals**: Jacobian-based CIs from LsqFit are sufficient for validation. Bootstrap adds complexity without clear benefit for this use case.
+**Defer (v1.5+):**
+- **n=8 sparse Lindbladian** — explicitly deferred in reference documents; requires KrylovKit.jl and new architecture
+- **Damped-oscillation fit model** — only if anti-Hermitian defect proves significant in practice
+- **GEVP / matrix pencil methods** — only if two-exponential fit proves insufficient
 
 ### Architecture Approach
 
-The design follows the "compose existing primitives, add minimal new code" principle. All trajectory simulation machinery is reused. The new milestone adds: (1) a new file `src/spectral_gap.jl` containing all gap estimation code (keeps the already-large `trajectories.jl` focused), (2) a variant of the trajectory inner loop `_run_chunk_obs_only!` that measures observables without per-trajectory DM accumulation (optional, for clarity and slight memory efficiency), (3) exponential fitting function `fit_exponential_decay` wrapping LsqFit.jl, (4) result struct `SpectralGapResult` co-located in `spectral_gap.jl`, (5) observable builder extensions in `convergence.jl` for total magnetization, and (6) cross-validation helper that compares fitted gap against `LindbladianResult.spectral_gap`.
+The diagnostic layer is purely additive — a post-hoc analysis layer consuming existing result structs and trajectory data. Two new source files are added (`src/diagnostics.jl` for all structural diagnostics, `src/bootstrap.jl` for the batched trajectory runner and bootstrap analysis). Three existing files receive additions with minimal modification risk: `src/fitting.jl` gets `fit_two_exponential_decay()`, `src/trajectories.jl` gets `run_observable_trajectories_batched()`, and `src/QuantumFurnace.jl` gets include and export additions. All new result structs are flat immutable Julia structs following the existing convention (no methods on structs, plain field types).
 
 **Major components:**
-1. **Observable builders (convergence.jl)** — `build_total_magnetization(ham, n)` and `build_gap_estimation_observables(ham, n)` extend existing patterns. Transform observables to eigenbasis/Trotter basis via `V' * O * V` (critical to avoid basis mismatch pitfall).
-2. **Trajectory runner variant (spectral_gap.jl)** — `run_observable_trajectories` and `_run_chunk_obs_only!` follow the `run_trajectories` pattern exactly but make DM reconstruction optional. Reuses all existing primitives: `_build_framework_and_seed`, `step_along_trajectory!`, `_accumulate_measurements!`, multi-threading via `_partition_trajectories`.
-3. **Exponential fitting (spectral_gap.jl)** — `fit_exponential_decay(times, values)` uses LsqFit.jl `curve_fit` with: log-linear initial guess, parameter bounds `[gap >= 0]`, optional Gibbs value for offset, returns named tuple with gap, CI, SE, residual norm, converged flag.
-4. **Top-level API (spectral_gap.jl)** — `estimate_spectral_gap(jumps, config, psi0, ham; observables, ntraj, save_every, exact_result)` runs trajectories, fits all observables, selects best fit (lowest residual, converged, gap > 0), optionally cross-validates, returns `SpectralGapResult`.
-5. **Cross-validation helper (spectral_gap.jl)** — `cross_validate_gap(estimated, exact_result::LindbladianResult)` compares `estimated.gap` vs `abs(real(exact_result.spectral_gap))`, warns if `|Im/Re| > 0.1`, returns relative error.
+1. **`src/fitting.jl` (modified — new function)** — adds `fit_two_exponential_decay()` returning `TwoExpFitResult`; 5-parameter model with Prony + effective-rate fallback initialization; separation test (g2/g1 > 1.5); kept separate from existing `fit_exponential_decay` to preserve unchanged API
+2. **`src/diagnostics.jl` (new, 500-700 LOC)** — all structural diagnostic functions: `compare_gap_to_exact`, `compute_effective_rates`, `anti_hermitian_defect` (with Gibbs spectrum truncation), `sector_gap_analysis` (with degeneracy detection), `trotter_convergence_sweep`, `run_gap_diagnostics` wrapper; all corresponding result structs
+3. **`src/bootstrap.jl` (new, 300-400 LOC)** — `run_observable_trajectories_batched` (new trajectory runner storing per-batch means in `n_batches x n_obs x n_saves` 3D array), `bootstrap_spectral_gap`, `BootstrapGapResult` with percentile CI; `BatchedTrajectoryResult`
+4. **Include order in QuantumFurnace.jl** — `fitting.jl` then `gap_estimation.jl` then `bootstrap.jl` then `diagnostics.jl`, following the dependency DAG
 
-**Integration points:**
-- `src/spectral_gap.jl` (NEW): ~250 lines, all gap estimation logic
-- `src/convergence.jl` (MODIFY): +2 functions (~40 lines) for observable builders
-- `src/QuantumFurnace.jl` (MODIFY): `include("spectral_gap.jl")`, `using LsqFit`, export new API
-- `Project.toml` (MODIFY): add LsqFit dependency and compat entry
-
-**No changes needed:**
-- `src/trajectories.jl`: all primitives reused as-is
-- `src/furnace.jl`: `run_lindbladian` already provides `.spectral_gap` for cross-validation
-- `src/structs.jl`: `SpectralGapResult` lives in `spectral_gap.jl` (not a cross-module type)
+The critical architectural decision is batch-level bootstrap over per-trajectory storage: `n_batches x n_obs x n_saves` (~3 MB for 100 batches) versus `n_traj x n_obs x n_saves` (640 MB+ for 20k trajectories at n=6). This enables genuine bootstrap distributions with percentile confidence intervals at ~1% of the naive memory cost, using the block bootstrap methodology validated for independent batches.
 
 ### Critical Pitfalls
 
-1. **Confusing complex eigenvalue with real decay rate (CRITICAL)** — The Liouvillian `spectral_gap` is `Complex{T}`. Observable decay rate is `-real(spectral_gap)`, NOT `abs(spectral_gap)`. Cross-validation MUST use `abs(real(...))` for comparison. For KMS-balanced Lindbladians (exact BohrDomain), eigenvalues are real; for approximate domains (Energy, Time, Trotter), small imaginary parts can appear. Flag when `|Im/Re| > 0.1` (indicates oscillatory decay, not pure exponential). **Mitigation:** Define comparison quantity explicitly: `exact_gap = abs(real(liouv_result.spectral_gap))`, assert positive, warn on large imaginary part.
+1. **Two-exponential fit parameter non-identifiability** — when g2/g1 < 1.5, the Levenberg-Marquardt Jacobian is ill-conditioned and `stderror(fit)` from LsqFit dramatically underestimates uncertainty; running from 5 different initial guesses gives 5 different (g1, g2) pairs with similar residuals. Prevention: two-stage initialization (single-exp tail fit for g1, residual fit for g2), explicit `g2 > g1` bounds in `curve_fit`, mandatory separation test with fallback to single-exponential tail fit when g2/g1 < 1.5. Never use LsqFit `stderror` for two-exponential uncertainty — use bootstrap exclusively.
 
-2. **Observable basis mismatch (CRITICAL)** — Trajectories evolve in eigenbasis/Trotter basis; observables MUST be transformed to the same basis via `V' * O * V`. This is the exact bug class from v1.2 quick-task-20 (0.83 gap instead of 0.0807 from mixing bases). Total magnetization `M_z = sum_i Z_i` is naturally defined in computational basis; must transform. **Mitigation:** Follow `build_convergence_observables` pattern exactly; add regression test `tr(gibbs * M_z_eigen) = sum_i <Z_i>_gibbs` to catch basis errors.
+2. **rho^{-1/4} blow-up at low temperature** — the KMS similarity transform amplifies Gibbs eigenvalues by the -1/4 power; at beta=10 for the n=6 Heisenberg chain, rho^{-1/4} diagonal entries reach ~10^5, drowning signal in Float64 numerical noise. Prevention: floor on Gibbs eigenvalues at ~1e-12 before taking the -1/4 power; report condition number max(d_k)/min(d_k); validate that BohrDomain defect is < 1e-10 after truncation (the physical ground truth). This truncation must be designed before any anti-Hermitian defect computations.
 
-3. **Multi-exponential contamination (CRITICAL)** — Observable decay is `sum_k c_k * exp(-gamma_k * t)`, not a single exponential. Fitting the full time series gives a biased estimate (weighted average of all rates, pulled high by fast modes). **Mitigation:** (a) Late-time fitting only — skip first 10-20% where fast modes dominate; (b) Fit multiple observables independently, select the smallest fitted rate with good R-squared as the true gap; (c) Use exact steady-state value `<O>_ss = tr(gibbs * O)` as fixed parameter rather than fitting it.
+3. **Richardson extrapolation amplifying fitting artifacts** — Quick-30 proved the gap estimation error does NOT follow O(delta^p) structure due to fitting model bias; Richardson applied to poorly-initialized two-exponential fits can produce results worse than the finest-delta un-extrapolated estimate. Prevention: mandatory delta-convergence diagnostic (plot fitted gap vs 3+ delta values) before any extrapolation; gate extrapolation on monotonicity check; always report un-extrapolated estimates alongside extrapolated ones; flag when extrapolated gap falls outside [min, max] of un-extrapolated estimates.
 
-4. **Noise floor at late times (CRITICAL)** — At `t >> 1/gap`, signal `|<O>(t) - <O>_ss| ~ exp(-gap * t)` drops below noise `sigma / sqrt(N_traj)`. Including noisy tail corrupts fit. For gap ~ 0.08, signal reaches noise floor at t ~ 50 with 1000 trajectories. **Mitigation:** (a) Pre-compute signal-to-noise from rough gap estimate, choose `N_traj` such that signal > 3*noise for at least 3 decay times; (b) Use weighted fitting by `1/var(t)` to downweight noisy regions; (c) Empirically determine noise floor and exclude time points where `|signal| < 2*noise`.
+4. **Bootstrap memory blow-up from per-trajectory storage** — naive implementation storing N_traj individual time series at n=6 uses 640 MB+ and makes bootstrap infeasible for N_traj > 10k. Prevention: batch-level bootstrap architecture from the start; `run_observable_trajectories_batched` must be the only supported bootstrap input path; the existing per-trajectory grand-mean runner is not extended.
 
-5. **Fitting sensitivity to initial guess (MODERATE)** — Levenberg-Marquardt converges to local minima. Poor initial `gap_0` causes convergence to wrong rate or failure. **Mitigation:** (a) Log-linear pre-estimate: fit `log|<O>(t) - C|` vs `t` to get initial gap; (b) Fix offset to known Gibbs value to reduce from 3-parameter to 2-parameter fit; (c) Use LsqFit bounds `lower=[..., 0.0, ...]` to constrain `gap >= 0`.
+5. **Effective rate lambda_eff(t) divergence at sign changes** — when trajectory noise causes Delta(t) to cross zero, the log-ratio diverges to NaN/Inf. Prevention: noise floor cutoff (exclude t where |Delta(t)| < 3*sigma_traj/sqrt(N)), sign-change guard returning NaN with companion boolean mask, and the steady-state value must be the Lindbladian fixed point (not Gibbs state) for TrotterDomain to prevent a systematic offset that corrupts all lambda_eff values.
 
 ## Implications for Roadmap
 
-Based on research, suggested phase structure:
+Based on the feature dependency graph in FEATURES.md and the build order in ARCHITECTURE.md, five phases are natural. The effective rate plot is the keystone and must exist before bootstrap (which needs to compute lambda_eff per bootstrap sample). The two-exponential fitter must exist before both the effective rate plot (feeds its initialization) and bootstrap (fits each bootstrap resample). Richardson extrapolation requires reliable per-delta gap estimates and is placed last among functional components.
 
-### Phase 1: Observable Infrastructure
-**Rationale:** Zero-dependency foundation. Observable builders have no external deps and enable all subsequent work. Following the same pattern as existing `build_convergence_observables` minimizes basis-mismatch risk. Can be tested in isolation against Gibbs state traces.
+### Phase 1: Two-Exponential Fitting Infrastructure
+**Rationale:** Zero dependencies on new code; pure numerical function testable immediately with synthetic data. The `TwoExpFitResult` struct established here is consumed by every downstream phase. Validating convergence and separation quality checks here prevents silently wrong results from propagating through the entire pipeline. This is the lowest-risk high-value starting point.
+**Delivers:** `fit_two_exponential_decay()` in `fitting.jl` with Prony two-point initialization, two-stage effective-rate fallback, separation test (g2/g1 > 1.5 with fallback to single-exponential), LsqFit `confint` for parameter uncertainty, `TwoExpFitResult` struct.
+**Addresses:** Two-exponential fit with Prony init (P0 feature)
+**Avoids:** Pitfall 1 (non-identifiability — separation test and two-stage init), Pitfall 8 (negative amplitude cancellation — cancellation ratio check)
+**Research flag:** Skip — well-documented numerical method; Prony algorithm is textbook; LsqFit API verified from official docs.
 
-**Delivers:**
-- `build_total_magnetization(ham, n)`
-- `build_gap_estimation_observables(ham, n)` returning [H, M_z, ZZ_12, ZZ_23, ...]
-- Basis transform regression tests
+### Phase 2: Exact Reference and Structural Diagnostics
+**Rationale:** These diagnostics (exact gap comparison, anti-Hermitian defect, symmetry sector labels, expanded eigenvalue extraction to nev=30) are all independent of each other and of the fitting pipeline. They consume existing `construct_lindbladian` and `run_lindbladian` infrastructure without modification. Building them before the fitting pipeline provides the ground truth references needed to validate Phase 3 and 4 results — in particular, the Lindbladian fixed point computed here is the correct steady-state for lambda_eff in Phase 3.
+**Delivers:** `compare_gap_to_exact()` with `GapComparisonResult` including Lindbladian fixed point; `anti_hermitian_defect()` with Gibbs spectrum truncation and condition number reporting; `sector_gap_analysis()` with `SectorAnalysisResult` and near-degeneracy detection; `run_lindbladian` nev increased to 30; `_thermalize_to_liouv_config()` helper. New file `src/diagnostics.jl` starts here.
+**Addresses:** Anti-Hermitian defect (P1), Delta-Sz symmetry labels (P1), store 20-30 eigenvalues (P2)
+**Avoids:** Pitfall 2 (rho^{-1/4} blow-up — spectrum truncation built in from the start), Pitfall 7 (symmetry label ambiguity — degeneracy detection built in), Pitfall 12 (steady-state mismatch — fixed point available for Phase 3)
+**Research flag:** Targeted audit needed for `_thermalize_to_liouv_config` field mapping — a field-by-field verification of ThermalizeConfig vs LiouvConfig struct definitions is needed before implementation. Skip research-phase for the rest (standard linear algebra).
 
-**Addresses:** Total magnetization observable (table stakes), basis mismatch prevention (critical pitfall 2)
+### Phase 3: Effective Rate Plot and Automatic Window Selection
+**Rationale:** The effective rate plot is the keystone diagnostic that provides model-free ground truth for all fitting validation. It must exist before the bootstrap pipeline because bootstrap computes lambda_eff curves per bootstrap sample. Automatic window selection is bundled here because it depends directly on the lambda_eff infrastructure and is used by Phase 1's two-exponential fit for t_min determination.
+**Delivers:** `compute_effective_rates()` in `diagnostics.jl` with NaN masking, noise floor cutoff at 3*sigma, midpoint time axis convention, sign-change guard; `EffectiveRateResult` struct; SNR-based t_max selector (SNR > 3); t_min stability test (g1 plateau detection over window-start sweep); steady-state value defaulting to Phase 2's Lindbladian fixed point.
+**Uses:** Phase 1's `fit_two_exponential_decay` for t_min stability loop; Phase 2's Lindbladian fixed point for correct steady-state subtraction
+**Avoids:** Pitfall 3 (lambda_eff divergence — noise floor cutoff and sign-change guard), Pitfall 6 (silent window selection failure — multiple-window comparison), Pitfall 12 (steady-state mismatch — fixed point from Phase 2), Pitfall 14 (wrong time axis — midpoint convention)
+**Research flag:** Skip — the lambda_eff computation is 15 lines of arithmetic; window selection logic is fully specified in reference documents.
 
-**Avoids:** Pitfall 2 (basis mismatch) by following `build_convergence_observables` pattern exactly
+### Phase 4: Batched Bootstrap and Richardson Extrapolation
+**Rationale:** Bootstrap requires the new batched trajectory runner, which is the highest-risk new code (touches trajectories.jl) and has the most significant memory implications. Placing it after Phases 1-3 means all analytical diagnostics are available as validation tools when debugging bootstrap outputs. Richardson extrapolation is bundled here because it is a one-line formula once reliable per-delta gap estimates exist from the two-exponential fitter.
+**Delivers:** `run_observable_trajectories_batched()` with `n_batches x n_obs x n_saves` 3D batch storage in new `src/bootstrap.jl`; `bootstrap_spectral_gap()` with percentile CI (not normal approximation); `BootstrapGapResult` including per-bootstrap-sample lambda_eff confidence bands; Richardson extrapolation with mandatory monotonicity precondition gate; `BatchedTrajectoryResult` struct.
+**Uses:** Phase 1 `fit_two_exponential_decay` per bootstrap resample; Phase 3 `compute_effective_rates` for per-sample lambda_eff curves
+**Implements:** Bootstrap architecture component from ARCHITECTURE.md
+**Avoids:** Pitfall 4 (Richardson failure — monotonicity gate required before extrapolation), Pitfall 5 (memory blow-up — batch-level storage from the start), Pitfall 9 (bootstrap lambda_eff bands — per-batch time series enables pointwise CI), Pitfall 13 (degenerate bootstrap samples — minimum B=100 batches)
+**Research flag:** Targeted audit needed for per-batch seeding arithmetic — the `master_seed + batch_idx * ntraj_per_batch` scheme must be verified against the existing `Xoshiro(seed + traj_id)` seeding in `trajectories.jl` before implementation to ensure batch independence. Skip research-phase for bootstrap resampling logic itself (textbook block bootstrap).
 
-**Complexity:** LOW (~40 lines in `convergence.jl`)
-
----
-
-### Phase 2: Add LsqFit Dependency + Exponential Fitting
-**Rationale:** The fitting logic can be developed and tested independently of trajectory simulation using synthetic exponential data. This validates the fitting methodology (initial guess, bounds, convergence) before integrating with noisy trajectory data. Can run in parallel with Phase 1.
-
-**Delivers:**
-- LsqFit.jl added to `Project.toml`
-- `fit_exponential_decay(times, values; skip_initial, gibbs_value)` in new `spectral_gap.jl`
-- Synthetic data tests: fit `y = 2.0 * exp(-0.5 * t) + 1.0 + noise`, verify recovery
-
-**Uses:** LsqFit.jl for `curve_fit`, `confidence_interval`, `standard_error`
-
-**Addresses:** Single-exponential fit with bounds (table stakes), fit quality metrics (table stakes)
-
-**Avoids:** Pitfall 5 (initial guess sensitivity) via log-linear pre-estimate, Pitfall 3 (multi-exponential) via `skip_initial` parameter
-
-**Complexity:** MEDIUM (~70 lines fitting function + tests)
-
----
-
-### Phase 3: Observable-Only Trajectory Runner
-**Rationale:** Depends on Phase 1 for observables but independent of Phase 2 (fitting). Follows `run_trajectories_convergence` template. The trajectory runner produces time-series data that Phase 4 will consume.
-
-**Delivers:**
-- `_run_chunk_obs_only!` (observable variant of trajectory loop)
-- `run_observable_trajectories(jumps, config, psi0, ham; observables, save_every, ntraj, reconstruct_dm=false)`
-- Returns `TrajectoryResult` with `measurements_mean` and `times`
-
-**Uses:** Existing trajectory primitives (`_build_framework_and_seed`, `step_along_trajectory!`, `_accumulate_measurements!`, multi-threading)
-
-**Implements:** Observable-only trajectory runner architecture component
-
-**Addresses:** Observable-only trajectory runner (table stakes), correct time grid selection (pitfall 7 mitigation)
-
-**Avoids:** Pitfall 4 (noise floor) by exposing `ntraj` and `total_time` parameters for signal-to-noise planning
-
-**Complexity:** MEDIUM (~120 lines following existing patterns)
-
----
-
-### Phase 4: Gap Estimation API + Result Struct
-**Rationale:** Depends on Phases 2 and 3 (requires both fitting and trajectory runner). Integrates observable-trajectories with multi-observable fitting, implements best-fit selection logic, packages results.
-
-**Delivers:**
-- `SpectralGapResult` struct in `spectral_gap.jl`
-- `estimate_spectral_gap(jumps, config, psi0, ham; observables, ntraj, save_every, exact_result)`
-- Fits all observables, selects best (lowest residual, converged, gap > 0)
-- Returns gap estimate + CI + per-observable results
-
-**Implements:** Top-level API architecture component
-
-**Addresses:** `estimate_spectral_gap` function (table stakes), multi-observable consistency check (differentiator)
-
-**Avoids:** Pitfall 3 (multi-exponential) by comparing gap across observables (smallest rate with good fit is true gap)
-
-**Complexity:** MEDIUM (~80 lines orchestration logic)
-
----
-
-### Phase 5: Cross-Validation Helpers + n=4,6 Validation
-**Rationale:** Depends on Phase 4 (needs `estimate_spectral_gap` API). Cross-validation establishes trust in the method by comparing against exact Liouvillian eigenvalues at n=4,6. This is the scientific validation step.
-
-**Delivers:**
-- `cross_validate_gap(estimated, exact_result::LindbladianResult)` helper
-- Validation simulation script for n=4 and n=6
-- Report: relative error, confidence interval overlap, per-observable gap comparison
-
-**Addresses:** Cross-validation against exact Liouvillian gap (table stakes)
-
-**Avoids:**
-- Pitfall 1 (complex vs real) by using `abs(real(spectral_gap))` and warning on large imaginary part
-- Pitfall 6 (wrong eigenvalue from Arpack) by requesting more eigenvalues and validating against full spectrum for n=4
-- Pitfall 9 (wrong steady-state value) by using `liouv_result.fixed_point` for baseline subtraction in cross-validation tests
-
-**Complexity:** MEDIUM (helper is ~30 lines; validation script is separate, not library code)
-
----
-
-### Phase 6: Gap Scaling Studies (Optional, Deferred)
-**Rationale:** Uses complete implementation from Phases 1-5. This is a simulation/paper phase, not library development. Can be done outside the main milestone delivery.
-
-**Delivers:**
-- Gap vs beta scaling plots
-- Gap vs n scaling plots (tests system-size independence prediction from arXiv:2510.08533)
-- Variance-weighted fitting refinement (if needed for precision)
-
-**Addresses:** Gap scaling plots (differentiator), variance-weighted fitting (differentiator)
-
-**Complexity:** LOW (simulation scripts using stable API)
-
----
+### Phase 5: Integration, Dashboard, and Validation
+**Rationale:** After all diagnostic components are independently validated, the final phase composes them into the `run_gap_diagnostics()` convenience wrapper and the 7-panel summary dashboard. This is the last phase because the summary figure must display results from all prior phases simultaneously and the external field comparison requires all diagnostics to be operational.
+**Delivers:** `run_gap_diagnostics()` wrapper returning `DiagnosticReport` bundling all prior result structs; 7-panel Plots.jl dashboard (spectrum, defect metrics, overlap coefficients, effective rate, delta-convergence, two-exp fit overlay, t_min stability); external field comparison (h=0.1J symmetry-breaking validation); multi-observable minimum-gap selector using two-exponential g1 estimates; final validated gap table for n=4,6 comparing exact vs estimated with sigma discrepancy.
+**Addresses:** Summary dashboard (P2), external field comparison (P2), multi-observable min-gap selector (P2)
+**Research flag:** Skip — Plots.jl multi-panel layout uses documented API already validated in existing docs/ usage; composition of existing structs is mechanical.
 
 ### Phase Ordering Rationale
 
-- **Phases 1 and 2 can be parallel:** Observable builders and exponential fitting are independent. Both are foundational.
-- **Phase 3 depends on Phase 1:** Needs observables to measure during trajectories.
-- **Phase 4 depends on Phases 2 and 3:** Integrates fitting with trajectory runner.
-- **Phase 5 depends on Phase 4:** Cross-validation needs the complete API.
-- **Phase 6 is post-delivery:** Paper figures and refinements happen after validation.
-
-**Key dependency chain:**
-```
-Phase 1 (observables)  ─┐
-                        ├─> Phase 3 (trajectories) ─┐
-Phase 2 (fitting)     ──┼───────────────────────────┼─> Phase 4 (API) ──> Phase 5 (validation) ──> Phase 6 (scaling)
-```
-
-**Risk mitigation via ordering:**
-- Address critical basis-mismatch pitfall (2) first via Phase 1 (observable patterns)
-- Validate fitting methodology via synthetic data in Phase 2 before applying to noisy trajectory data
-- Cross-validation (Phase 5) validates the entire pipeline before extending to n≥8
+- Phase 1 first because `TwoExpFitResult` is a dependency of Phases 3, 4, and 5, and it is the easiest to test in isolation with synthetic data without any trajectory infrastructure.
+- Phase 2 before Phase 3 because the Lindbladian fixed point from Phase 2's `compare_gap_to_exact` is needed as the correct steady-state value for lambda_eff computation in Phase 3. Using the wrong steady-state (Gibbs instead of fixed point for TrotterDomain) corrupts all effective rate plots.
+- Phase 3 before Phase 4 because the batched trajectory runner (Phase 4) needs to compute per-bootstrap-sample lambda_eff curves using Phase 3's `compute_effective_rates`. Having the lambda_eff infrastructure ready first avoids implementing it twice.
+- Phase 4 before Phase 5 because the dashboard plots bootstrap confidence bands and Richardson-extrapolated estimates that are produced in Phase 4.
+- This ordering also matches the ARCHITECTURE.md suggested build order: arch phases 1 (two-exp fitting) maps to roadmap Phase 1; arch phases 2-5 (effective rates, exact reference, defect, symmetry) map to roadmap Phases 2-3; arch phases 6-7 (batched runner, bootstrap) map to roadmap Phase 4; arch phase 9 (integration) maps to roadmap Phase 5.
 
 ### Research Flags
 
-**Phases with standard patterns (minimal additional research needed):**
-- **Phase 1 (Observables):** Follows `build_convergence_observables` exactly. Basis transform pattern is established. Skip `/gsd:research-phase`.
-- **Phase 2 (Fitting):** LsqFit.jl is well-documented, exponential fitting is standard numerics. Skip `/gsd:research-phase`.
-- **Phase 3 (Trajectories):** Follows `run_trajectories_convergence` template. All primitives exist. Skip `/gsd:research-phase`.
+Phases needing targeted verification during planning:
+- **Phase 2 (config conversion):** The `_thermalize_to_liouv_config` helper must map all fields between `ThermalizeConfig` and `LiouvConfig` correctly. A field-by-field audit of both struct definitions in `src/` is needed before implementation. Silent field mismatch means running diagnostics against a wrong Lindbladian. This is a 30-minute verification task, not a full research-phase.
+- **Phase 4 (batched trajectory seeding):** The per-batch seed arithmetic must produce statistically independent batches, compatible with the existing `Xoshiro(seed + traj_id)` scheme. Incorrect seeding makes bootstrap confidence intervals invalid. This is also a targeted audit of the seeding code in `trajectories.jl`, not a full research-phase.
 
-**Phases needing light validation during planning (but not deep research):**
-- **Phase 4 (API):** Multi-observable selection logic (pick best fit by R-squared, converged, gap > 0) is straightforward but may benefit from a quick-task to define the exact selection heuristic. Consider a quick-task for "best-fit selection criteria".
-- **Phase 5 (Cross-validation):** The comparison metric (exact vs fitted) needs precision in handling complex eigenvalues and imaginary part warnings. Consider a quick-task to validate the comparison logic for n=4 BohrDomain vs TrotterDomain.
-
-**No phase requires `/gsd:research-phase`:** All technical approaches are well-understood from domain research.
+Phases with standard patterns (skip research-phase):
+- **Phase 1:** Prony algorithm is textbook; LsqFit bounded fitting is documented from official sources with verified API.
+- **Phase 3:** lambda_eff computation is ~15 lines of arithmetic; window selection logic is fully specified in reference documents.
+- **Phase 5:** Plots.jl multi-panel dashboard uses documented API already validated in existing `docs/` usage; composition is mechanical.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | LsqFit.jl verified via official docs, GitHub, and tutorial. Dependency analysis confirms minimal footprint. All existing trajectory primitives are production-ready. |
-| Features | HIGH | Physics foundation is textbook Lindbladian theory. Feature scope is well-defined by cross-validation at n=4,6. Observable builders follow established patterns. |
-| Architecture | HIGH | Direct codebase analysis of all relevant files (trajectories.jl, convergence.jl, furnace.jl, structs.jl). New components follow existing patterns exactly. Integration points are clear. |
-| Pitfalls | HIGH | Critical pitfalls identified from (a) codebase analysis (basis mismatch from v1.2 quick-task-20), (b) numerical analysis literature (multi-exponential fitting, noise floor), (c) quantum open systems theory (complex eigenvalues, decay rate vs oscillation frequency). Mitigations are concrete and testable. |
+| Stack | HIGH | All packages verified against official Julia docs; zero new dependencies confirmed by cross-checking each v1.4 feature against existing stdlib and extras; version compatibility verified for all API calls |
+| Features | HIGH | Feature set precisely specified in `spectral-gap-refinements-instructions.md` and `error_catalogue_spectral_gap_estimation.md`; priorities validated by Quick-30/31/32 empirical data with exact gap comparison |
+| Architecture | HIGH | Based on direct analysis of all 26 source files and 19 test files; complete data flow traced through existing codebase; all integration points identified; build order validated against dependency DAG |
+| Pitfalls | HIGH | Critical pitfalls grounded in Quick-30/31/32 empirical results plus established numerical analysis literature; mitigations are concrete, testable, and cross-referenced to specific code locations |
 
 **Overall confidence:** HIGH
 
-The research is grounded in direct codebase analysis (all source files read), verified external dependencies (LsqFit.jl documentation and GitHub), established physics (Lindbladian spectral decomposition, observable decay), and battle-tested numerical methods (Levenberg-Marquardt fitting, log-linear initial guess). The architecture reuses 95% of existing code. The new code (~250 lines in `spectral_gap.jl`, ~40 lines in `convergence.jl`) follows established patterns from `run_trajectories_convergence` and `build_convergence_observables`.
-
 ### Gaps to Address
 
-**Multi-observable selection heuristic:** The "best fit" selection logic (from energy, M_z, and ZZ correlations) uses "lowest residual + converged + gap > 0" as the criterion. This is reasonable but may need refinement based on validation results. **Mitigation:** Phase 5 cross-validation will reveal if this heuristic is sufficient. If not, consider weighted average across observables with inverse-variance weighting, or select the observable with best R-squared rather than best residual norm.
-
-**Exact eigenvalue for non-BohrDomain:** The research assumes `run_lindbladian` returns the correct spectral gap for Energy, Time, and TrotterDomain. Pitfall 6 flags that Arpack with shift-invert may misidentify the gap eigenvalue when eigenvalues have similar real parts. **Mitigation:** Phase 5 validation should compute full spectrum (via `eigen()`) for n=4 to verify Arpack's result. If discrepancy found, extend `run_lindbladian` to request more eigenvalues and sort properly.
-
-**Signal-to-noise planning for n=8:** The recommended trajectory counts (5000+ for n=4,6, 10000+ for n=8) are rough estimates. The actual required `N_traj` depends on the specific Hamiltonian's spectral gap and observable variance. **Mitigation:** Phase 5 validation at n=4,6 will calibrate the signal-to-noise relationship. Use this to plan n=8 runs. Consider a pilot run (100 trajectories) before committing to full N_traj.
-
-**Gibbs vs fixed-point for offset:** The exponential fit uses `<O>_ss` as the offset parameter. For exact KMS (BohrDomain), this is the Gibbs value. For approximate domains, it should be the Liouvillian fixed point. The research flags this as Pitfall 9. **Mitigation:** For cross-validation (Phase 5), use `liouv_result.fixed_point` to compute `<O>_ss`. For production use at n≥8 (where Liouvillian is unavailable), use Gibbs value and acknowledge domain approximation error. Document this in the function docstring.
+- **Config field mapping (ThermalizeConfig to LiouvConfig):** The `_thermalize_to_liouv_config` helper needs a field-by-field audit against the actual struct definitions before Phase 2 implementation. This is mechanical verification but the consequence of a silent mismatch is running all structural diagnostics against a wrong Lindbladian with no error signal.
+- **Per-batch seeding arithmetic:** The exact seeding scheme for `run_observable_trajectories_batched` needs explicit design verification that batches are statistically independent. Correlated batches silently invalidate bootstrap confidence intervals. Audit the `Xoshiro(seed + traj_id)` logic in `trajectories.jl` before writing the batched runner.
+- **Two-exponential identifiability at n=4:** The n=4 Heisenberg chain has g1=0.173 and g2~0.35 (ratio ~2x), right at the boundary of identifiability per the numerical literature. Whether two-stage Prony initialization reliably recovers g1 at this ratio should be validated early in Phase 1 with actual n=4 trajectory data (not just synthetic). If not, profile likelihood over a g1 grid may be needed.
+- **TrotterDomain fixed point for n=6:** The effective rate computation requires the Lindbladian fixed point for correct steady-state subtraction. For n=6, the Liouvillian is 4096x4096 (dense eigen takes ~30s but is feasible). Confirming `liouv_result.fixed_point` is available from `run_lindbladian` for TrotterDomain with nev=30 should be verified in Phase 2 before Phase 3 depends on it.
 
 ## Sources
 
 ### Primary (HIGH confidence)
+- QuantumFurnace.jl codebase — direct analysis of all 26 source files and 19 test files; all integration points and data flows traced
+- `supplementary-informations/spectral-gap-refinements-instructions.md` — 5-part diagnostic pipeline specification; feature and architecture ground truth
+- `supplementary-informations/error_catalogue_spectral_gap_estimation.md` — 7 catalogued error sources; pitfall grounding
+- Quick-30/31/32 summaries — empirical validation of root cause (fitting model error >> simulation error); Richardson extrapolation failure mechanism confirmed
+- Julia LinearAlgebra documentation — eigen, Hermitian, opnorm, Diagonal; matrix fourth root via eigenbasis approach verified
+- LsqFit.jl official documentation — curve_fit API, bounds, confidence intervals; two-exponential model approach verified
+- Arpack.jl documentation — eigs with sigma (shift-invert) and nev parameters; KrylovKit.jl rejection verified by explicit "no shift-invert" documentation quote
+- KrylovKit.jl eigenvalue documentation — confirms no shift-invert mode; interior eigenvalue finding not supported
+- StatsBase.jl documentation — `sample` function with `replace` keyword; batch bootstrap pattern verified
 
-**Codebase (direct analysis):**
-- `src/trajectories.jl` (927 lines) — `run_trajectories`, `_run_chunk_with_obs!`, `step_along_trajectory!`, `_accumulate_measurements!`, trajectory primitives
-- `src/convergence.jl` (387 lines) — `build_convergence_observables`, `run_trajectories_convergence`, observable builders and basis transforms
-- `src/furnace.jl` (163 lines) — `run_lindbladian`, `LindbladianResult.spectral_gap`, Arpack eigenvalue extraction
-- `src/structs.jl` (358 lines) — `LindbladianResult`, `TrajectoryResult`, `ConvergenceData`, struct definitions
-- `src/QuantumFurnace.jl` — module structure, exports, dependency imports
-- `Project.toml` — current dependencies (Optim.jl, Arpack, etc.)
-- `.planning/quick/20-debug-gns-trotterdomain-0-83-gap-suspect/20-SUMMARY.md` — documented basis mismatch bug (0.83 gap instead of 0.0807)
+### Secondary (MEDIUM confidence)
+- Prony's method (Wikipedia + SIAM J. Sci. Comput. paper) — two-point exponential initialization; mathematical foundation sound and standard
+- Richardson extrapolation for Lindbladian Trotter error (arXiv:2507.22341, DOI:10.1103/kw39-yxq5) — theoretical support for extrapolation when error structure is correct
+- Symmetry classification of many-body Lindbladians (PhysRevX.13.031019) — symmetry sector labeling framework; Delta-Sz approach validated
+- KMS detailed balance and similarity transform (Chen et al. arXiv:2303.18224) — rho^{-1/4} transform mathematical foundation
+- Bootstrap resampling theory (Efron 1979; Efron and Tibshirani 1993) — block bootstrap validity for independent blocks; minimum ~50 blocks for reliable percentile CIs
+- Parameter identifiability in two-exponential models (BMC Systems Biology 2015) — condition number growth as function of rate separation ratio; g2/g1 > 1.5 threshold grounded here
 
-**External dependencies:**
-- [LsqFit.jl Documentation](https://julianlsolvers.github.io/LsqFit.jl/latest/) — API reference, tutorials, curve_fit usage
-- [LsqFit.jl GitHub v0.15.1](https://github.com/JuliaNLSolvers/LsqFit.jl) — Dependencies, Project.toml, release history, Julia compat
-- [LsqFit.jl Tutorial](https://julianlsolvers.github.io/LsqFit.jl/latest/tutorial/) — Exponential model example, parameter bounds, confidence intervals
-- [Distributions.jl v0.25 docs](https://juliastats.org/Distributions.jl/v0.25/) — Generated with Julia 1.11.7, confirming compatibility
-- [Distributions.jl v0.25.123 on Zenodo](https://zenodo.org/records/18145493) — Latest release Jan 2026
-
-### Secondary (HIGH confidence, domain knowledge)
-
-**Quantum open systems theory:**
-- Lindbladian spectral decomposition: `rho(t) = rho_ss + sum c_k R_k exp(lambda_k t)` — textbook result
-- Observable decay rate = `-real(lambda)` where `lambda` is Liouvillian eigenvalue — standard open quantum systems
-- KMS detailed balance implies real eigenvalues w.r.t. GNS inner product — Chen, Kastoryano, Gilyen (2025) arXiv:2311.09207
-
-**Numerical methods:**
-- Exponential fitting of sums of exponentials is ill-conditioned — classic numerical analysis result
-- Log-linear initial guess for nonlinear exponential fitting — standard practice in spectroscopy, NMR
-- Levenberg-Marquardt for nonlinear least squares — Nocedal & Wright, Numerical Optimization
-- Late-time fitting extracts slowest decay mode — standard in quantum Monte Carlo gap estimation
-
-**Physics literature:**
-- [Sandvik (2011) "Excitation Gap from Optimized Correlation Functions in QMC"](https://ar5iv.labs.arxiv.org/html/1112.2269) — Signal-to-noise in extracting gaps from Monte Carlo, multi-exponential fitting window selection
-- [Nachtergaele, Sims (2006) "Spectral Gap and Exponential Decay of Correlations"](https://link.springer.com/article/10.1007/s00220-006-0030-4) — Mathematical foundation: spectral gap implies exponential correlation decay
-- [Fast Mixing of Quantum Spin Chains at All Temperatures](https://arxiv.org/html/2510.08533) — System-size independent gap for 1D chains at finite temperature (testable prediction for gap vs n scaling)
-
-### Tertiary (MEDIUM confidence, methodological references)
-
-- [HypothesisTests.jl parametric tests](https://juliastats.org/HypothesisTests.jl/stable/parametric/) — OneSampleTTest for gap validation (existing test dependency)
-- [Mixing Time of Open Quantum Systems via Hypocoercivity](https://arxiv.org/abs/2404.11503) — Relationship between spectral gap, mixing time, and observable autocorrelation
-- [Mori (2022) "Liouvillian analysis of relaxation time"](https://www2.yukawa.kyoto-u.ac.jp/~nqs2022/slide/4th/Mori.pdf) — Complex eigenvalue structure, decay rate vs oscillation frequency
-- Julia Discourse on weighted LsqFit — Weight parameter usage patterns
+### Tertiary (MEDIUM-LOW confidence)
+- Julia Discourse sparse eigenvalue comparison (Arpack vs KrylovKit vs ArnoldiMethod) — community discussion supporting Arpack choice; not official source
+- Plots.jl vs Makie.jl ecosystem comparison (Julia Discourse) — community discussion supporting Plots.jl for diagnostic purposes; not official benchmark
 
 ---
-*Research completed: 2026-02-16*
-*Ready for roadmap: YES*
+*Research completed: 2026-02-19*
+*Ready for roadmap: yes*

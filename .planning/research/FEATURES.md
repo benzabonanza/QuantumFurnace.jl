@@ -1,439 +1,459 @@
-# Feature Landscape: v1.3 Spectral Gap Estimation from Trajectory Observables
+# Feature Landscape: v1.4 Spectral Gap Refinement Diagnostics
 
-**Domain:** Spectral gap estimation for Lindbladian dynamics via exponential decay fitting of trajectory-averaged observables
-**Researched:** 2026-02-16
-**Confidence:** HIGH (physics well-established, codebase analysis thorough, fitting methodology standard)
+**Domain:** Diagnostic infrastructure and improved estimators for Lindbladian spectral gap estimation
+**Researched:** 2026-02-19
+**Confidence:** HIGH (features specified by reference documents, existing codebase well-understood, numerical methods standard)
 
 ## Scope
 
-This research covers features needed for **v1.3 Mixing Time Estimation**: estimating the Lindbladian spectral gap (the real part of the second eigenvalue of the Liouvillian superoperator) from trajectory-based observable time series. The idea is physically grounded: under Lindbladian evolution, any observable expectation value `<O>(t) = tr(O rho(t))` decays exponentially toward its thermal equilibrium value at a rate determined by the spectral gap, provided the observable has nonzero overlap with the gap mode. By fitting `A * exp(-lambda * t) + C` to the trajectory-averaged observable time series, we extract `lambda` as an estimate of the spectral gap. Cross-validation against the exact Liouvillian eigenvalue (available for n=4,6 via `run_lindbladian`) establishes trust; the same fitting procedure then extends to n>8 where full Liouvillian construction is infeasible.
+This research covers features for **v1.4 Spectral Gap Refinement**: a comprehensive diagnostic and improved estimation pipeline that addresses the 7 catalogued error sources in trajectory-based spectral gap estimation. The v1.3 milestone delivered single-exponential fitting achieving 0.72% accuracy at n=4 but diagnosed zero-overlap physics limitations at n=6 and confirmed (Quick-32) that non-monotonic gap estimation is a fitting artifact, not a simulation bug. The v1.4 pipeline attacks these limitations head-on.
+
+**Key constraint from reference documents:** All trajectory runs use `with_coherent=true`, 4 threads, Trotter steps=10 for OFT/B, delta is the Trotter parameter.
 
 ---
 
-## Physics Foundation: Observable Decay and the Spectral Gap
+## Existing Features (Already Built in v1.3)
 
-### The Spectral Decomposition Argument
+These are NOT part of v1.4 scope but are the foundation:
 
-The Lindbladian generator L has eigenvalues {0, lambda_1, lambda_2, ...} where Re(lambda_i) < 0 for all i > 0 (for a primitive Lindbladian with unique steady state). The spectral gap is defined as:
-
-```
-Delta = min_i |Re(lambda_i)|  for lambda_i != 0
-```
-
-Under the semigroup evolution rho(t) = e^{Lt} rho(0), the density matrix decomposes as:
-
-```
-rho(t) = rho_ss + sum_i c_i * R_i * exp(lambda_i * t)
-```
-
-where `rho_ss` is the steady state (Gibbs state for our Lindbladian) and `R_i` are right eigenmatrices. For any observable O:
-
-```
-<O>(t) = tr(O rho(t)) = <O>_ss + sum_i c_i * tr(O R_i) * exp(lambda_i * t)
-```
-
-At long times, the slowest-decaying mode dominates:
-
-```
-<O>(t) ~ <O>_ss + A * exp(-Delta * t)     (for t >> 1/|Re(lambda_2)|)
-```
-
-where `A = c_1 * tr(O R_1)` depends on:
-1. The overlap of the initial state with the gap mode (`c_1`)
-2. The overlap of the observable with the gap mode (`tr(O R_1)`)
-
-Both must be nonzero for the spectral gap to be visible in observable O's decay.
-
-### Why This Works for QuantumFurnace
-
-- The Lindbladian constructed by QuantumFurnace satisfies KMS detailed balance, which guarantees a unique steady state (the Gibbs state) and a real spectral gap for the symmetrized Lindbladian.
-- The initial state is the maximally mixed state (or a random pure state), which has nonzero overlap with all eigenspaces, so `c_1 != 0`.
-- The gap mode for spin chain Lindbladians typically has significant overlap with energy and magnetization observables (confirmed by `LindbladianResult.gap_mode` from `run_lindbladian`).
-
-### Key Subtlety: Real vs. Complex Eigenvalues
-
-The Lindbladian eigenvalues are generally complex: `lambda_i = -gamma_i + i * omega_i`. The real part `gamma_i` determines the decay rate; the imaginary part `omega_i` produces oscillations. For KMS-detailed-balanced Lindbladians, the eigenvalues come in conjugate pairs, but the gap eigenvalue may be real or complex depending on the Hamiltonian.
-
-For the fitting:
-- If the gap eigenvalue is real (`omega = 0`): pure exponential decay, `A * exp(-gamma * t) + C`
-- If the gap eigenvalue is complex (`omega != 0`): damped oscillation, `A * exp(-gamma * t) * cos(omega * t + phi) + C`
-- For KMS-detailed-balanced Lindbladians with real coupling to the gap mode (which is typical for energy and magnetization observables), the dominant contribution is real exponential decay.
-
-The existing `LindbladianResult.spectral_gap` is complex, but for the Heisenberg chain with disordering field, `|Im(spectral_gap)| / |Re(spectral_gap)|` is typically small (< 0.1), so the pure exponential model is a good first approximation. A damped oscillation model should be available as a fallback.
+| Feature | Location | Status |
+|---------|----------|--------|
+| `estimate_spectral_gap` API | `gap_estimation.jl` | Shipped, single-exponential |
+| `eigenbasis_overlap_analysis` | `gap_estimation.jl` | Shipped, 8 observables |
+| `run_observable_trajectories` | `trajectories.jl` | Shipped, obs-only path |
+| `fit_exponential_decay` | `fitting.jl` | Shipped, `A*exp(-gap*t)+C` |
+| `SpectralGapResult`, `FitResult` | `gap_estimation.jl`, `fitting.jl` | Shipped |
+| `build_preset_trajectory_observables` | `convergence.jl` | Shipped, 8 observables |
+| Full Lindbladian construction + Arpack | `furnace.jl` | Shipped, shift-invert |
+| Multi-threaded trajectory engine | `trajectories.jl` | Shipped, 4 threads |
 
 ---
 
 ## Table Stakes
 
-Features users expect. Missing any of these means the milestone is incomplete.
+Features that ARE the milestone. Without these, v1.4 delivers no value over v1.3.
 
 | Feature | Why Expected | Complexity | Dependencies |
 |---------|--------------|------------|--------------|
-| **Observable-only trajectory runner** | Current `run_trajectories` with `observables` and `save_every` already returns time-resolved `<O>(t)`. But `run_trajectories_convergence` does batch-level DM reconstruction without time-resolved measurements. Need a runner that does time-resolved observable measurements without per-batch DM overhead -- just accumulate `<O>(t)` across many trajectories. | LOW | Existing `run_trajectories` with `observables` parameter; minor API design |
-| **Total magnetization observable** | `sum_i Z_i` is the canonical order parameter for spin chains. Must be available alongside ZZ correlations and energy. Not currently in `build_convergence_observables`. Easy to add. | LOW | `build_convergence_observables`, `pad_term`, Pauli `Z` |
-| **Single-exponential fit: `A * exp(-gap * t) + C`** | The core fitting model. Extracts the spectral gap from observable time series. Must handle: initial guess from data, weighted least squares with 1/variance weights, parameter bounds (gap > 0, C near Gibbs value). | MEDIUM | `LsqFit.jl` (new dependency), observable time series data |
-| **Automatic initial guess for fitting** | Levenberg-Marquardt is sensitive to initial guess. Must derive good initial parameters from the data: `C_guess = mean(last 20% of data)` (plateau), `A_guess = data[1] - C_guess`, `gap_guess` from log-linear fit of `data - C_guess`. | LOW | Observable time series data |
-| **Fit quality metrics** | R-squared, residual norm, and confidence intervals on the gap estimate. Without these, cannot assess whether the fit is trustworthy. LsqFit.jl provides `confidence_interval`, `standard_error`, `estimate_covar`. | LOW | LsqFit.jl fit result |
-| **Cross-validation against exact Liouvillian gap** | For n=4 and n=6, compute the exact spectral gap via `run_lindbladian`, then compare against the trajectory-fitted gap. This is the validation that makes the method trustworthy for n>8. | MEDIUM | `run_lindbladian` (existing), fitted gap, matching configs |
-| **`estimate_spectral_gap` function** | A single callable function that takes trajectory observable data and returns a gap estimate with confidence interval. This is the reusable API for larger systems. Signature: `estimate_spectral_gap(times, observable_data; kwargs...) -> (gap, confidence_interval, fit_result)` | MEDIUM | All fitting infrastructure |
-| **Fitting window selection** | The exponential fit should exclude early transient (first ~10% of data where multi-exponential effects dominate) and use data from the "single-exponential regime" where only the gap mode contributes. Must detect or allow specifying the fitting window. | MEDIUM | Observable time series data, fit quality metrics |
-
-## Differentiators
-
-Features that add substantial value but are not strictly required for milestone sign-off.
-
-| Feature | Value Proposition | Complexity | Dependencies |
-|---------|-------------------|------------|--------------|
-| **Multi-observable gap consistency check** | Fit the gap independently from energy, magnetization, and each ZZ correlation. If the same gap is recovered from all observables (within error bars), this strongly validates the method. Disagreement flags observables with poor gap mode overlap. | LOW | Multiple fitted gaps + comparison logic |
-| **Damped oscillation model: `A * exp(-gamma * t) * cos(omega * t + phi) + C`** | Handles complex eigenvalues where the gap mode produces oscillatory decay. Falls back to pure exponential when omega is small. Paper completeness: shows the method handles the general case. | MEDIUM | LsqFit.jl, model selection (AIC/BIC or F-test) |
-| **Automatic model selection (exponential vs. damped oscillation)** | Use Bayesian Information Criterion (BIC) or F-test to decide whether the oscillatory model is justified by the data. Prevents overfitting with the more complex model when the gap is purely real. | MEDIUM | Both fit models, statistical model comparison |
-| **Observable overlap diagnostic** | Compute `|tr(O * gap_mode)|` for each observable (available for n=4,6 where the gap mode is known from `run_lindbladian`). Reports which observables have the strongest coupling to the gap mode. Guides observable selection for larger systems. | LOW | `LindbladianResult.gap_mode`, observable matrices |
-| **Multi-exponential fit: `A1 * exp(-g1 * t) + A2 * exp(-g2 * t) + C`** | Resolves the first AND second decay modes from the data. More robust gap extraction at early times before the single-exponential regime. However, multi-exponential fitting is notoriously ill-conditioned -- keep this as optional/advanced. | HIGH | LsqFit.jl with 5+ parameters, careful regularization |
-| **Bootstrap confidence intervals on gap** | Resample trajectory batches (block bootstrap), refit the gap from each resample, report the bootstrap confidence interval. More robust than the linearized LsqFit confidence interval for nonlinear models. | MEDIUM | Trajectory batch data, refitting loop |
-| **Gap vs. beta scaling plot** | For each (n, beta) pair, plot the estimated gap vs. beta. Theory predicts the gap decreases with beta (slower mixing at lower temperatures). This is a key paper figure. | LOW | Multiple (n, beta) experiments with fitted gaps |
-| **Gap vs. n scaling plot** | For fixed beta, plot the estimated gap vs. n (system size). Theory for 1D Heisenberg chains predicts system-size-independent gap at any finite temperature (proven in arXiv:2510.08533). This is a testable prediction. | LOW | Multiple (n, beta) experiments with fitted gaps |
-| **Variance-weighted fitting** | Weight the least-squares fit by `1/var(O(t_i))` where the variance is estimated from trajectory-to-trajectory fluctuations. Downweights noisy early-time data and noisy late-time data near the plateau. | LOW | Per-time-point variance from trajectory batches |
-
-## Anti-Features
-
-Features to explicitly NOT build for this milestone.
-
-| Anti-Feature | Why Avoid | What to Do Instead |
-|--------------|-----------|-------------------|
-| **Prony's method for multi-exponential extraction** | Prony's method solves for exponential frequencies via polynomial root-finding, which is severely ill-conditioned for noisy data. It requires uniformly sampled data and the number of exponentials must be known a priori. The trajectory data is noisy (Monte Carlo variance ~1/sqrt(N_traj)); Prony would produce unstable results. | Use nonlinear least squares (LsqFit.jl) with single or double exponential models. NLLS is robust to noise when given good initial guesses and parameter bounds. |
-| **Full Liouvillian construction for n>6** | The Liouvillian is dim^2 x dim^2 = 65536x65536 for n=8, requiring ~32 GB. For n=10, it is 1M x 1M -- completely infeasible. The entire point of trajectory-based gap estimation is to avoid this. | Use trajectory-based observable fitting for n>6. Cross-validate against exact Liouvillian only for n=4,6. |
-| **Imaginary-time evolution or adiabatic state preparation for gap estimation** | Recent work (arXiv:2512.19288) proposes adiabatic gap estimation on quantum devices. This is irrelevant for classical simulation -- we have direct access to observable time series. | Fit the decay rate directly from real-time observable data. |
-| **Autocorrelation-based gap estimation** | Autocorrelation time estimation requires the system to be at stationarity (already in the Gibbs state), then measures decorrelation. Our trajectories start far from equilibrium and evolve toward it. The decay-to-equilibrium approach is more natural and uses the same data we already collect. | Fit the observable's approach to equilibrium, not its fluctuations around equilibrium. |
-| **Stochastic trace estimation for the Liouvillian gap** | Methods like the stochastic Lanczos quadrature can estimate eigenvalue densities without full matrix construction. These are sophisticated but require matrix-vector products with the Liouvillian, which we do not currently have as a separate primitive (only the full explicit matrix from `construct_lindbladian`). | Use trajectory-based fitting. If stochastic Liouvillian methods are needed later, they are a separate milestone. |
-| **Real-time plotting during fitting** | Interactive plotting during the fit loop is a development convenience, not a feature. | Post-process and plot after the fit completes. Paper plots are made from saved data. |
-| **GPU-accelerated fitting** | The fitting is a tiny computation (minutes of Levenberg-Marquardt on a few hundred data points). The bottleneck is trajectory generation, not fitting. | Run LsqFit.jl on CPU. All computation time is in trajectory sampling. |
+| **Effective rate plot `lambda_eff(t)`** | The single most useful model-free diagnostic. Reveals the three time regimes (transient, plateau, noise floor) without any fitting assumptions. Directly identifies the golden fitting window. This is the "Rosetta Stone" of the error diagnosis. | MEDIUM | Trajectory-averaged observable time series, steady-state subtraction |
+| **Two-exponential fit with Prony initialization** | The root cause finding from Quick-32: single-exponential fitting is the bottleneck. Two-exponential `c1*exp(-g1*t) + c2*exp(-g2*t)` absorbs excited-state contamination into the second term, analogous to lattice QCD multi-state analysis. Prony two-point initialization provides robust starting values. | HIGH | `LsqFit.jl` (existing), effective rate plateau for init, bounded constraints |
+| **Bootstrap resampling for trajectory error bars** | Linearized LsqFit confidence intervals assume Gaussian errors and local linearity -- poor assumptions for noisy exponential fits near the noise floor. Bootstrap over trajectories provides nonparametric error bars that correctly propagate the trajectory-level variance. | MEDIUM | Per-trajectory observable storage (new), resampling loop |
+| **Automatic fitting window selection** | Manual `skip_initial=0.1` is fragile. t_max via SNR threshold (SNR > 3), t_min via gamma_1 stability test. The effective rate plot provides visual validation. | MEDIUM | Effective rate plot, trajectory variance estimates |
+| **Richardson extrapolation for Trotter bias** | Quick-30 found Richardson was ineffective with single-exponential fitting. With improved two-exponential fitting, Richardson at two delta values eliminates the O(delta) Trotter bias, giving O(delta^2) residual. | LOW | Gap estimates at 2+ delta values, simple linear algebra |
+| **Anti-Hermitian defect computation** | KMS similarity transform `D(rho,L) = rho^{-1/4} L[rho^{1/4}(.)rho^{1/4}] rho^{-1/4}`, decomposed as D = H + A. The ratio `||A|| / lambda_gap(H)` determines whether real-exponential fitting is valid or damped-oscillation model needed. | MEDIUM | Gibbs state eigendecomposition (existing), vectorized superoperator construction |
+| **Delta-Sz symmetry sector labeling** | Label Lindbladian eigenvectors by the quantum number `Delta_Sz = Sz(E_i) - Sz(E_j)` they carry. Explains why certain observables see zero gap-mode overlap (Quick-25 through Quick-27 diagnosed this). | LOW | Exact eigenvectors from `run_lindbladian` (existing), Hamiltonian eigenbasis Sz values |
 
 ---
 
 ## Feature Details
 
-### Observable-Only Trajectory Runner
+### 1. Effective Rate Plot: `lambda_eff(t)`
 
-**Current state:** `run_trajectories` already supports `observables` and `save_every`. It returns `TrajectoryResult` with `measurements_mean::Matrix{Float64}` (n_obs x n_saves) and `times::Vector{Float64}`. This is already exactly what we need for observable time series.
+**What it computes:**
+```
+Delta(t) = <O>(t) - <O>_ss
+lambda_eff(t) = -(1/tau) * ln|Delta(t+tau) / Delta(t)|
+```
+where `tau = lag * dt` (default `lag=3` for noise smoothing).
 
-**What is missing:** The existing `run_trajectories_convergence` and `run_trajectories_adaptive` do NOT support time-resolved observable measurements -- they track batch-level convergence metrics only. For spectral gap estimation, we need many trajectories with time-resolved `<O>(t)` data.
+**Why it works:** For a pure single-exponential `Delta(t) = c * exp(-lambda * t)`, the effective rate is exactly `lambda` for all t. For multi-exponential signals, `lambda_eff(t)` starts high (dominated by fast modes), decreases to a plateau at the true gap, then becomes erratic when the signal hits the noise floor. The plateau region IS the golden fitting window.
 
-**Recommended approach:** Use `run_trajectories` directly with the `observables` and `save_every` parameters. No new runner function is needed. The existing code already:
-1. Saves `<O_i>(t)` at every `save_every` steps across all trajectories
-2. Averages across trajectories (both serial and multi-threaded paths)
-3. Returns the time grid and measurement matrix
+**What the plot shows:**
+- Horizontal dashed line at exact `lambda_gap` (n=4,6 reference)
+- Error bands from propagated trajectory variance: `sigma_lambda(t) ~ (1/tau) * sqrt(Var[Delta(t)]/|Delta(t)|^2 + Var[Delta(t+tau)]/|Delta(t+tau)|^2)`
+- Vertical dashed lines at t_min (plateau entry) and t_max (noise floor)
 
-What IS needed:
-- A convenience function `build_spectral_gap_observables(hamiltonian, num_qubits)` that returns [H, M_z, ZZ_1, ZZ_2, ...] with appropriate names
-- Choose `save_every` and `total_time` appropriately: `save_every` should give ~200-500 time points for smooth decay curves; `total_time` should be long enough to see the observable reach its plateau (roughly `5/gap`)
+**Implementation notes:**
+- Sign-change guard: when `Delta(t)` and `Delta(t+tau)` have different signs, output NaN (signal has crossed zero due to noise or oscillation)
+- Lag parameter: start with `lag=3`, adjustable. Larger lag smooths but loses time resolution.
+- The reference document provides a complete Julia implementation snippet.
 
-**Complexity:** LOW. Mostly wiring existing functionality.
+**Complexity:** MEDIUM. The computation itself is simple. The complexity lies in the error propagation, sensible defaults for lag, and the overlay plot generation.
 
-### Total Magnetization Observable
+**Dependencies:** Trajectory-averaged observable data (existing), Gibbs steady-state expectation values (existing via `_compute_gibbs_observable_values`).
 
-**What:** `M_z = sum_{i=1}^{n} Z_i` in the Hamiltonian eigenbasis (or Trotter eigenbasis for TrotterDomain).
+---
 
-**Implementation:** Add to `build_convergence_observables`:
-```julia
-# Total magnetization in eigenbasis
-Mz_comp = sum(Matrix{ComplexF64}(pad_term([Z], num_qubits, i)) for i in 1:num_qubits)
-Mz_eigen = V' * Mz_comp * V
-push!(observables, Mz_eigen)
-push!(names, "Mz")
+### 2. Two-Exponential Fit with Prony Initialization
+
+**Why single-exponential fails (from Quick-32 root cause):**
+The signal is `Delta(t) = c1*exp(-g1*t) + c2*exp(-g2*t) + ...`. A single-exponential fit `A*exp(-gap*t)+C` finds a compromise rate between the true gap g1 and the faster modes g2, g3, ..., systematically overestimating the gap. Different delta values excite different spectral modes with different weights, explaining the non-monotonic delta-scaling found in Quick-30/31.
+
+**Model:**
+```
+Delta(t) = c1 * exp(-g1 * t) + c2 * exp(-g2 * t)
+```
+with constraint `0 < g1 < g2`. The gap estimate is g1; the second term is a nuisance parameter that absorbs fast-mode contamination.
+
+**Prony two-point initialization:**
+Pick two time points t_a, t_b = t_a + tau in the signal (in the effective-rate plateau transition region). Form:
+```
+r1 = Delta(t_a + tau/2) / Delta(t_a)
+r2 = Delta(t_b) / Delta(t_a + tau/2)
+```
+Solve the quadratic `z^2 - (r1+r2)*z + r1*r2 = 0` to get `z1, z2`. Then `g1 = -2*ln(z1)/tau`, `g2 = -2*ln(z2)/tau`. This gives initial guesses without iterative optimization.
+
+**Alternative initialization from effective rate plot:**
+```
+g1_init = plateau value of lambda_eff(t)
+g2_init = lambda_eff at early time (t ~ 0)
+c1_init = Delta(t_mid) / exp(-g1_init * t_mid)
+c2_init = Delta(0) - c1_init
 ```
 
-**Why total magnetization specifically for the gap:**
-- For the 1D Heisenberg chain with disorder, the total magnetization sector structure matters. The gap mode typically lives in the `M_z = 0` sector (same as the ground state for the antiferromagnet). However, the OBSERVABLE `M_z` couples to modes that CHANGE the total magnetization -- these are typically NOT the gap mode.
-- Energy `<H>` is the better observable for the gap because the gap mode is an energy-like excitation (it describes the slowest approach to the thermal energy). The gap mode lives in the same symmetry sector as the Gibbs state, and `H` has diagonal matrix elements in the eigenbasis that directly couple to it.
-- ZZ correlations `<Z_iZ_{i+1}>` also couple well to the gap mode because they probe the two-body correlations that change as the system thermalizes.
-- Total magnetization `M_z` is included for completeness and as a consistency check. If `<M_z>_gibbs = 0` (as for the clean Heisenberg chain), then `M_z` couples only to odd-magnetization modes and may not see the gap at all. With disorder, `<M_z>_gibbs != 0`, so there is some coupling.
-
-**Observable selection priority for gap estimation:**
-1. **Energy `<H>`** -- strongest coupling to gap mode (diagonal in eigenbasis)
-2. **ZZ correlations `<Z_iZ_{i+1}>`** -- strong coupling, site-resolved
-3. **Total magnetization `M_z`** -- weaker coupling, included as consistency check
-
-**Complexity:** LOW. One function addition.
-
-### Single-Exponential Fit
-
-**Model:** `f(t, p) = p[1] * exp(-p[2] * t) + p[3]`
-
-where:
-- `p[1] = A` -- amplitude (signed, can be positive or negative)
-- `p[2] = gap` -- decay rate (must be positive)
-- `p[3] = C` -- asymptotic value (the Gibbs expectation value)
-
-**Implementation with LsqFit.jl:**
-```julia
-using LsqFit
-
-function fit_spectral_gap(times, obs_data;
-    t_start_frac=0.1, t_end_frac=1.0,
-    obs_gibbs=nothing, weights=nothing)
-
-    # Select fitting window
-    n = length(times)
-    i_start = max(1, round(Int, t_start_frac * n))
-    i_end = round(Int, t_end_frac * n)
-    t_fit = times[i_start:i_end]
-    y_fit = obs_data[i_start:i_end]
-
-    # Model
-    model(t, p) = p[1] .* exp.(-p[2] .* t) .+ p[3]
-
-    # Initial guess
-    C_guess = mean(y_fit[end-div(length(y_fit),5):end])  # last 20%
-    A_guess = y_fit[1] - C_guess
-    # Log-linear estimate for gap
-    y_shifted = abs.(y_fit .- C_guess) .+ 1e-15
-    log_y = log.(y_shifted)
-    gap_guess = -(log_y[end] - log_y[1]) / (t_fit[end] - t_fit[1])
-    gap_guess = max(gap_guess, 1e-6)  # ensure positive
-
-    p0 = [A_guess, gap_guess, C_guess]
-
-    # Bounds: gap must be positive
-    lower = [-Inf, 0.0, -Inf]
-    upper = [Inf, Inf, Inf]
-
-    fit = curve_fit(model, t_fit, y_fit, p0; lower=lower, upper=upper)
-
-    return fit
-end
+**Bounded constraints (critical for convergence):**
+```
+g1 in [0.01, 3 * g1_init]
+g2 in [g1, 10 * g2_init]
+|c1|, |c2| < 10 * |Delta(0)|
 ```
 
-**Key considerations:**
-- **Parameter bounds:** The gap must be positive. LsqFit.jl supports box constraints via `lower` and `upper` keyword arguments.
-- **Weights:** If per-time-point variance is available (from trajectory-to-trajectory fluctuations), use `wt = 1.0 ./ variance` in `curve_fit`.
-- **Gibbs value constraint:** If the Gibbs expectation value is known (it is, from `tr(gibbs * O)`), we can fix `C` to the known value and fit only `A` and `gap`. This reduces the fit to 2 parameters and improves conditioning. Provide this as an option.
+**Validation:** At n=4,6, extracted g1 must agree with exact `lambda_gap` within 2-sigma bootstrap error bars.
 
-**Complexity:** MEDIUM. The fitting itself is straightforward with LsqFit.jl. The complexity is in the initial guess logic, fitting window selection, and edge case handling.
+**Complexity:** HIGH. Two-exponential fitting is notoriously ill-conditioned (nearly degenerate eigenvalues produce flat cost landscape). Requires both initialization strategies (Prony + effective-rate fallback), careful bounds, and bootstrap validation of convergence.
 
-### Fitting Window Selection
+**Dependencies:** Effective rate plot (for initialization and window), LsqFit.jl (existing), bootstrap (for error bars).
 
-**The problem:** The observable time series has three regimes:
-1. **Early transient** (t < ~2/|lambda_2|): Multiple exponential modes contribute. The observable decays with a rate faster than the gap (because faster-decaying modes are still active).
-2. **Single-exponential regime** (2/|lambda_2| < t < ~5/gap): Only the gap mode contributes. This is where the fit should be performed.
-3. **Plateau** (t > 5/gap): The observable has reached its equilibrium value. The signal is noise. Including too much plateau data biases the fit toward C and loses sensitivity to the gap.
+---
 
-**Approach:** Default to excluding the first 10% and fitting the remaining data. Provide an optional `t_start` parameter. For automatic window selection:
-1. Compute the running derivative `d<O>/dt` numerically.
-2. Find where the decay rate stabilizes (i.e., `d/dt[log|<O> - C|]` becomes approximately constant). This marks the start of the single-exponential regime.
-3. Find where `|<O>(t) - C| < noise_level`. This marks the end of useful data.
+### 3. Bootstrap Resampling for Error Bars
 
-For the cross-validation at n=4,6, the exact `|lambda_2|` is known, so the fitting window can be set precisely: start at `t = 2/|lambda_2|`, end at `t = 5/gap`.
+**Why needed:** The current `FitResult.gap_se` and `gap_ci` come from LsqFit's linearized covariance estimate `J^T J` inversion. This assumes: (a) Gaussian errors, (b) the Jacobian is approximately constant over the confidence region, (c) residuals are independent. None hold well for noisy exponential decay: the noise is not Gaussian (pure-state measurement outcomes), the model is nonlinear near boundaries, and consecutive time points from the same trajectory are correlated.
 
-**Complexity:** MEDIUM. The automatic detection is the harder part; manual specification of the window is LOW complexity.
+**Procedure:**
+1. Store per-trajectory observable time series `O_i(t)` for i=1..N_traj (NEW: currently only the mean is stored)
+2. For b = 1..N_boot (default 200):
+   a. Draw N_traj trajectory indices with replacement
+   b. Compute bootstrap-averaged `<O>^(b)(t)`
+   c. Subtract steady-state value
+   d. Compute `lambda_eff^(b)(t)` and/or run two-exponential fit
+   e. Record g1^(b)
+3. Report: mean, median, standard deviation, and [2.5%, 97.5%] percentiles of {g1^(b)}
 
-### Cross-Validation Against Exact Liouvillian
+**Key implementation decision:** Storing per-trajectory data. Currently `_accumulate_measurements!` sums in-place. For bootstrap, we need either:
+- (a) Store all N_traj x n_saves x n_obs data in memory (for 20k trajectories, 500 saves, 8 observables: ~64 MB Float64 -- feasible)
+- (b) Use block bootstrap: group trajectories into ~50 blocks, resample blocks (reduces storage to block-level means)
 
-**Protocol:**
-1. For n=4 and n=6 with identical configs (same beta, sigma, domain, delta, etc.):
-   a. Run `run_lindbladian(jumps, liouv_config, hamiltonian)` to get exact `spectral_gap`
-   b. Run `run_trajectories(jumps, therm_config, psi0, hamiltonian; observables=obs, save_every=k, ntraj=N, total_time=T)` to get time-resolved `<O>(t)`
-   c. Fit exponential to each observable
-   d. Compare `fitted_gap` vs `|Re(exact_gap)|`
+**Recommendation:** Option (a) for n=4,6 validation (affordable memory). Option (b) for larger n when N_traj is very large. Provide both.
 
-2. Report:
-   - Relative error: `|fitted_gap - exact_gap| / exact_gap`
-   - The exact gap for reference
-   - Confidence interval on fitted gap
-   - Which observables give the best (closest to exact) gap estimate
+**Complexity:** MEDIUM. The resampling loop is straightforward. The main complexity is in the new storage path for per-trajectory data.
 
-**Expected precision:** With N_traj=10000 and T=5/gap, the fitted gap should agree with the exact gap to within ~5-10% for n=4 and ~10-20% for n=6 (more noise at larger dimensions due to higher-dimensional Hilbert space). This precision is sufficient for the paper's purpose (scaling analysis, not precision spectroscopy).
+**Dependencies:** Per-trajectory observable storage (new functionality in trajectories.jl), fitting functions.
 
-**Matching configs:** The `LiouvConfig` (for Liouvillian) and `ThermalizeConfig` (for trajectories) share all parameters except `mixing_time` and `delta`. Construct both from the same physical parameters to ensure consistency.
+---
 
-**Complexity:** MEDIUM. Mostly scripting -- the hard parts (trajectory simulation, Liouvillian construction) are already implemented.
+### 4. Automatic Fitting Window Selection
 
-### The `estimate_spectral_gap` Function
+**t_max selection (SNR threshold):**
+```
+SNR(t) = |Delta(t)| / sigma_Delta(t)
+t_max = last time point where SNR(t) > 3
+```
+where `sigma_Delta(t) = sqrt(Var_traj[<psi|O|psi>] / N_traj)` is the standard error of the mean.
 
-**Signature:**
-```julia
-function estimate_spectral_gap(
-    times::Vector{Float64},
-    measurements::Matrix{Float64};   # n_obs x n_times
-    observable_names::Vector{String} = String[],
-    gibbs_values::Union{Nothing, Vector{Float64}} = nothing,
-    weights::Union{Nothing, Matrix{Float64}} = nothing,
-    t_start_frac::Float64 = 0.1,
-    model::Symbol = :exponential,  # :exponential or :damped_oscillation
-) -> SpectralGapEstimate
+**t_min selection (stability test):**
+Run two-exponential fit over [t_min, t_max] for a sequence of t_min values:
+```
+t_min = 0, dt, 2*dt, 3*dt, ...
+```
+Plot g1 vs t_min. Choose t_min as the smallest value where g1 has stabilized (does not change beyond its bootstrap error bar as t_min increases further).
+
+**Why this is important:**
+- Manual `skip_initial=0.1` is system-dependent. For fast-mixing systems, 10% skip is too much (wastes data). For slow-mixing, it is too little (transient still present).
+- The t_min stability plot is itself a valuable diagnostic for the thesis: it demonstrates that the result is robust to fitting window choice.
+
+**Complexity:** MEDIUM. t_max via SNR is simple. t_min stability requires running the fitter in a loop with different windows, which is computationally manageable but needs careful edge-case handling (when no stable plateau exists, when the window becomes too small).
+
+**Dependencies:** Trajectory variance estimates, two-exponential fit, effective rate plot for validation.
+
+---
+
+### 5. Richardson Extrapolation for Trotter Bias
+
+**The formula:**
+```
+gap_rich = 2 * gap(delta/2) - gap(delta)
+```
+with error `sigma_rich = sqrt(4 * sigma^2(delta/2) + sigma^2(delta))`.
+
+**Why Quick-30 failed:** Quick-30 applied Richardson to single-exponential fits. Since single-exponential fitting introduces a fitting-model bias that varies non-monotonically with delta (different delta excites different spectral modes), Richardson amplified this fitting artifact rather than correcting Trotter bias.
+
+**Why it should work with two-exponential fitting:** The two-exponential fit correctly isolates g1 (the true gap) from the fast-mode contamination, regardless of how delta affects the mode weights. The remaining bias IS the O(delta) Trotter error, which Richardson cancels.
+
+**Required data:** Trajectory runs at 2+ delta values (e.g., delta=0.01 and delta=0.005) with identical everything else (same N_traj, same T, same observables, same psi0, same seed).
+
+**Complexity:** LOW. The formula is trivial. The cost is in running trajectories at multiple delta values (but delta-convergence runs are already planned for diagnostics).
+
+**Dependencies:** Two-exponential fit (must produce reliable per-delta gap estimates), bootstrap error bars.
+
+---
+
+### 6. Anti-Hermitian Defect Computation
+
+**The KMS similarity transform:**
+```
+D(rho_beta, L) = rho_beta^{-1/4} * L[rho_beta^{1/4} (.) rho_beta^{1/4}] * rho_beta^{-1/4}
+```
+This is a superoperator. Vectorized, it becomes a d^2 x d^2 matrix D. Decompose:
+```
+H = (D + D^dagger) / 2     (Hermitian part)
+A = (D - D^dagger) / 2     (anti-Hermitian part)
 ```
 
-**Return type:**
-```julia
-struct SpectralGapEstimate
-    gap::Float64                          # best-estimate spectral gap
-    gap_confidence::Tuple{Float64, Float64}  # 95% CI
-    gap_per_observable::Vector{Float64}   # gap fitted per each observable
-    best_observable_idx::Int              # which observable gave the best fit
-    fit_results::Vector{Any}              # raw LsqFitResult per observable
-    r_squared::Vector{Float64}           # R^2 per observable
-    model_used::Symbol                    # :exponential or :damped_oscillation
-end
+**What to report:**
+1. `||A||` (operator norm of anti-Hermitian part)
+2. `lambda_gap(H)` (spectral gap of the Hermitian part)
+3. Ratio `||A|| / lambda_gap(H)` -- if < 0.01, real-exponential model is safe; if > 0.1, need damped-oscillation model
+4. `|Im(lambda_2)| / |Re(lambda_2)|` for the leading eigenvalues -- direct check for oscillatory modes
+
+**Implementation notes:**
+- Computing `rho_beta^{1/4}`: Since `rho_beta` is diagonal in the energy eigenbasis, raise diagonal entries to the 1/4 power. For TrotterDomain, `rho_beta` is in the Trotter eigenbasis -- diagonalize it first, raise eigenvalues to 1/4, transform back.
+- The vectorized D matrix is constructed by applying the map to each basis element of the d^2-dimensional vectorized operator space (same technique as `construct_lindbladian`).
+- Size constraint: d^2 x d^2 is 4096x4096 for n=6 -- feasible.
+
+**Complexity:** MEDIUM. The matrix fourth root is straightforward via eigendecomposition. The superoperator construction reuses the existing vectorization machinery from `qi_tools.jl` (_kron!, _vectorize_liouv_diss_and_add!). The main work is assembling the similarity-transformed superoperator.
+
+**Dependencies:** Exact Lindbladian (existing), Gibbs state eigendecomposition (existing), vectorization utilities (existing).
+
+---
+
+### 7. Delta-Sz Symmetry Sector Labeling
+
+**What to compute:**
+For each energy eigenstate |E_i> of H, compute `Sz_tot(E_i) = <E_i| sum_j Z_j |E_i>`. For each Lindbladian eigenvector R_k (reshaped as a d x d matrix), determine the dominant `Delta_Sz = Sz(E_i) - Sz(E_j)` quantum number by computing:
 ```
+weight(Delta_Sz) = sum_{i,j: Sz(i)-Sz(j)=Delta_Sz} |R_k[i,j]|^2
+```
+Label R_k by the Delta_Sz with the largest weight.
 
-**Logic:**
-1. Fit the gap independently from each observable.
-2. Rank by R-squared (best fit quality).
-3. Report the gap from the observable with the best R-squared as the primary estimate.
-4. Report the gap from all observables for consistency checking.
-5. If gaps from multiple observables agree within their confidence intervals, report the weighted average as the final estimate.
+**Why this matters:**
+Quick-25 through Quick-27 diagnosed that the n=6 gap mode lives in a symmetry sector that zero-overlap observables cannot access. Delta-Sz labeling makes this diagnosis systematic:
+- If lambda_2 carries Delta_Sz = 0: it describes population decay. Diagonal observables (H, Z_i) can see it.
+- If lambda_2 carries Delta_Sz != 0: it describes coherence decay. Only off-diagonal observables or symmetry-breaking observables (XZ_stagg) can see it.
+- Explains why Quick-28 found that disorder breaks the symmetry protection.
 
-**Complexity:** MEDIUM.
+**Complexity:** LOW. This is a post-processing analysis on existing eigendecomposition data. No new simulation infrastructure needed.
+
+**Dependencies:** Exact Lindbladian eigenvectors (existing from `run_lindbladian`), Hamiltonian eigenbasis (existing).
+
+---
+
+## Differentiators
+
+Features that strengthen the milestone but are not strictly required for the core diagnostic pipeline.
+
+| Feature | Value Proposition | Complexity | Dependencies |
+|---------|-------------------|------------|--------------|
+| **Summary dashboard (7-panel figure)** | Single thesis-quality figure showing all diagnostics at once: spectrum, defect metrics, overlap coefficients, effective rate, delta-convergence, two-exp fit, t_min stability. Communicates the entire error analysis in one visual. | MEDIUM | All 7 table-stakes features |
+| **External field comparison (h = 0.1J)** | Run full diagnostic with and without symmetry-breaking field. If the gap estimate changes dramatically while the exact gap changes mildly, symmetry sector restriction is confirmed as the dominant error source. | LOW | All diagnostics running, field parameter in Hamiltonian |
+| **Multi-observable minimum-gap selector** | Extend the existing `_select_best_observable` to use the two-exponential fit and report the gap as `min_j(g1_j)` across all observables. Observables can only overestimate the gap. | LOW | Two-exponential fit per observable |
+| **Damped-oscillation fit model** | `c * exp(-gamma*t) * cos(omega*t + phi)` for cases where anti-Hermitian defect is significant. Auto-selected when `|Im(lambda_2)/Re(lambda_2)| > 0.1`. | MEDIUM | Anti-Hermitian defect computation |
+| **Observable overlap with left/right eigenvectors** | Extend `eigenbasis_overlap_analysis` to compute `c_k = Tr[O R_k] * Tr[L_k^dagger (rho0 - rho_beta)]` using both left and right eigenvectors (currently only uses right). More accurate coefficient decomposition. | LOW | Existing overlap analysis, left eigenvector computation |
+| **Store leading 20-30 eigenvalues (not just 2)** | Currently `run_lindbladian` extracts only nev=2 eigenvalues. Expand to 20-30 for spectrum visualization and overlap coefficient analysis. | LOW | Modify Arpack `nev` parameter |
+
+---
+
+## Anti-Features
+
+Features to explicitly NOT build in this milestone.
+
+| Anti-Feature | Why Avoid | What to Do Instead |
+|--------------|-----------|-------------------|
+| **Extend to n=8 via sparse Lindbladian** | The reference document explicitly defers this: "DEFERRED TO A LATER MILESTONE." n=8 requires 65536x65536 sparse Lindbladian, KrylovKit.jl methods, and a fast `apply_lindbladian!` function. Too much scope. | Validate at n=4,6 only. n=8 is a separate milestone. |
+| **Matrix pencil / ESPRIT methods for spectral gap** | These are signal-processing alternatives to nonlinear least squares. While potentially more robust for multi-exponential extraction, they require uniform sampling (which we have) but add a new algorithmic paradigm with its own tuning parameters. The two-exponential fit with Prony init is sufficient. | Two-exponential fit with Prony initialization covers the same ground with less implementation complexity. |
+| **Full GEVP (Generalized Eigenvalue Problem) approach** | Used in lattice QCD for multi-hadron spectroscopy. Requires building a matrix of correlation functions from multiple operators. Powerful but massively over-engineered for our 1-2 exponential extraction problem. | Two-exponential fit is the right level of sophistication. |
+| **GPU-accelerated trajectory sampling** | The bottleneck for this milestone is understanding, not throughput. We need 20k trajectories at n=4,6 -- minutes on 4 CPU threads. GPU would add huge complexity for zero benefit at this system size. | Keep CPU-only. GPU is a future performance milestone. |
+| **Adaptive delta selection** | Automatically choosing the optimal delta to balance Trotter bias vs. computational cost. This is an optimization problem that presumes the diagnostic pipeline already works. | Run at 2-3 fixed delta values. Use Richardson extrapolation. |
+| **Real-time interactive plotting** | The reference document specifies static diagnostic figures for the thesis. Interactive plotting adds complexity (Makie.jl event handling, live updates) without scientific value. | Generate static plots post-hoc. Use CairoMakie for publication quality. |
+| **Per-trajectory density matrix reconstruction during bootstrap** | Storing the full density matrix per trajectory would require N_traj x d^2 complex matrices. For 20k trajectories at n=6, that is 20000 x 4096 x 16 bytes = 1.3 GB. Unnecessary -- observable time series suffice. | Store per-trajectory observable values only (64 MB for 20k x 500 x 8). |
+| **Weighted least squares with variance weights** | The reference document's effective rate approach and bootstrap make variance-weighted fitting less critical. The error propagation through lambda_eff already accounts for varying noise levels. Adding weights to the two-exponential fit complicates the already ill-conditioned optimization. | Use unweighted two-exponential fit with SNR-based window truncation instead. |
 
 ---
 
 ## Feature Dependencies
 
 ```
-[build_spectral_gap_observables]  <-- adds M_z, extends build_convergence_observables
-    |
-    v
-[Run trajectories with time-resolved observables]  <-- uses existing run_trajectories
-    |
-    v
-[Single-exponential fit with LsqFit.jl]  <-- new dependency
-    |           |
-    v           v
-[Fitting window selection]    [Fit quality metrics]
-    |           |
-    v           v
-[estimate_spectral_gap function]  <-- combines all fitting
-    |
-    v
-[Cross-validation vs exact Liouvillian]  <-- n=4,6 validation script
-    |
-    v
-[Multi-observable consistency check]  (differentiator)
-    |
-    v
-[Gap scaling plots: gap vs beta, gap vs n]  (differentiator)
+[Anti-Hermitian Defect Computation]          [Delta-Sz Symmetry Labels]
+         |                                              |
+         v                                              v
+    Validates real-exp model              Explains zero-overlap at n=6
+         |                                              |
+         +-------> [Effective Rate Plot] <--------------+
+                           |
+                           v
+              Identifies golden window
+                    |              |
+                    v              v
+     [Auto Fitting Window]   [Two-Exponential Fit]
+          |                        |
+          +--------+   +---------+
+                   v   v
+          [Bootstrap Error Bars]
+                    |
+                    v
+        [Richardson Extrapolation]  (requires gap at 2+ delta)
+                    |
+                    v
+          [Validated Gap Estimate]
+                    |
+                    v
+          [Summary Dashboard]
 ```
 
 ### Dependency Notes
 
-- **LsqFit.jl is the gate:** All fitting depends on this new dependency. Add it early.
-- **Observable builder is independent of fitting:** Can build `build_spectral_gap_observables` immediately.
-- **Cross-validation requires both paths:** Need both `run_lindbladian` (exact) and trajectory fitting to compare. These are independent and can be computed in parallel.
-- **Model selection (exponential vs damped oscillation) is optional:** Start with pure exponential. Add damped oscillation only if the pure exponential gives poor fits.
+- **Effective rate plot is the keystone:** It feeds initialization for the two-exponential fit, defines the fitting window, and provides the model-free reference against which all fits are validated. Build it first.
+- **Anti-Hermitian defect and symmetry labels are independent diagnostics:** They can be computed in parallel with no dependency on each other or on the fitting pipeline. They answer "is the real-exponential model valid?" and "why does this observable miss the gap?" respectively.
+- **Bootstrap requires per-trajectory storage:** This is a new data path in `trajectories.jl`. The current `_accumulate_measurements!` only stores the running sum. A new accumulation mode or return type is needed.
+- **Richardson extrapolation depends on the two-exponential fit being reliable:** Quick-30 showed that Richardson amplifies fitting artifacts. Only apply Richardson after the two-exponential fit is validated.
+- **Auto fitting window depends on effective rate AND two-exponential fit:** t_max is from SNR (effective rate infrastructure), t_min is from fit stability (requires running the fitter).
+- **Summary dashboard depends on everything:** It is the last feature, composing all results into one figure.
 
 ---
 
-## MVP Recommendation
+## MVP Definition
 
-### Must Complete
+### Launch With (v1.4 core)
 
-1. **Total magnetization observable** -- extend `build_convergence_observables` to include `M_z` (and rename/create `build_spectral_gap_observables`)
-2. **Add LsqFit.jl dependency** -- needed for all fitting
-3. **Single-exponential fit function** -- `A * exp(-gap * t) + C` with auto initial guess and parameter bounds
-4. **Fitting window selection** -- at minimum, manual start fraction; ideally, simple auto-detection
-5. **Fit quality metrics** -- R-squared, confidence interval on gap
-6. **`estimate_spectral_gap` function** -- the reusable API that fits all observables and picks the best
-7. **Cross-validation script** -- n=4 and n=6: exact gap vs fitted gap comparison
+- [x] **Effective rate plot** -- the model-free diagnostic that reveals everything
+- [x] **Two-exponential fit with Prony init** -- the root cause fix from Quick-32
+- [x] **Bootstrap error bars** -- trustworthy uncertainty quantification
+- [x] **Auto fitting window (SNR + stability)** -- removes the manual skip_initial fragility
+- [x] **Anti-Hermitian defect** -- validates the real-exponential model assumption
+- [x] **Delta-Sz symmetry labels** -- explains the n=6 zero-overlap mystery
+- [x] **Richardson extrapolation** -- eliminates O(delta) Trotter bias
 
-### Defer
+### Add After Core Validation
 
-- **Damped oscillation model** -- add only if pure exponential gives poor R-squared for some configs
-- **Multi-exponential fit** -- ill-conditioned, only needed if early-time fitting is important
-- **Bootstrap confidence intervals** -- linearized LsqFit CIs are sufficient for the paper
-- **Automatic model selection (AIC/BIC)** -- overkill for single vs damped oscillation choice; visual inspection suffices
-- **Observable overlap diagnostic** -- informative but not needed for the gap estimate itself
+- [ ] **Summary dashboard** -- after all diagnostics work, compose the thesis figure
+- [ ] **External field comparison** -- test symmetry-breaking effect on gap estimation
+- [ ] **Multi-observable minimum-gap selector** -- improve `_select_best_observable`
+- [ ] **Store 20-30 eigenvalues** -- richer spectrum visualization
+
+### Future Consideration (v1.5+)
+
+- [ ] **n=8 sparse Lindbladian** -- separate milestone per reference document
+- [ ] **Damped-oscillation fit model** -- only if anti-Hermitian defect is significant
+- [ ] **GEVP / matrix pencil methods** -- only if two-exponential fit proves insufficient
 
 ---
 
 ## Feature Prioritization Matrix
 
-| Feature | Paper Value | Implementation Cost | Priority |
-|---------|------------|---------------------|----------|
-| Total magnetization observable | HIGH | LOW | P0 |
-| LsqFit.jl dependency | CRITICAL | LOW | P0 |
-| Single-exponential fit | CRITICAL | MEDIUM | P1 |
-| Auto initial guess | CRITICAL | LOW | P1 |
-| Fit quality metrics | CRITICAL | LOW | P1 |
-| Fitting window selection (manual) | HIGH | LOW | P1 |
-| estimate_spectral_gap function | CRITICAL | MEDIUM | P1 |
-| Cross-validation n=4,6 | CRITICAL | MEDIUM | P2 |
-| Multi-observable consistency | HIGH | LOW | P2 |
-| Variance-weighted fitting | MEDIUM | LOW | P2 |
-| Gap vs beta/n scaling plots | MEDIUM | LOW | P2 |
-| Damped oscillation model | LOW-MEDIUM | MEDIUM | P3 |
-| Fitting window auto-detection | LOW | MEDIUM | P3 |
-| Observable overlap diagnostic | LOW | LOW | P3 |
-| Bootstrap confidence intervals | LOW | MEDIUM | P3 |
-| Multi-exponential fit | LOW | HIGH | P4 (defer) |
+| Feature | Scientific Value | Implementation Cost | Priority |
+|---------|-----------------|---------------------|----------|
+| Effective rate plot lambda_eff(t) | CRITICAL | MEDIUM | P0 |
+| Two-exponential fit + Prony init | CRITICAL | HIGH | P0 |
+| Per-trajectory observable storage | CRITICAL (enables bootstrap) | MEDIUM | P0 |
+| Bootstrap error bars | HIGH | MEDIUM | P1 |
+| Auto t_max (SNR threshold) | HIGH | LOW | P1 |
+| Auto t_min (stability test) | HIGH | MEDIUM | P1 |
+| Anti-Hermitian defect computation | HIGH | MEDIUM | P1 |
+| Delta-Sz symmetry sector labels | HIGH | LOW | P1 |
+| Richardson extrapolation | HIGH | LOW | P1 |
+| Store 20-30 Lindbladian eigenvalues | MEDIUM | LOW | P2 |
+| Summary dashboard (7-panel figure) | HIGH (thesis) | MEDIUM | P2 |
+| External field comparison | MEDIUM | LOW | P2 |
+| Multi-observable min-gap selector | MEDIUM | LOW | P2 |
+| Left/right eigenvector overlap | LOW | LOW | P3 |
+| Damped-oscillation fit model | LOW | MEDIUM | P3 |
 
 **Priority key:**
-- P0: Enables all other work; do first
-- P1: Core milestone features
-- P2: Validates and strengthens the method
-- P3: Nice to have; defer if time-constrained
-- P4: Defer to future milestone
+- P0: Foundation that enables other features; build first
+- P1: Core diagnostic pipeline
+- P2: Validation, visualization, thesis figures
+- P3: Only if needed based on diagnostic results
 
 ---
 
-## Physics Reference: Observable Coupling to Gap Mode
+## Phase Structure Implications
 
-### Which Observables See the Spectral Gap?
+Based on feature dependencies, the natural phase ordering is:
 
-An observable O sees the spectral gap only if `tr(O * R_gap) != 0`, where `R_gap` is the gap eigenmatrix of the Lindbladian. For the 1D Heisenberg chain with disorder:
+**Phase A (Foundation):** Per-trajectory storage, effective rate plot, anti-Hermitian defect, symmetry labels, expand eigenvalue extraction to 20-30. These are independent and can be built/validated separately.
 
-| Observable | Expected coupling to gap mode | Reasoning |
-|------------|-------------------------------|-----------|
-| Energy `<H>` | **STRONG** | `H` is diagonal in the eigenbasis. The gap mode is a density-matrix perturbation in the eigenbasis that describes the slowest redistribution of population among energy levels. The gap mode is "energy-like" -- it has large diagonal elements in the eigenbasis. `tr(H * R_gap)` is generically nonzero and large. |
-| ZZ correlation `<Z_iZ_{i+1}>` | **STRONG** | The ZZ correlations probe two-body spin-spin interactions, which are the building blocks of the Hamiltonian. The gap mode, being related to the slowest energy redistribution, has significant structure in these two-body sectors. |
-| Total magnetization `<M_z>` | **MODERATE to WEAK** | `M_z` commutes with the Heisenberg Hamiltonian's total spin (when disorder is absent). With disorder, this symmetry is broken, giving `M_z` some coupling. But the gap mode is primarily an energy excitation, not a magnetization excitation, so the coupling is weaker. |
-| Single-site `<Z_i>` | **MODERATE** | Site-resolved magnetization has nontrivial coupling via the disorder field, but is a coarser probe than ZZ correlations. |
+**Phase B (Improved Estimator):** Two-exponential fit with Prony init, auto fitting window (SNR + stability), bootstrap error bars. These depend on Phase A outputs for initialization and validation.
 
-### Expected Spectral Gap Values
+**Phase C (Bias Elimination):** Richardson extrapolation at 2+ delta values, external field comparison. Depends on Phase B producing reliable per-delta gap estimates.
 
-For the 1D Heisenberg chain simulated in QuantumFurnace (rescaled spectrum in [0, 0.45]):
+**Phase D (Synthesis):** Summary dashboard, final validated gap estimate at n=4,6, comparison table (exact vs estimated, with sigma discrepancy).
 
-| n | beta | Expected gap (rescaled units) | Mixing time ~1/gap | Notes |
-|---|------|------------------------------|-------------------|-------|
-| 4 | 5 | ~0.01-0.1 | ~10-100 | Warm, fast mixing |
-| 4 | 10 | ~0.005-0.05 | ~20-200 | Moderate |
-| 4 | 20 | ~0.001-0.01 | ~100-1000 | Cold, slow mixing |
-| 6 | 10 | ~0.003-0.03 | ~30-300 | Larger system |
-| 8 | 10 | ~0.001-0.01 | ~100-1000 | Trajectory-only regime |
+---
 
-Note: These are rough estimates. The actual gap depends on the specific disordered Hamiltonian instance, the domain (Energy/Time/Trotter), and the Lindbladian parameters (sigma, transition function). Cross-validation at n=4,6 will calibrate expectations.
+## Technical Notes for Implementation
 
-### Required Simulation Parameters for Gap Estimation
+### Per-Trajectory Storage Architecture
 
-To resolve the spectral gap from trajectory data:
+The current code in `_run_chunk_obs_only!` sums measurements in-place via `_accumulate_measurements!`. For bootstrap, we need one of:
+1. **Full storage:** New `Matrix{Float64}` of size `(n_traj, n_obs, n_saves)`. Return alongside the mean.
+2. **Streaming variance:** Welford's online algorithm to accumulate mean AND variance in one pass (no per-trajectory storage, but variance is needed for SNR calculation).
+3. **Block storage:** Divide trajectories into B blocks of size N_traj/B. Store B block means. Bootstrap resamples blocks.
 
-- **`total_time`:** Must be at least `5/gap` for the observable to reach its plateau. For gap ~ 0.01, total_time ~ 500 in rescaled units.
-- **`save_every`:** Should give ~200-500 time points. With `delta = 0.001` and `total_time = 500`, num_steps = 500000. Set `save_every = 1000-2500` for 200-500 data points.
-- **`ntraj`:** More trajectories reduce noise, improving fit quality. For gap estimation: ntraj = 5000-20000 is a reasonable range. The fitted gap precision scales as ~1/sqrt(ntraj).
-- **`delta`:** Must be small enough for simulation accuracy (existing tests confirm delta = 0.001 works well). No additional constraint from gap estimation.
+**Recommendation:** Use approach (1) for n=4,6 (small enough) and approach (3) as a fallback for larger systems.
+
+### LsqFit.jl Two-Exponential Model
+
+```julia
+_two_exp_model(t, p) = @. p[1] * exp(-p[2] * t) + p[3] * exp(-p[4] * t)
+# p = [c1, g1, c2, g2] with constraint g1 < g2
+# Enforce via bounds: lower = [-Inf, 0.01, -Inf, 0.01], upper = [Inf, g1_ub, Inf, g2_ub]
+```
+
+The constraint `g1 < g2` is enforced indirectly: set `upper[2] = initial_g2` and `lower[4] = initial_g1` based on Prony initialization. If the fit swaps g1 and g2, sort post-hoc.
+
+### Prony Two-Point Implementation
+
+```julia
+function prony_init(Delta, times; t_a_idx, tau_steps)
+    tau = (times[t_a_idx + tau_steps] - times[t_a_idx])
+    r1 = Delta[t_a_idx + div(tau_steps,2)] / Delta[t_a_idx]
+    r2 = Delta[t_a_idx + tau_steps] / Delta[t_a_idx + div(tau_steps,2)]
+    # Solve z^2 - (r1+r2)*z + r1*r2 = 0
+    disc = (r1 + r2)^2 - 4 * r1 * r2
+    disc < 0 && return nothing  # complex roots: fall back to effective rate init
+    z1 = ((r1 + r2) + sqrt(disc)) / 2
+    z2 = ((r1 + r2) - sqrt(disc)) / 2
+    g1 = -2 * log(max(z1, 1e-10)) / tau
+    g2 = -2 * log(max(z2, 1e-10)) / tau
+    g1, g2 = minmax(g1, g2)  # ensure g1 < g2
+    return (g1, g2)
+end
+```
+
+### Observable Update
+
+The reference document specifies updating the observable set to:
+- Z1 (single-site Z on first site)
+- X1 (single-site X on first site)
+- Z1 * Z_{n/2} (two-point correlator)
+- H (energy)
+- Random traceless Hermitian (control)
+
+This differs from the current 8-observable set. The `build_preset_trajectory_observables` function should be updated accordingly, or a separate builder provided for the diagnostics.
 
 ---
 
 ## Sources
 
-### Verified (HIGH confidence)
-- QuantumFurnace.jl codebase -- Direct analysis of `trajectories.jl` (run_trajectories, _run_chunk_with_obs!, _accumulate_measurements!), `convergence.jl` (build_convergence_observables, run_trajectories_convergence), `furnace.jl` (run_lindbladian, LindbladianResult.spectral_gap), `structs.jl` (TrajectoryResult, LindbladianResult, ConvergenceData)
-- [LsqFit.jl Documentation](https://julianlsolvers.github.io/LsqFit.jl/latest/tutorial/) -- curve_fit API, confidence_interval, estimate_covar, Levenberg-Marquardt algorithm
-- [LsqFit.jl GitHub](https://github.com/JuliaNLSolvers/LsqFit.jl) -- MIT license, pure Julia, box constraints support
+### HIGH Confidence (codebase + reference documents)
+- QuantumFurnace.jl codebase: `gap_estimation.jl`, `fitting.jl`, `trajectories.jl`, `convergence.jl`, `furnace.jl`, `qi_tools.jl`
+- `supplementary-informations/spectral-gap-refinements-instructions.md` -- 5-part diagnostic pipeline specification
+- `supplementary-informations/error_catalogue_spectral_gap_estimation.md` -- 7 error sources catalogued
+- Quick-30/31/32 summaries: trajectory correctness confirmed, fitting is the bottleneck
 
-### Verified (MEDIUM confidence)
-- [Spectral Gap and Exponential Decay of Correlations](https://arxiv.org/abs/math-ph/0507008) (Nachtergaele & Sims 2006) -- Mathematical foundation: spectral gap implies exponential decay of correlations
-- [Fast Mixing of Quantum Spin Chains at All Temperatures](https://arxiv.org/html/2510.08533) -- System-size independent spectral gap for 1D chains at any finite temperature
-- [Mixing Time of Open Quantum Systems via Hypocoercivity](https://arxiv.org/abs/2404.11503) -- Relationship between spectral gap, mixing time, and observable autocorrelation
-- [Computationally Efficient Estimation of the Spectral Gap of a Markov Chain](https://arxiv.org/abs/1806.06047) -- UCPI algorithm for gap estimation from sample paths (classical analog)
-- [Spectral Gap Estimation via Adiabatic Preparation](https://arxiv.org/html/2512.19288) -- Quantum device approach (not directly applicable but contextually relevant)
-- [Universal Predictors for Mixing Time more than Liouvillian Gap](https://arxiv.org/html/2601.06256) -- Recent work on mixing time predictors beyond the gap
-
-### Domain knowledge (HIGH confidence, established physics/mathematics)
-- Lindbladian semigroup spectral decomposition: `rho(t) = rho_ss + sum c_i R_i exp(lambda_i t)` is standard open quantum systems theory
-- Observable decay rate = real part of dominant non-zero eigenvalue (from spectral decomposition of `tr(O rho(t))`)
-- Nonlinear least squares with Levenberg-Marquardt is the standard approach for exponential decay fitting in physics
-- Heisenberg chain gap mode coupling to energy and spin-spin observables -- established condensed matter physics
-- KMS-detailed-balanced Lindbladians have unique steady state and real spectral gap for the symmetrized generator
+### MEDIUM Confidence (established methods, verified by multiple sources)
+- [Prony's Method (Wikipedia)](https://en.wikipedia.org/wiki/Prony's_method) -- exponential extraction via polynomial root-finding
+- [LsqFit.jl Tutorial](https://julianlsolvers.github.io/LsqFit.jl/latest/tutorial/) -- Julia nonlinear least squares with bounds
+- [Excited State Systematics in Lattice QCD](https://arxiv.org/abs/2104.05226) -- multi-state analysis for excited state contamination (analog problem)
+- [Monte Carlo Wave-Function Method](https://www.sciencedirect.com/science/article/abs/pii/S0010465518304314) -- robust adaptive MCWF with convergence study
+- [Reducing Circuit Depth in Lindblad Simulation via Step-Size Extrapolation](https://arxiv.org/html/2507.22341) -- Richardson extrapolation for Lindbladian Trotter error
+- [Exponentially Reduced Circuit Depths Using Trotter Error Mitigation](https://doi.org/10.1103/kw39-yxq5) -- rigorous Richardson extrapolation performance guarantees
+- [Symmetry Classification of Many-Body Lindbladians](https://dx.doi.org/10.1103/PhysRevX.13.031019) -- symmetry sector labeling framework
+- [Chen et al. 2023 (arXiv:2303.18224)](https://arxiv.org/pdf/2303.18224) -- KMS detailed balance, Proposition II.3, similarity transform
+- [Efficient Quantum Gibbs Samplers with KMS Detailed Balance](https://link.springer.com/article/10.1007/s00220-025-05235-3) -- theoretical framework for KMS Lindbladians
+- [QuantumToolbox.jl Monte Carlo Solver](https://qutip.org/QuantumToolbox.jl/stable/users_guide/time_evolution/mcsolve) -- bootstrap/jackknife for trajectory error bars in QuTiP
+- [Classical Shadow Nonparametric Bootstrap](https://arxiv.org/html/2511.09793) -- bootstrap methods for quantum state estimation
 
 ---
-*Feature research for: v1.3 Spectral Gap Estimation from Trajectory Observables*
-*Researched: 2026-02-16*
+*Feature research for: v1.4 Spectral Gap Refinement Diagnostics*
+*Researched: 2026-02-19*

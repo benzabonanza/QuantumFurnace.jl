@@ -1,380 +1,503 @@
-# Stack Research: Spectral Gap Estimation from Trajectory Observable Decay
+# Stack Research: Spectral Gap Refinement Diagnostics
 
-**Domain:** Nonlinear curve fitting, statistical inference on decay rates, spectral gap cross-validation for quantum Lindbladian simulation
-**Researched:** 2026-02-16
-**Confidence:** HIGH (LsqFit.jl verified via official docs + GitHub; Distributions.jl verified; integration points confirmed from codebase analysis)
+**Domain:** Advanced spectral analysis, bootstrap statistics, two-exponential fitting, similarity transforms, diagnostic visualization for quantum Lindbladian simulation
+**Researched:** 2026-02-19
+**Confidence:** HIGH (existing deps verified from codebase; new capabilities analyzed against official docs and Julia ecosystem)
 
 ## Scope
 
-This stack research covers ONLY the additions needed for spectral gap estimation via trajectory-based observable decay fitting:
+This stack research covers ONLY the additions needed for v1.4 Spectral Gap Refinement -- the diagnostic and improved estimation capabilities described in the spectral-gap-refinements-instructions.md (Tasks 1.1--5.2).
 
-1. Exponential decay curve fitting: `f(t) = A * exp(-gap * t) + c`
-2. Parameter uncertainty / confidence intervals on the fitted gap
-3. Robust initial guess strategies for the Levenberg-Marquardt solver
-4. Statistical tools for handling noisy trajectory-averaged data
-5. Cross-validation against exact Liouvillian eigenvalues (Arpack)
+Specifically:
+1. Anti-Hermitian defect computation (similarity transform with rho^{+/-1/4})
+2. Effective rate plot lambda_eff(t) computation
+3. Bootstrap resampling over trajectories for error bars
+4. Two-exponential fitting with robust initialization (Prony method)
+5. Richardson extrapolation for delta-convergence
+6. Automatic fitting window selection (SNR-based t_max, stability-based t_min)
+7. Symmetry sector labeling on Lindbladian eigenvectors
+8. Dashboard/summary figure generation
 
-It does NOT re-research the existing stack. See the v1.2 codebase STACK.md for Arpack, FINUFFT, LinearAlgebra, BSON, StableRNGs, HypothesisTests, StatsBase, threading, convergence monitoring, etc.
+It does NOT re-research the existing stack. The v1.3 STACK.md covered LsqFit.jl (already in [deps]), Arpack.jl, single-exponential fitting, and log-linear initial guess. All of those remain valid and unchanged.
 
-## Current Stack (Relevant Subset for This Feature)
+## Verdict: Zero New Production Dependencies
 
-These existing capabilities are directly used and need no changes:
+The existing production dependency set is sufficient for ALL v1.4 features. The key insight: every new capability (two-exponential fitting, bootstrap, Richardson extrapolation, matrix fourth roots, symmetry labeling) can be implemented with LinearAlgebra + LsqFit + existing stdlib, with plotting handled via the already-present extras dependency on Plots.jl. No new `[deps]` entries needed.
 
-| Existing Capability | Role in Spectral Gap Estimation | Status |
-|---------------------|-------------------------------|--------|
-| `run_trajectories(..., observables=..., save_every=N)` | Generates time series `<O_i>(t)` averaged over trajectories | Keep -- produces the raw data for fitting |
-| `TrajectoryResult.measurements_mean` | Matrix{Float64} of shape (n_obs, n_saves) -- observable means at each save point | Keep -- this is the input to the fitter |
-| `TrajectoryResult.times` | Vector{Float64} of time points corresponding to saves | Keep -- independent variable for fitting |
-| `run_lindbladian(...)` -> `LindbladianResult.spectral_gap` | Exact spectral gap via Arpack shift-invert for n=4,6 | Keep -- ground truth for cross-validation |
-| `build_convergence_observables(ham, n)` | Builds ZZ_ij and H observables in eigenbasis | Keep -- defines which observables to track |
-| `_compute_gibbs_observable_values(gibbs, observables)` | Computes equilibrium values `<O_i>_gibbs` | Keep -- defines the asymptotic offset `c` in the fit |
-| HypothesisTests (test extra) | OneSampleTTest for statistical validation | Keep -- useful for testing gap estimate consistency |
-| StatsBase (test extra) | mean, std for trajectory statistics | Keep -- useful in test assertions |
+---
 
-## New Production Dependencies (src/)
+## Existing Stack (Relevant to v1.4 Features)
 
-### Core: LsqFit.jl -- Nonlinear Curve Fitting
+### Already in [deps] -- Used Directly by New Features
 
-| Technology | Version | Purpose | Why Recommended |
-|------------|---------|---------|-----------------|
-| LsqFit.jl | >= 0.15 | Levenberg-Marquardt nonlinear least squares fitting for `f(t) = A * exp(-gap * t) + c` | **The** standard Julia package for nonlinear curve fitting. Pure Julia. Provides `curve_fit` with parameter bounds (essential: gap > 0), weighted fitting (essential: weight by 1/variance at each time point), and built-in `confidence_interval` / `standard_error` for parameter uncertainty without needing a separate statistics package. Uses ForwardDiff for automatic Jacobian computation. Latest release v0.15.1 (April 2025), actively maintained by JuliaNLSolvers. |
+| Existing Dep | v1.4 Role | Sufficient? |
+|---|---|---|
+| **LsqFit.jl** (0.15) | Two-exponential fitting: same `curve_fit` with 5-param model `c1*exp(-g1*t) + c2*exp(-g2*t)` + bounds. Confidence intervals via `confint`. | YES -- no API changes needed. Two-exponential is just a different model function passed to the same `curve_fit`. |
+| **LinearAlgebra** (stdlib) | Matrix fourth root via eigendecomposition: `F = eigen(Hermitian(rho)); rho_quarter = F.vectors * Diagonal(F.values .^ 0.25) * F.vectors'`. Also: `opnorm()` for anti-Hermitian defect, `eigen()` for full Lindbladian diagonalization (n<=6), `Hermitian()` wrapper. | YES -- `eigen(Hermitian(...))` guarantees real eigenvalues for the Gibbs state; raising diagonal to 1/4 power is trivial. |
+| **Arpack.jl** (0.5.4) | Leading 20-30 eigenvalues via shift-invert `eigs(L, nev=30, sigma=shift)`. Already used for 2 eigenvalues in `run_lindbladian`; just increase `nev`. | YES -- shift-invert mode already working for Lindbladian. Increasing nev from 2 to 20-30 is the only change. |
+| **Optim.jl** (1) | NOT directly used for fitting (LsqFit handles that), but available if custom loss functions needed for fitting window optimization. | Not needed for v1.4. Keep as-is. |
+| **SparseArrays** (stdlib) | Lindbladian stored as dense (dim^2 x dim^2) for n<=6. Sparse not needed at these sizes. | No change. |
 
-**Confidence: HIGH** -- Verified via [official docs](https://julianlsolvers.github.io/LsqFit.jl/latest/), [GitHub v0.15.1 release](https://github.com/JuliaNLSolvers/LsqFit.jl), and [tutorial](https://julianlsolvers.github.io/LsqFit.jl/latest/tutorial/).
+### Already in [extras] -- Used in Scripts/Tests
 
-**Why LsqFit over alternatives:**
+| Existing Extra | v1.4 Role | Sufficient? |
+|---|---|---|
+| **Plots.jl** (1) | Dashboard figures (Task 5.1). Multi-panel layout via `plot(p1, p2, ..., layout=(rows, cols))`. Supports PNG, PDF, SVG output. Already in `[extras]` and `[compat]` with bounds. | YES for diagnostic scripts. See plotting section below for detailed analysis. |
+| **StatsBase** (0.34) | `mean`, `std`, `sample` (with replacement) for bootstrap resampling. `sample(1:N, N; replace=true)` gives bootstrap indices. | YES -- `StatsBase.sample` with `replace=true` is the standard Julia bootstrap primitive. |
+| **HypothesisTests** (0.11) | Statistical validation of gap estimates. | YES -- no change. |
+| **StableRNGs** (1) | Reproducible bootstrap seeds. | YES -- no change. |
+| **Statistics** (stdlib) | `mean`, `std`, `var` for bootstrap statistics, SNR computation. Already resolved in Manifest. | YES -- stdlib, always available. |
 
-1. **Built-in parameter uncertainty** -- `confidence_interval(fit, alpha)` computes t-distribution-based CIs directly from the Jacobian at the solution. No need to write bootstrap code or pull in a separate statistics package for the primary use case.
+---
 
-2. **Parameter bounds** -- `curve_fit(model, t, y, p0; lower=[...], upper=[...])` constrains the gap to be positive and the amplitude to be physically reasonable. Essential because unconstrained Levenberg-Marquardt can converge to negative decay rates on noisy data.
+## Feature-by-Feature Stack Analysis
 
-3. **Weighted fitting** -- Pass `wt = 1 ./ variance_per_timepoint` to properly handle trajectory noise that varies with time (early time points have high variance from diverse initial conditions; late time points have low signal).
+### 1. Anti-Hermitian Defect (Task 1.2): Matrix Fourth Root
 
-4. **Minimal dependency footprint** -- LsqFit depends on Distributions, ForwardDiff, NLSolversBase, StatsAPI, LinearAlgebra, Printf. Of these, ForwardDiff, NLSolversBase, StatsAPI, LinearAlgebra, and Printf are already in the Manifest.toml as transitive dependencies of Optim (which is a direct dep). Adding LsqFit only truly adds **LsqFit itself + Distributions.jl** as new resolved packages.
+**What's needed:** Compute rho^{1/4} and rho^{-1/4} for the Gibbs state to form the similarity-transformed generator D = rho^{-1/4} * L[rho^{1/4} * (.) * rho^{1/4}] * rho^{-1/4}.
 
-**Key API for this milestone:**
+**Stack decision: Use LinearAlgebra.eigen() on Hermitian Gibbs state. No new dependency.**
+
+**Confidence: HIGH** -- Verified from Julia docs and codebase analysis.
+
+**Rationale:** The Gibbs state rho_beta is diagonal in the energy eigenbasis (already computed in `HamHam.gibbs`). The project stores it as a `Hermitian{Complex{T}, Matrix{Complex{T}}}`. Two paths exist:
+
+**Path A (preferred): Exploit diagonal structure in eigenbasis.**
+The `HamHam` struct stores `eigvals` and `eigvecs`. The Gibbs state in the eigenbasis is `Diagonal(exp.(-beta .* eigvals) ./ Z)`. Fourth root is simply `Diagonal((exp.(-beta .* eigvals) ./ Z) .^ 0.25)`. Transform back to computational basis if needed via `eigvecs * D * eigvecs'`. This is O(dim^2), exact, and numerically stable (all Gibbs eigenvalues are strictly positive).
 
 ```julia
-using LsqFit
+# In energy eigenbasis: rho is diagonal
+gibbs_eigs = exp.(-beta .* hamiltonian.eigvals)
+gibbs_eigs ./= sum(gibbs_eigs)
+rho_quarter_diag = Diagonal(gibbs_eigs .^ 0.25)
+rho_inv_quarter_diag = Diagonal(gibbs_eigs .^ (-0.25))
 
-# Model: observable deviation decays exponentially to equilibrium
-# p = [A, gap, c] where A = amplitude, gap = decay rate, c = offset
-model(t, p) = p[1] .* exp.(-p[2] .* t) .+ p[3]
-
-# Fit with bounds: gap > 0, A can be any sign, c unconstrained
-fit = curve_fit(model, times, obs_deviation, p0;
-                lower = [-Inf, 0.0, -Inf],
-                upper = [Inf, Inf, Inf])
-
-# Extract gap estimate and uncertainty
-gap_estimate = fit.param[2]
-gap_stderr = standard_error(fit)[2]
-gap_ci = confidence_interval(fit, 0.05)[2]  # 95% CI on gap
-
-# Covariance matrix for full parameter correlation analysis
-cov_matrix = estimate_covar(fit)
+# In computational basis (if needed for Lindbladian that's in computational basis):
+V = hamiltonian.eigvecs
+rho_quarter = V * rho_quarter_diag * V'
+rho_inv_quarter = V * rho_inv_quarter_diag * V'
 ```
 
-### Transitive: Distributions.jl -- Brought in by LsqFit
-
-| Technology | Version | Purpose | Why Acceptable |
-|------------|---------|---------|----------------|
-| Distributions.jl | >= 0.25 | t-distribution quantiles for `confidence_interval()` in LsqFit; not used directly in QuantumFurnace code | LsqFit uses `quantile(TDist(dof), 1 - alpha/2)` internally to compute confidence intervals. This is a well-maintained, standard Julia statistics package (v0.25.123, Jan 2026). Compatible with Julia 1.11+. It brings some transitive deps (PDMats, StatsFuns, FillArrays, etc.) but these are lightweight and standard in the Julia ecosystem. |
-
-**Confidence: HIGH** -- Verified via [Distributions.jl v0.25 docs](https://juliastats.org/Distributions.jl/v0.25/) generated with Julia 1.11.7. [v0.25.123 on Zenodo](https://zenodo.org/records/18145493).
-
-## No New Test Dependencies Needed
-
-The existing test extras are sufficient:
-
-| Existing Test Dep | Role in Spectral Gap Tests |
-|-------------------|---------------------------|
-| HypothesisTests | `OneSampleTTest` to verify fitted gap matches exact Arpack gap within statistical tolerance |
-| StatsBase | `mean`, `std` for computing reference statistics on fit residuals |
-| StableRNGs | Deterministic seeding for reproducible trajectory data in gap estimation tests |
-
-## How LsqFit Integrates with Existing Code
-
-### Data Flow: Trajectory -> Fit -> Gap
+**Path B (for TrotterDomain): General eigendecomposition.**
+In TrotterDomain, the Gibbs state is NOT diagonal in the Trotter eigenbasis. The Lindbladian and Gibbs state are both in the Trotter basis. Use:
 
 ```julia
-# STEP 1: Run trajectories with observable measurement (EXISTING)
-observables, obs_names = build_convergence_observables(hamiltonian, n_qubits)
-result = run_trajectories(jumps, config, psi0, hamiltonian;
-    observables = observables,
-    save_every = save_every,
-    ntraj = ntraj,
-    seed = seed)
-
-# result.times        :: Vector{Float64}      -- time grid
-# result.measurements_mean :: Matrix{Float64}  -- (n_obs, n_saves)
-
-# STEP 2: Compute deviation from equilibrium (NEW, uses existing helpers)
-obs_gibbs = _compute_gibbs_observable_values(gibbs, observables)
-# For observable i: deviation(t) = <O_i>(t) - <O_i>_gibbs
-
-# STEP 3: Fit exponential decay (NEW, uses LsqFit)
-using LsqFit
-
-model(t, p) = p[1] .* exp.(-p[2] .* t) .+ p[3]
-
-for i in 1:n_obs
-    y = result.measurements_mean[i, :] .- obs_gibbs[i]
-    # Or fit the raw data with c as free parameter:
-    # model_with_offset(t, p) = p[1] * exp(-p[2] * t) + p[3]
-    # y = result.measurements_mean[i, :]
-    # p0 = [y[1] - y[end], initial_gap_guess, y[end]]
-
-    p0 = _compute_initial_guess(result.times, y)
-    fit = curve_fit(model, result.times, y, p0;
-                    lower = [-Inf, 0.0, -Inf])
-    gap_i = fit.param[2]
-    gap_ci_i = confidence_interval(fit, 0.05)[2]
-end
-
-# STEP 4: Cross-validate against exact gap (EXISTING Arpack result)
-liouv = run_lindbladian(jumps, liouv_config, hamiltonian; trotter=trotter)
-exact_gap = abs(real(liouv.spectral_gap))
+F = eigen(Hermitian(Matrix(gibbs_in_trotter_basis)))
+rho_quarter = F.vectors * Diagonal(F.values .^ 0.25) * F.vectors'
+rho_inv_quarter = F.vectors * Diagonal(F.values .^ (-0.25)) * F.vectors'
 ```
 
-### Integration Points in the Codebase
+This is safe because `Hermitian()` guarantees real eigenvalues. The Gibbs state is positive definite (all eigenvalues > 0), so the quarter-power is well-defined and real.
 
-| Integration Point | File | What Changes |
-|-------------------|------|-------------|
-| New function: `estimate_spectral_gap(result, gibbs, observables)` | New file: `src/spectral_gap.jl` | Takes TrajectoryResult + Gibbs state + observables, returns gap estimate + CI + per-observable fits |
-| New struct: `SpectralGapResult` | `src/structs.jl` | Holds gap estimate, confidence interval, per-observable fit quality (R-squared, residual norm), fit parameters |
-| Existing: `run_trajectories` with `observables` + `save_every` | `src/trajectories.jl` | No changes needed -- already produces the exact data format required |
-| Existing: `run_lindbladian` -> `LindbladianResult.spectral_gap` | `src/furnace.jl` | No changes needed -- provides ground truth for validation |
-| New export: `estimate_spectral_gap` | `src/QuantumFurnace.jl` | Add to exports |
-| New `using LsqFit` | `src/QuantumFurnace.jl` | Add import |
+**Numerical concern: near-zero eigenvalues.**
+For high beta (low temperature), some Gibbs eigenvalues approach zero, making rho^{-1/4} diverge. At n=6 with beta=1 (the current test case), the smallest Gibbs eigenvalue is ~exp(-beta * E_max) / Z, which is well above machine epsilon. For beta >> 1, a regularization floor `max(eigval, epsilon)` may be needed, but this is a v1.4+ concern. **No new package needed.**
 
-## Robust Initial Guess Strategy
+### 2. Effective Rate Plot lambda_eff(t) (Task 2.1): Pure Arithmetic
 
-The Levenberg-Marquardt algorithm in LsqFit converges reliably IF the initial guess is reasonable. For noisy trajectory data, a poor initial guess causes convergence to local minima or failure. **This is the most likely pitfall**, not the fitting library itself.
+**What's needed:** Compute lambda_eff(t) = -ln|Delta(t+tau)/Delta(t)| / tau from the trajectory-averaged signal.
 
-### Recommended: Log-Linear Preprocessing for Initial Guess
+**Stack decision: Pure Julia arithmetic. No dependency at all.**
+
+**Confidence: HIGH** -- This is a 15-line function using only division, abs, log, and array indexing.
 
 ```julia
-function _compute_initial_guess(times, deviation)
-    # deviation = <O>(t) - <O>_gibbs, should decay from ~A to ~0
-
-    # Estimate offset c from late-time average (last 20% of data)
-    n = length(deviation)
-    c_guess = mean(deviation[max(1, round(Int, 0.8*n)):n])
-
-    # Subtract offset, take abs to handle sign, take log
-    shifted = deviation .- c_guess
-    # Use only points where |shifted| > threshold to avoid log(~0)
-    mask = abs.(shifted) .> 0.01 * maximum(abs.(shifted))
-    if sum(mask) < 3
-        # Fallback: crude guess
-        A_guess = deviation[1] - c_guess
-        gap_guess = 1.0 / (times[end] - times[1])
-        return [A_guess, gap_guess, c_guess]
+function effective_rate(Delta::Vector{Float64}, dt::Float64; lag::Int=3)
+    n = length(Delta)
+    tau = lag * dt
+    t_vals = [(i-1)*dt for i in 1:(n-lag)]
+    lambda_eff = Vector{Float64}(undef, n-lag)
+    for i in 1:(n-lag)
+        d_now = Delta[i]
+        d_later = Delta[i + lag]
+        if d_now != 0.0 && d_later != 0.0 && sign(d_now) == sign(d_later)
+            lambda_eff[i] = -log(abs(d_later / d_now)) / tau
+        else
+            lambda_eff[i] = NaN
+        end
     end
-
-    # Log-linear fit: log|shifted| = log|A| - gap * t
-    log_y = log.(abs.(shifted[mask]))
-    t_masked = times[mask]
-    # Simple linear regression
-    t_mean = mean(t_masked)
-    y_mean = mean(log_y)
-    slope = sum((t_masked .- t_mean) .* (log_y .- y_mean)) / sum((t_masked .- t_mean).^2)
-    intercept = y_mean - slope * t_mean
-
-    A_guess = sign(shifted[1]) * exp(intercept)
-    gap_guess = max(-slope, 1e-6)  # Ensure positive
-
-    return [A_guess, gap_guess, c_guess]
+    return t_vals, lambda_eff
 end
 ```
 
-**Why log-linear for initial guess only (not final fit):**
-- Log transform distorts error distribution (additive Gaussian noise on linear scale becomes non-Gaussian on log scale)
-- Log transform cannot handle sign changes in the deviation (which happen when noise pushes the observable past equilibrium)
-- But for initial guess, approximate is fine -- the nonlinear LM fit refines from there
+### 3. Bootstrap Resampling (Task 2.2): StatsBase.sample + Custom Loop
 
-**Confidence: HIGH** -- Standard numerical methods practice. The log-linear initial guess + nonlinear refinement pattern is used in scipy.optimize.curve_fit documentation, MATLAB's fit() documentation, and countless scientific computing references.
+**What's needed:** Resample N_traj trajectories with replacement, recompute averaged signal, recompute lambda_eff, collect statistics.
 
-## Weighted Fitting for Trajectory Noise
+**Stack decision: Use StatsBase.sample (already in test extras) for index sampling. No new dependency.**
 
-Trajectory-averaged observable values have non-uniform variance along the time axis:
+**Confidence: HIGH** -- StatsBase.sample with `replace=true` is the standard Julia primitive for bootstrap.
 
-- **Early times (t << 1/gap):** High variance because trajectories haven't mixed -- each trajectory is near the initial state but random jumps create spread.
-- **Late times (t >> 1/gap):** Low variance because trajectories have converged near the thermal equilibrium. The signal (deviation from Gibbs) is also small, so SNR is low.
+**Critical design consideration:** The current `run_observable_trajectories` does NOT store per-trajectory measurements -- it accumulates into `mean_data` and divides by `ntraj`. For bootstrap, we need per-trajectory data OR we need a modified trajectory runner.
 
-### Weight Computation from Trajectory Batches
+**Two approaches (architecture decision, not a stack decision):**
 
-```julia
-# Option A: If running multiple independent batches (e.g., from run_trajectories_convergence)
-# Compute per-timepoint variance across batches
-# wt = 1 ./ var_per_timepoint
+**Approach A: Store per-trajectory measurements.** Add a `measurements_per_traj::Array{Float64, 3}` field (n_obs x n_saves x n_traj) to ObservableTrajectoryResult. Memory: for n=6, 8 observables, 500 save points, 10000 trajectories = 8 * 500 * 10000 * 8 bytes = 320 MB. Feasible for n<=6 validation but NOT for production use at larger n.
 
-# Option B: If running a single large batch with save_every
-# Split trajectories into sub-batches, compute variance of means
-# This requires modifying run_trajectories to return per-sub-batch data
+**Approach B: Batch-level bootstrap.** Run K independent trajectory batches (e.g., K=200 batches of ntraj/K trajectories each). Store per-batch means. Bootstrap resample at the batch level. Memory: 8 * 500 * 200 * 8 bytes = 6.4 MB. This is the approach used in lattice QCD (jackknife/bootstrap over configurations).
 
-# Option C (RECOMMENDED for first implementation): Unweighted fit
-# Start with unweighted fit. Add weighting later if fit quality is poor.
-# Reason: For n=4,6 with ntraj >= 10000, the trajectory average is smooth
-# enough that unweighted fitting gives good results. Weighting is a
-# refinement for when the gap estimate precision matters.
-```
-
-**Recommendation:** Start with unweighted fitting. The unweighted fit is simpler, and for the cross-validation against exact eigenvalues (the primary goal), the gap estimate only needs to be within ~10-20% of the exact value to demonstrate the method works. Add variance-weighted fitting as a refinement if unweighted residuals show systematic structure.
-
-## Multi-Exponential Considerations
-
-The observable deviation from equilibrium is not a pure single exponential. The exact expansion is:
-
-```
-<O>(t) - <O>_gibbs = sum_k c_k * exp(lambda_k * t)
-```
-
-where `lambda_k` are Liouvillian eigenvalues (all with Re(lambda_k) <= 0) and `c_k` depend on the overlap of the initial state and observable with the k-th eigenmode.
-
-### Why Single Exponential Works for Gap Estimation
-
-At long times (t >> 1/|lambda_3|), all faster modes have decayed, leaving:
-
-```
-<O>(t) - <O>_gibbs ≈ c_2 * exp(lambda_2 * t)   for large t
-```
-
-where `lambda_2` is the spectral gap (smallest non-zero eigenvalue in magnitude). **The gap dominates the late-time behavior**, which is precisely what we want to extract.
-
-### Fitting Window Selection
-
-Do NOT fit the entire time series. Instead:
-
-1. **Skip early transient:** The first ~10% of the time series contains multi-exponential contributions from fast modes. Skip it.
-2. **Skip late noise floor:** Once the deviation drops below the trajectory noise level, the data is pure noise. Stop there.
-3. **Fit the middle region** where the single exponential dominates.
+**Recommended: Approach B (batch-level bootstrap).** The trajectory runner already supports deterministic per-trajectory seeding via `Xoshiro(seed + traj_id)`. Run batches sequentially, store per-batch mean arrays, then bootstrap over batch indices using `StatsBase.sample(1:K, K; replace=true)`.
 
 ```julia
-function _select_fitting_window(times, deviation; skip_fraction=0.1, noise_floor_ratio=0.05)
-    n = length(times)
-    t_start = round(Int, skip_fraction * n) + 1
-    max_dev = maximum(abs.(deviation))
-    t_end = findlast(abs.(deviation) .> noise_floor_ratio * max_dev)
-    t_end = max(t_end, t_start + 5)  # Need at least a few points
-    return t_start:t_end
+using StatsBase: sample
+# After collecting batch_means::Vector{Matrix{Float64}}  (K matrices of size n_obs x n_saves)
+n_boot = 200
+boot_gaps = Vector{Float64}(undef, n_boot)
+for b in 1:n_boot
+    idx = sample(1:K, K; replace=true)
+    boot_mean = mean(batch_means[idx])  # requires Statistics.mean
+    # compute lambda_eff or fit from boot_mean
+    boot_gaps[b] = ...
+end
+gap_se = std(boot_gaps)
+```
+
+**Why NOT Bootstrap.jl:** Bootstrap.jl provides infrastructure for standard bootstrap workflows, but our use case is non-standard (resampling trajectory batches, then re-fitting). The custom loop above is 10 lines and gives full control. Adding Bootstrap.jl would be dependency bloat for no benefit.
+
+### 4. Two-Exponential Fitting (Task 3.1): LsqFit.jl with 5-Parameter Model
+
+**What's needed:** Fit `Delta(t) = c1 * exp(-g1 * t) + c2 * exp(-g2 * t)` with constraint `0 < g1 < g2`.
+
+**Stack decision: LsqFit.jl (already in [deps]). No new dependency.**
+
+**Confidence: HIGH** -- Verified that LsqFit supports arbitrary model functions with bounded parameters.
+
+```julia
+# Two-exponential model
+_two_exp_model(t, p) = @. p[1] * exp(-p[2] * t) + p[3] * exp(-p[4] * t) + p[5]
+
+# Parameters: [c1, g1, c2, g2, offset]
+# Bounds: g1 > 0, g2 > g1 (enforce g2 > some_minimum)
+lower = [-Inf, 0.0, -Inf, 0.0, -Inf]
+upper = [Inf, Inf, Inf, Inf, Inf]
+
+fit = curve_fit(_two_exp_model, times, data, p0; lower=lower, upper=upper)
+```
+
+**The challenge is initialization, not the fitting library.** Two-exponential fits are notoriously sensitive to initial conditions. The instructions describe two initialization strategies:
+
+**Strategy A: Effective-rate-informed initialization.**
+Read plateau value from lambda_eff plot as g1_init, early-time value as g2_init. Simple, requires lambda_eff to be computed first.
+
+**Strategy B: Prony two-point method.**
+Pick two time points, form ratios, solve quadratic for decay constants. More automated but sensitive to noise in the chosen points.
+
+Both strategies are ~20 lines of pure Julia arithmetic. No external package needed. The Prony method in particular does NOT need SignalDecomposition.jl or any signal processing package -- it's a 2x2 linear algebra problem:
+
+```julia
+function _prony_two_exp_init(t, Delta; t_frac_a=0.2, t_frac_b=0.5)
+    n = length(t)
+    ia = max(1, round(Int, t_frac_a * n))
+    ib = max(ia+2, round(Int, t_frac_b * n))
+    im = div(ia + ib, 2)
+    dt_half = t[im] - t[ia]
+
+    r1 = Delta[im] / Delta[ia]
+    r2 = Delta[ib] / Delta[im]
+
+    # z1 + z2 = r1 + r2,  z1 * z2 = r1 * r2  (Prony relations)
+    S = r1 + r2
+    P = r1 * r2
+    disc = S^2 - 4*P
+    if disc < 0
+        # Complex roots: fall back to single-exponential init
+        return nothing
+    end
+    z1 = (S + sqrt(disc)) / 2
+    z2 = (S - sqrt(disc)) / 2
+
+    # Convert to decay rates
+    g1 = -log(max(abs(z1), 1e-10)) / dt_half
+    g2 = -log(max(abs(z2), 1e-10)) / dt_half
+    if g1 > g2; g1, g2 = g2, g1; end  # ensure g1 < g2
+
+    # Amplitudes from linear system
+    # Delta[ia] = c1*exp(-g1*t[ia]) + c2*exp(-g2*t[ia])
+    # Delta[ib] = c1*exp(-g1*t[ib]) + c2*exp(-g2*t[ib])
+    E = [exp(-g1*t[ia]) exp(-g2*t[ia]); exp(-g1*t[ib]) exp(-g2*t[ib])]
+    c = E \ [Delta[ia]; Delta[ib]]
+
+    return [c[1], g1, c[2], g2, 0.0]  # offset = 0 initially
 end
 ```
 
-**Confidence: HIGH** -- This is standard practice in spectroscopy, NMR relaxometry, and fluorescence lifetime imaging where exponential decay rates are extracted from noisy data with multi-exponential contributions.
+### 5. Richardson Extrapolation (Task 3.2): Pure Arithmetic
 
-### When Single Exponential Fails
+**What's needed:** Combine gap estimates at delta and delta/2: `gap_rich = 2*gap(delta/2) - gap(delta)`.
 
-If the observable has zero overlap with the gap eigenmode (`c_2 = 0`), the fitted rate will correspond to `lambda_3` or a later eigenvalue. This is why fitting multiple observables (ZZ correlations + energy) is essential -- at least one will have non-zero gap overlap.
+**Stack decision: One-line formula. No dependency.**
 
-**Detection:** Compare gap estimates across observables. If they agree, the estimate is the true gap. If they disagree, the smallest positive fitted rate (closest to zero) is the best gap estimate, because faster rates indicate the observable couples to higher modes.
-
-## What NOT to Add
-
-| Avoid | Why | What to Do Instead |
-|-------|-----|-------------------|
-| **Bootstrap.jl** for confidence intervals | LsqFit already provides analytically-derived `confidence_interval` from the Jacobian covariance matrix. Bootstrap resampling would require either (a) storing per-trajectory data (massive memory for ntraj=10000+), or (b) re-running trajectories (computationally prohibitive). The Jacobian-based CI is standard and appropriate for this application. | Use `confidence_interval(fit, alpha)` from LsqFit. If Jacobian-based CIs are insufficient (e.g., highly non-Gaussian residuals), implement a simple residual bootstrap on the fit residuals, which requires no extra package. |
-| **Optim.jl for custom fitting** | Already a dependency, but LsqFit wraps the Levenberg-Marquardt algorithm with purpose-built curve fitting infrastructure (Jacobian management, covariance estimation, confidence intervals). Reimplementing this with raw Optim would be error-prone and redundant. | Use LsqFit which internally uses NLSolversBase (same optimization base as Optim). |
-| **SignalDecomposition.jl / Prony method packages** | Prony and matrix pencil methods are theoretically superior for multi-exponential decomposition, but (a) no mature Julia package exists, (b) the single-exponential fit with window selection is sufficient for gap estimation, (c) Prony methods require equispaced samples (which we have) but are notoriously sensitive to noise without careful SVD-based regularization. | Fit single exponential with window selection. If multi-exponential decomposition is needed later, implement a simple SVD-based Prony method in ~50 lines rather than adding an external dependency. |
-| **GLM.jl / StatsModels.jl** | These are for linear statistical models and generalized linear models. The exponential decay fit is inherently nonlinear. | Use LsqFit for nonlinear fitting. |
-| **Measurements.jl** | Propagates uncertainties through calculations via dual numbers. Elegant but heavyweight for this use case where we only need CI on one parameter (the gap). | Use `standard_error(fit)[2]` from LsqFit directly. |
-| **Multi-exponential fit (fitting 2+ decay rates)** | Tempting for extracting lambda_2 AND lambda_3. But 6+ parameter fits (A1, gap1, A2, gap2, A3, c) on noisy data are notoriously ill-conditioned. The gap/lambda_3 ratio determines identifiability; for Lindbladians this ratio is often < 2, making the two rates nearly indistinguishable from noisy data. | Fit single exponential with late-time window. Extract gap from the dominant late-time decay. Cross-validate against exact Arpack eigenvalues. |
-| **Distributions.jl as direct dependency** | It is a transitive dependency of LsqFit. Do not import it directly in QuantumFurnace -- the confidence interval computation happens inside LsqFit. | Let LsqFit handle the t-distribution internally. If you ever need Distributions directly (e.g., for custom statistical tests), add it then. |
-
-## Recommended Stack Summary
-
-### Production Dependencies to ADD to `[deps]`
-
-| Package | UUID | Purpose |
-|---------|------|---------|
-| LsqFit | `2fda8390-95c7-5789-9bda-21331edee243` | Nonlinear curve fitting for exponential decay gap estimation |
-
-That is **one** new direct dependency. The transitive deps (Distributions, ForwardDiff, NLSolversBase, StatsAPI) are either already resolved or lightweight and standard.
-
-### No New Test Dependencies
-
-HypothesisTests and StatsBase (already in test extras) provide everything needed for validating gap estimates against exact eigenvalues.
-
-## Installation
+**Confidence: HIGH** -- This is literally one line of arithmetic.
 
 ```julia
-using Pkg
-Pkg.activate(".")
-Pkg.add("LsqFit")
+gap_richardson = 2 * gap_half_delta - gap_delta
+sigma_richardson = sqrt(4 * sigma_half_delta^2 + sigma_delta^2)
 ```
 
-Concrete `Project.toml` additions:
+**Why NOT Richardson.jl:** The Richardson.jl package (v1.4.0, Dec 2020) is designed for adaptive extrapolation of scalar functions with automatic convergence detection. Our use case is a one-shot linear extrapolation from two or three points -- literally `2*f(h/2) - f(h)`. Adding a package dependency for this would be absurd. Richardson.jl would be useful if we were doing higher-order Richardson with automatic order detection, but the instructions explicitly describe the simple two-point formula.
+
+### 6. Automatic Fitting Window Selection (Task 3.3): SNR + Stability
+
+**What's needed:**
+- t_max: last time where SNR(t) = |Delta(t)| / sigma_Delta(t) > 3
+- t_min: stability test -- sweep t_min, look for plateau in fitted g1
+
+**Stack decision: Pure Julia loops and array operations. Statistics.std for variance. No new dependency.**
+
+**Confidence: HIGH** -- This is iterative fitting with varying parameters, all using existing LsqFit infrastructure.
+
+SNR computation requires per-timepoint variance from the bootstrap batches. This feeds directly into the batch-level data collection discussed in section 3 above.
+
+### 7. Symmetry Sector Labeling (Task 4.1): LinearAlgebra + Eigenbasis Indexing
+
+**What's needed:** Compute S_z quantum numbers for each energy eigenstate, then label each Lindbladian eigenvector by the Delta_S_z sectors it has support in.
+
+**Stack decision: Pure Julia. Pauli Z matrix already exists in the codebase (see `src/hamiltonian.jl` exports `Z`). Total S_z = sum of Z_i/2 for each eigenstate.**
+
+**Confidence: HIGH** -- The only operation is computing Z_total = sum(pad_term(Z, i, n)) in the energy eigenbasis, then checking which (i,j) blocks of each Lindbladian eigenvector (reshaped to dim x dim) have non-zero weight.
+
+```julia
+# Compute S_z for each energy eigenstate
+Z_total = sum(pad_term([Z], i, n_qubits) for i in 1:n_qubits)  # existing pad_term
+Sz_values = [real(hamiltonian.eigvecs[:, k]' * Z_total * hamiltonian.eigvecs[:, k]) / 2
+             for k in 1:dim]
+
+# For each Lindbladian eigenvector reshaped to dim x dim:
+# entry (i,j) corresponds to |E_i><E_j| with Delta_Sz = Sz[i] - Sz[j]
+function label_symmetry_sector(eigvec, dim, Sz_values; threshold=1e-6)
+    R = reshape(eigvec, dim, dim)
+    delta_sz_weights = Dict{Float64, Float64}()
+    for i in 1:dim, j in 1:dim
+        w = abs2(R[i, j])
+        w < threshold && continue
+        dsz = round(Sz_values[i] - Sz_values[j], digits=6)
+        delta_sz_weights[dsz] = get(delta_sz_weights, dsz, 0.0) + w
+    end
+    return delta_sz_weights
+end
+```
+
+### 8. Dashboard/Summary Figures (Task 5.1): Plots.jl
+
+**What's needed:** 7-panel diagnostic figure with eigenvalue spectrum, defect metrics, overlap coefficients, effective rate plot, delta-convergence, fit overlay, and t_min stability.
+
+**Stack decision: Use Plots.jl (already in [extras] with compat bounds). Generate figures in diagnostic scripts, not in production src/.**
+
+**Confidence: HIGH** -- Plots.jl is already a project dependency (extras section), already has compat bounds (`Plots = "1"`), and the docs Project.toml already uses it.
+
+**Why Plots.jl and not CairoMakie:**
+
+| Factor | Plots.jl | CairoMakie |
+|--------|----------|------------|
+| Already in Project.toml | YES (extras) | NO |
+| Multi-panel layout | `plot(p1, p2, ..., layout=(r,c))` -- simple | `Figure()`/`Axis` -- more flexible but more verbose |
+| Publication quality | Good with GR backend (default) | Better (vector graphics focus) |
+| Dependency weight | GR backend is lightweight | CairoMakie 0.15.8 brings Makie 0.24.8, Cairo, FreeType, GeometryBasics + many transitive deps |
+| Learning curve for team | Low (already used in docs) | Higher (scene graph model) |
+| Julia compat | Plots 1.x works with Julia 1.11+ | CairoMakie 0.15.8 requires Julia 1.3+ (fine) but Makie ecosystem adds ~30 packages |
+
+**Verdict: Use Plots.jl.** The diagnostic figures are for internal validation and paper drafts, not for interactive dashboards. Plots.jl's `plot(; layout=...)` handles the 7-panel figure adequately. If publication-quality vector graphics are needed later, CairoMakie can be considered, but adding ~30 new transitive dependencies for slightly nicer fonts is not justified at this stage.
+
+**Plots.jl usage pattern for dashboard:**
+
+```julia
+using Plots
+
+# Panel A: Eigenvalue spectrum
+p1 = scatter(real.(eigs), imag.(eigs); xlabel="Re(lambda)", ylabel="Im(lambda)",
+             marker_z=delta_sz_labels, title="Lindbladian Spectrum")
+
+# Panel D: Effective rate plot
+p4 = plot(t_eff, lambda_eff; ribbon=sigma_eff, xlabel="t", ylabel="lambda_eff(t)",
+          title="Effective Rate")
+hline!([exact_gap]; linestyle=:dash, label="Exact gap")
+
+# Combine into dashboard
+dashboard = plot(p1, p2, p3, p4, p5, p6, p7; layout=(4, 2), size=(1200, 1600))
+savefig(dashboard, "diagnostic_dashboard.png")
+```
+
+---
+
+## What Arpack.jl Can Do for Extended Eigenvalue Computation
+
+The existing `run_lindbladian` uses `eigs(liouv, nev=2, sigma=shift, tol=1e-12)` to get the two smallest-magnitude eigenvalues. For v1.4 Task 1.1, we need the leading 20-30 eigenvalues and their eigenvectors.
+
+**Stack decision: Keep Arpack.jl. Increase nev to 20-30. No change to dependency.**
+
+**Confidence: HIGH** -- Arpack's shift-invert mode supports arbitrary nev up to dim-1.
+
+```julia
+# Current (v1.3):
+eigvals, eigvecs = eigs(liouv, nev=2, sigma=shift, tol=1e-12)
+
+# New (v1.4):
+eigvals, eigvecs = eigs(liouv, nev=30, sigma=shift, tol=1e-12)
+# Returns 30 eigenvalues nearest to shift, with their eigenvectors.
+```
+
+For n=6, the Lindbladian is 4096 x 4096 (dense). Arpack with shift-invert at this size takes ~seconds and is well within capabilities. No need for KrylovKit.jl or any other eigenvalue solver.
+
+**Why NOT switch to KrylovKit.jl:**
+KrylovKit.jl (v0.8+) does NOT support shift-invert mode. Its `eigsolve` only finds extremal eigenvalues (largest or smallest magnitude/real part). For finding eigenvalues near zero in a non-Hermitian Lindbladian, shift-invert is essential. KrylovKit's documentation explicitly warns: "since no (shift-and)-invert is used, this will only be successful if you somehow know that eigenvalues close to zero are also close to the periphery of the spectrum." For our Lindbladian, eigenvalues near zero are interior eigenvalues, NOT extremal. Arpack's Fortran-based shift-invert is the right tool here.
+
+KrylovKit.jl would be relevant for n=8+ (dim=65536) where the Lindbladian is too large to factorize for shift-invert. That's deferred to a future milestone (Task 5.3 is explicitly deferred in the instructions).
+
+---
+
+## Dependencies to NOT Add
+
+| Package | Why Evaluated | Why NOT Adding |
+|---------|---------------|----------------|
+| **Bootstrap.jl** | Bootstrap resampling for error bars on lambda_eff and gap estimates | Our bootstrap is non-standard (batch-level trajectory resampling + re-fitting). A 10-line loop with `StatsBase.sample` gives full control. Bootstrap.jl's API is designed for standard statistic-on-sample workflows. |
+| **Richardson.jl** (v1.4.0) | Richardson extrapolation for delta-convergence | One-line formula: `2*gap(delta/2) - gap(delta)`. Adding a dependency for this is absurd overhead. Richardson.jl's adaptive polynomial extrapolation is overkill for a fixed two-point linear combination. |
+| **KrylovKit.jl** | Alternative sparse eigenvalue solver | No shift-invert mode. Cannot find eigenvalues near zero for non-Hermitian Lindbladian. Arpack is the right tool for n<=6. |
+| **CairoMakie.jl** (0.15.8) | Publication-quality vector graphics | Adds ~30 transitive dependencies (Makie 0.24.8, Cairo, FreeType, GeometryBasics, etc.). Plots.jl already in extras and sufficient for diagnostic figures. Consider for paper polish milestone only. |
+| **SignalDecomposition.jl** | Prony/ESPRIT method for multi-exponential decomposition | Immature Julia package. Prony two-point initialization is ~20 lines of arithmetic. No external package needed. |
+| **Measurements.jl** | Uncertainty propagation | Heavyweight for propagating bootstrap error through Richardson formula. Manual formula `sigma_rich = sqrt(4*sigma1^2 + sigma2^2)` is simpler and more transparent. |
+| **Statistics.jl** (stdlib) as production dep | mean, std for bootstrap/SNR | Already available as stdlib. Use in scripts/tests only (already works via `using Statistics`). Not needed as `[deps]` entry since diagnostic functions can take pre-computed statistics as arguments. |
+
+---
+
+## Recommended Stack Changes Summary
+
+### Production Dependencies [deps]: NO CHANGES
+
+The existing dependency set is sufficient:
+
+| Package | Status | Role in v1.4 |
+|---------|--------|--------------|
+| LsqFit (0.15) | Already present | Two-exponential fitting (new model function, same API) |
+| LinearAlgebra (stdlib) | Already present | Matrix fourth root, opnorm for defect, full eigendecomposition |
+| Arpack (0.5.4) | Already present | 20-30 eigenvalue extraction (increase nev) |
+| SparseArrays (stdlib) | Already present | Lindbladian storage (no change) |
+
+### Test/Script Dependencies [extras]: NO CHANGES
+
+| Package | Status | Role in v1.4 |
+|---------|--------|--------------|
+| Plots (1) | Already present | Diagnostic dashboard figures |
+| StatsBase (0.34) | Already present | Bootstrap index sampling via `sample(replace=true)` |
+| HypothesisTests (0.11) | Already present | Gap estimate statistical validation |
+| StableRNGs (1) | Already present | Reproducible bootstrap seeds |
+
+### Project.toml Changes: NONE
 
 ```toml
-[deps]
-# ... existing deps ...
-LsqFit = "2fda8390-95c7-5789-9bda-21331edee243"
-
-[compat]
-# ... existing compat ...
-LsqFit = "0.15"
+# No changes to [deps], [compat], [extras], or [targets]
+# Everything needed is already declared.
 ```
 
-**Note on compat range:** Pin to `"0.15"` (not `"0.14, 0.15"`) because v0.15 introduced important improvements to the Levenberg-Marquardt implementation and parameter bounds handling. The package requires Julia >= 1.6, well within the project's Julia >= 1.11 requirement.
+---
+
+## Integration Points with Existing Code
+
+### New Files (src/)
+
+| New File | Dependencies Used | Purpose |
+|----------|-------------------|---------|
+| `src/diagnostics.jl` | LinearAlgebra (eigen, opnorm, Hermitian, Diagonal) | Anti-Hermitian defect, symmetry sector labeling, exact reference data |
+| `src/effective_rate.jl` | None (pure arithmetic) | lambda_eff(t) computation, SNR computation |
+| `src/two_exp_fit.jl` | LsqFit (curve_fit, confint, stderror, coef) | Two-exponential model definition, Prony initialization, fitting window selection |
+| `src/richardson.jl` | None (pure arithmetic) | Richardson extrapolation formula and error propagation |
+
+### New Files (scripts/ or experiments/)
+
+| New File | Dependencies Used | Purpose |
+|----------|-------------------|---------|
+| `experiments/diagnostics/run_diagnostics.jl` | Plots, StatsBase, Statistics | Full diagnostic pipeline: run trajectories, compute diagnostics, generate dashboard |
+| `experiments/diagnostics/bootstrap_analysis.jl` | StatsBase (sample), Statistics (mean, std) | Batch-level bootstrap for error bars |
+
+### Modified Files (src/)
+
+| File | Change | Stack Impact |
+|------|--------|--------------|
+| `src/QuantumFurnace.jl` | Add `include` for new files, add exports for new public functions | No new `using` statements needed |
+| `src/furnace.jl` | Modify `run_lindbladian` to support `nev` parameter (default 2, allow 20-30) | Same Arpack API, just parameterize `nev` |
+| `src/fitting.jl` | Keep existing `fit_exponential_decay` unchanged. New two-exponential functions go in separate file. | No modification to existing LsqFit usage |
+
+---
+
+## Numerical Considerations
+
+### Matrix Fourth Root Stability
+
+For the anti-Hermitian defect computation, rho^{-1/4} involves inverting the fourth root of potentially small eigenvalues:
+
+| Scenario | Smallest Gibbs Eigenvalue | rho^{-1/4} Magnitude | Risk |
+|----------|---------------------------|----------------------|------|
+| n=4, beta=1 | ~0.04 | ~2.2 | None |
+| n=6, beta=1 | ~0.003 | ~4.3 | None |
+| n=6, beta=5 | ~1e-10 | ~5600 | Moderate (amplifies numerical errors in Lindbladian) |
+| n=6, beta=10 | ~1e-22 | ~1e5 | HIGH (similarity transform numerically meaningless) |
+
+**Recommendation:** Compute the condition number of the similarity transform (max/min of rho^{-1/4} diagonal entries). If > 1e8, warn that the defect metric is unreliable. For the Heisenberg chain at beta=1, this is not an issue.
+
+### Two-Exponential Fit Conditioning
+
+The condition of a two-exponential fit depends on the ratio g2/g1. If g2/g1 < 2, the two exponentials are nearly indistinguishable and the Jacobian becomes ill-conditioned, leading to:
+- Non-convergence of Levenberg-Marquardt
+- Huge confidence intervals
+- Rate estimates that swap (g1 and g2 exchange roles)
+
+**Mitigation built into LsqFit:** The `maxIter` parameter (default 1000) prevents infinite loops. The `confint` function returns Inf when the Jacobian is rank-deficient (the codebase already handles this for single-exponential in `fitting.jl` lines 201-208). The same `try/catch LinearAlgebra.SingularException` pattern should be applied to two-exponential fits.
+
+### Bootstrap Sample Size
+
+For K batches, the number of distinct bootstrap samples is `binomial(2K-1, K)`. With K=200 and N_boot=200, each bootstrap resample gives an independent gap estimate. The standard error on the bootstrap SE itself is ~SE/sqrt(2*N_boot), so N_boot=200 gives ~5% precision on the error estimate. Sufficient for diagnostic purposes.
+
+---
 
 ## Alternatives Considered
 
-| Recommended | Alternative | When to Use Alternative |
-|-------------|-------------|-------------------------|
-| LsqFit.jl `curve_fit` | Optim.jl + manual Jacobian | Only if you need a custom loss function (e.g., robust L1 loss instead of L2). For standard least squares, LsqFit is strictly better because it handles Jacobian computation, covariance estimation, and confidence intervals automatically. |
-| LsqFit.jl `confidence_interval` | Manual bootstrap resampling | Only if residuals are severely non-Gaussian (would indicate a model misspecification rather than a statistics problem). For Monte Carlo trajectory data with sufficient ntraj, the central limit theorem ensures approximately Gaussian residuals. |
-| Single exponential fit with window selection | Multi-exponential fit via Prony/ESPRIT | Only if you need to extract multiple eigenvalues simultaneously. For gap estimation alone, the single exponential approach is more robust and well-conditioned. Consider this for a future milestone if eigenvalue spectrum characterization is needed. |
-| Unweighted initial fit | Variance-weighted fit from sub-batches | Add weighting as a refinement AFTER the unweighted approach is validated. Weighting requires either storing per-trajectory-batch data or modifying run_trajectories to return variance estimates. |
-| LsqFit.jl | SciPy via PythonCall.jl | Never. Adding a Python dependency for curve fitting when a mature pure-Julia solution exists is unjustifiable overhead. |
+| Category | Recommended | Alternative | Why Not |
+|----------|-------------|-------------|---------|
+| Eigenvalues | Arpack.jl (shift-invert) | KrylovKit.jl | No shift-invert; cannot target interior eigenvalues |
+| Eigenvalues | Arpack.jl | ArnoldiMethod.jl | Pure Julia but also no shift-invert mode |
+| Two-exp fitting | LsqFit.jl | Optim.jl + manual Jacobian | LsqFit handles Jacobian, CIs, and convergence tracking. Reimplementing is error-prone. |
+| Two-exp fitting | LsqFit.jl | Custom IRLS/Prony standalone | Prony only for initialization; LsqFit for refinement is standard practice |
+| Bootstrap | StatsBase.sample + loop | Bootstrap.jl | Non-standard use case (batch resampling + refitting); 10-line loop is clearer |
+| Richardson | Manual formula | Richardson.jl | One-line computation; package adds dependency for no benefit |
+| Plotting | Plots.jl (GR backend) | CairoMakie.jl | ~30 extra transitive deps; Plots.jl already in project, sufficient quality |
+| Plotting | Plots.jl | UnicodePlots.jl | No file output; terminal-only; not suitable for paper figures |
+| Matrix power | eigen + diagonal ^ 0.25 | General `A^0.25` operator | Exploiting known diagonal structure in eigenbasis is more efficient and numerically stable |
 
-## Stack Patterns by Use Case
-
-**If estimating the gap for n=4 (dim=16, validation target):**
-- Run ntraj >= 5000 with save_every = 10, total_time = 5/expected_gap
-- Unweighted single exponential fit on late-time window
-- Cross-validate against exact Arpack gap from `run_lindbladian`
-- LsqFit confidence_interval gives error bars on the estimate
-
-**If estimating the gap for n=6 (dim=64, validation target):**
-- Run ntraj >= 10000 with save_every = 20, total_time = 5/expected_gap
-- Same fitting approach as n=4
-- Exact Arpack gap still available (64^2 = 4096 dim Liouvillian)
-- May need weighted fit if signal-to-noise is poor at late times
-
-**If estimating the gap for n=8+ (dim=256+, where Arpack is infeasible):**
-- This is the production use case: trajectory-based gap estimation IS the method
-- Run ntraj >= 50000 with save_every = 50
-- Fit multiple observables (all ZZ correlations + energy)
-- Take gap estimate as minimum fitted rate across observables with good fit quality
-- No exact cross-validation available; rely on agreement across observables and CI overlap
+---
 
 ## Version Compatibility
 
-| Package | Compatible With | Notes |
-|---------|-----------------|-------|
-| LsqFit 0.15.1 | Julia >= 1.6 | Latest stable (April 2025). Pure Julia. No binary dependencies. |
-| LsqFit 0.15.1 | Distributions >= 0.18 | LsqFit compat allows 0.18-0.25. Project will resolve 0.25.x. |
-| LsqFit 0.15.1 | ForwardDiff >= 0.10 or 1.0 | Already in Manifest via Optim. No conflict. |
-| LsqFit 0.15.1 | NLSolversBase 7.5 | Already in Manifest via Optim. No conflict. |
-| LsqFit 0.15.1 | StatsAPI 1.x | Already in Manifest. No conflict. |
-| Distributions 0.25.x | Julia 1.11, 1.12 | Verified: docs generated with Julia 1.11.7. |
+All v1.4 features use existing packages at their current versions. No version bumps needed.
 
-**No version conflicts expected.** The shared transitive dependencies (ForwardDiff, NLSolversBase, StatsAPI) are already resolved in the Manifest.toml via Optim. Adding LsqFit will not trigger version conflicts.
+| Package | Current Version | v1.4 API Used | Compatibility |
+|---------|----------------|---------------|---------------|
+| LsqFit | 0.15 | `curve_fit` with 5-param model, `confint`, `stderror`, `coef` | Same API as single-exponential. Verified from v0.15 docs. |
+| Arpack | 0.5.4 | `eigs(L; nev=30, sigma=shift)` | `nev` parameter supported since Arpack inception. |
+| LinearAlgebra | stdlib (Julia 1.11) | `eigen(Hermitian(...))`, `opnorm`, `Diagonal`, `norm` | All standard stdlib functions. |
+| Plots | 1 | `plot(layout=...)`, `scatter`, `hline!`, `savefig` | Standard Plots.jl API. |
+| StatsBase | 0.34 | `sample(1:N, N; replace=true)` | Core StatsBase function, stable since v0.30+. |
+| Statistics | stdlib | `mean`, `std`, `var` | Standard stdlib functions. |
+
+**No version conflicts.** No new packages to resolve. No compat bound changes needed.
+
+---
 
 ## Sources
 
-- [LsqFit.jl GitHub repository](https://github.com/JuliaNLSolvers/LsqFit.jl) -- v0.15.1 (April 2025), release history, dependency list. HIGH confidence.
-- [LsqFit.jl official documentation](https://julianlsolvers.github.io/LsqFit.jl/latest/) -- API reference, tutorials. HIGH confidence.
-- [LsqFit.jl Getting Started](https://julianlsolvers.github.io/LsqFit.jl/latest/getting_started/) -- confidence_interval, standard_error, estimate_covar API. HIGH confidence.
-- [LsqFit.jl Tutorial](https://julianlsolvers.github.io/LsqFit.jl/latest/tutorial/) -- Exponential model example, parameter bounds, weighted fitting. HIGH confidence.
-- [LsqFit.jl Project.toml](https://raw.githubusercontent.com/JuliaNLSolvers/LsqFit.jl/master/Project.toml) -- Dependencies: Distributions, ForwardDiff, NLSolversBase, StatsAPI, LinearAlgebra, Printf. Julia >= 1.6. HIGH confidence.
-- [Distributions.jl v0.25 docs](https://juliastats.org/Distributions.jl/v0.25/) -- Generated with Julia 1.11.7, confirming compatibility. HIGH confidence.
-- [Distributions.jl v0.25.123 on Zenodo](https://zenodo.org/records/18145493) -- Latest release Jan 2026. HIGH confidence.
-- [HypothesisTests.jl parametric tests](https://juliastats.org/HypothesisTests.jl/stable/parametric/) -- OneSampleTTest for gap validation. HIGH confidence.
-- [Bootstrap.jl](https://github.com/juliangehring/Bootstrap.jl) -- Evaluated but not recommended (LsqFit CI is sufficient). HIGH confidence evaluation.
-- [Julia Discourse: weighted LsqFit](https://discourse.julialang.org/t/how-to-do-weighted-least-squares-fit-with-lsqfit-jl/61136) -- Weight parameter usage patterns. MEDIUM confidence.
-- Standard exponential decay fitting methodology from NMR/spectroscopy literature -- log-linear initial guess, window selection, multi-exponential considerations. HIGH confidence (textbook methods).
+- [Julia LinearAlgebra documentation](https://docs.julialang.org/en/v1/stdlib/LinearAlgebra/) -- eigen, Hermitian, opnorm, Diagonal. HIGH confidence.
+- [LsqFit.jl official documentation](https://julianlsolvers.github.io/LsqFit.jl/latest/) -- curve_fit API, bounds, confidence intervals. HIGH confidence.
+- [LsqFit.jl Getting Started](https://julianlsolvers.github.io/LsqFit.jl/latest/getting_started/) -- Multi-parameter models, weighted fitting. HIGH confidence.
+- [KrylovKit.jl eigenvalue problems](https://jutho.github.io/KrylovKit.jl/stable/man/eig/) -- Confirmed NO shift-invert mode. Quote: "since no (shift-and)-invert is used, this will only be successful if you somehow know that eigenvalues close to zero are also close to the periphery of the spectrum." HIGH confidence.
+- [Arpack.jl documentation](https://arpack.julialinearalgebra.org/latest/) -- eigs API with sigma (shift-invert) and nev parameters. HIGH confidence.
+- [Arpack.jl GitHub](https://github.com/JuliaLinearAlgebra/Arpack.jl) -- v0.5.4, Julia wrapper for arpack-ng Fortran library. HIGH confidence.
+- [Richardson.jl GitHub](https://github.com/JuliaMath/Richardson.jl) -- v1.4.0 (Dec 2020). Only dependency: LinearAlgebra. Evaluated and rejected (overkill for one-line formula). HIGH confidence.
+- [Bootstrap.jl GitHub](https://github.com/juliangehring/Bootstrap.jl) -- Evaluated and rejected (non-standard use case). HIGH confidence.
+- [Plots.jl vs Makie.jl discussion](https://discourse.julialang.org/t/what-are-the-biggest-differences-between-makie-jl-and-plots-jl/76643) -- Ecosystem comparison. MEDIUM confidence (community discussion, not official).
+- [CairoMakie.jl in Makie monorepo](https://github.com/MakieOrg/Makie.jl/tree/master/CairoMakie) -- v0.15.8, requires Makie 0.24.8. Evaluated and deferred. HIGH confidence.
+- [Makie.jl releases](https://github.com/JuliaPlots/Makie.jl/releases) -- v0.24.8 (Dec 5, 2024). HIGH confidence.
+- [StatsBase.jl documentation](https://juliastats.org/StatsBase.jl/stable/) -- sample function with replace keyword. HIGH confidence.
+- [Prony's method Wikipedia](https://en.wikipedia.org/wiki/Prony%27s_method) -- Mathematical foundation for two-exponential initialization. HIGH confidence (textbook method).
+- Eigendecomposition-based matrix power: f(A) = V * f(Lambda) * V^{-1} for diagonalizable A. Standard numerical linear algebra (Golub & Van Loan). HIGH confidence.
+- [Julia Discourse: sparse eigenvalues](https://discourse.julialang.org/t/suggestions-needed-diagonalizing-large-hermitian-sparse-matrix/96580) -- Comparison of Arpack, KrylovKit, ArnoldiMethod for sparse eigenproblems. MEDIUM confidence.
 
 ---
-*Stack research for: QuantumFurnace.jl Spectral Gap Estimation from Trajectory Observable Decay*
-*Researched: 2026-02-16*
+*Stack research for: QuantumFurnace.jl v1.4 Spectral Gap Refinement Diagnostics*
+*Researched: 2026-02-19*

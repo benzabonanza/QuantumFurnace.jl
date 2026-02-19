@@ -1,481 +1,483 @@
-# Domain Pitfalls: Spectral Gap Estimation from Trajectory Observables
+# Domain Pitfalls: Spectral Gap Refinement Diagnostics
 
-**Domain:** Adding spectral gap estimation via exponential fitting to observable decay curves from quantum trajectory simulations, cross-validated against exact Liouvillian eigenvalues
-**Researched:** 2026-02-16
-**Confidence:** HIGH (codebase analysis + established numerical analysis + quantum open systems literature)
+**Domain:** Adding two-exponential fitting, Richardson extrapolation, effective rate plots, bootstrap error bars, anti-Hermitian defect diagnosis, symmetry sector analysis, and automatic fitting window selection to an existing quantum trajectory simulator (QuantumFurnace.jl v1.3)
+**Researched:** 2026-02-19
+**Confidence:** HIGH (codebase analysis of fitting.jl/gap_estimation.jl/trajectories.jl + established numerical analysis + lessons from Quick-22 through Quick-32 investigations)
+
+**Relationship to prior research:** This document supersedes the v1.3 research PITFALLS.md (2026-02-16) for the v1.4 milestone. Many v1.3 pitfalls remain relevant (basis mismatch, noise floor, symmetry selection) but are now understood empirically. This document focuses on **new** pitfalls specific to the seven features being added in v1.4, plus integration pitfalls from connecting them to the existing system.
 
 ---
 
 ## Critical Pitfalls
 
-Mistakes that cause wrong spectral gap estimates, silent numerical failures, or fundamentally flawed cross-validation.
+Mistakes that produce silently wrong spectral gap estimates, introduce false conclusions about which error source dominates, or require rewrites.
 
 ---
 
-### Pitfall 1: Confusing Complex Liouvillian Eigenvalue with Real Observable Decay Rate
+### Pitfall 1: Two-Exponential Fit Parameter Non-Identifiability (Sloppy Direction)
 
 **What goes wrong:**
-The existing `run_lindbladian()` in `furnace.jl` (line 22) computes `spectral_gap = eigvals_near_zero[gap_index]`, which is a `Complex{T}` value -- the second eigenvalue of the Liouvillian superoperator. The Liouvillian is non-Hermitian, so its eigenvalues are generically complex: `lambda_2 = -gamma + i*omega` where `gamma > 0` is the decay rate and `omega` is an oscillation frequency. The observable decay rate from trajectory fitting will be a real number `gamma_fit`. The cross-validation must compare `gamma_fit` against `-Re(lambda_2)`, NOT against `abs(lambda_2)` or `real(lambda_2)`.
+The two-exponential model `f(t) = A1*exp(-g1*t) + A2*exp(-g2*t) + C` has 5 parameters. When the two decay rates g1 and g2 are within a factor of ~2 of each other, the model becomes structurally non-identifiable: many different (A1,g1,A2,g2) combinations produce nearly identical residuals. The Levenberg-Marquardt optimizer (LsqFit.jl `curve_fit`) converges to whichever local minimum is closest to the initial guess, and the resulting g1 can vary by 50-300% depending on initialization.
 
 **Why it happens:**
-The `LindbladianResult` struct stores `spectral_gap::Complex{T}` (structs.jl line 263). The existing simulation script `main_liouv.jl` (line 130) prints `abs(real(liouv_result.spectral_gap))`, which happens to be correct for the comparison but hides the sign convention. When writing the cross-validation, it is natural to compare `abs(spectral_gap)` (the modulus) against the fitted decay rate, which would be WRONG whenever `Im(lambda_2) != 0` because `|lambda_2| = sqrt(gamma^2 + omega^2) > gamma`.
+This is a fundamental property of sums of exponentials, not a software bug. The condition number of the Jacobian matrix at the solution grows as `~1/(g2-g1)^2` when the rates are close. For the n=4 Heisenberg chain, the exact spectral gap is g1=0.173 and the second decay rate is g2~0.35 (ratio ~2x), which is right at the boundary of identifiability. The Hessian has a "sloppy direction" where A1 and A2 can trade off against g1 and g2 with almost no change in the cost function.
 
-**The physics:**
-For a Lindbladian L, the semigroup `exp(Lt)` has eigenvalues `exp(lambda_k * t)`. For an observable `O`, the deviation from steady state decays as:
+**Specific manifestation in QuantumFurnace:** The existing `fit_exponential_decay` in fitting.jl uses `_log_linear_initial_guess` which estimates parameters from the tail (lines 73-101). For a two-exponential model, this approach gives the SLOW rate reliably but gives an unreliable fast rate, because the tail is dominated by the slow component. The fast component's amplitude and rate are determined almost entirely by the initial transient, which has low signal-to-noise in trajectory data.
 
-```
-<O>(t) - <O>_ss = sum_k c_k * exp(lambda_k * t) = sum_k c_k * exp(-gamma_k * t) * exp(i * omega_k * t)
-```
+**How to avoid:**
+1. **Constrain g2 > g1 explicitly.** Without this constraint, the optimizer can swap the two components, doubling the effective number of local minima. Use LsqFit.jl parameter bounds: `lower = [-Inf, 0.0, -Inf, ?, -Inf]` where `?` is `g1 + epsilon` (requires sequential fitting).
+2. **Two-stage initialization.** First fit single-exponential to the tail (t > 0.5*T) to get g1_init. Then fit single-exponential to `data - A1_init*exp(-g1_init*t)` in the head (t < 0.3*T) to get g2_init. Use (A1_init, g1_init, A2_init, g2_init, C_init) as the starting point.
+3. **Profile likelihood for g1.** Fix g1 at a grid of values, optimize over (A1, A2, g2, C) for each, and plot the profile likelihood. The minimum of this profile gives g1 with reliable uncertainty even when the full 5D landscape is sloppy.
+4. **Accept that g2 is unreliable.** For spectral gap estimation, g1 is what matters. Report g2 with an explicit "LOW confidence" flag and do NOT use g2 for Richardson extrapolation or other downstream calculations.
+5. **Implement a separation test.** If the fitted g2/g1 < 1.5, flag the fit as "rates too close for reliable two-exponential decomposition." Fall back to single-exponential tail fit.
 
-The REAL part of the eigenvalue controls the exponential envelope. If you measure `<O>(t)` from trajectories, the oscillations `exp(i*omega*t)` average out for a real-valued observable, and the dominant visible decay rate is `gamma_1 = -Re(lambda_2)`.
+**Warning signs:**
+- LsqFit.jl `stderror(fit)` reports standard errors on g1 and g2 that are comparable to or larger than the gap between them.
+- Running the fit from 5 different initial guesses gives 5 different (g1, g2) pairs with similar residuals.
+- The covariance matrix `vcov(fit)` has a condition number > 10^6.
+- A1 and A2 have opposite signs (the optimizer is using cancellation to achieve a better fit).
 
-However, for KMS-detailed-balanced Lindbladians (which QuantumFurnace implements), the Liouvillian is self-adjoint with respect to the GNS inner product, meaning all eigenvalues are real and non-positive. So for the exact KMS construction (BohrDomain), `Im(lambda_2) = 0`. But for approximate domains (Energy, Time, Trotter), the detailed balance is approximate, and eigenvalues may have small imaginary parts. The cross-validation must handle both cases.
-
-**Consequences:**
-- Comparing `abs(spectral_gap)` to the fitted rate gives a systematic overestimate of agreement (the modulus is always >= the real part).
-- For TrotterDomain at coarse Trotter steps, `Im(lambda_2)` can be non-negligible, making the discrepancy significant.
-- False confidence in the cross-validation: you think trajectory-based and exact methods agree when they do not.
-
-**Prevention:**
-1. Define the comparison quantity explicitly: `exact_gap = -real(liouv_result.spectral_gap)`. Assert it is positive.
-2. Also record `imag(liouv_result.spectral_gap)` and flag when `|Im/Re| > threshold` (e.g., 0.1), because a large imaginary part means observable oscillations that complicate exponential fitting.
-3. For BohrDomain (exact KMS), assert `abs(imag(spectral_gap)) < 1e-10` as a sanity check.
-4. When the imaginary part is significant, the observable time series will show damped oscillations, not pure exponential decay. The fitting model must account for this (see Pitfall 3).
-
-**Detection:**
-- Print both `real(spectral_gap)` and `imag(spectral_gap)` in every cross-validation.
-- Test: for BohrDomain, verify `imag(spectral_gap) ~= 0`.
-- Test: for TrotterDomain with fine Trotter steps, verify `|Im/Re| < 0.01`.
-
-**Phase to address:** Cross-validation phase -- the very first thing to get right when defining the comparison metric.
+**Phase to address:** Two-exponential fitting implementation (early phase). Must be the FIRST thing validated before using two-exp fits for any downstream diagnostic.
 
 ---
 
-### Pitfall 2: Observable Basis Mismatch -- Eigenbasis vs Computational vs Trotter Basis
+### Pitfall 2: Anti-Hermitian Defect Blow-Up from rho^{-1/4} at Low Temperature
 
 **What goes wrong:**
-The total magnetization observable `M_z = sum_i Z_i` is naturally defined in the computational basis. The trajectory simulation evolves `psi` in the Hamiltonian eigenbasis (for Energy/Time domains) or Trotter eigenbasis (for TrotterDomain). If the observable matrix is constructed in the computational basis but applied to `psi` in the eigenbasis, `<psi|M_z_comp|psi>` gives a wrong expectation value. The decay curve of this wrong observable decays at the wrong rate, and the fitted spectral gap is meaningless.
+The KMS similarity transform uses `rho^{1/4}` and `rho^{-1/4}` to map the Lindbladian to a self-adjoint operator: `L_tilde = rho^{-1/4} * L * rho^{1/4}`. For the Gibbs state `rho = exp(-beta*H) / Z`, the eigenvalues of `rho` are `exp(-beta*E_k) / Z`. At low temperature (beta=10, n=6), the ratio of the smallest to largest eigenvalue of `rho` is `exp(-beta*(E_max - E_min))`. For the Heisenberg chain with n=6, the bandwidth is ~12J, so this ratio is `exp(-120) ~ 10^{-52}`. The `rho^{-1/4}` transform amplifies this by the -1/4 power: `10^{-52*(-1/4)} = 10^{13}`. This means a matrix element of L that couples a high-energy state to a low-energy state gets amplified by a factor of ~10^{13}.
 
 **Why it happens:**
-This is the EXACT same class of bug that caused the v1.2 quick-task 20 crisis: the GNS TrotterDomain test compared a Trotter-basis fixed point against an energy-eigenbasis Gibbs state, producing a spurious gap of 0.83 instead of 0.0807. The existing `build_convergence_observables()` in `convergence.jl` (lines 25-46) correctly transforms ZZ operators into the eigenbasis via `V' * O_comp * V`. The `build_convergence_observables_trotter()` (lines 56-77) correctly uses `V_T' * O_comp * V_T`. But when building a NEW observable (total magnetization), there is high risk of forgetting this transform.
+The similarity transform is mathematically well-defined (rho is positive definite, so rho^{-1/4} exists) but numerically catastrophic. In Float64, machine epsilon is ~10^{-16}. A 10^{13} amplification means that numerical noise at the 10^{-16} level becomes noise at the 10^{-3} level in L_tilde. The anti-Hermitian defect `||L_tilde - L_tilde^dagger|| / ||L_tilde||` will be dominated by this amplified noise, NOT by physical violation of KMS detailed balance.
 
-**The insidious part:**
-If the observable is diagonal in the eigenbasis (like the Hamiltonian `H`), the computational-basis and eigenbasis representations differ only by the unitary transform, and the EXPECTATION VALUE is basis-independent for the correct `psi`. But the MATRIX REPRESENTATION used in `_accumulate_measurements!` (trajectories.jl line 325: `mul!(tmp, observables[i], psi)`) must be in the SAME basis as `psi`. Since `psi` is in the eigenbasis, `observables[i]` must also be in the eigenbasis.
-
-For total magnetization `M_z = sum_i Z_i`:
-- Computational basis: `M_z_comp = sum_i pad_term([Z], num_qubits, i)`
-- Eigenbasis: `M_z_eigen = V' * M_z_comp * V` where `V = hamiltonian.eigvecs`
-- Trotter basis: `M_z_trotter = V_T' * M_z_comp * V_T` where `V_T = trotter.eigvecs`
+**Specific manifestation in QuantumFurnace:** The existing `gibbs_state_in_eigen` (qi_tools.jl line 198) computes the Gibbs state correctly. But `hamiltonian.gibbs` is stored as a `Hermitian` matrix. Computing `rho^{-1/4}` requires eigendecomposition: `rho = V * D * V'`, `rho^{-1/4} = V * D^{-1/4} * V'` where `D^{-1/4} = diag(d_k^{-1/4})`. For d_k ~ 10^{-52}, d_k^{-1/4} ~ 10^{13}. This is computed correctly in principle but the subsequent matrix multiplications lose all precision for components involving small eigenvalues of rho.
 
 **Consequences:**
-- The observable time series looks physically plausible (starts near zero, evolves to some value) but the values are wrong.
-- The fitted decay rate does not correspond to any physical decay mode.
-- Cross-validation against exact spectral gap fails, and the failure is attributed to "statistical noise" rather than a basis error.
-- This bug is particularly hard to catch because `<M_z>` for a random initial state is close to zero in any basis for the Heisenberg chain (symmetry), so the wrong-basis result might pass superficial sanity checks.
+- The normality ratio `||[L_tilde, L_tilde^dagger]|| / ||L_tilde||^2` reports a large anti-Hermitian defect even for the exact KMS Lindbladian (BohrDomain), which is known to be exactly self-adjoint in the GNS inner product. This leads to the false conclusion that the Lindbladian construction has a bug.
+- Any diagnostic that relies on L_tilde (e.g., verifying that eigenvalues of L_tilde are real) will be corrupted.
 
-**Prevention:**
-1. Follow the EXISTING pattern from `build_convergence_observables()`: always transform `O_eigen = V' * O_comp * V`.
-2. Build the total magnetization observable in the SAME function that builds ZZ observables, using the same basis transform.
-3. Add a regression test: for the eigenbasis energy observable `H_eigen`, verify that `tr(gibbs * H_eigen)` matches the analytical Gibbs energy. Then do the same for `M_z_eigen`: verify `tr(gibbs * M_z_eigen) = sum_i <Z_i>_gibbs`. This catches basis mismatches.
-4. For TrotterDomain: use `build_convergence_observables_trotter()` (which uses `V_T`) rather than `build_convergence_observables()` (which uses `V`). Do NOT mix them.
+**How to avoid:**
+1. **Truncate the Gibbs state spectrum.** When computing `rho^{-1/4}`, set a floor on the eigenvalues: `d_k_floor = max(d_k, epsilon_floor)` where `epsilon_floor ~ 1e-12`. This limits the amplification to `(1e-12)^{-1/4} ~ 5600`, which is manageable. Document that this truncation limits the diagnostic to the "thermally accessible" subspace.
+2. **Work in the projected subspace.** Identify the k eigenvalues of rho with `d_k > threshold` (e.g., threshold = 1e-10 * max(d_k)). Project L onto this k-dimensional subspace, then compute the similarity transform in the reduced space. This is mathematically cleaner than truncation.
+3. **Use the normality ratio relative to the projected norm.** Report `||anti-Hermitian part of L_tilde_projected|| / ||L_tilde_projected||` where both norms are in the projected subspace.
+4. **Validate against BohrDomain.** For BohrDomain (exact KMS), the anti-Hermitian defect after projection should be at machine precision (~1e-14). If it is not, the projection threshold is too aggressive. For TrotterDomain, the defect measures the actual KMS violation from Trotterization.
+5. **Report the condition number** `max(d_k)/min(d_k)` and warn when it exceeds 10^{10}.
 
-**Detection:**
-- Compare `<M_z>` from trajectory vs `tr(gibbs * M_z)` analytically. If they disagree at convergence, suspect basis mismatch.
-- For the Heisenberg chain WITHOUT disorder, `<M_z>_gibbs = 0` by SU(2) symmetry. If `<M_z>` from trajectories converges to a nonzero value for the clean chain, something is wrong.
+**Warning signs:**
+- Anti-Hermitian defect > 1e-6 for BohrDomain (should be ~0 for exact KMS).
+- The defect INCREASES when switching from TrotterDomain to BohrDomain (impossible if code is correct).
+- `rho^{-1/4}` matrix has entries > 10^{10}.
 
-**Phase to address:** Observable construction phase -- before ANY trajectory runs with the new observable.
+**Phase to address:** Anti-Hermitian defect diagnosis phase. The truncation/projection strategy must be designed BEFORE computing any similarity transforms.
 
 ---
 
-### Pitfall 3: Fitting Single Exponential to Multi-Exponential Decay
+### Pitfall 3: Effective Rate lambda_eff(t) Divergence at Sign Changes
 
 **What goes wrong:**
-The observable decay `<O>(t) - <O>_ss` is a superposition of ALL Liouvillian eigenmodes, not just the slowest:
-
-```
-<O>(t) - <O>_ss = c_1 * exp(-gamma_1 * t) + c_2 * exp(-gamma_2 * t) + ... + noise
-```
-
-where `gamma_1 < gamma_2 < ...` are the decay rates (negative real parts of Liouvillian eigenvalues). The spectral gap is `gamma_1`. Fitting a single exponential `A * exp(-gamma * t)` to this data gives a `gamma_fit` that is BIASED HIGH -- it is a weighted average of all decay rates, dominated by the fast-decaying components at short times and the slow component at long times.
+The effective rate is defined as `lambda_eff(t) = -d/dt log|Delta(t)|` where `Delta(t) = <O>(t) - <O>_ss` is the observable deviation from steady state. In practice this is computed as `lambda_eff(t_i) = -log|Delta(t_{i+1})/Delta(t_i)| / dt`. When `Delta(t)` passes through zero (sign change due to noise or oscillation), the ratio `Delta(t_{i+1})/Delta(t_i)` becomes negative, and `log(negative)` is undefined. Even near a zero crossing, `|Delta(t_{i+1})/Delta(t_i)|` can be astronomically large or small, producing NaN, +Inf, or -Inf in lambda_eff.
 
 **Why it happens:**
-For a general initial state (like the maximally mixed state) and a general observable (like total magnetization), the coefficients `c_k` can be non-negligible for many eigenmodes. The single-exponential fit minimizes the sum of squared residuals over the entire time range, which means:
-- At short times: the fast modes dominate, pulling `gamma_fit` up.
-- At long times: only the slowest mode survives, but the signal is buried in noise.
-- The least-squares optimum is a compromise that overestimates the spectral gap.
+For trajectory-averaged observables, `Delta(t)` is the mean over N trajectories. At late times when `|Delta(t)|` is comparable to the statistical noise `sigma/sqrt(N)`, the sign of Delta(t) fluctuates randomly between consecutive time points. This happens at `t ~ (1/gap) * log(A * sqrt(N) / sigma)`. For n=4 with gap~0.17, A~1, N=20000, sigma~1: `t ~ 6 * log(141) ~ 30`. Beyond t~30, lambda_eff is dominated by noise.
 
-For the Heisenberg chain at n=4 (dim=16, Liouvillian dim=256), there are 255 non-zero eigenvalues. The spectral gap `gamma_1` might be ~0.08 while the second eigenvalue `gamma_2` might be ~0.15 -- a factor of 2 larger. The observable `M_z` will have overlap with both modes.
+Even at earlier times, the observable may have oscillatory components (from non-zero imaginary parts of Lindbladian eigenvalues, see v1.3 Pitfall 1) that cause Delta(t) to change sign. Multi-exponential decay where the fast component has a different sign from the slow component also causes a zero crossing.
+
+**Specific manifestation in QuantumFurnace:** The existing trajectory infrastructure returns `measurements_mean` as a matrix (convergence.jl). The effective rate plot requires computing `Delta(t) = measurements_mean[i, :] .- O_ss` and then the discrete derivative of `log|Delta|`. A naive implementation will produce NaN at every zero crossing.
 
 **Consequences:**
-- The fitted spectral gap is systematically too large (optimistic).
-- Cross-validation against exact eigenvalue `gamma_1` fails with the fit consistently above the true value.
-- The overestimate gets WORSE with fewer trajectories (more noise at long times, fit dominated by short-time behavior).
+- The effective rate plot has gaps or spikes that look like bugs but are physically meaningful (they indicate the boundary of the usable fitting window).
+- Automatic fitting window selection algorithms that scan lambda_eff for a plateau will crash or produce nonsensical windows if they encounter NaN/Inf.
+- Plotting lambda_eff with NaN values causes gaps in plots that confuse interpretation.
 
-**Prevention:**
-1. **Use late-time fitting only.** Discard the initial transient (t < t_cutoff) and fit only the long-time tail where the slowest mode dominates. The cutoff should be `t_cutoff ~ 3 / gamma_2` (roughly 3 decay times of the second mode). For n=4, this is estimable from the exact Liouvillian. For larger systems, start with a conservative cutoff (e.g., discard the first 50% of the time series).
-2. **Fit log-linear.** Plot `log|<O>(t) - <O>_ss|` vs `t`. At late times this should be linear with slope `-gamma_1`. A linear fit to the log-data in the tail region is more robust than nonlinear exponential fitting.
-3. **Use the exact steady-state value.** Subtract `<O>_ss = tr(gibbs * O)` (known analytically from the Gibbs state) rather than fitting it as a free parameter. This eliminates one degree of freedom and prevents the fitter from absorbing baseline errors into the decay rate.
-4. **Multi-exponential awareness.** If cross-validation fails, try a two-exponential fit `c_1 * exp(-gamma_1 * t) + c_2 * exp(-gamma_2 * t)` and check if `gamma_1` from the two-exponential fit matches the exact spectral gap. But beware: two-exponential fitting is ill-conditioned (see Pitfall 5).
-5. **Observable choice matters.** Choose observables with maximal overlap with the slowest eigenmode. The energy observable `<H>` may or may not have good overlap. The optimal observable is the gap mode itself (`liouv_result.gap_mode`), but this is only known from the exact diagonalization, creating a circularity. In practice, try multiple observables and see which gives the most consistent gap estimate.
+**How to avoid:**
+1. **Guard the log.** Use `lambda_eff(t_i) = -log(max(|Delta(t_{i+1})/Delta(t_i)|, epsilon)) / dt` where `epsilon = 1e-15`. This prevents NaN but produces a large negative lambda_eff at zero crossings.
+2. **Mark invalid points explicitly.** Return lambda_eff as a vector of `Union{Float64, Nothing}` or use NaN with a companion boolean mask `valid[i]`. The plotting and window selection code must respect this mask.
+3. **Compute lambda_eff from a smoothed Delta(t).** Apply a Savitzky-Golay filter or running median to Delta(t) before computing the log-derivative. This suppresses the single-point noise that causes sign flips. BUT: smoothing introduces bias in the effective rate at early times where Delta(t) changes rapidly. Use a smoothing window that is small compared to 1/gap.
+4. **Use absolute value consistently.** Work with `|Delta(t)|` throughout, not `Delta(t)`. The effective rate is well-defined for `|Delta(t)|` as long as it is monotonically decreasing. If `|Delta(t)|` is not monotonically decreasing, that itself is diagnostic information (indicates multi-exponential structure or oscillations).
+5. **Define a noise floor cutoff.** Compute `noise_floor(t) = std_over_trajectories(O(t)) / sqrt(N)`. Exclude time points where `|Delta(t)| < 3 * noise_floor(t)` from the lambda_eff computation entirely.
 
-**Detection:**
-- Fitted gap is consistently 20-100% larger than the exact gap.
-- Residuals show systematic curvature (not random scatter) at early times.
-- Changing the fit window (start time) changes the fitted gap significantly.
+**Warning signs:**
+- lambda_eff contains NaN or Inf values.
+- lambda_eff has sharp spikes (>10x the median value) at isolated time points.
+- lambda_eff oscillates with amplitude comparable to the plateau value.
 
-**Phase to address:** Exponential fitting phase -- core fitting methodology.
+**Phase to address:** Effective rate plot implementation. The noise floor cutoff and sign-change handling must be built into the lambda_eff computation function, not handled ad-hoc by the caller.
 
 ---
 
-### Pitfall 4: Trajectory Noise Destroying the Late-Time Signal
+### Pitfall 4: Richardson Extrapolation Making Things Worse (Wrong Error Structure)
 
 **What goes wrong:**
-At late times `t >> 1/gamma_1`, the observable deviation `<O>(t) - <O>_ss` is exponentially small. With `N_traj` trajectories, the statistical error on `<O>(t)` scales as `sigma(t) / sqrt(N_traj)`, where `sigma(t)` is the single-trajectory variance. At late times, the signal `|c_1 * exp(-gamma_1 * t)|` drops below the noise floor `sigma / sqrt(N_traj)`. Beyond this point, the data is pure noise, and including it in the fit corrupts the estimate.
-
-For the QuantumFurnace setup:
-- Each trajectory is a single pure-state evolution. The variance of `<psi|O|psi>` for a single trajectory is `<O^2> - <O>^2`, which is O(1) for bounded observables like `M_z` (eigenvalues in [-n, +n]).
-- The signal decays as `~exp(-gamma_1 * t)` where `gamma_1 ~ 0.08` for n=4 Heisenberg.
-- After time `t = 50`, the signal is `exp(-4) ~ 0.018`. With 1000 trajectories, noise is `1/sqrt(1000) ~ 0.032`. The signal is already buried.
+Richardson extrapolation assumes the error in the gap estimate has the form `gap_est(delta) = gap_exact + C*delta^p + O(delta^{p+1})` for some known order p (typically p=1 or p=2). The formula then cancels the leading error term. Quick-30 conclusively proved that the gap estimation error does NOT follow this structure: the error/delta ratio varied by 96x across delta=0.1, 0.01, 0.001, and Richardson extrapolation provided only 1.0x improvement. Applying Richardson extrapolation when the assumption is violated can produce results that are WORSE than the un-extrapolated estimate.
 
 **Why it happens:**
-This is the fundamental signal-to-noise problem of extracting slow decay rates from stochastic simulations. It is well-known in quantum Monte Carlo for imaginary-time correlation functions (see Sandvik and Vidal, "Excitation Gap from Optimized Correlation Functions"). The problem is intrinsic to the method, not a bug.
+The gap estimation error has at least three sources with different delta-dependence:
+1. **Trotter discretization error:** O(delta) per trajectory step, accumulates over T/delta steps, but this affects the trajectory-averaged density matrix, NOT the fitted gap rate directly. Quick-32 confirmed this error is small (~1e-3) and does decrease monotonically with delta.
+2. **Fitting model error:** The single-exponential fit captures a weighted average of multiple decay modes. Different delta values produce different effective Kraus channels that excite spectral modes with different weights, causing the "effective gap" from fitting to vary non-monotonically with delta. This is delta-independent in magnitude (~37-49% for Mz_stagg) but delta-dependent in direction.
+3. **Statistical noise:** Adds O(1/sqrt(N)) noise to the gap estimate, uncorrelated with delta.
+
+Richardson extrapolation cancels only source (1), which is already the smallest contributor. Source (2), which dominates, has NO clean power-law dependence on delta. Applying Richardson amplifies source (2) because the formula `gap_rich = (delta2 * gap(delta1) - delta1 * gap(delta2)) / (delta2 - delta1)` subtracts two similar numbers, amplifying their fitting-error differences.
+
+**Specific manifestation in QuantumFurnace:** Quick-30 data (30-SUMMARY.md lines 66-72): for the (0.01, 0.1) pair, Richardson gave 49.83% error vs 48.72% for the finer estimate alone. For the (0.001, 0.01) pair, Richardson gave 35.88% vs 37.17%. The "improvement" is within noise, and for some observables Richardson makes things noticeably worse.
+
+**How to avoid:**
+1. **Do NOT apply Richardson extrapolation to single-exponential gap estimates.** This is a settled conclusion from Quick-30. The code should not even offer this as an automatic option.
+2. **For two-exponential fits:** Re-evaluate whether Richardson is viable by checking if the TWO-exponential gap estimate has clean O(delta^p) error structure. Run the same delta-sweep experiment as Quick-30 but with two-exponential fitting. Only if error/delta is approximately constant across 3+ delta values should Richardson be applied.
+3. **If Richardson is applied:** Always report the un-extrapolated estimates alongside the extrapolated one, and flag when the extrapolated estimate is OUTSIDE the range of the un-extrapolated estimates (which indicates the extrapolation diverged).
+4. **Implement a delta-convergence diagnostic BEFORE Richardson.** Plot the fitted gap vs delta for 3+ delta values. If the curve is monotonic with consistent curvature, Richardson is appropriate. If the curve is non-monotonic or noisy, Richardson is contraindicated. This diagnostic should be a required precondition, not an optional check.
+
+**Warning signs:**
+- Richardson-extrapolated gap is outside the range [min(gap_estimates), max(gap_estimates)].
+- The extrapolated gap is negative.
+- The "improvement factor" (error_rich / error_finest) is > 0.9 (no improvement) or > 1.0 (degradation).
+
+**Phase to address:** Delta-convergence diagnosis phase. The diagnostic must PRECEDE any Richardson extrapolation. The extrapolation itself should be gated on a monotonicity check.
+
+---
+
+### Pitfall 5: Bootstrap Storing Individual Trajectory Data Blows Memory for n=6
+
+**What goes wrong:**
+Bootstrap error bars on the spectral gap require access to per-trajectory (or per-batch) observable time series, not just the grand mean. The naive implementation stores per-trajectory data: a matrix of size `(n_obs, n_saves, n_traj)`. For n=6 (dim=64), 8 observables, save_every=10, delta=0.01, mixing_time=50 (5000 steps, 500 saves), and 20,000 trajectories: 8 * 500 * 20000 * 8 bytes = 640 MB. For 50,000 trajectories: 1.6 GB. This exceeds reasonable memory budgets for a diagnostic tool and prevents running multiple bootstrap analyses in a session.
+
+**Why it happens:**
+The existing `run_observable_trajectories` (trajectories.jl) only returns `measurements_mean`, the average over all trajectories. It does not store per-trajectory data. Adding bootstrap requires either: (a) storing all per-trajectory data, (b) re-running trajectories with different subsets, or (c) accumulating per-batch statistics during the run. Option (a) is the obvious implementation but is memory-prohibitive. Option (b) is wasteful (re-runs trajectories). Option (c) is efficient but requires modifying the trajectory runner.
+
+**Specific manifestation in QuantumFurnace:** The existing batch infrastructure in `run_trajectories_convergence` (convergence.jl) already computes per-batch density matrices but does NOT store per-batch observable time series. The `_run_batch_no_obs!` function accumulates the density matrix sum. The `_run_chunk_with_obs!` function accumulates measurements into `mean_data_local` but averages across all trajectories in the chunk. There is no existing mechanism to return per-batch measurement arrays.
+
+**How to avoid:**
+1. **Block bootstrap over trajectory batches.** Modify the trajectory runner to run in fixed batches (e.g., batch_size=200) and store per-BATCH mean time series: `(n_obs, n_saves, n_batches)`. For 100 batches of 200: 8 * 500 * 100 * 8 bytes = 3.2 MB. Bootstrap then resamples over the 100 batch indices, recomputing the mean for each bootstrap sample as a weighted sum of batch means.
+2. **Online sufficient statistics.** During the trajectory run, maintain two running accumulators: `sum_obs[i, t]` and `sum_obs_sq[i, t]` (the latter for variance estimation). This requires zero additional memory beyond 2 * n_obs * n_saves floats, but only gives the normal-approximation confidence interval, not the full bootstrap distribution.
+3. **Two-pass approach.** First pass: run all trajectories, store only the grand mean. Second pass: run bootstrap samples (smaller batches) with different seeds. This avoids storing any per-trajectory data but costs ~2x the compute.
+4. **Recommendation: Option 1 (block bootstrap) with batch_size=200.** This matches the existing adaptive sampling batch structure and provides genuine bootstrap distributions while keeping memory at ~3 MB. The block bootstrap is valid because trajectories within different batches are independent (different RNG seeds via `Xoshiro(master_seed + traj_id)`).
+
+**Warning signs:**
+- Julia process memory exceeds 4 GB during bootstrap (for n=6 simulations that should use ~500 MB).
+- Out-of-memory crashes during bootstrap with large trajectory counts.
+- Bootstrap resampling takes longer than the original trajectory run (indicates data is being re-loaded from disk).
+
+**Phase to address:** Bootstrap error bar implementation. The per-batch storage mechanism must be designed before any bootstrap code is written. Modify `run_observable_trajectories` or create a new variant.
+
+---
+
+### Pitfall 6: Automatic Window Selection Fails Silently on Multi-Exponential Data
+
+**What goes wrong:**
+The "golden window" for single-exponential fitting is the time range where the fast modes have decayed but the signal is still above the noise floor. Automatic window selection looks for this window by scanning the effective rate lambda_eff(t) for a plateau. On clean single-exponential data, this works well: lambda_eff is approximately constant for t > 3/g2 and t < T_noise.
+
+But with multi-exponential data (which is the reality for trajectory observables), lambda_eff has a monotonically DECREASING profile from g2 at early times to g1 at late times, with no clean plateau. The automatic selector either: (a) picks the entire time range (too wide, biased by fast modes), (b) picks the late-time tail (too narrow, dominated by noise), or (c) declares failure and returns no window.
+
+**Why it happens:**
+The concept of a "golden window" assumes a single dominant decay mode in the data. For the n=4 Heisenberg chain, the spectral gap mode has overlap with most observables, but the second decay mode also has significant overlap (Quick-30 showed this causes 37-49% single-exponential fitting error). The transition from the "fast mode dominated" regime to the "slow mode dominated" regime is gradual, spanning several decay times. There is no sharp boundary.
 
 **Consequences:**
-- If fitting includes the noisy tail, the fitter either: (a) finds a spurious minimum far from the true gap, or (b) converges to a shallow minimum with enormous uncertainty.
-- The fitted `gamma_fit` can be arbitrarily wrong if the noise-dominated region is large relative to the signal region.
-- Bootstrap confidence intervals on the fit become huge, but only if computed correctly (see Pitfall 8).
+- Silent failure: the automatic selector returns a window, but it is not the "right" window. The resulting gap estimate is biased, and the user does not know the window was problematic.
+- Window selection depends on noise realization: running with different seeds produces different windows, which produce different gap estimates. This inflates the apparent bootstrap uncertainty but does not capture the systematic bias from window placement.
+- The two-exponential fit (which is supposed to eliminate the need for careful window selection) is itself sensitive to the fitting window (see Pitfall 1), creating a circularity.
 
-**Prevention:**
-1. **Determine the noise floor empirically.** Compute `std(<O>(t))` across trajectories at each time point. The noise floor is `std / sqrt(N_traj)`. Exclude time points where `|<O>(t) - <O>_ss| < k * noise_floor` (e.g., k=2 or k=3).
-2. **Use weighted least squares.** Weight each data point by `1 / variance(t)`. This automatically downweights the noisy tail. LsqFit.jl supports the `wt` parameter for weighted fitting.
-3. **Increase trajectory count.** The noise floor drops as `1/sqrt(N_traj)`. To extend the usable time range by a factor of 2, you need 4x more trajectories (the signal drops by `exp(-gamma_1 * Delta_t) ~ exp(-0.08 * 25) ~ 0.14` while noise drops by `1/2`).
-4. **Use coarser time binning at late times.** Average the observable over wider time windows at late times to reduce noise. This is equivalent to a running average, which does NOT bias the decay rate.
-5. **For cross-validation at n=4,6 (where exact gap is known):** compute the expected signal-to-noise ratio at the planned trajectory count, and verify it is sufficient to resolve the gap before running the full experiment.
+**How to avoid:**
+1. **Do NOT rely on automatic window selection as the sole method.** Always offer manual override and report which window was selected so the user can verify.
+2. **Implement multiple window strategies and compare.** Run fits with: (a) skip_initial=0.1, (b) skip_initial=0.3, (c) skip_initial=0.5, and (d) the noise-floor-determined window. Report all four gap estimates. If they agree within bootstrap error bars, the result is robust. If they disagree significantly, flag the result as window-dependent.
+3. **Use the effective rate plot as a DIAGNOSTIC, not as an input to automatic selection.** Plot lambda_eff(t) and let the user identify the plateau visually. The automatic selector is a convenience, not a substitute for judgment.
+4. **For two-exponential fits: use the full signal window.** The whole point of two-exponential fitting is to capture both modes simultaneously, eliminating the need for window selection. Use skip_initial=0.0 (or a very small value to avoid initial-state artifacts) and fit the full time range. If the two-exponential fit converges, it implicitly handles the mode separation.
+5. **Plateau detection with explicit quality metric.** If implementing automatic selection: compute lambda_eff in rolling windows of width W. For each window position, compute the coefficient of variation (std/mean) of lambda_eff within the window. The "best" window is where this CV is minimized. Report the CV value so the user knows how flat the plateau actually is. A CV > 0.2 means there is no reliable plateau.
 
-**Detection:**
-- Plot `|<O>(t) - <O>_ss|` on a log scale alongside the noise floor `std/sqrt(N_traj)`. The signal should be well above the noise for at least ~3 decay times (`3/gamma_1`).
-- If the error bars on the fit exceed 50% of the fitted value, the signal-to-noise is inadequate.
-- The fit residuals in the late-time region should be consistent with random noise, not systematic.
+**Warning signs:**
+- The automatic selector returns a window spanning less than 2 decay times (not enough data for reliable fitting).
+- Different trajectory seeds produce windows that differ by more than 30%.
+- The gap estimate changes by more than 20% when the window is shifted by +/- 10%.
 
-**Phase to address:** Trajectory runner and fitting phases -- must plan trajectory count and time range together.
+**Phase to address:** Automatic window selection implementation. Must be designed alongside, not after, the effective rate plot.
+
+---
+
+### Pitfall 7: Symmetry Sector Labels Ambiguous Near Degeneracies
+
+**What goes wrong:**
+Symmetry sector labeling assigns quantum numbers (like total Sz, crystal momentum k, or parity) to Lindbladian eigenvalues. This requires identifying which symmetry sector each eigenvector belongs to by computing overlap with symmetry projectors. When two eigenvalues are nearly degenerate (|lambda_i - lambda_j| / |lambda_i| < 1e-6), the corresponding eigenvectors are arbitrary linear combinations within the degenerate subspace, and the symmetry labels become ambiguous or wrong.
+
+**Why it happens:**
+The `eigen()` decomposition of the Liouvillian returns orthogonal eigenvectors, but within a degenerate subspace, any orthonormal basis is valid. Julia's `eigen()` (LAPACK) picks a basis that is numerically convenient, not one that respects the symmetry. If eigenvalues lambda_1 and lambda_2 differ by less than the numerical precision of the eigendecomposition (~1e-12 for a well-conditioned matrix), the returned eigenvectors v1 and v2 will be random linear combinations of the true symmetry eigenstates. Applying a symmetry projector P_k to v1 will give a non-zero overlap for MULTIPLE symmetry sectors, making the assignment ambiguous.
+
+**Specific manifestation in QuantumFurnace:** The existing `eigenbasis_overlap_analysis` (gap_estimation.jl line 279) uses `eigen(L)` and sorts by `abs.(real.(F.values))`. For the n=6 periodic Heisenberg chain, Quick-25 showed the gap mode lives in the k=pi momentum sector. The second gap mode (lambda_3) may be in a different sector. If lambda_2 and lambda_3 are close, their sector labels will be mixed up.
+
+**Consequences:**
+- The symmetry sector analysis reports contradictory labels for nearly degenerate eigenvalues.
+- The "gap mode sector" diagnostic incorrectly identifies which sector the gap mode belongs to, leading to wrong observable selection recommendations.
+- Users may conclude that a symmetry-breaking observable is needed when the symmetry assignment itself is wrong.
+
+**How to avoid:**
+1. **Detect near-degeneracies explicitly.** Before labeling, compute pairwise separations `|lambda_i - lambda_j|` for eigenvalues near the gap. Flag any pair with separation < threshold (e.g., 1e-8 * |lambda_gap|) as "ambiguous sector assignment."
+2. **Use simultaneous diagonalization.** Instead of diagonalizing L alone, diagonalize L together with the symmetry operator (e.g., the translation operator T). The simultaneous eigendecomposition picks a basis that respects the symmetry even within degenerate subspaces. This requires that [L, T] = 0 (which Quick-25 verified for the translation operator).
+3. **Apply symmetry projectors to the degenerate SUBSPACE, not individual eigenvectors.** If lambda_i and lambda_j are nearly degenerate, project the 2D subspace span(v_i, v_j) onto each symmetry sector. Report "this degenerate subspace contains modes from sectors k_a and k_b" rather than "v_i is in sector k_a."
+4. **For practical purposes: label the GAP mode first.** The gap mode is typically non-degenerate (there is a unique slowest decay rate). Label it unambiguously. Only flag the degeneracy issue for higher modes.
+
+**Warning signs:**
+- Two adjacent eigenvalues differ by less than 1e-8 * |gap|.
+- The symmetry projector gives overlap > 0.1 with multiple sectors for a single eigenvector.
+- The sector label changes when a small perturbation (random field h ~ 1e-8) is added to the Hamiltonian.
+
+**Phase to address:** Symmetry sector labeling implementation. Degeneracy detection must be the first step, before any sector assignment.
 
 ---
 
 ## Moderate Pitfalls
 
-Mistakes that cause significant debugging time, wrong intermediate results, or wasted computation, but are recoverable.
+Mistakes that cause significant debugging time or wrong intermediate results but are recoverable.
 
 ---
 
-### Pitfall 5: Exponential Fitting Sensitivity to Initial Parameter Guesses
+### Pitfall 8: Two-Exponential Fit Converges to Negative Amplitude (Cancellation Artifact)
 
 **What goes wrong:**
-Nonlinear least squares fitting of `A * exp(-gamma * t) + offset` is highly sensitive to the initial guess for `gamma`. The Levenberg-Marquardt algorithm (used by LsqFit.jl) converges to local minima. If the initial `gamma_0` is far from the true value, the fit may:
-- Converge to a wrong local minimum (e.g., fitting to a fast mode instead of the slow mode).
-- Diverge entirely (LsqFit returns NaN or throws an exception).
-- Converge to a physically nonsensical result (`gamma < 0` or `gamma ~ 0`).
+The two-exponential model `A1*exp(-g1*t) + A2*exp(-g2*t) + C` has no physical constraint requiring A1, A2 > 0. The optimizer may find that the best fit has A1 > 0 and A2 < 0 (or vice versa), where the two exponentials partially cancel. This produces a curve that looks superficially like an exponential decay but is actually a difference of two exponentials. The fitted g1 in this case does NOT correspond to the spectral gap -- it can be arbitrarily different.
 
 **Why it happens:**
-The exponential model is highly nonlinear in the rate parameter. Small changes in `gamma` produce large changes in the residual at late times but small changes at early times. The least-squares landscape has narrow valleys and shallow basins, especially when fitting to noisy data.
+For trajectory-averaged observables, the expansion `<O>(t) - <O>_ss = sum_k c_k * exp(lambda_k * t)` can have coefficients c_k of either sign, depending on the observable and initial state. If c_1 > 0 and c_2 < 0, then A1 > 0 and A2 < 0 is the physically correct decomposition. But if both c_1, c_2 > 0 and the data has noise, the optimizer might find a spurious solution with one negative amplitude that exploits cancellation to fit noise features.
 
-For the QuantumFurnace use case, the spectral gap `gamma_1` ranges from ~0.01 to ~0.2 depending on the Hamiltonian, domain, and temperature. An initial guess of `gamma_0 = 1.0` (off by 10x) is enough to cause convergence failure.
+**How to avoid:**
+1. **Constrain amplitudes to be positive** (`lower = [0.0, 0.0, 0.0, 0.0, -Inf]`) if the physics guarantees positive overlap coefficients. For the observables in `build_preset_trajectory_observables`, this is NOT guaranteed -- overlaps can have either sign.
+2. **Instead: flag but do not reject negative amplitudes.** If one amplitude is negative, check whether the other amplitude exceeds the negative one in magnitude at t=0 (which is required for a physically decaying signal). Report "mixed-sign amplitudes" as a diagnostic.
+3. **Detect cancellation.** Compute `A1*exp(-g1*t) + A2*exp(-g2*t)` at t=0 and compare to `|A1| + |A2|`. If `|A1 + A2| < 0.3 * (|A1| + |A2|)`, there is significant cancellation. The fitted rates in this case are unreliable.
 
-**Prevention:**
-1. **Use the log-linear estimate as the initial guess.** Before nonlinear fitting, compute `gamma_init = -slope(linear_fit(log|signal|, t))` over the last 30% of the signal-above-noise time range. This is cheap, robust, and typically within 50% of the true value.
-2. **Fix the offset parameter.** Set `offset = <O>_ss = tr(gibbs * O)` (known analytically) instead of fitting it. This reduces the problem from 3 parameters to 2, greatly improving convergence.
-3. **Bound the parameters.** Use LsqFit.jl's `lower` and `upper` bounds: `gamma in [1e-4, 10.0]`, `A in [-max_signal, max_signal]`. This prevents runaway to unphysical values.
-4. **Try multiple initial guesses.** Run the fit from 3-5 different `gamma_0` values spanning the expected range. Take the result with the lowest residual sum of squares.
+**Warning signs:**
+- A1 and A2 have opposite signs.
+- `|A1| + |A2|` is much larger than the observed signal amplitude `|Delta(0)|`.
+- The residuals have a characteristic "W" shape (two crossings instead of one).
 
-**Detection:**
-- LsqFit.jl throws a convergence warning or returns `converged = false`.
-- The fitted `gamma` is negative or orders of magnitude from expected.
-- The fit residual is comparable to the total signal variance (fit did not improve over a constant model).
-
-**Phase to address:** Exponential fitting implementation.
+**Phase to address:** Two-exponential fitting validation tests.
 
 ---
 
-### Pitfall 6: Using abs(spectral_gap) Instead of Sorting by Real Part
+### Pitfall 9: Bootstrap Error Bars on lambda_eff(t) Require Per-Batch Time Series
 
 **What goes wrong:**
-The existing `run_lindbladian()` (furnace.jl line 18) sorts eigenvalues by `abs.(real.(eigvals_near_zero))` to find the steady state (smallest) and gap mode (second smallest). This works when eigenvalues are real or nearly real. But the Arpack `eigs()` call with `sigma=shift` (shift-invert mode) returns the 2 eigenvalues closest to `shift = 1e-9 * (1 + 1im)`. The sorting by `abs(real(...))` could misidentify the gap eigenvalue if:
-- Two eigenvalues have similar real parts but different imaginary parts.
-- The shift-invert targets an eigenvalue with a small imaginary part but not the one with the smallest real part magnitude.
-
-For KMS BohrDomain where all eigenvalues are real, this is fine. For TrotterDomain where eigenvalues have small imaginary parts, sorting by `abs(real(...))` could pick the wrong second eigenvalue, giving a wrong spectral gap.
-
-**Consequences:**
-- The "exact" spectral gap used as ground truth in cross-validation is itself wrong.
-- The cross-validation comparison is meaningless because both sides are wrong.
-
-**Prevention:**
-1. After extracting the spectral gap, verify: compute `gamma_exact = -real(spectral_gap)` and `omega_exact = imag(spectral_gap)`. Assert `gamma_exact > 0` (the gap eigenvalue must have negative real part). Assert `gamma_exact < gamma_max` for some reasonable bound (e.g., `gamma_max < 1.0` for the rescaled Hamiltonian).
-2. For the cross-validation study, also compute the full spectrum (not just 2 eigenvalues) for n=4 systems where this is feasible (Liouvillian is 256x256). Use `eigen()` instead of `eigs()` and verify that the gap identified by `eigs()` matches the second-smallest `abs(real(...))` in the full spectrum.
-3. Consider requesting more eigenvalues from Arpack: `eigs(liouv, nev=5, sigma=shift)` and then sorting to find the true gap.
-
-**Detection:**
-- For BohrDomain: full eigenvalue check (all should be real and non-positive).
-- For n=4: compare `eigs(nev=2)` result against `eigen()` full spectrum.
-- If the fitted gap consistently disagrees with the "exact" gap in a systematic direction, suspect that the exact gap is wrong.
-
-**Phase to address:** Cross-validation phase -- validate the ground truth before using it.
-
----
-
-### Pitfall 7: Wrong Time Grid for Observable Sampling
-
-**What goes wrong:**
-The existing `run_trajectories()` with observables uses `save_every` to subsample the time grid: measurements are taken every `save_every * delta` time units. If `save_every` is too large, the Nyquist criterion for the oscillation frequency `omega` (imaginary part of the spectral gap) is violated, and the time series aliases. More commonly, if `save_every` is too small, the data points are highly autocorrelated (consecutive measurements on the same trajectory step are correlated), which inflates apparent signal-to-noise and leads to underestimated error bars on the fit.
-
-For spectral gap fitting specifically:
-- The TOTAL evolution time `total_time` must be long enough to see at least 3-5 decay times: `total_time > 5 / gamma_1`. For `gamma_1 ~ 0.08`, this means `total_time > 62`. With `delta = 0.01`, that is 6,200 steps.
-- The sampling interval `save_every * delta` must be fine enough to resolve the decay: at least 10-20 points per decay time. For `gamma_1 ~ 0.08`, one decay time is `~12.5`, so `save_every * delta ~ 0.6-1.2`.
-- But `delta = 0.01` with `save_every = 1` gives 6,200 data points, which is excessive and wastes memory. Use `save_every = 50-100`.
+Computing bootstrap error bars on the effective rate plot `lambda_eff(t)` requires resampling per-batch observable time series and recomputing lambda_eff for each bootstrap sample. This is a different computation from bootstrap on the fitted gap (which resamples the gap fit). If the implementation only supports bootstrap on the gap parameter, the user cannot get uncertainty bands on the lambda_eff plot.
 
 **Why it happens:**
-The time grid parameters were designed for convergence tracking (where you want to see the full trajectory), not for spectral gap estimation (where you want a specific time range at specific resolution).
+The lambda_eff computation involves a nonlinear transformation (log of the ratio) applied to each time point independently. Bootstrapping the fitted gap gives a scalar confidence interval. Bootstrapping lambda_eff(t) gives a function-valued confidence band. These are different quantities and require different implementations.
 
-**Consequences:**
-- Too coarse sampling: miss the initial transient, aliasing of oscillatory components.
-- Too fine sampling: memory bloat (6200 points * N_traj * N_obs), slow fitting, autocorrelation bias.
-- Too short total time: cannot resolve the spectral gap (the signal has not decayed enough).
-- Too long total time: the late-time data is all noise (see Pitfall 4), wasting computation.
+**How to avoid:**
+1. **Design the bootstrap infrastructure to return per-batch time series**, not just per-batch gap estimates. This is the same data structure needed for Pitfall 5 (memory management). Store `batch_measurements[batch_idx][obs_idx, time_idx]` and use it for both gap bootstrap and lambda_eff bootstrap.
+2. **Compute lambda_eff for each bootstrap sample.** For each resampled set of batch indices, compute the resampled mean time series, then compute lambda_eff on that resampled mean. Collect N_bootstrap lambda_eff curves and compute pointwise percentiles for the confidence band.
+3. **Handle NaN propagation.** Some bootstrap samples will have more noise than others, producing NaN in lambda_eff at earlier time points. The confidence band computation must handle NaN: use `nanquantile` or equivalent.
 
-**Prevention:**
-1. Choose `total_time` based on a rough estimate of the spectral gap. For cross-validation where the exact gap is known, use `total_time = 5 / gamma_exact`. Otherwise, use a conservative estimate based on the domain approximation level.
-2. Choose `save_every` so that there are 100-500 usable data points across the signal region.
-3. For memory efficiency, use `save_every >> 1`. The trajectory step loop runs at `delta` resolution for accuracy, but measurements can be coarser.
-4. Run a short pilot trajectory (100 trajectories, full time range) to estimate the decay timescale before committing to the full run.
+**Warning signs:**
+- Bootstrap confidence band on lambda_eff is missing (only scalar gap CI is implemented).
+- The confidence band has gaps at time points where some bootstrap samples produced NaN.
 
-**Detection:**
-- The observable time series is flat (no visible decay) -- total time too short.
-- The observable time series is noisy everywhere -- too few trajectories or total time too long.
-- Memory issues when storing `measurements_mean` -- `save_every` too small.
-
-**Phase to address:** Trajectory runner phase -- parameter selection.
+**Phase to address:** Bootstrap implementation. Design the data flow for both gap bootstrap and lambda_eff bootstrap simultaneously.
 
 ---
 
-### Pitfall 8: Naive Error Estimation on Fitted Parameters
+### Pitfall 10: Testing Two-Exponential Fits Against Stochastic Simulation Output
 
 **What goes wrong:**
-LsqFit.jl provides `stderror(fit)` which estimates parameter uncertainties from the covariance matrix of the fit. This estimate assumes: (a) the model is correct, (b) residuals are independent and identically distributed, and (c) the noise is Gaussian. For trajectory-averaged observables, condition (b) is violated: consecutive time points from the same trajectory are correlated (they share the same trajectory history), and the noise is non-Gaussian (it comes from projective measurements on quantum states, not Gaussian noise).
-
-**Consequences:**
-- `stderror(fit)` dramatically underestimates the true uncertainty on the fitted spectral gap.
-- The cross-validation reports "agreement within error bars" when the actual uncertainty is much larger.
-- Publication-quality error bars based on `stderror` are unreliable.
-
-**Prevention:**
-1. **Use bootstrap resampling over trajectories.** The correct error estimation procedure is:
-   - Split the N_traj trajectories into M bootstrap samples (resample with replacement).
-   - For each bootstrap sample, recompute the trajectory-averaged observable time series.
-   - Fit each bootstrap time series independently.
-   - The standard deviation of the M fitted gaps is the bootstrap standard error.
-2. **Use block averaging.** Divide trajectories into K blocks. Compute the fitted gap from each block independently. The standard error is `std(block_gaps) / sqrt(K)`.
-3. **Do NOT use jackknife on time points** (this would propagate autocorrelation). Resample over trajectories (which are independent), not over time points.
-4. Bootstrap is computationally cheap: the expensive part is running trajectories. Refitting 100 bootstrap samples is trivial.
-
-**Detection:**
-- `stderror(fit)` gives uncertainties much smaller than the observed variation across different seeds or trajectory counts.
-- Bootstrap uncertainty is 5-50x larger than `stderror(fit)`.
-
-**Phase to address:** Statistical analysis phase -- error estimation on the spectral gap.
-
----
-
-### Pitfall 9: Subtracting Wrong Steady-State Value in Observable Decay
-
-**What goes wrong:**
-The exponential decay analysis requires subtracting the steady-state expectation value: `signal(t) = <O>(t) - <O>_ss`. If `<O>_ss` is wrong, the entire decay analysis is corrupted. There are several ways to get `<O>_ss` wrong:
-
-1. **Using the Gibbs state instead of the Liouvillian fixed point.** For exact KMS (BohrDomain), the fixed point IS the Gibbs state. But for approximate domains (Energy, Time, Trotter), the Liouvillian fixed point deviates from the Gibbs state. The observable decays toward the FIXED POINT, not toward the Gibbs state. Using `<O>_gibbs` instead of `<O>_fixed_point` introduces a constant offset that the exponential fitter will absorb, biasing the decay rate.
-
-2. **Using `tr(gibbs_comp * O_comp)` in the computational basis when `O` is in the eigenbasis.** This gives the wrong trace. Must use `tr(gibbs_eigen * O_eigen)` or `tr(gibbs_trotter * O_trotter)`, consistent with the basis of the trajectory.
-
-3. **Using the trajectory time-averaged value instead of the known analytical value.** The trajectory-averaged `<O>(t_final)` at the end of a long evolution approximates `<O>_ss` but with statistical noise. Using it as `<O>_ss` introduces noise into every data point of the decay signal, creating correlated errors.
-
-**Consequences:**
-- A systematic offset in the signal causes the exponential fit to converge to a wrong rate.
-- For small offsets, the bias is approximately `delta_gamma ~ offset / (t_final * signal_amplitude)`, which can be significant.
-- The cross-validation shows a consistent directional bias (fit always above or always below the exact gap).
-
-**Prevention:**
-1. For cross-validation where the Liouvillian is available: compute `<O>_ss = tr(fixed_point * O)` using `liouv_result.fixed_point` from `run_lindbladian()`. This is the correct steady-state value that the trajectories converge to.
-2. When the Liouvillian is NOT available (large systems): use `<O>_gibbs` but acknowledge the domain approximation error. For KMS with coherent term, this error is controlled by Trotter/quadrature errors.
-3. Always compute both `<O>_gibbs` and `<O>_fixed_point` and report the difference. If it exceeds the statistical precision, flag it.
-
-**Detection:**
-- The subtracted signal `<O>(t) - <O>_ss` does not approach zero at late times (it approaches a nonzero constant). This is a clear sign that `<O>_ss` is wrong.
-- The fit residuals show a systematic constant offset.
-
-**Phase to address:** Observable analysis phase -- computing the correct baseline.
-
----
-
-### Pitfall 10: Total Magnetization Has Zero Overlap with Gap Mode (Symmetry Selection)
-
-**What goes wrong:**
-For the isotropic Heisenberg Hamiltonian `H = sum(XX + YY + ZZ)`, the total magnetization `M_z = sum_i Z_i` commutes with the Hamiltonian: `[H, M_z] = 0`. This means `M_z` is block-diagonal in the energy eigenbasis, with blocks corresponding to different total `S_z` sectors. If the gap mode of the Liouvillian connects states within the same `S_z` sector, then `M_z` may have ZERO overlap with the gap mode -- meaning `c_1 = 0` in the expansion `<M_z>(t) - <M_z>_ss = sum c_k exp(-gamma_k t)`, and the slowest visible decay is `gamma_2` (the second gap), not `gamma_1`.
-
-For the DISORDERED Heisenberg chain (with the external Z-field that QuantumFurnace uses), `[H, M_z] != 0` in general, so this exact cancellation is broken. However, the overlap `c_1` may still be small if the disorder is weak, leading to a near-invisible slowest mode in the `M_z` time series.
+Tests for the two-exponential fitting function need test data. Using synthetic data (known amplitudes, rates, noise) validates the fitting algorithm but does NOT test the full pipeline (trajectory simulation -> fitting). Using actual trajectory data makes tests non-deterministic (different seeds give different results) and slow (trajectory simulation dominates test time). The temptation is to test only with synthetic data, which misses integration issues like basis mismatches, wrong steady-state subtraction, or observable normalization errors.
 
 **Why it happens:**
-Symmetry-based selection rules are a fundamental feature of quantum systems. The Liouvillian preserves symmetry sectors if the jump operators respect the symmetry. For single-site Pauli jumps `{X_i, Y_i, Z_i}`, the `Z_i` jump preserves `M_z` but `X_i, Y_i` do not. So the full Lindbladian does NOT preserve `M_z`, and the gap mode generically has nonzero overlap with `M_z`. But the overlap may be small for systems close to the symmetric limit.
+The fitting function (`fit_exponential_decay`, fitting.jl) is a pure numerical function: it takes (times, values) and returns a FitResult. Testing it with synthetic data is straightforward and fast. The integration test (trajectory -> observables -> fitting -> gap) requires building the full system (Hamiltonian, Lindbladian, Kraus operators) and running trajectories, which takes 30-60 seconds for n=4 with 1000 trajectories.
 
-**Consequences:**
-- Fitting `M_z` decay extracts the SECOND gap instead of the first.
-- Cross-validation fails because the fitted rate is ~2x the true spectral gap.
-- The failure mode is subtle: the fit quality (R^2) may be excellent, but the extracted gap is wrong.
+**Specific manifestation in QuantumFurnace:** The existing test suite has both: test_fitting.jl tests the fitting function with clean and noisy synthetic data (fast, deterministic), and test_gap_estimation.jl tests the full pipeline with the SMALL system (n=3, 500 trajectories, fast). But the n=3 system is too small and simple to exercise two-exponential behavior -- its spectral structure is dominated by a single decay mode. The n=4 system is needed but makes tests take ~30 seconds.
 
-**Prevention:**
-1. **Use multiple observables and compare.** Fit the spectral gap from `M_z`, from `<H>`, from `<Z_1 Z_2>`, and from other observables. If they all give the same gap, it is likely the true spectral gap. If one gives a systematically different value, it may have selection-rule issues.
-2. **Check overlap coefficients.** For small systems (n=4), compute the gap mode from the exact Liouvillian and calculate `c_1 = tr(gap_mode^dagger * O)` for each observable. Choose the observable with the largest `|c_1|`.
-3. **Prefer observables that break symmetries.** Single-site `Z_i` (for site i with strong disorder) is better than `M_z` because it has overlap with all eigenmodes. Nearest-neighbor correlations `Z_i Z_{i+1}` are also generally safe.
-4. **For the cross-validation: report the gap from each observable separately** and note which observables agree and which do not.
+**How to avoid:**
+1. **Three-tier testing strategy:**
+   - **Unit tests (fast, synthetic):** Test the two-exponential fitting function with known parameters. Include edge cases: rates close together, one amplitude zero, negative amplitudes, noisy data. These run in <1 second.
+   - **Integration tests (medium, n=3):** Test the full pipeline with the SMALL system. Even though n=3 may not show two-exponential behavior clearly, it validates that the data flows correctly from trajectory simulation to fitting.
+   - **Validation tests (slow, n=4, optional/CI-only):** Run the full pipeline with n=4, 1000 trajectories, seed=42. Compare the fitted gap against the exact Liouvillian gap. Mark these as `@testset "slow"` and skip in regular test runs. These are the critical tests but they take 30+ seconds.
+2. **Generate reference two-exponential data from the Liouvillian.** For n=4, compute `exp(t*L) * vec(rho0)` exactly and extract the observable time series. This gives clean two-exponential data (no stochastic noise) that can be used in fast deterministic tests. The reference data can be pre-computed and stored.
+3. **Use deterministic seeding (seed=42) in integration tests** and test for consistency (same seed -> same result) rather than accuracy (fitted gap close to exact gap). This is already the pattern in test_gap_estimation.jl.
 
-**Detection:**
-- The fitted gap from `M_z` is approximately 2x the fitted gap from `Z_1 Z_2`.
-- The `M_z` decay signal is much smaller in amplitude than expected from other observables.
-- The overlap coefficient `c_1` (computed from exact diagonalization) is anomalously small.
+**Warning signs:**
+- Two-exponential fitting tests all use synthetic data but fail on actual trajectory data.
+- Integration tests pass but validation against exact Liouvillian fails.
+- Tests are flaky (pass sometimes, fail other times) because they depend on stochastic simulation output without proper tolerance handling.
 
-**Phase to address:** Observable selection phase -- before running the full experiment.
+**Phase to address:** Every phase that adds a new diagnostic. Each feature needs all three test tiers.
+
+---
+
+### Pitfall 11: Observable-Level vs DM-Level Error Conflation
+
+**What goes wrong:**
+The delta-convergence diagnostic compares gap estimates at different delta values. But the "gap estimation error" has two components: (a) the trajectory simulation error (how well the simulated rho matches exp(t*L)*rho0) and (b) the fitting error (how well the single/two-exponential model captures the true multi-exponential decay). Quick-32 proved that component (a) is O(1e-3) and monotonic in delta, while component (b) is O(10-50%) and non-monotonic. If the delta-convergence diagnostic only reports the total error, it will conflate these two components and misattribute fitting errors to simulation errors.
+
+**How to avoid:**
+1. **Report both components separately.** For each delta value, compute: (a) `trace_distance(rho_traj, rho_exact)` as the simulation error, and (b) `|gap_fitted - gap_exact|` as the total estimation error. The difference `(b) - (a)` gives the fitting contribution.
+2. **Use the Quick-32 approach.** Compare trajectory-averaged OBSERVABLE values (not just fitted gaps) against exact values from exp(t*L). This separates simulation correctness from fitting model adequacy.
+
+**Phase to address:** Delta-convergence diagnosis phase.
+
+---
+
+### Pitfall 12: Steady-State Value Mismatch Between Lindbladian Fixed Point and Gibbs State for Effective Rate
+
+**What goes wrong:**
+The effective rate computation requires `Delta(t) = <O>(t) - <O>_ss`. For approximate domains (TrotterDomain), the Lindbladian fixed point differs from the Gibbs state (v1.3 Pitfall 9). Using `<O>_gibbs` instead of `<O>_fixed_point` introduces a constant offset that makes Delta(t) approach a non-zero value at late times, corrupting the effective rate plot. The lambda_eff(t) will NOT plateau at the spectral gap but will instead show a gradual decrease toward zero (as the constant offset dominates over the exponential decay).
+
+**How to avoid:**
+1. **Always use the Lindbladian fixed point** from `liouv_result.fixed_point` when available (n=4,6 where exact diagonalization is feasible).
+2. **For large systems where the Liouvillian is not available:** use the trajectory-averaged observable at the final time point `<O>(T_final)` as an estimate of `<O>_ss`. This introduces noise but avoids the systematic bias from Gibbs/fixed-point mismatch. Alternatively, use the Gibbs value and document the expected offset.
+3. **Diagnostic: plot `Delta(T_final)` for each observable.** If it is not approximately zero, the steady-state value is wrong.
+
+**Phase to address:** Effective rate plot implementation. The steady-state computation must be a required input to the lambda_eff function.
 
 ---
 
 ## Minor Pitfalls
 
-Mistakes that cause confusion, wasted time, or suboptimal results, but are easily fixed.
-
 ---
 
-### Pitfall 11: Memory Blow-Up from Storing Full Observable Time Series per Trajectory
+### Pitfall 13: Bootstrap Resampling Indices With Replacement Can Produce Degenerate Samples
 
 **What goes wrong:**
-The current `run_trajectories()` with observables returns `measurements_mean` as an `n_obs x num_saves` matrix averaged over all trajectories. This is memory-efficient. But for bootstrap error estimation (Pitfall 8), you need per-trajectory or per-batch observable time series, not just the mean. Storing per-trajectory data requires `n_obs x num_saves x N_traj` memory, which for n=8 (17 observables, 500 time points, 10,000 trajectories) is 17 * 500 * 10000 * 8 bytes = 680 MB.
+With B batches (e.g., B=100), a bootstrap sample draws B indices with replacement from {1,...,B}. For small B, there is a non-negligible probability that a bootstrap sample consists of repeated copies of very few unique batches (e.g., 80% from one batch). The gap fitted to such a degenerate sample may have extreme values (very high or low), inflating the bootstrap confidence interval.
 
-**Prevention:**
-1. Store per-BATCH means, not per-trajectory. With batch_size=200 and 50 batches, you get 50 independent time series at a cost of 17 * 500 * 50 * 8 = 3.4 MB.
-2. Compute bootstrap over batches (block bootstrap), not over individual trajectories.
-3. The existing `run_trajectories_convergence` already uses a batch structure. Extend it to also record per-batch observable TIME SERIES (not just checkpoint values).
+**How to avoid:**
+- Use at least B=50 batches (100 preferred). With B=100 and standard bootstrap theory, the probability of a degenerate sample is negligible.
+- Consider the block bootstrap variant: for each bootstrap sample, draw blocks of consecutive batches rather than individual batches. This preserves any temporal correlations between batches (though for this system, batches are independent by construction).
 
-**Phase to address:** Data architecture phase.
+**Phase to address:** Bootstrap implementation (minor concern, just set B large enough).
 
 ---
 
-### Pitfall 12: LsqFit.jl Convergence Failure with Default Parameters
+### Pitfall 14: Plotting Effective Rate on Wrong Time Axis
 
 **What goes wrong:**
-LsqFit.jl's `curve_fit()` uses default tolerances that may be too tight for noisy data, or too few iterations for slow convergence. The default `maxIter=1000` is usually sufficient, but the default `x_tol=1e-8` and `g_tol=1e-12` can cause premature termination on noisy data where the gradient is dominated by noise.
+The effective rate lambda_eff is computed from pairs of consecutive time points: `lambda_eff(t_i) = -log|Delta(t_{i+1})/Delta(t_i)| / (t_{i+1} - t_i)`. This value should be plotted at the midpoint `(t_i + t_{i+1})/2`, not at `t_i` or `t_{i+1}`. Plotting at `t_i` introduces a systematic half-step offset that shifts the apparent plateau position, biasing any automatic window selection that uses the lambda_eff time axis.
 
-**Prevention:**
-1. Set explicit tolerances: `curve_fit(model, t, data, p0; maxIter=10000, x_tol=1e-6, g_tol=1e-8)`.
-2. Check `fit.converged` after every fit. If false, increase iterations or relax tolerances.
-3. Always provide parameter bounds via `lower` and `upper` to prevent physically nonsensical solutions.
+**How to avoid:**
+- Return the midpoint times alongside lambda_eff values: `times_eff[i] = (times[i] + times[i+1]) / 2`.
+- Document the time axis convention in the function docstring.
 
-**Phase to address:** Exponential fitting implementation.
+**Phase to address:** Effective rate implementation (minor, but easy to get wrong).
 
 ---
 
-### Pitfall 13: Initial State Contamination of Decay Rate
+### Pitfall 15: Confusing bootstrap Standard Error with bootstrap Confidence Interval
 
 **What goes wrong:**
-The initial state `psi0` determines the coefficients `c_k` in the eigenmode expansion. If `psi0` is a ground state (e.g., `psi0 = [1, 0, 0, ...]` in the eigenbasis), it may already be close to the Gibbs state, meaning `<O>(0) - <O>_ss` is small and the decay signal is weak. Alternatively, if `psi0` is an eigenstate of the observable, the initial transient may be dominated by a specific eigenmode that is not the gap mode.
+The bootstrap gives a distribution of gap estimates. The standard error is the standard deviation of this distribution. The 95% confidence interval is the [2.5th, 97.5th] percentile of this distribution. For non-normal distributions (which is common for gap estimates, since the gap is bounded below by 0), these can differ significantly. Reporting "bootstrap SE" as the uncertainty and then computing "gap +/- 1.96*SE" assumes normality, which may not hold.
 
-**Prevention:**
-1. Use the maximally mixed state as the initial DM (which corresponds to random pure states in the trajectory picture -- but NOTE: maximally mixed state is NOT a pure state and cannot be represented by a single trajectory starting from a specific `psi0`).
-2. For trajectory simulations, use a fixed initial state like `psi0 = [1, 0, 0, ...]` (eigenbasis ground state) which is far from the Gibbs state at high temperature. This maximizes the decay signal.
-3. Run from multiple initial states and verify that the fitted gap is consistent.
+**How to avoid:**
+- Report the percentile-based confidence interval directly, not a normal approximation.
+- Also report the SE for comparison, but label it clearly as "bootstrap SE (normal approximation)" and the CI as "bootstrap CI (percentile method)."
 
-**Phase to address:** Experiment design phase.
-
----
-
-### Pitfall 14: Confusing Observable Decay Time with Mixing Time
-
-**What goes wrong:**
-The "spectral gap" from the Liouvillian is the slowest decay rate, which sets the ASYMPTOTIC convergence rate. The actual mixing time (time to reach within epsilon of the steady state) depends on the initial state, the observable, and the target precision:
-
-```
-t_mix(epsilon) ~ (1/gamma_1) * log(c_max / epsilon)
-```
-
-where `c_max` is the largest eigenmode coefficient. The decay rate `gamma_1` from fitting gives the SLOPE of the log-distance curve at late times, not the total mixing time. Reporting `1/gamma_fit` as "the mixing time" without specifying the prefactor is misleading.
-
-**Prevention:**
-1. Report `gamma_fit` as the "spectral gap estimate" or "asymptotic decay rate", NOT as "the mixing time".
-2. If estimating mixing time, also estimate the prefactor: `c_max ~ |<O>(0) - <O>_ss|`.
-3. The mixing time bound is `t_mix ~ (1/gamma_1) * log(c_max / epsilon)` for target precision epsilon.
-
-**Phase to address:** Results reporting -- terminology and interpretation.
+**Phase to address:** Bootstrap error bar reporting.
 
 ---
 
-## Phase-Specific Warnings
+## Technical Debt Patterns
 
-| Phase Topic | Likely Pitfall | Severity | Mitigation |
-|-------------|---------------|----------|------------|
-| **Observable construction (M_z)** | Basis mismatch (Pitfall 2) | CRITICAL | Follow `build_convergence_observables` pattern exactly |
-| **Observable construction (M_z)** | Symmetry selection (Pitfall 10) | MODERATE | Use multiple observables, check overlap |
-| **Trajectory runner for gap estimation** | Wrong time grid (Pitfall 7) | MODERATE | Compute time range from rough gap estimate |
-| **Trajectory runner for gap estimation** | Noise floor at late times (Pitfall 4) | CRITICAL | Pre-compute signal-to-noise, choose N_traj accordingly |
-| **Exponential fitting** | Single-exponential bias (Pitfall 3) | CRITICAL | Late-time fitting, log-linear pre-estimate |
-| **Exponential fitting** | Initial guess sensitivity (Pitfall 5) | MODERATE | Log-linear pre-estimate, bounded parameters |
-| **Exponential fitting** | LsqFit.jl convergence (Pitfall 12) | MINOR | Explicit tolerances, bounds, convergence check |
-| **Cross-validation metric** | Complex vs real gap (Pitfall 1) | CRITICAL | Always use `-real(spectral_gap)`, check imaginary part |
-| **Cross-validation ground truth** | Wrong eigenvalue from Arpack (Pitfall 6) | MODERATE | Full spectrum check for n=4, request more eigenvalues |
-| **Cross-validation baseline** | Wrong steady-state value (Pitfall 9) | MODERATE | Use Liouvillian fixed point, not Gibbs state |
-| **Error estimation** | Naive stderror (Pitfall 8) | MODERATE | Bootstrap over trajectory batches |
-| **Memory management** | Per-trajectory storage (Pitfall 11) | MINOR | Per-batch storage, block bootstrap |
-| **Results interpretation** | Decay rate vs mixing time (Pitfall 14) | MINOR | Correct terminology, include prefactor |
+Shortcuts that seem reasonable but create long-term problems.
 
----
+| Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
+|----------|-------------------|----------------|-----------------|
+| Hardcoding `skip_initial=0.1` for all observables | Quick results, no per-observable tuning | Wrong window for observables with different decay profiles; biased gap estimates | Never -- always use per-observable window or the automatic selector |
+| Storing bootstrap results only as scalar CIs | Small result structs | Cannot reconstruct per-time-point lambda_eff bands or diagnose non-normal bootstrap distributions | MVP only; full bootstrap distribution needed for publication |
+| Using LsqFit.jl `stderror` for two-exponential fit uncertainties | Free with the fit, no extra computation | Dramatically underestimates uncertainty due to ill-conditioning (see Pitfall 1); misleads about parameter identifiability | Never for two-exponential fits; acceptable only for single-exponential fits as a diagnostic |
+| Computing anti-Hermitian defect without rho^{-1/4} spectrum truncation | Simpler code, no threshold parameter | Misleading defect values at low temperature (see Pitfall 2); false alarm about KMS violation | Only for high-temperature (beta < 2) where condition number is manageable |
+| Selecting best observable by smallest fitted gap without cross-checking | Simple selection criterion | Systematically picks observables that underestimate the gap (Quick-30: Mz_stagg at 37-49% vs YY_avg at 2-6%) | Acceptable for quick estimates; must cross-check for publication-quality results |
 
-## Recommended Build Order to Minimize Risk
+## Integration Gotchas
 
-Based on the pitfall analysis, the safest implementation order is:
+Common mistakes when connecting new v1.4 features to the existing v1.3 infrastructure.
 
-1. **Cross-validation metric first** (addresses Pitfalls 1, 6): Define exactly what you are comparing. Extract exact gap from Liouvillian. Validate with full spectrum for n=4.
+| Integration | Common Mistake | Correct Approach |
+|-------------|----------------|------------------|
+| Two-exp fitting with existing `FitResult` | Trying to reuse `FitResult` struct (which has 3 params: A, gap, C) for 5 params | Create a new `TwoExpFitResult` struct with fields for both rates, both amplitudes, and offset |
+| Bootstrap with `run_observable_trajectories` | Expecting per-batch data from existing function | Modify function to accept a `store_per_batch::Bool` kwarg, or create a new `run_observable_trajectories_batched` variant |
+| Lambda_eff using `measurements_mean` from `ObservableTrajectoryResult` | Computing lambda_eff directly from the stored mean (which has already averaged out per-trajectory information) | This is correct for the mean lambda_eff; for bootstrap bands, need per-batch data (see Pitfall 9) |
+| Symmetry sector analysis with `eigenbasis_overlap_analysis` | Assuming the existing function's eigendecomposition respects symmetry | The existing `eigen(L)` does NOT respect symmetry. Need a separate simultaneous diagonalization step (see Pitfall 7) |
+| Anti-Hermitian defect with `LindbladianResult` | Using `liouv_result.liouvillian` directly for the similarity transform | The Liouvillian is in the vectorized (Liouville) form. The similarity transform `rho^{-1/4} L rho^{1/4}` acts on the operator level, requiring reshaping each column of L into a matrix, transforming, and reshaping back |
+| Delta-convergence with `estimate_spectral_gap` | Running `estimate_spectral_gap` at multiple delta values and comparing | This works but conflates simulation and fitting errors (see Pitfall 11). Instead, also compare trajectory-averaged observable values against exact exp(t*L) results, as Quick-32 demonstrated |
 
-2. **Observable construction second** (addresses Pitfalls 2, 10): Build M_z in the correct basis. Compute overlap coefficients with gap mode for n=4 to verify observability.
+## Performance Traps
 
-3. **Trajectory runner with correct time grid third** (addresses Pitfalls 4, 7): Compute required total_time and save_every from the exact gap. Run pilot to verify signal-to-noise.
+Patterns that work at small scale but fail at larger system sizes.
 
-4. **Exponential fitting fourth** (addresses Pitfalls 3, 5, 12): Implement log-linear pre-estimate, late-time fitting, fixed baseline subtraction.
+| Trap | Symptoms | Prevention | When It Breaks |
+|------|----------|------------|----------------|
+| Dense eigendecomposition of full Liouvillian for symmetry sector analysis | OOM or multi-hour runtime | Use Arpack shift-invert for just the leading 10-20 eigenvalues; only do full eigen for n<=4 (dim^2 <= 256) | n=6: Liouvillian is 4096x4096 (dense eigen takes ~30s, OK). n=8: 65536x65536 (impossible, 32 GB) |
+| Storing the full Liouvillian as a dense matrix for anti-Hermitian defect | Memory: dim^4 * 16 bytes. n=6: 4096^2 * 16 = 268 MB (OK). n=8: 65536^2 * 16 = 69 GB (impossible) | For n>6, use sparse Liouvillian and iterative methods for the defect norm; or restrict defect analysis to n<=6 | n=8 (dim=256, Liouvillian dim=65536) |
+| Two-exponential fitting with multi-start (5 initial guesses x 8 observables x 100 bootstrap samples) | 4000 fits per delta value; ~20 seconds for n=4 | Reduce multi-start to 3 guesses; skip fitting for observables that failed single-exponential quality check (R^2 < 0.5) | When bootstrap sample count > 200 or observable count > 10 |
+| Per-batch storage for n=8 with 1000 batches | 8 obs * 500 saves * 1000 batches * 8 bytes = 32 MB (manageable) but if save_every is too small (1 instead of 10), it becomes 320 MB | Always use save_every >= 10 for gap estimation; store only the number of batches needed for bootstrap (100 is enough) | When save_every < 5 or n_batches > 500 |
 
-5. **Error estimation fifth** (addresses Pitfall 8): Implement block bootstrap over trajectory batches.
+## "Looks Done But Isn't" Checklist
 
-6. **Full cross-validation last** (addresses Pitfall 9): Compare trajectory-derived gap against exact gap with proper error bars.
+Things that appear complete but are missing critical pieces.
+
+- [ ] **Two-exponential fitting:** Often missing the separation test (g2/g1 > 1.5 check) -- verify that the code flags when rates are too close for reliable decomposition
+- [ ] **Bootstrap error bars:** Often missing the per-batch time series storage mechanism -- verify that the trajectory runner actually returns per-batch data, not just the grand mean
+- [ ] **Effective rate plot:** Often missing the noise floor cutoff -- verify that lambda_eff is NaN/masked beyond the noise floor, not plotted with spurious values
+- [ ] **Richardson extrapolation:** Often missing the precondition check (monotonic delta-convergence) -- verify that the code refuses to extrapolate when the error structure is not O(delta^p)
+- [ ] **Anti-Hermitian defect:** Often missing the spectrum truncation for rho^{-1/4} -- verify that the code has a floor on Gibbs eigenvalues and reports the effective condition number
+- [ ] **Symmetry sector labels:** Often missing the degeneracy detection -- verify that near-degenerate eigenvalues are flagged as "ambiguous sector"
+- [ ] **Automatic window selection:** Often missing the quality metric (CV of lambda_eff in the selected window) -- verify that the code reports HOW FLAT the plateau is, not just WHERE it is
+- [ ] **Testing:** Often missing validation against exact Liouvillian -- verify that at least one test compares the diagnostic output against known exact results (not just synthetic data)
+
+## Recovery Strategies
+
+When pitfalls occur despite prevention, how to recover.
+
+| Pitfall | Recovery Cost | Recovery Steps |
+|---------|---------------|----------------|
+| Two-exp fit non-identifiable (Pitfall 1) | LOW | Fall back to single-exponential tail fit; report g1 from tail with bootstrap CI |
+| rho^{-1/4} blow-up (Pitfall 2) | LOW | Recompute with spectrum truncation threshold; compare BohrDomain vs TrotterDomain defect |
+| lambda_eff divergence (Pitfall 3) | LOW | Apply noise floor cutoff retroactively; recompute with smoothing |
+| Richardson worsens estimate (Pitfall 4) | LOW | Discard Richardson result; use the finest-delta un-extrapolated estimate |
+| Memory blow-up from per-trajectory storage (Pitfall 5) | MEDIUM | Kill the process; redesign with block bootstrap; re-run trajectory simulation with per-batch storage |
+| Silent window selection failure (Pitfall 6) | MEDIUM | Re-run with multiple manual windows; compare results; identify the actual usable range from lambda_eff plot |
+| Ambiguous symmetry labels (Pitfall 7) | LOW | Add small random perturbation to break degeneracy; re-label; verify labels are consistent |
+| Negative amplitude in two-exp fit (Pitfall 8) | LOW | Check if the physics allows mixed-sign amplitudes; if spurious, constrain to positive amplitudes and refit |
+
+## Pitfall-to-Phase Mapping
+
+How roadmap phases should address these pitfalls.
+
+| Pitfall | Prevention Phase | Verification |
+|---------|------------------|--------------|
+| Two-exp non-identifiability (1) | Two-exponential fitting | Multi-start test: 5 initial guesses give same g1 within 10%; separation test passes |
+| rho^{-1/4} blow-up (2) | Anti-Hermitian defect diagnosis | BohrDomain defect < 1e-10 after truncation; condition number reported |
+| lambda_eff divergence (3) | Effective rate plot | No NaN in returned lambda_eff; noise floor cutoff applied; sign-change points marked |
+| Richardson failure (4) | Delta-convergence diagnosis | Monotonicity test runs before Richardson; non-monotonic data blocks extrapolation |
+| Memory blow-up (5) | Bootstrap error bars | n=6 with 20k trajectories and 100 bootstrap samples uses < 50 MB for stored batch data |
+| Window selection failure (6) | Automatic window selection | Multiple-window comparison shows gap estimates agree within 2x bootstrap SE |
+| Symmetry label ambiguity (7) | Symmetry sector analysis | Degeneracy flag triggers for eigenvalue pairs closer than 1e-8 * |gap| |
+| Negative amplitude (8) | Two-exponential fitting | Cancellation ratio (|A1+A2|/(|A1|+|A2|)) > 0.3 for all converged fits |
+| Bootstrap lambda_eff (9) | Bootstrap error bars | Per-batch time series stored; pointwise CI band computed |
+| Testing stochastic output (10) | All diagnostic phases | Each feature has unit tests (synthetic), integration tests (n=3), and validation tests (n=4, optional) |
+| Error conflation (11) | Delta-convergence diagnosis | Both simulation error (rho distance) and total estimation error (gap distance) reported separately |
+| Steady-state mismatch (12) | Effective rate plot | Uses liouv_result.fixed_point when available; plots Delta(T_final) as diagnostic |
 
 ---
 
 ## Sources
 
-### Verified (HIGH confidence)
-- QuantumFurnace.jl codebase -- Direct analysis of `furnace.jl` (run_lindbladian, spectral_gap extraction), `structs.jl` (LindbladianResult with Complex{T} spectral_gap), `trajectories.jl` (observable accumulation, TrajectoryWorkspace), `convergence.jl` (build_convergence_observables basis transforms), `qi_tools.jl` (gibbs_state, trace_distance)
-- Quick task 20 summary (.planning/quick/20-debug-gns-trotterdomain-0-83-gap-suspect/20-SUMMARY.md) -- Documented basis mismatch causing spurious 0.83 gap (should be 0.0807)
-- [LsqFit.jl documentation](https://julianlsolvers.github.io/LsqFit.jl/latest/tutorial/) -- Levenberg-Marquardt, parameter bounds, convergence control
-- [LsqFit.jl GitHub](https://github.com/JuliaNLSolvers/LsqFit.jl) -- API reference, weighted fitting
-- [Lindbladian Wikipedia](https://en.wikipedia.org/wiki/Lindbladian) -- Spectral gap definition, eigenvalue structure, convergence rate
-- [Sandvik (2011) "Excitation Gap from Optimized Correlation Functions in QMC Simulations"](https://ar5iv.labs.arxiv.org/html/1112.2269) -- Signal-to-noise in extracting gaps from Monte Carlo
-- [Nachtergaele, Sims (2006) "Spectral Gap and Exponential Decay of Correlations"](https://link.springer.com/article/10.1007/s00220-006-0030-4) -- Theory of gap-controlled correlation decay
-- [Mori (2022) "Liouvillian analysis of relaxation time in open quantum systems"](https://www2.yukawa.kyoto-u.ac.jp/~nqs2022/slide/4th/Mori.pdf) -- Complex eigenvalue structure, decay rate vs oscillation frequency
-- [Chen, Kastoryano, Gilyen (2025)](https://arxiv.org/abs/2311.09207) -- KMS detailed balance, real eigenvalues under GNS inner product
+### Verified from codebase (HIGH confidence)
+- QuantumFurnace.jl fitting.jl: single-exponential model `A*exp(-gap*t)+C`, log-linear initial guess, LsqFit.jl `curve_fit` with parameter bounds
+- QuantumFurnace.jl gap_estimation.jl: `estimate_spectral_gap` pipeline, `_select_best_observable` smallest-gap criterion, `eigenbasis_overlap_analysis` full dense eigendecomposition
+- QuantumFurnace.jl trajectories.jl: `run_observable_trajectories` returns `measurements_mean` (grand average only), no per-batch storage; `_run_chunk_obs_only!` accumulates into shared `mean_data_local`
+- QuantumFurnace.jl convergence.jl: `run_trajectories_convergence` has batch structure but stores only per-batch density matrix (via `_run_batch_no_obs!`), not per-batch observable time series
+- Quick-30 (30-SUMMARY.md): Gap estimation error NOT O(delta); error/delta varies 96x; Richardson extrapolation 1.0x improvement (ineffective)
+- Quick-32 (32-SUMMARY.md): Trajectory simulation correct; observable errors O(1e-3) and monotonic; fitting procedure is sole source of 37-49% gap estimation error
+- Quick-25 (25-PLAN.md): n=6 gap mode in k=pi momentum sector; all k=0 observables have zero overlap
 
-### Domain knowledge (HIGH confidence, established physics/numerics)
-- Exponential fitting of sums of exponentials is an ill-conditioned problem (classic numerical analysis result)
-- Late-time fitting extracts the slowest decay mode (standard technique in spectroscopy and QMC)
-- Bootstrap resampling is the gold standard for error estimation in Monte Carlo (Efron 1979)
-- Signal-to-noise for Monte Carlo averages scales as 1/sqrt(N_samples)
-- KMS-detailed-balanced Lindbladians are self-adjoint w.r.t. GNS inner product, giving real eigenvalues
-- Total magnetization commutes with isotropic Heisenberg Hamiltonian (SU(2) symmetry)
-- Disorder breaks SU(2) symmetry, making all observables generically overlap with all eigenmodes
+### Established numerical analysis (HIGH confidence)
+- [Parameter identifiability in two-exponential models](https://bmcsystbiol.biomedcentral.com/articles/10.1186/s12918-015-0219-2): Ill-conditioning of sums-of-exponentials fitting depends on ratio of decay constants and signal-to-noise
+- [On the accuracy of Prony's method for recovery of exponential sums with closely spaced exponents](https://www.sciencedirect.com/science/article/abs/pii/S1063520324000642): Numerical conditioning of exponential sum recovery degrades as exponent separation decreases
+- [Levenberg-Marquardt algorithm](https://en.wikipedia.org/wiki/Levenberg%E2%80%93Marquardt_algorithm): Damping regularizes ill-conditioned Jacobian; convergence depends on initialization
+- [Richardson extrapolation](https://en.wikipedia.org/wiki/Richardson_extrapolation): Requires error to be a power series in the discretization parameter; fails when assumption is violated
+- [Fitting sum of exponentials is ill-conditioned](https://randorithms.com/2020/03/08/exponential-sum-fits.html): On moving from two- to three-exponential models, the condition deteriorates badly
+- [Modified Prony Algorithm for Exponential Function Fitting](https://epubs.siam.org/doi/abs/10.1137/0916008): SVD-based approaches improve numerical stability over direct Prony for noisy data
+- Bootstrap resampling theory (Efron 1979): Block bootstrap valid for independent blocks; minimum ~50 blocks for reliable percentile CIs
 
-### Partially verified (MEDIUM confidence)
-- [ResearchGate discussion on fitting sum of exponentials](https://www.researchgate.net/post/What_are_good_methods_for_fitting_a_sum_of_exponentials_to_data_without_an_initial_guess) -- Practical advice on multi-exponential fitting
-- [Exponential curve fitting numerical conditioning](https://davdata.nl/math/expfitting.html) -- Ill-conditioning analysis
-- [Mixing time from Liouvillian spectral gap](https://arxiv.org/html/2411.04454) -- Recent theoretical bounds on mixing time
+### Domain knowledge (HIGH confidence)
+- Similarity transform `rho^{-1/4} L rho^{1/4}` condition number grows as `exp(beta * bandwidth / 4)` -- exponential in inverse temperature and system size
+- For KMS-detailed-balanced Lindbladians, L_tilde is self-adjoint (all eigenvalues real) in exact arithmetic; any non-real eigenvalues indicate either approximation error or numerical artifacts
+- Effective rate `lambda_eff(t) = -d/dt log|Delta(t)|` is model-free but requires |Delta(t)| > 0 at all computed points
+- Near-degenerate eigenvalue subspaces have arbitrary eigenvector orientation under standard eigendecomposition (LAPACK `dsyev`/`zheev`)
+- Quick-30 empirically confirmed: single-exponential gap estimation error is dominated by fitting model mismatch (delta-independent), not Trotter discretization (delta-dependent)
 
 ---
-*Pitfalls research for: v1.3 Mixing Time Estimation -- Spectral gap estimation from trajectory observables*
-*Researched: 2026-02-16*
+*Pitfalls research for: v1.4 Spectral Gap Refinement -- Adding diagnostics to QuantumFurnace.jl*
+*Researched: 2026-02-19*
