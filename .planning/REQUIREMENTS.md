@@ -1,0 +1,110 @@
+# Requirements: QuantumFurnace.jl v1.4
+
+**Defined:** 2026-02-19
+**Core Value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
+
+## v1.4 Requirements
+
+Requirements for v1.4 Spectral Gap Refinement. Each maps to roadmap phases.
+
+### Structural Diagnostics
+
+- [ ] **DIAG-01**: Leading 20-30 eigenvalues of exact Lindbladian extracted via Arpack shift-invert at n=4,6 (real + imaginary parts, sorted by proximity to zero)
+- [ ] **DIAG-02**: Lindbladian fixed point (lambda_1=0 eigenvector) computed and trace distance to Gibbs state reported
+- [ ] **DIAG-03**: Anti-Hermitian defect computed via KMS similarity transform D = rho^{-1/4} L[rho^{1/4}(.)rho^{1/4}] rho^{-1/4}, with spectrum truncation for numerical stability
+- [ ] **DIAG-04**: Defect ratio ||A||/lambda_gap(H) reported, determining whether real-exponential fitting is appropriate
+- [ ] **DIAG-05**: Observable overlap coefficients c_k computed for leading 10-20 modes using exact left/right eigenvectors
+- [ ] **DIAG-06**: Delta-Sz symmetry sector labels assigned to each Lindbladian eigenvector, with near-degeneracy detection
+
+### Fitting Infrastructure
+
+- [ ] **FIT-01**: Two-exponential fit c1*exp(-g1*t) + c2*exp(-g2*t) implemented with Prony two-point initialization
+- [ ] **FIT-02**: Separation quality check (g2/g1 > 1.5) with automatic fallback to single-exponential tail fit
+- [ ] **FIT-03**: Two-exponential fit validated against synthetic data (known rates recovered within CIs)
+
+### Effective Rate & Window
+
+- [ ] **RATE-01**: Model-free effective rate lambda_eff(t) computed with configurable lag, NaN masking at sign changes, and noise floor cutoff
+- [ ] **RATE-02**: Bootstrap error bars on lambda_eff(t) via trajectory batch resampling (pointwise confidence bands)
+- [ ] **RATE-03**: Automatic t_max selection via SNR > 3 threshold
+- [ ] **RATE-04**: Automatic t_min selection via gamma_1 stability test (plateau detection over window-start sweep)
+
+### Bootstrap Error Bars
+
+- [ ] **BOOT-01**: Batched trajectory runner storing per-batch mean observable time series (n_batches x n_obs x n_saves)
+- [ ] **BOOT-02**: Batch-level bootstrap with percentile confidence intervals (not normal approximation)
+- [ ] **BOOT-03**: Bootstrap gap distribution reported (median, mean, SE, full distribution) for each observable
+
+### Richardson & Convergence
+
+- [ ] **RICH-01**: Delta-convergence sweep at 3+ delta values with identical parameters (same N_traj, t_final, observable, seed)
+- [ ] **RICH-02**: Richardson extrapolation with mandatory monotonicity precondition gate
+- [ ] **RICH-03**: Un-extrapolated estimates always reported alongside Richardson-extrapolated values
+
+### Validation & Dashboard
+
+- [ ] **VAL-01**: 7-panel diagnostic dashboard: spectrum, defect metrics, overlap coefficients, effective rate, delta-convergence, two-exp fit, t_min stability
+- [ ] **VAL-02**: External field comparison (h=0 vs h=0.1J) at n=4,6 for symmetry-breaking validation
+- [ ] **VAL-03**: Final validated gap table at n=4,6 (exact vs estimated, bootstrap CI, sigma discrepancy)
+- [ ] **VAL-04**: Multi-observable minimum-gap selector using two-exponential g1 estimates
+
+## v2 Requirements
+
+Deferred to future release. Tracked but not in current roadmap.
+
+### Extended Validation
+
+- **EVAL-01**: n=8 sparse Lindbladian diagonalization via KrylovKit.jl for second validation point
+- **EVAL-02**: Damped-oscillation fit model c*exp(-gamma*t)*cos(omega*t+phi) for complex eigenvalue cases
+- **EVAL-03**: GEVP / matrix pencil methods for multi-eigenvalue extraction
+
+## Out of Scope
+
+| Feature | Reason |
+|---------|--------|
+| n=8 sparse Lindbladian construction | Explicitly deferred per reference documents; requires new architecture (fast apply_lindbladian) |
+| GPU-accelerated trajectories | Not needed for current system sizes (n=4,6 diagnostic validation) |
+| Adaptive delta selection | Optimization that presumes diagnostic pipeline already works |
+| Per-trajectory density matrix storage for bootstrap | Memory-prohibitive (640 MB+ at n=6, 20k traj); batch-level bootstrap sufficient |
+| Real-time interactive plotting | Static diagnostic figures sufficient for thesis |
+| Weighted least squares for two-exp fit | SNR-based window truncation is simpler and equally effective |
+| Float32 diagnostic paths | Diagnostics need full Float64 precision for meaningful defect ratios |
+
+## Traceability
+
+Which phases cover which requirements. Updated during roadmap creation.
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| FIT-01 | — | Pending |
+| FIT-02 | — | Pending |
+| FIT-03 | — | Pending |
+| DIAG-01 | — | Pending |
+| DIAG-02 | — | Pending |
+| DIAG-03 | — | Pending |
+| DIAG-04 | — | Pending |
+| DIAG-05 | — | Pending |
+| DIAG-06 | — | Pending |
+| RATE-01 | — | Pending |
+| RATE-02 | — | Pending |
+| RATE-03 | — | Pending |
+| RATE-04 | — | Pending |
+| BOOT-01 | — | Pending |
+| BOOT-02 | — | Pending |
+| BOOT-03 | — | Pending |
+| RICH-01 | — | Pending |
+| RICH-02 | — | Pending |
+| RICH-03 | — | Pending |
+| VAL-01 | — | Pending |
+| VAL-02 | — | Pending |
+| VAL-03 | — | Pending |
+| VAL-04 | — | Pending |
+
+**Coverage:**
+- v1.4 requirements: 23 total
+- Mapped to phases: 0
+- Unmapped: 23
+
+---
+*Requirements defined: 2026-02-19*
+*Last updated: 2026-02-19 after initial definition*
