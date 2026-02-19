@@ -76,35 +76,35 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FIT-01 | — | Pending |
-| FIT-02 | — | Pending |
-| FIT-03 | — | Pending |
-| DIAG-01 | — | Pending |
-| DIAG-02 | — | Pending |
-| DIAG-03 | — | Pending |
-| DIAG-04 | — | Pending |
-| DIAG-05 | — | Pending |
-| DIAG-06 | — | Pending |
-| RATE-01 | — | Pending |
-| RATE-02 | — | Pending |
-| RATE-03 | — | Pending |
-| RATE-04 | — | Pending |
-| BOOT-01 | — | Pending |
-| BOOT-02 | — | Pending |
-| BOOT-03 | — | Pending |
-| RICH-01 | — | Pending |
-| RICH-02 | — | Pending |
-| RICH-03 | — | Pending |
-| VAL-01 | — | Pending |
-| VAL-02 | — | Pending |
-| VAL-03 | — | Pending |
-| VAL-04 | — | Pending |
+| DIAG-01 | Phase 26 | Pending |
+| DIAG-02 | Phase 26 | Pending |
+| DIAG-03 | Phase 26 | Pending |
+| DIAG-04 | Phase 26 | Pending |
+| DIAG-05 | Phase 26 | Pending |
+| DIAG-06 | Phase 26 | Pending |
+| FIT-01 | Phase 27 | Pending |
+| FIT-02 | Phase 27 | Pending |
+| FIT-03 | Phase 27 | Pending |
+| RATE-01 | Phase 28 | Pending |
+| RATE-02 | Phase 28 | Pending |
+| RATE-03 | Phase 28 | Pending |
+| RATE-04 | Phase 28 | Pending |
+| BOOT-01 | Phase 29 | Pending |
+| BOOT-02 | Phase 29 | Pending |
+| BOOT-03 | Phase 29 | Pending |
+| RICH-01 | Phase 29 | Pending |
+| RICH-02 | Phase 29 | Pending |
+| RICH-03 | Phase 29 | Pending |
+| VAL-01 | Phase 30 | Pending |
+| VAL-02 | Phase 30 | Pending |
+| VAL-03 | Phase 30 | Pending |
+| VAL-04 | Phase 30 | Pending |
 
 **Coverage:**
 - v1.4 requirements: 23 total
-- Mapped to phases: 0
-- Unmapped: 23
+- Mapped to phases: 23
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-19*
-*Last updated: 2026-02-19 after initial definition*
+*Last updated: 2026-02-19 after roadmap creation*

@@ -5,14 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-19)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.4 Spectral Gap Refinement
+**Current focus:** v1.4 Spectral Gap Refinement -- Phase 26 (Two-Exponential Fitting Infrastructure)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-02-19 — Milestone v1.4 started
+Phase: 26 of 30 (Two-Exponential Fitting Infrastructure)
+Plan: 0 of TBD in current phase
+Status: Ready to plan
+Last activity: 2026-02-19 -- Roadmap created for v1.4 milestone
+
+Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
@@ -27,12 +29,18 @@ Last activity: 2026-02-19 — Milestone v1.4 started
 | v1.1 Reduce | 6-11 | 16 (+5 quick) | 2026-02-15 |
 | v1.2 Multi-threading | 12-19 | 15 (+3 quick) | 2026-02-15 to 2026-02-16 |
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
+| v1.4 Spectral Gap Refinement | 26-30 | TBD | 2026-02-19 to - |
 
 ## Accumulated Context
 
 ### Decisions
 
 All decisions logged in PROJECT.md Key Decisions table.
+Recent context for v1.4:
+- All trajectory runs use `with_coherent=true`, 4 threads, Trotter steps = 10, delta is the Trotter parameter
+- Batch-level bootstrap (~3 MB) chosen over per-trajectory storage (~640 MB+) -- memory safe within 40 GB budget
+- Two-exponential fitting is the root cause fix for non-monotonic delta-scaling (Quick-32 conclusion)
+- Lindbladian fixed point (not Gibbs state) must be used as steady-state for TrotterDomain lambda_eff
 
 ### Pending Todos
 
@@ -40,11 +48,9 @@ None
 
 ### Blockers/Concerns
 
-None
-
-### Roadmap Evolution
-
-All milestones (v1.0-v1.3) complete and archived.
+- Phase 27: `_thermalize_to_liouv_config` field mapping needs targeted audit before implementation
+- Phase 29: Per-batch seeding arithmetic needs verification against existing `Xoshiro(seed + traj_id)` scheme
+- Phase 26: n=4 has g2/g1 ~ 2x, right at identifiability boundary -- validate Prony initialization early with real data
 
 ### Quick Tasks Completed
 
@@ -68,5 +74,5 @@ All milestones (v1.0-v1.3) complete and archived.
 ## Session Continuity
 
 Last session: 2026-02-19
-Stopped at: v1.4 Spectral Gap Refinement — defining requirements
+Stopped at: v1.4 roadmap created -- ready to plan Phase 26
 Resume file: None
