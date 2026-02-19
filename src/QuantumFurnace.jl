@@ -53,6 +53,13 @@ export fit_exponential_decay, FitResult
 # Gap estimation
 export SpectralGapResult, estimate_spectral_gap, OverlapAnalysisResult, eigenbasis_overlap_analysis
 
+# Diagnostics (Phase 26)
+export EigenDecompositionResult, FixedPointResult, DefectResult, OverlapResult,
+       SzSectorLabel, MultipletGroup, ExactDiagnosticsResult,
+       extract_leading_eigendata, compute_fixed_point_distance,
+       compute_anti_hermitian_defect, compute_overlap_coefficients,
+       compute_sz_labels, detect_multiplets, run_exact_diagnostics
+
 # Simulation
 export run_lindbladian, run_thermalization, construct_lindbladian,
        run_trajectories
@@ -110,6 +117,7 @@ include("linearmaps_liouv.jl")
 include("convergence.jl")
 include("fitting.jl")
 include("gap_estimation.jl")
+include("diagnostics.jl")
 include("results.jl")
 
 end
