@@ -60,6 +60,22 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 
 ### Active
 
+## Current Milestone: v1.4 Spectral Gap Refinement
+
+**Goal:** Build comprehensive diagnostics and improved estimation methods for spectral gap estimation, validated against exact results at n=4,6, to produce reliable gap estimates for larger systems.
+
+**Target features:**
+- Exact Lindbladian reference data (leading eigenvalues, eigenvectors, fixed point deviation)
+- Anti-Hermitian defect diagnosis (KMS similarity transform, normality ratio)
+- Observable overlap analysis with exact eigenvectors (mode decomposition)
+- δ-convergence diagnosis and Richardson extrapolation
+- Effective rate plot λ_eff(t) — model-free instantaneous decay diagnostic
+- Bootstrap error bars on λ_eff(t) via trajectory resampling
+- Two-exponential fitting with robust initialization and automatic window selection
+- Symmetry sector labeling on Lindbladian eigenvalues (ΔSz quantum numbers)
+- External field comparison tests (h=0 vs h=0.1J)
+- Summary diagnostic dashboard and final validated estimates
+
 **Future milestones:**
 - [ ] 1D Ising model Hamiltonian generation
 - [ ] 2D Heisenberg Hamiltonian generation (lattice graph support)
@@ -71,9 +87,7 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 - [ ] Paper-ready plotting: convergence curves, sim time plots, gate complexity, mixing time
 - [ ] Ding et al. (2024) KMS Lindbladian construction with discrete jump operators (future addition)
 - [ ] Jump statistics histogram (empirical rates match theoretical predictions)
-- [ ] Confidence interval reporting (bootstrap CIs on trajectory-vs-DM trace distance)
-- [ ] Multi-exponential fitting for improved gap estimation accuracy (Prony/ESPRIT/matrix pencil methods)
-- [ ] Symmetry-adapted observables for gap estimation on symmetric Hamiltonians (n=6 Heisenberg limitation)
+- [ ] n=8 sparse Lindbladian diagonalization for second validation point
 
 ### Out of Scope
 
@@ -106,9 +120,9 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 - API organized: physics building blocks exported, implementation details `_`-prefixed
 
 **Known Limitations:**
-- n=6 periodic Heisenberg chain: all preset observables have zero overlap with gap mode due to translational + discrete symmetry protection. Gap estimation accuracy ~10.7% for this system.
-- Single-exponential fitting produces non-monotonic error at small delta. Multi-exponential methods (Prony/ESPRIT) would improve accuracy but are deferred.
-- Richardson extrapolation ineffective for gap estimation error (error is not O(delta^p)).
+- n=6 periodic Heisenberg chain: all preset observables have zero overlap with gap mode due to translational + discrete symmetry protection. Gap estimation accuracy ~10.7% for this system. (v1.4 target: diagnose and address via symmetry sector analysis)
+- Single-exponential fitting produces non-monotonic error at small delta. (v1.4 target: two-exponential fitting with automatic window selection)
+- Richardson extrapolation ineffective for single-exponential gap estimation error. (v1.4 target: revisit with two-exponential fitting + δ-convergence diagnosis)
 
 **Theoretical Foundation:**
 The package implements quantum Gibbs samplers from three key papers:
@@ -166,4 +180,4 @@ Results needed for publication: convergence curves (trace distance vs. steps), m
 | Qiskit for circuit generation (Python interop) | Qiskit is the standard for quantum circuit representation; Julia quantum circuit ecosystem less mature | -- Pending |
 
 ---
-*Last updated: 2026-02-19 after v1.3 milestone*
+*Last updated: 2026-02-19 after v1.4 milestone start*

@@ -5,16 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-02-19)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.3 Mixing Time Estimation -- SHIPPED
+**Current focus:** v1.4 Spectral Gap Refinement
 
 ## Current Position
 
-Phase: v1.3 milestone complete
-Plan: All 10 plans across 6 phases complete
-Status: v1.3 Mixing Time Estimation shipped. Spectral gap estimation from trajectory-based observable decay, cross-validated against exact Liouvillian eigenvalues. n=4 achieves 0.72% accuracy.
-Last activity: 2026-02-19 -- v1.3 milestone archived
-
-Progress: [##############################] 51/51 plans (v1.0-v1.3)
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-02-19 — Milestone v1.4 started
 
 ## Performance Metrics
 
@@ -70,5 +68,5 @@ All milestones (v1.0-v1.3) complete and archived.
 ## Session Continuity
 
 Last session: 2026-02-19
-Stopped at: v1.3 Mixing Time Estimation milestone archived and tagged.
+Stopped at: v1.4 Spectral Gap Refinement — defining requirements
 Resume file: None
