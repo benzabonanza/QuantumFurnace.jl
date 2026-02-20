@@ -19,7 +19,7 @@ Progress: [░░░░░░░░░░] 0%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 70 (v1.0: 10, v1.1: 16, quick: 17, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2)
+- Total plans completed: 71 (v1.0: 10, v1.1: 16, quick: 18, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2)
 
 **By Milestone:**
 
@@ -45,6 +45,7 @@ Recent context for v1.4:
 - DIAG-03/04 defect_ratio > 0.1 is advisory-only warning, does not gate computation
 - Canonical 6-observable set: Z1, X1, Z1_Zhalf, H, Rand_traceless, Mz_stagg (replaces v1.3 8-obs set)
 - Biorthogonal overlap formula: c_k = Tr[O R_k] * Tr[L_k^dagger (rho_0 - rho_beta)] via explicit left+right eigenvectors
+- run_exact_diagnostics accepts basis_eigvecs keyword for TrotterDomain; controls default observables, initial states, and Sz labels
 
 ### Pending Todos
 
@@ -74,9 +75,10 @@ None
 | 30 | Gap error NOT O(delta); Richardson extrapolation ineffective (1.0x) | 2026-02-18 | 502afe4 | [30-validate-trotter-delta-order-gap-error-a](./quick/30-validate-trotter-delta-order-gap-error-a/) |
 | 31 | Longer mixing + uniform psi0 does NOT fix O(delta) scaling (199x ratio spread) | 2026-02-18 | 06fcff8 | [31-delta-scaling-revalidation-with-longer-m](./quick/31-delta-scaling-revalidation-with-longer-m/) |
 | 32 | Trajectory simulation confirmed correct; non-monotonic gap estimation is fitting artifact | 2026-02-18 | dfd3baf | [32-investigate-and-fix-non-monotonic-delta-](./quick/32-investigate-and-fix-non-monotonic-delta-/) |
+| 34 | Extend exact diagnostics to support TrotterDomain (basis_eigvecs keyword) | 2026-02-20 | 5b48b1e | [34-extend-exact-diagnostics-to-support-trot](./quick/34-extend-exact-diagnostics-to-support-trot/) |
 
 ## Session Continuity
 
-Last session: 2026-02-19
-Stopped at: Phase 26 complete and verified -- ready to plan Phase 27
+Last session: 2026-02-20
+Stopped at: Quick task 34 complete -- TrotterDomain diagnostics support added
 Resume file: None
