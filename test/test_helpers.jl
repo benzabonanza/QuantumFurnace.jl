@@ -242,6 +242,29 @@ function make_liouv_config(domain; with_coherent::Bool=true)
 end
 
 """
+    make_liouv_config_gns(domain) -> LiouvConfigGNS
+
+Create a LiouvConfigGNS for the standard 4-qubit test system.
+Uses Smooth Metro transition matching KMS test parameter choices.
+"""
+function make_liouv_config_gns(domain)
+    LiouvConfigGNS(
+        num_qubits = NUM_QUBITS,
+        with_coherent = false,
+        with_linear_combination = true,
+        domain = domain,
+        beta = BETA,
+        sigma = SIGMA,
+        a = BETA / 30.0,
+        b = 0.4,
+        num_energy_bits = NUM_ENERGY_BITS,
+        w0 = W0,
+        t0 = T0,
+        num_trotter_steps_per_t0 = NUM_TROTTER_STEPS_PER_T0,
+    )
+end
+
+"""
     make_thermalize_config(domain; with_coherent=true, delta=TEST_DELTA, mixing_time=1.0) -> ThermalizeConfig
 
 Create a ThermalizeConfig with locked test parameters.

@@ -64,6 +64,9 @@ export EigenDecompositionResult, FixedPointResult, DefectResult, OverlapResult,
 export run_lindbladian, run_thermalization, construct_lindbladian,
        run_trajectories
 
+# Krylov matvec (Phase 27)
+export KrylovWorkspace, apply_lindbladian!, apply_adjoint_lindbladian!
+
 # QI Tools
 export trace_distance_h, trace_distance_nh, trace_norm_h, trace_norm_nh,
        fidelity, frobenius_norm, is_density_matrix, random_density_matrix,
@@ -111,6 +114,8 @@ include("jump_workers.jl")
 include("trajectories.jl")
 include("furnace_utensils.jl")
 include("furnace.jl")
+include("krylov_workspace.jl")
+include("krylov_matvec.jl")
 include("log_sobolev.jl")
 include("log_sobolev_manopt.jl")
 include("linearmaps_liouv.jl")
