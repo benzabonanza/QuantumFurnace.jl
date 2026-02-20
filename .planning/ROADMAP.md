@@ -83,7 +83,7 @@ Full details: [milestones/v1.4-ROADMAP.md](milestones/v1.4-ROADMAP.md)
 
 **Milestone Goal:** Matrix-free spectral gap estimation via KrylovKit.jl, enabling gap computation for system sizes (up to ~12 qubits) where the full Lindbladian matrix cannot be stored.
 
-- [ ] **Phase 27: Core Matvec Infrastructure** - KrylovWorkspace, EnergyDomain matvec, coherent term, adjoint, round-trip correctness gate
+- [x] **Phase 27: Core Matvec Infrastructure** - KrylovWorkspace, EnergyDomain matvec, coherent term, adjoint, round-trip correctness gate
 - [ ] **Phase 28: Domain Extension** - Matrix-free Lindbladian action for TimeDomain, TrotterDomain, and BohrDomain
 - [ ] **Phase 29: Eigensolver Integration** - KrylovKit eigsolve wrapper, CPTP channel path, result struct, memory guard, convergence handling
 - [ ] **Phase 30: Cross-Validation** - Krylov gap vs dense eigen() at n=4,6; L-vs-E consistency; KMS-vs-GNS comparison
@@ -100,11 +100,11 @@ Full details: [milestones/v1.4-ROADMAP.md](milestones/v1.4-ROADMAP.md)
   2. Coherent term -i[B, rho] is included when `with_coherent=true` for KMS configs, and the round-trip test passes with coherent term enabled
   3. Adjoint Lindbladian L'(rho) (dissipator with A <-> A' swap) passes its own round-trip test against dense adjoint at n=4
   4. KrylovWorkspace pre-allocates all scratch matrices at construction time and the matvec hot path produces zero heap allocations (verified by `@allocated`)
-**Plans:** 2 plans
+**Plans:** 2 plans -- completed 2026-02-20
 
 Plans:
-- [ ] 27-01-PLAN.md -- KrylovWorkspace struct + constructor, apply_lindbladian!, apply_adjoint_lindbladian!, _accumulate_dissipator!
-- [ ] 27-02-PLAN.md -- Module integration, test helpers, round-trip correctness tests, allocation regression tests
+- [x] 27-01-PLAN.md -- KrylovWorkspace struct + constructor, apply_lindbladian!, apply_adjoint_lindbladian!, _accumulate_dissipator!
+- [x] 27-02-PLAN.md -- Module integration, test helpers, round-trip correctness tests, allocation regression tests
 
 ### Phase 28: Domain Extension
 **Goal**: Matrix-free Lindbladian action works for all four domains, with proper NUFFT prefactors (Time), Trotter eigenbasis (Trotter), and Bohr bucket iteration (Bohr)
@@ -196,7 +196,7 @@ Phases execute in numeric order: 27 -> 28 -> 29 -> 30 -> 31
 | 24. Cross-Validation | v1.3 | 3/3 | Complete | 2026-02-17 |
 | 25. Spectral Gap Validation Overhaul | v1.3 | 3/3 | Complete | 2026-02-18 |
 | 26. Exact Reference and Structural Diagnostics | v1.4 | 2/2 | Complete | 2026-02-19 |
-| 27. Core Matvec Infrastructure | v1.5 | 0/TBD | Not started | - |
+| 27. Core Matvec Infrastructure | v1.5 | 2/2 | Complete | 2026-02-20 |
 | 28. Domain Extension | v1.5 | 0/TBD | Not started | - |
 | 29. Eigensolver Integration | v1.5 | 0/TBD | Not started | - |
 | 30. Cross-Validation | v1.5 | 0/TBD | Not started | - |
