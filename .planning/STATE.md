@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-20)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.5 Krylov Gap Estimation -- Phase 27 (Core Matvec Infrastructure)
+**Current focus:** v1.5 Krylov Gap Estimation -- Phase 28 (Other-Domain Dispatch)
 
 ## Current Position
 
-Phase: 27 of 31 (Core Matvec Infrastructure)
-Plan: 1 of 2 complete
-Status: Executing
-Last activity: 2026-02-20 -- Completed 27-01 (KrylovWorkspace + EnergyDomain matvec)
+Phase: 28 of 31 (Other-Domain Dispatch)
+Plan: 0 of TBD complete
+Status: Ready
+Last activity: 2026-02-20 -- Completed Phase 27 (Core Matvec Infrastructure, 2/2 plans)
 
-Progress: [██░░░░░░░░] 10% (v1.5 phases 27-31, plan 27-01 done)
+Progress: [██░░░░░░░░] 20% (v1.5 phases 27-31, phase 27 complete)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 72 (v1.0: 10, v1.1: 16, quick: 18, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 1)
+- Total plans completed: 73 (v1.0: 10, v1.1: 16, quick: 18, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 2)
 
 **By Milestone:**
 
@@ -43,8 +43,9 @@ Recent decisions affecting current work:
 - Canonical 6-observable set (v1.4): available for trajectory-based comparison if needed
 - Biorthogonal overlap formula (v1.4): left+right eigenvectors for diagnostics
 - KrylovWorkspace{T,PD} dual type params for zero-overhead NamedTuple access (v1.5, 27-01)
-- 3-arg mul! + @. broadcasting pattern for guaranteed zero-alloc with Adjoint wrappers (v1.5, 27-01)
-- Lazy adjoint ws.jump_oft' passed directly to dissipator helper (v1.5, 27-01)
+- BLAS.gemm!/axpy! instead of mul!/broadcast for zero-allocation hot path (v1.5, 27-02)
+- Concrete-typed jump_eigenbases in KrylovWorkspace to avoid JumpOp abstract field boxing (v1.5, 27-02)
+- Separate _accumulate_adjoint_dissipator! preserving {L'L, rho} anticommutator (v1.5, 27-02)
 
 ### Deferred from v1.4
 
@@ -72,5 +73,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-20
-Stopped at: Completed 27-01-PLAN.md -- ready for 27-02 (round-trip tests)
+Stopped at: Completed Phase 27 (27-02-PLAN.md) -- ready for Phase 28 (other-domain dispatch)
 Resume file: None
