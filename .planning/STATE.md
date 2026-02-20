@@ -10,16 +10,16 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 ## Current Position
 
 Phase: 28 of 31 (Other-Domain Dispatch)
-Plan: 1 of 2 complete
-Status: In Progress
-Last activity: 2026-02-20 -- Completed 28-01 (Time/Trotter Domain Matvec)
+Plan: 2 of 2 complete
+Status: Phase Complete
+Last activity: 2026-02-20 -- Completed 28-02 (BohrDomain Matvec)
 
-Progress: [████░░░░░░] 40% (v1.5 phases 27-31, phase 28 plan 1/2 complete)
+Progress: [█████░░░░░] 50% (v1.5 phases 27-31, phase 28 complete)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 74 (v1.0: 10, v1.1: 16, quick: 18, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 3)
+- Total plans completed: 75 (v1.0: 10, v1.1: 16, quick: 18, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 4)
 
 **By Milestone:**
 
@@ -30,7 +30,7 @@ Progress: [████░░░░░░] 40% (v1.5 phases 27-31, phase 28 plan
 | v1.2 Multi-threading | 12-19 | 15 (+3 quick) | 2026-02-15 to 2026-02-16 |
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
-| v1.5 Krylov Gap Estimation | 27-31 | 3 | 2026-02-20 to -- |
+| v1.5 Krylov Gap Estimation | 27-31 | 4 | 2026-02-20 to -- |
 
 ## Accumulated Context
 
@@ -48,6 +48,8 @@ Recent decisions affecting current work:
 - Separate _accumulate_adjoint_dissipator! preserving {L'L, rho} anticommutator (v1.5, 27-02)
 - _prefactor_view + broadcast multiply for zero-alloc NUFFT OFT in Krylov hot path (v1.5, 28-01)
 - _measure_matvec_allocs helper to avoid @testset soft-scope variable boxing (v1.5, 28-01)
+- Kron-derived 2op dissipator formula (B_dag'*rho*A' sandwich) instead of physics convention (v1.5, 28-02)
+- Dedicated _accumulate_adjoint_dissipator_2op! with all-N BLAS flags for real-valued BohrDomain (v1.5, 28-02)
 
 ### Deferred from v1.4
 
@@ -75,5 +77,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-20
-Stopped at: Completed 28-01-PLAN.md (Time/Trotter Domain Matvec) -- ready for 28-02 (BohrDomain)
+Stopped at: Completed 28-02-PLAN.md (BohrDomain Matvec) -- Phase 28 complete, ready for Phase 29
 Resume file: None
