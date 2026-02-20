@@ -7,7 +7,7 @@
 
 Requirements for Krylov Gap Estimation milestone. Each maps to roadmap phases.
 
-### Matvec — Matrix-Free Lindbladian/Channel Action
+### Matvec -- Matrix-Free Lindbladian/Channel Action
 
 - [ ] **MATVEC-01**: Matrix-free `apply_lindbladian!` computes L(rho) directly via dissipator formula for EnergyDomain (KMS + GNS)
 - [ ] **MATVEC-02**: Matrix-free `apply_lindbladian!` computes L(rho) for TimeDomain using NUFFT prefactors (KMS + GNS)
@@ -19,7 +19,7 @@ Requirements for Krylov Gap Estimation milestone. Each maps to roadmap phases.
 - [ ] **MATVEC-08**: KrylovWorkspace pre-allocates all scratch matrices for zero-alloc matvec hot path
 - [ ] **MATVEC-09**: Round-trip test validates ||L_dense * vec(rho) - vec(L_matvec(rho))|| < 1e-12 at n=4
 
-### Krylov — Eigensolver Integration
+### Krylov -- Eigensolver Integration
 
 - [ ] **KRYLOV-01**: `krylov_spectral_gap()` API wrapping KrylovKit eigsolve with :LR targeting for Lindbladian
 - [ ] **KRYLOV-02**: `krylov_spectral_gap()` also supports :LM targeting for CPTP channel eigenvalues
@@ -27,14 +27,14 @@ Requirements for Krylov Gap Estimation milestone. Each maps to roadmap phases.
 - [ ] **KRYLOV-04**: Pre-flight memory estimation (krylovdim * 4^n * 16 * 1.5 bytes) with warning if exceeds threshold
 - [ ] **KRYLOV-05**: Convergence assertion: info.converged >= howmany, with fallback to increased krylovdim
 
-### Validation — Cross-Validation Framework
+### Validation -- Cross-Validation Framework
 
 - [ ] **XVAL-01**: Krylov gap matches dense eigen() gap to < 1e-8 at n=4 for all 4 domains (KMS)
 - [ ] **XVAL-02**: Krylov gap matches dense eigen() gap to < 1e-6 at n=6 for all 4 domains (KMS)
 - [ ] **XVAL-03**: Krylov L gap vs Krylov E gap consistency: gap_L ~ -log(|lambda_2(E)|)/delta
 - [ ] **XVAL-04**: Krylov KMS vs GNS gap comparison at n=4 matches existing results
 
-### Benchmark — Scaling and Resource Estimation
+### Benchmark -- Scaling and Resource Estimation
 
 - [ ] **BENCH-01**: Timing benchmarks at n=3,4,5,6 (n=7 if feasible) with 4 BLAS threads
 - [ ] **BENCH-02**: Memory usage measurement at each n
@@ -72,13 +72,34 @@ Requirements for Krylov Gap Estimation milestone. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (populated during roadmap creation) | | |
+| MATVEC-01 | Phase 27 | Pending |
+| MATVEC-02 | Phase 28 | Pending |
+| MATVEC-03 | Phase 28 | Pending |
+| MATVEC-04 | Phase 28 | Pending |
+| MATVEC-05 | Phase 27 | Pending |
+| MATVEC-06 | Phase 29 | Pending |
+| MATVEC-07 | Phase 27 | Pending |
+| MATVEC-08 | Phase 27 | Pending |
+| MATVEC-09 | Phase 27 | Pending |
+| KRYLOV-01 | Phase 29 | Pending |
+| KRYLOV-02 | Phase 29 | Pending |
+| KRYLOV-03 | Phase 29 | Pending |
+| KRYLOV-04 | Phase 29 | Pending |
+| KRYLOV-05 | Phase 29 | Pending |
+| XVAL-01 | Phase 30 | Pending |
+| XVAL-02 | Phase 30 | Pending |
+| XVAL-03 | Phase 30 | Pending |
+| XVAL-04 | Phase 30 | Pending |
+| BENCH-01 | Phase 31 | Pending |
+| BENCH-02 | Phase 31 | Pending |
+| BENCH-03 | Phase 31 | Pending |
+| BENCH-04 | Phase 31 | Pending |
 
 **Coverage:**
 - v1.5 requirements: 22 total
-- Mapped to phases: 0
-- Unmapped: 22
+- Mapped to phases: 22
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-20*
-*Last updated: 2026-02-20 after initial definition*
+*Last updated: 2026-02-20 after roadmap creation*
