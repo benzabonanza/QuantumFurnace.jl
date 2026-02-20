@@ -67,6 +67,18 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 
 ### Active
 
+**Current Milestone: v1.5 Krylov Gap Estimation**
+
+**Goal:** Matrix-free spectral gap estimation via KrylovKit.jl, enabling gap computation for system sizes (up to ~12 qubits) where the full Lindbladian matrix cannot be stored.
+
+**Target features:**
+- Matrix-free `apply_lindbladian!()` and `apply_delta_channel!()` using existing precomputation infrastructure
+- KrylovKit-based eigensolve for ground state (steady state), gap mode, and spectral gap
+- Support for both GNS (approximate) and KMS (exact) detailed balance
+- Support for all domains (Bohr, Energy, Time, Trotter) with proper basis handling
+- Cross-validation against dense `eigen()` for n<=6
+- Resource benchmarks (memory + time) up to 8 qubits with extrapolation to 12 qubits
+
 **Future milestones:**
 - [ ] 1D Ising model Hamiltonian generation
 - [ ] 2D Heisenberg Hamiltonian generation (lattice graph support)
@@ -78,7 +90,6 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 - [ ] Paper-ready plotting: convergence curves, sim time plots, gate complexity, mixing time
 - [ ] Ding et al. (2024) KMS Lindbladian construction with discrete jump operators (future addition)
 - [ ] Jump statistics histogram (empirical rates match theoretical predictions)
-- [ ] n=8 sparse Lindbladian diagonalization for second validation point
 
 ### Out of Scope
 
@@ -179,4 +190,4 @@ Results needed for publication: convergence curves (trace distance vs. steps), m
 | Qiskit for circuit generation (Python interop) | Qiskit is the standard for quantum circuit representation; Julia quantum circuit ecosystem less mature | -- Pending |
 
 ---
-*Last updated: 2026-02-20 after v1.4 milestone (partial) completion*
+*Last updated: 2026-02-20 after v1.5 milestone start*
