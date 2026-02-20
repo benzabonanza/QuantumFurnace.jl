@@ -24,9 +24,13 @@ end
 
 Accumulate `scalar * D_L(rho)` into `out` in-place:
 
-    D_L(rho) = conj(L) * rho * L^T - 0.5 * (L'L * rho + rho * L'L)
+    D_L(rho) = conj(L) * rho * L^T - 0.5 * ((L'L)^T * rho + rho * (L'L)^T)
 
-Matches the dense kron convention: `kron(L, conj(L))` un-vectorizes to `conj(L) rho L^T`.
+Matches the dense kron convention exactly:
+- Sandwich: `kron(L, conj(L))` un-vectorizes to `conj(L) rho L^T`
+- Anticommutator: `kron(L'L, I)` un-vectorizes to `rho * (L'L)^T`, and
+  `kron(I, (L'L)^T)` un-vectorizes to `(L'L)^T * rho`
+
 Uses `ws.tmp1`, `ws.tmp2`, `ws.LdagL` as scratch. Uses BLAS.gemm! for
 Adjoint/Transpose arguments to avoid boxing allocations from `mul!` with wrappers.
 """
@@ -43,12 +47,12 @@ function _accumulate_dissipator!(
     # L'L -> ws.LdagL
     BLAS.gemm!('C', 'N', CT, L_op, L_op, ZT, ws.LdagL)
 
-    # Term 2: -0.5 * scalar * L'L * rho  (anticommutator, unchanged)
-    BLAS.gemm!('N', 'N', CT, ws.LdagL, rho, ZT, ws.tmp1)
+    # Term 2: -0.5 * scalar * (L'L)^T * rho
+    BLAS.gemm!('T', 'N', CT, ws.LdagL, rho, ZT, ws.tmp1)
     BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
 
-    # Term 3: -0.5 * scalar * rho * L'L  (anticommutator, unchanged)
-    BLAS.gemm!('N', 'N', CT, rho, ws.LdagL, ZT, ws.tmp1)
+    # Term 3: -0.5 * scalar * rho * (L'L)^T
+    BLAS.gemm!('N', 'T', CT, rho, ws.LdagL, ZT, ws.tmp1)
     BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
 
     # Term 1: scalar * conj(L) * rho * L^T  (LdagL now free as scratch)
@@ -65,9 +69,10 @@ end
 
 Accumulate `scalar * D_{L'}(rho)` into `out` in-place, where the operator is L' (adjoint of L):
 
-    D_{L'}(rho) = L^T * rho * conj(L) - 0.5 * (L L' * rho + rho * L L')
+    D_{L'}(rho) = L^T * rho * conj(L) - 0.5 * ((LL')^T * rho + rho * (LL')^T)
 
-Matches kron convention with M = L^H: `conj(M) rho M^T = conj(L^H) rho (L^H)^T = L^T rho conj(L)`.
+Matches kron convention with M = L^H: `conj(M) rho M^T = L^T rho conj(L)`.
+Anticommutator uses `(M'M)^T = (LL')^T` matching `kron(LL', I)` and `kron(I, (LL')^T)`.
 Used for the negative-frequency partner in the Hermitian half-grid optimization.
 """
 function _accumulate_dissipator_adj_L!(
@@ -80,15 +85,15 @@ function _accumulate_dissipator_adj_L!(
     CT = one(T)
     ZT = zero(T)
 
-    # (L')' L' = L L' -> ws.LdagL  (unchanged)
+    # (L')' L' = L L' -> ws.LdagL
     BLAS.gemm!('N', 'C', CT, L_op, L_op, ZT, ws.LdagL)
 
-    # Term 2: -0.5 * scalar * L L' * rho  (anticommutator, unchanged)
-    BLAS.gemm!('N', 'N', CT, ws.LdagL, rho, ZT, ws.tmp1)
+    # Term 2: -0.5 * scalar * (LL')^T * rho
+    BLAS.gemm!('T', 'N', CT, ws.LdagL, rho, ZT, ws.tmp1)
     BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
 
-    # Term 3: -0.5 * scalar * rho * L L'  (anticommutator, unchanged)
-    BLAS.gemm!('N', 'N', CT, rho, ws.LdagL, ZT, ws.tmp1)
+    # Term 3: -0.5 * scalar * rho * (LL')^T
+    BLAS.gemm!('N', 'T', CT, rho, ws.LdagL, ZT, ws.tmp1)
     BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
 
     # Term 1: scalar * L^T * rho * conj(L)  (LdagL now free)
@@ -105,10 +110,11 @@ end
 
 Accumulate `scalar * D_L*(rho)` (Hilbert-Schmidt adjoint dissipator) into `out` in-place:
 
-    D_L*(rho) = L^T * rho * conj(L) - 0.5 * (L'L * rho + rho * L'L)
+    D_L*(rho) = L^T * rho * conj(L) - 0.5 * ((L'L)^T * rho + rho * (L'L)^T)
 
 HS adjoint of `conj(L) rho L^T` is `L^T rho conj(L)` (X -> X^H, Y -> Y^H).
-The anticommutator `{L'L, rho}` stays the same.
+The anticommutator `{(L'L)^T, rho}` is the same as the forward (HS adjoint of
+`M^T * rho` is `conj(M) * rho = M^T * rho` for Hermitian M).
 """
 function _accumulate_adjoint_dissipator!(
     out::Matrix{T},
@@ -120,15 +126,15 @@ function _accumulate_adjoint_dissipator!(
     CT = one(T)
     ZT = zero(T)
 
-    # L'L -> ws.LdagL (same as forward -- anticommutator is unchanged)
+    # L'L -> ws.LdagL (same as forward)
     BLAS.gemm!('C', 'N', CT, L_op, L_op, ZT, ws.LdagL)
 
-    # Term 2: -0.5 * scalar * L'L * rho  (anticommutator, unchanged)
-    BLAS.gemm!('N', 'N', CT, ws.LdagL, rho, ZT, ws.tmp1)
+    # Term 2: -0.5 * scalar * (L'L)^T * rho
+    BLAS.gemm!('T', 'N', CT, ws.LdagL, rho, ZT, ws.tmp1)
     BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
 
-    # Term 3: -0.5 * scalar * rho * L'L  (anticommutator, unchanged)
-    BLAS.gemm!('N', 'N', CT, rho, ws.LdagL, ZT, ws.tmp1)
+    # Term 3: -0.5 * scalar * rho * (L'L)^T
+    BLAS.gemm!('N', 'T', CT, rho, ws.LdagL, ZT, ws.tmp1)
     BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
 
     # Term 1: scalar * L^T * rho * conj(L)  (LdagL now free)
@@ -146,9 +152,10 @@ end
 Accumulate `scalar * D_{L'}*(rho)` into `out` in-place, where the original operator is L'
 and we take the Hilbert-Schmidt adjoint of the resulting superoperator:
 
-    D_{L'}*(rho) = conj(L) * rho * L^T - 0.5 * (L L' * rho + rho * L L')
+    D_{L'}*(rho) = conj(L) * rho * L^T - 0.5 * ((LL')^T * rho + rho * (LL')^T)
 
 Forward for M=L^H gives sandwich `L^T rho conj(L)`. HS adjoint: `conj(L) rho L^T`.
+Anticommutator uses `(LL')^T` matching the kron convention.
 Used for the negative-frequency partner in the adjoint Hermitian half-grid.
 """
 function _accumulate_adjoint_dissipator_adj_L!(
@@ -161,15 +168,15 @@ function _accumulate_adjoint_dissipator_adj_L!(
     CT = one(T)
     ZT = zero(T)
 
-    # (L')' L' = L L' -> ws.LdagL  (unchanged)
+    # (L')' L' = L L' -> ws.LdagL
     BLAS.gemm!('N', 'C', CT, L_op, L_op, ZT, ws.LdagL)
 
-    # Term 2: -0.5 * scalar * L L' * rho  (anticommutator, unchanged)
-    BLAS.gemm!('N', 'N', CT, ws.LdagL, rho, ZT, ws.tmp1)
+    # Term 2: -0.5 * scalar * (LL')^T * rho
+    BLAS.gemm!('T', 'N', CT, ws.LdagL, rho, ZT, ws.tmp1)
     BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
 
-    # Term 3: -0.5 * scalar * rho * L L'  (anticommutator, unchanged)
-    BLAS.gemm!('N', 'N', CT, rho, ws.LdagL, ZT, ws.tmp1)
+    # Term 3: -0.5 * scalar * rho * (LL')^T
+    BLAS.gemm!('N', 'T', CT, rho, ws.LdagL, ZT, ws.tmp1)
     BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
 
     # Term 1: scalar * conj(L) * rho * L^T  (LdagL now free)
@@ -215,13 +222,16 @@ function apply_lindbladian!(
     # Zero output accumulator (CRITICAL: must be zeroed each call)
     fill!(ws.rho_out, 0)
 
-    # Coherent term: -i[B, rho] = -i*B*rho + i*rho*B
+    # Coherent term: i[B^T, rho] = i*B^T*rho - i*rho*B^T
+    # Dense convention: kron(B, I) -> rho*B^T and kron(I, B^T) -> B^T*rho
     B = ws.B_total
     if B !== nothing
-        mul!(ws.tmp1, B, rho)
-        @. ws.rho_out += -1im * ws.tmp1
-        mul!(ws.tmp1, rho, B)
+        CT = one(T)
+        ZT = zero(T)
+        BLAS.gemm!('T', 'N', CT, B, rho, ZT, ws.tmp1)   # tmp1 = B^T * rho
         @. ws.rho_out += 1im * ws.tmp1
+        BLAS.gemm!('N', 'T', CT, rho, B, ZT, ws.tmp1)    # tmp1 = rho * B^T
+        @. ws.rho_out -= 1im * ws.tmp1
     end
 
     # Dissipator: sum over jumps, sum over energy labels
@@ -291,13 +301,15 @@ function apply_adjoint_lindbladian!(
     # Zero output accumulator
     fill!(ws.rho_out, 0)
 
-    # Adjoint coherent term: +i[B, rho] = +i*B*rho - i*rho*B (sign flip vs forward)
+    # Adjoint coherent term: -i[B^T, rho] = -i*B^T*rho + i*rho*B^T (sign flip vs forward)
     B = ws.B_total
     if B !== nothing
-        mul!(ws.tmp1, B, rho)
-        @. ws.rho_out += 1im * ws.tmp1      # +i instead of -i
-        mul!(ws.tmp1, rho, B)
-        @. ws.rho_out -= 1im * ws.tmp1      # -i instead of +i
+        CT = one(T)
+        ZT = zero(T)
+        BLAS.gemm!('T', 'N', CT, B, rho, ZT, ws.tmp1)   # tmp1 = B^T * rho
+        @. ws.rho_out -= 1im * ws.tmp1                    # -i instead of +i
+        BLAS.gemm!('N', 'T', CT, rho, B, ZT, ws.tmp1)    # tmp1 = rho * B^T
+        @. ws.rho_out += 1im * ws.tmp1                    # +i instead of -i
     end
 
     # Adjoint dissipator: D_L*(rho) = L^T rho conj(L) - 0.5 {L'L, rho}
@@ -468,13 +480,16 @@ function apply_lindbladian!(
     dim = size(rho, 1)
     fill!(ws.rho_out, 0)
 
-    # Coherent term: -i[B, rho] = -i*B*rho + i*rho*B (identical to other domains)
+    # Coherent term: i[B^T, rho] = i*B^T*rho - i*rho*B^T (identical to other domains)
+    # Dense convention: kron(B, I) -> rho*B^T and kron(I, B^T) -> B^T*rho
     B = ws.B_total
     if B !== nothing
-        mul!(ws.tmp1, B, rho)
-        @. ws.rho_out += -1im * ws.tmp1
-        mul!(ws.tmp1, rho, B)
+        CT = one(T)
+        ZT = zero(T)
+        BLAS.gemm!('T', 'N', CT, B, rho, ZT, ws.tmp1)   # tmp1 = B^T * rho
         @. ws.rho_out += 1im * ws.tmp1
+        BLAS.gemm!('N', 'T', CT, rho, B, ZT, ws.tmp1)    # tmp1 = rho * B^T
+        @. ws.rho_out -= 1im * ws.tmp1
     end
 
     # Allocate A_nu2_dag buffer (one allocation per matvec -- acceptable for Bohr)
@@ -529,13 +544,15 @@ function apply_adjoint_lindbladian!(
     dim = size(rho, 1)
     fill!(ws.rho_out, 0)
 
-    # Adjoint coherent term: +i[B, rho] = +i*B*rho - i*rho*B (sign flip vs forward)
+    # Adjoint coherent term: -i[B^T, rho] = -i*B^T*rho + i*rho*B^T (sign flip vs forward)
     B = ws.B_total
     if B !== nothing
-        mul!(ws.tmp1, B, rho)
-        @. ws.rho_out += 1im * ws.tmp1      # +i instead of -i
-        mul!(ws.tmp1, rho, B)
-        @. ws.rho_out -= 1im * ws.tmp1      # -i instead of +i
+        CT = one(T)
+        ZT = zero(T)
+        BLAS.gemm!('T', 'N', CT, B, rho, ZT, ws.tmp1)   # tmp1 = B^T * rho
+        @. ws.rho_out -= 1im * ws.tmp1                    # -i instead of +i
+        BLAS.gemm!('N', 'T', CT, rho, B, ZT, ws.tmp1)    # tmp1 = rho * B^T
+        @. ws.rho_out += 1im * ws.tmp1                    # +i instead of -i
     end
 
     # Allocate A_nu2_dag buffer (one allocation per matvec -- acceptable for Bohr)
@@ -599,13 +616,16 @@ function apply_lindbladian!(
     # Zero output accumulator (CRITICAL: must be zeroed each call)
     fill!(ws.rho_out, 0)
 
-    # Coherent term: -i[B, rho] = -i*B*rho + i*rho*B (identical to EnergyDomain)
+    # Coherent term: i[B^T, rho] = i*B^T*rho - i*rho*B^T (identical to EnergyDomain)
+    # Dense convention: kron(B, I) -> rho*B^T and kron(I, B^T) -> B^T*rho
     B = ws.B_total
     if B !== nothing
-        mul!(ws.tmp1, B, rho)
-        @. ws.rho_out += -1im * ws.tmp1
-        mul!(ws.tmp1, rho, B)
+        CT = one(T)
+        ZT = zero(T)
+        BLAS.gemm!('T', 'N', CT, B, rho, ZT, ws.tmp1)   # tmp1 = B^T * rho
         @. ws.rho_out += 1im * ws.tmp1
+        BLAS.gemm!('N', 'T', CT, rho, B, ZT, ws.tmp1)    # tmp1 = rho * B^T
+        @. ws.rho_out -= 1im * ws.tmp1
     end
 
     # Dissipator: sum over jumps, sum over energy labels
@@ -676,13 +696,15 @@ function apply_adjoint_lindbladian!(
     # Zero output accumulator
     fill!(ws.rho_out, 0)
 
-    # Adjoint coherent term: +i[B, rho] = +i*B*rho - i*rho*B (sign flip vs forward)
+    # Adjoint coherent term: -i[B^T, rho] = -i*B^T*rho + i*rho*B^T (sign flip vs forward)
     B = ws.B_total
     if B !== nothing
-        mul!(ws.tmp1, B, rho)
-        @. ws.rho_out += 1im * ws.tmp1      # +i instead of -i
-        mul!(ws.tmp1, rho, B)
-        @. ws.rho_out -= 1im * ws.tmp1      # -i instead of +i
+        CT = one(T)
+        ZT = zero(T)
+        BLAS.gemm!('T', 'N', CT, B, rho, ZT, ws.tmp1)   # tmp1 = B^T * rho
+        @. ws.rho_out -= 1im * ws.tmp1                    # -i instead of +i
+        BLAS.gemm!('N', 'T', CT, rho, B, ZT, ws.tmp1)    # tmp1 = rho * B^T
+        @. ws.rho_out += 1im * ws.tmp1                    # +i instead of -i
     end
 
     # Adjoint dissipator: D_L*(rho) = L^T rho conj(L) - 0.5 {L'L, rho}
