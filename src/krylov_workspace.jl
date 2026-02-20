@@ -16,7 +16,9 @@ Tied to a specific (config, hamiltonian) pair at construction time.
 # Fields
 - `precomputed_data::PD`: from `_precompute_data(config, ham_or_trott)`
 - `B_total::Union{Nothing, Matrix{T}}`: precomputed coherent B (nothing for GNS / with_coherent=false)
-- `jumps::Vector{JumpOp}`: reference to jump operators
+- `jumps::Vector{JumpOp}`: reference to jump operators (kept for external access)
+- `jump_eigenbases::Vector{Matrix{T}}`: concrete-typed eigenbasis matrices (avoids JumpOp abstract field boxing)
+- `jump_hermitian::Vector{Bool}`: hermitian flags for each jump operator
 
 Scratch matrices (all dim x dim, zeroed or overwritten each matvec call):
 - `jump_oft::Matrix{T}`: A(omega) buffer (written by `oft!`)
@@ -30,6 +32,11 @@ struct KrylovWorkspace{T<:Complex, PD<:NamedTuple}
     precomputed_data::PD
     B_total::Union{Nothing, Matrix{T}}
     jumps::Vector{JumpOp}
+
+    # Concrete-typed jump data for zero-allocation hot path
+    # (JumpOp.in_eigenbasis is Matrix{<:Complex} -- abstract element type causes boxing)
+    jump_eigenbases::Vector{Matrix{T}}
+    jump_hermitian::Vector{Bool}
 
     # Scratch matrices for dissipator accumulation (dim x dim)
     jump_oft::Matrix{T}
@@ -75,6 +82,12 @@ function KrylovWorkspace(
     dim = size(hamiltonian.data, 1)
     CT = Complex{eltype(hamiltonian.eigvals)}
 
+    # Extract concrete-typed eigenbasis matrices and hermitian flags
+    # (JumpOp.in_eigenbasis is Matrix{<:Complex} -- abstract type parameter
+    #  causes boxing allocations in the hot path)
+    jump_eigenbases = [Matrix{CT}(j.in_eigenbasis) for j in jumps]
+    jump_hermitian  = [j.hermitian for j in jumps]
+
     # Allocate scratch matrices
     jump_oft = zeros(CT, dim, dim)
     tmp1     = zeros(CT, dim, dim)
@@ -84,6 +97,7 @@ function KrylovWorkspace(
 
     return KrylovWorkspace{CT, typeof(precomputed_data)}(
         precomputed_data, B_total, jumps,
+        jump_eigenbases, jump_hermitian,
         jump_oft, tmp1, tmp2, LdagL, rho_out,
     )
 end

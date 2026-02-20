@@ -23,4 +23,5 @@ include("test_helpers.jl")
     include("test_observable_trajectories.jl")
     include("test_gap_estimation.jl")
     include("test_diagnostics.jl")
+    include("test_krylov_matvec.jl")
 end
