@@ -333,18 +333,19 @@ end
 """
     _accumulate_dissipator_2op!(out, A, B_dag, rho, scalar, ws) -> nothing
 
-Accumulate `scalar * D(A, B_dag)(rho)` into `out` in-place for the BohrDomain two-operator
-dissipator:
+Accumulate `scalar * D_kron(A, B_dag)(rho)` into `out` in-place for the BohrDomain
+two-operator dissipator. The formula is derived from the dense code's kron vectorization
+convention (see `_vectorize_liouv_diss_and_add!` in qi_tools.jl):
 
-    D(A, B_dag)(rho) = A * rho * B_dag' - 0.5*(B_dag * A * rho + rho * B_dag * A)
+    D_kron(A, B_dag)(rho) = B_dag' * rho * A' - 0.5*((B_dag*A)' * rho + rho * (B_dag*A)')
 
-Where:
-- `A` = alpha_A_nu1 (dense alpha-weighted eigenbasis, dim x dim)
-- `B_dag` = A_nu2_dag (dense matrix built via scatter, dim x dim)
-- The "right" operator in the sandwich is `B_dag'` (adjoint of B_dag)
-- The anticommutator product is `B_dag * A`
+Where `A` = alpha_A_nu1 (jump_1 in the dense code) and `B_dag` = A_nu2_dag (jump_2).
+The kron identity `(P kron Q) vec(X) = vec(Q X P^T)` gives the un-vectorized form:
+  `kron(j1, j2^T) vec(rho) = vec(j2^T * rho * j1^T)` with j1=A, j2=B_dag.
 
-This is fundamentally different from the single-operator dissipator where `A = B = L`.
+For real-valued operators (which BohrDomain always produces: real eigenbasis + real alpha),
+adjoint = transpose, so 'C' flags are equivalent to 'T'.
+
 Uses `ws.LdagL`, `ws.tmp1`, `ws.tmp2` as scratch. The caller must ensure `A` and `B_dag`
 are NOT stored in any of these scratch buffers.
 """
@@ -359,20 +360,20 @@ function _accumulate_dissipator_2op!(
     CT = one(T)
     ZT = zero(T)
 
-    # B_dag * A -> ws.LdagL (anticommutator product)
+    # B_dag * A -> ws.LdagL (anticommutator base product)
     BLAS.gemm!('N', 'N', CT, B_dag, A, ZT, ws.LdagL)
 
-    # Term 1: scalar * A * rho * B_dag'
-    BLAS.gemm!('N', 'N', CT, A, rho, ZT, ws.tmp1)         # tmp1 = A * rho
-    BLAS.gemm!('N', 'C', CT, ws.tmp1, B_dag, ZT, ws.tmp2)  # tmp2 = A * rho * B_dag'
+    # Term 1: scalar * B_dag' * rho * A'
+    BLAS.gemm!('C', 'N', CT, B_dag, rho, ZT, ws.tmp1)      # tmp1 = B_dag' * rho
+    BLAS.gemm!('N', 'C', CT, ws.tmp1, A, ZT, ws.tmp2)       # tmp2 = B_dag' * rho * A'
     BLAS.axpy!(T(scalar), ws.tmp2, out)
 
-    # Term 2: -0.5 * scalar * B_dag*A * rho
-    BLAS.gemm!('N', 'N', CT, ws.LdagL, rho, ZT, ws.tmp1)
+    # Term 2: -0.5 * scalar * (B_dag*A)' * rho
+    BLAS.gemm!('C', 'N', CT, ws.LdagL, rho, ZT, ws.tmp1)   # tmp1 = LdagL' * rho
     BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
 
-    # Term 3: -0.5 * scalar * rho * B_dag*A
-    BLAS.gemm!('N', 'N', CT, rho, ws.LdagL, ZT, ws.tmp1)
+    # Term 3: -0.5 * scalar * rho * (B_dag*A)'
+    BLAS.gemm!('N', 'C', CT, rho, ws.LdagL, ZT, ws.tmp1)   # tmp1 = rho * LdagL'
     BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
 
     return nothing
@@ -381,17 +382,18 @@ end
 """
     _accumulate_adjoint_dissipator_2op!(out, A, B_dag, rho, scalar, ws) -> nothing
 
-Accumulate `scalar * D*(A, B_dag)(rho)` (Hilbert-Schmidt adjoint of the two-operator
+Accumulate `scalar * D*_kron(A, B_dag)(rho)` (Hilbert-Schmidt adjoint of the two-operator
 dissipator) into `out` in-place:
 
-    D*(A, B_dag)(rho) = A' * rho * B_dag - 0.5*(A' * B_dag * rho + rho * A' * B_dag)
+    D*_kron(A, B_dag)(rho) = conj(B_dag) * rho * conj(A) - 0.5*(conj(B_dag*A) * rho + rho * conj(B_dag*A))
 
-This is NOT a simple argument swap of the forward dissipator. The key differences:
-- Sandwich: `A * rho * B_dag'` (forward) becomes `A' * rho * B_dag` (adjoint)
-- Anticommutator: `B_dag * A` (forward) becomes `A' * B_dag` (adjoint)
+Derived from the HS adjoint of the kron-based forward superoperator. The HS adjoint of the
+map `rho -> X * rho * Y` is `rho -> X^H * rho * Y^H`, so:
+- Sandwich `B_dag^T rho A^T` -> adjoint `conj(B_dag) rho conj(A)`
+- Anticomm `(B_dag*A)^T rho` -> adjoint `conj(B_dag*A) rho`
 
-A simple swap of A and B_dag would give sandwich `B_dag * rho * A'` which is incorrect
-(should be `A' * rho * B_dag`). See RESEARCH.md Pitfall 5 for the full derivation.
+For real-valued operators (BohrDomain's eigenbasis and alpha are real), this simplifies to:
+    D*(A, B_dag)(rho) = B_dag * rho * A - 0.5*(B_dag*A * rho + rho * B_dag*A)
 
 Uses `ws.LdagL`, `ws.tmp1`, `ws.tmp2` as scratch.
 """
@@ -406,19 +408,19 @@ function _accumulate_adjoint_dissipator_2op!(
     CT = one(T)
     ZT = zero(T)
 
-    # A' * B_dag -> ws.LdagL (adjoint anticommutator product)
-    BLAS.gemm!('C', 'N', CT, A, B_dag, ZT, ws.LdagL)
+    # B_dag * A -> ws.LdagL (anticommutator product, used without transpose for adjoint)
+    BLAS.gemm!('N', 'N', CT, B_dag, A, ZT, ws.LdagL)
 
-    # Term 1: scalar * A' * rho * B_dag
-    BLAS.gemm!('C', 'N', CT, A, rho, ZT, ws.tmp1)          # tmp1 = A' * rho
-    BLAS.gemm!('N', 'N', CT, ws.tmp1, B_dag, ZT, ws.tmp2)   # tmp2 = A' * rho * B_dag
+    # Term 1: scalar * B_dag * rho * A  (no transpose/adjoint flags -- real-valued operators)
+    BLAS.gemm!('N', 'N', CT, B_dag, rho, ZT, ws.tmp1)      # tmp1 = B_dag * rho
+    BLAS.gemm!('N', 'N', CT, ws.tmp1, A, ZT, ws.tmp2)       # tmp2 = B_dag * rho * A
     BLAS.axpy!(T(scalar), ws.tmp2, out)
 
-    # Term 2: -0.5 * scalar * A'*B_dag * rho
+    # Term 2: -0.5 * scalar * B_dag*A * rho
     BLAS.gemm!('N', 'N', CT, ws.LdagL, rho, ZT, ws.tmp1)
     BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
 
-    # Term 3: -0.5 * scalar * rho * A'*B_dag
+    # Term 3: -0.5 * scalar * rho * B_dag*A
     BLAS.gemm!('N', 'N', CT, rho, ws.LdagL, ZT, ws.tmp1)
     BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
 

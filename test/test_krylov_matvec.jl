@@ -264,4 +264,69 @@ end
         @test allocs_adj == 0
     end
 
+    # ========================================================================
+    # Phase 28: BohrDomain round-trip and duality tests
+    # ========================================================================
+
+    # Testset 16: Round-trip matvec vs dense (BohrDomain KMS, with coherent)
+    @testset "Round-trip: matvec vs dense (BohrDomain KMS, with coherent)" begin
+        config = make_liouv_config(BohrDomain(); with_coherent=true)
+        L_dense = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
+        ws = KrylovWorkspace(config, TEST_HAM, TEST_JUMPS)
+
+        for _ in 1:10
+            rho = Matrix(random_density_matrix(NUM_QUBITS))
+            v_dense = L_dense * vec(rho)
+            L_rho = apply_lindbladian!(ws, rho, config, TEST_HAM)
+            @test norm(v_dense - vec(L_rho)) < 1e-12
+        end
+    end
+
+    # Testset 17: Round-trip matvec vs dense (BohrDomain GNS)
+    @testset "Round-trip: matvec vs dense (BohrDomain GNS)" begin
+        config = make_liouv_config_gns(BohrDomain())
+        L_dense = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
+        ws = KrylovWorkspace(config, TEST_HAM, TEST_JUMPS)
+
+        for _ in 1:10
+            rho = Matrix(random_density_matrix(NUM_QUBITS))
+            v_dense = L_dense * vec(rho)
+            L_rho = apply_lindbladian!(ws, rho, config, TEST_HAM)
+            @test norm(v_dense - vec(L_rho)) < 1e-12
+        end
+    end
+
+    # Testset 18: Round-trip adjoint matvec vs dense adjoint (BohrDomain KMS)
+    @testset "Round-trip: adjoint matvec vs dense adjoint (BohrDomain KMS)" begin
+        config = make_liouv_config(BohrDomain(); with_coherent=true)
+        L_dense = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
+        ws = KrylovWorkspace(config, TEST_HAM, TEST_JUMPS)
+
+        for _ in 1:10
+            rho = Matrix(random_density_matrix(NUM_QUBITS))
+            v_adj_dense = L_dense' * vec(rho)
+            L_adj_rho = apply_adjoint_lindbladian!(ws, rho, config, TEST_HAM)
+            @test norm(v_adj_dense - vec(L_adj_rho)) < 1e-12
+        end
+    end
+
+    # Testset 19: Adjoint duality check (BohrDomain): tr(X' * L(Y)) == tr(L*(X)' * Y)
+    @testset "Adjoint duality check (BohrDomain): tr(X' * L(Y)) == tr(L*(X)' * Y)" begin
+        config = make_liouv_config(BohrDomain(); with_coherent=true)
+        ws = KrylovWorkspace(config, TEST_HAM, TEST_JUMPS)
+
+        for _ in 1:5
+            X = Matrix(random_density_matrix(NUM_QUBITS))
+            Y = Matrix(random_density_matrix(NUM_QUBITS))
+
+            L_Y = copy(apply_lindbladian!(ws, Y, config, TEST_HAM))
+            lhs = tr(X' * L_Y)
+
+            Lstar_X = copy(apply_adjoint_lindbladian!(ws, X, config, TEST_HAM))
+            rhs = tr(Lstar_X' * Y)
+
+            @test abs(lhs - rhs) < 1e-11
+        end
+    end
+
 end  # @testset "Krylov Matvec"
