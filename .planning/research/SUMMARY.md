@@ -1,180 +1,187 @@
 # Project Research Summary
 
-**Project:** QuantumFurnace.jl v1.4 Spectral Gap Refinement Diagnostics
-**Domain:** Quantum Lindbladian simulation — spectral gap estimation diagnostics and improved estimators
-**Researched:** 2026-02-19
+**Project:** QuantumFurnace.jl — Krylov-Based Lindbladian Spectral Gap Estimation
+**Domain:** Matrix-free Krylov eigensolving for open quantum system spectral analysis (n=8-12 qubits)
+**Researched:** 2026-02-20
 **Confidence:** HIGH
 
 ## Executive Summary
 
-QuantumFurnace.jl v1.4 is a diagnostic and improved-estimation milestone built on top of a working v1.3 single-exponential fitting pipeline. The core problem, confirmed by Quick-30 through Quick-32, is that trajectory-based spectral gap estimation achieves ~0.72% accuracy at n=4 but suffers 37-49% error at n=6. Root cause analysis (Quick-32) conclusively separated two error sources: trajectory simulation errors are O(1e-3) and monotonically decrease with Trotter step size delta, while fitting model errors are O(10-50%) and non-monotonic in delta. The v1.4 milestone attacks the fitting bottleneck directly through seven interlocking diagnostic capabilities: effective rate plots, two-exponential fitting with Prony initialization, bootstrap error bars, automatic fitting window selection, anti-Hermitian defect computation, Delta-Sz symmetry sector labeling, and Richardson extrapolation.
+QuantumFurnace.jl is a mature Julia package (26+ phases) for Lindbladian simulation of open quantum systems. The existing codebase provides dense Liouvillian construction and trajectory-based gap estimation, both limited to n<=6 qubits. The next milestone extends spectral gap estimation to n=8-12 qubits using matrix-free Krylov methods: the Lindbladian superoperator is never formed as an explicit matrix, only applied as a callable function L(rho). At n=12, the full dim^2 x dim^2 superoperator would be 4 petabytes; the Krylov approach stores only ~30-50 vectors of size dim^2 (7-12 GB total) and finds the spectral gap eigenvalue by repeated application of the Lindbladian action.
 
-The recommended approach is a pure additive layer on top of the existing simulation infrastructure. All new capabilities are post-hoc analyses of trajectory data and exact Lindbladian results — none require modifying the performance-critical trajectory step loop. The sole architectural exception is bootstrap error bars, which require a new batched trajectory runner variant that stores per-batch mean observable time series. The complete existing Julia dependency set (LsqFit.jl, LinearAlgebra stdlib, Arpack.jl, Plots.jl in extras, StatsBase in extras) is sufficient for all v1.4 features. Zero new production dependencies are needed.
+The critical structural insight enabling this without shift-invert is that all Lindbladian eigenvalues satisfy Re(lambda) <= 0, with the steady state at lambda=0 as the extremal eigenvalue under largest-real-part sorting. The spectral gap eigenvalue — typically an interior eigenvalue in other contexts — is exactly the second-most-extremal eigenvalue under `:LR` sorting. KrylovKit.jl's `eigsolve(..., :LR)` finds it directly. The existing precomputed jump data (NUFFT prefactors, OFT results, Bohr frequency dictionaries) is reused verbatim inside the matvec closure, making each matvec an O(dim^3 * n_jumps * n_freqs) operation rather than the O(dim^4) cost of assembling the full superoperator. At n=8 (dim=256), a full Krylov solve takes an estimated ~10 minutes where dense diagonalization is already impossible (64 GB matrix).
 
-The three critical risks are: (1) two-exponential fitting parameter non-identifiability when the two decay rates are within ~2x of each other, which requires two-stage initialization and a separation quality check before any downstream use of the fitted rates; (2) numerical blow-up of the rho^{-1/4} similarity transform at low temperature (beta > 5), which requires Gibbs eigenvalue spectrum truncation and must be validated against the BohrDomain ground truth; and (3) Richardson extrapolation amplifying fitting artifacts rather than correcting Trotter bias, which requires a monotonicity precondition test across 3+ delta values before any extrapolation is applied. These three pitfalls produce silently wrong results that look plausible, making proactive prevention essential.
+The primary risks are correctness bugs that produce plausible-looking but wrong eigenvalues: vectorization convention mismatches (reshape/transpose errors in the matvec), basis selection errors (using computational-basis jump operators instead of eigenbasis ones), and confusing the CPTP channel E with the Lindbladian generator L (which introduces catastrophic cancellation when computing (E(rho)-rho)/delta). All three are prevented by a mandatory round-trip test at n=4 before any eigsolve is attempted. Secondary risks are memory blowup from misconfigured krylovdim at n=12, and non-convergence for systems with clustered eigenvalues, both mitigated by pre-flight memory estimation and requesting 6-10 eigenvalues rather than just 2.
 
 ## Key Findings
 
 ### Recommended Stack
 
-The existing dependency set covers all v1.4 needs without exception. Two-exponential fitting uses LsqFit.jl's `curve_fit` with a 5-parameter model — the same API already used for single-exponential fitting in v1.3. Matrix fourth roots for the KMS similarity transform are computed via `LinearAlgebra.eigen(Hermitian(...))` exploiting the diagonal structure of the Gibbs state in the energy eigenbasis, with a numerically stable path for TrotterDomain via general eigendecomposition. Expanding the eigenvalue extraction from nev=2 to nev=30 requires only a parameter change to the existing Arpack.jl shift-invert call. Bootstrap resampling uses `StatsBase.sample(replace=true)` already in the test extras. Diagnostic figures use Plots.jl already in extras.
+The existing stack requires exactly one new production dependency: **KrylovKit.jl v0.10.2** (released October 2025). This pure-Julia package accepts any callable `f(x) -> y` as the linear operator — no `LinearMap` wrapper, no explicit matrix, no Fortran dependency. It provides `eigsolve` for right eigenvectors with `:LR` targeting, `bieigsolve` (BiArnoldi) for simultaneous left+right eigenvectors needed for overlap diagnostics, and `exponentiate` for matrix exponential action. One new development dependency is recommended: **TimerOutputs.jl v0.5** for hierarchical profiling of multi-minute Krylov runs where `@benchmark` is impractical.
+
+All existing dependencies remain unchanged. `Arpack.jl` stays for the dense n<=6 path. `LinearMaps.jl` stays for backward compatibility (the commented-out `linearmaps_liouv.jl` prototype was abandoned as "slow" because it recomputed OFT per iteration without NUFFT prefactor caching; the new implementation avoids this). `FINUFFT.jl` and `SparseArrays` continue to be used inside the matvec for NUFFT prefactors and Bohr-frequency indexing.
 
 **Core technologies:**
-- **LsqFit.jl (0.15):** Two-exponential fitting — same `curve_fit` API with 5-parameter model `c1*exp(-g1*t) + c2*exp(-g2*t)`; Prony two-point method provides robust starting values for the ill-conditioned optimization
-- **LinearAlgebra (stdlib):** Matrix fourth root via `eigen(Hermitian(...))` exploiting diagonal Gibbs state structure; `opnorm` for anti-Hermitian defect norm; `Diagonal` for efficient similarity transforms in eigenbasis
-- **Arpack.jl (0.5.4):** Leading 20-30 eigenvalue extraction via shift-invert; only change is increasing `nev` from 2 to 30 in the existing `eigs` call; KrylovKit.jl explicitly rejected (no shift-invert mode for interior eigenvalues)
-- **StatsBase.jl (0.34, extras):** `sample(1:K, K; replace=true)` for batch-level bootstrap resampling; 10-line custom loop preferred over Bootstrap.jl for non-standard batch-level use case
-- **Plots.jl (1, extras):** 7-panel diagnostic dashboard via `plot(layout=...)` — sufficient for thesis-quality diagnostic figures; CairoMakie.jl deferred (adds ~30 transitive deps for marginal quality gain)
-- **Statistics (stdlib):** `mean`, `std` for bootstrap statistics and SNR computation — always available, no new dep entry needed
+- **KrylovKit.jl v0.10.2**: Matrix-free Arnoldi eigensolving — chosen over ArnoldiMethod.jl (no `bieigsolve`) and Arpack.jl (no callable interface without explicit matrix); API verified via official docs
+- **TimerOutputs.jl v0.5**: Hierarchical profiling for multi-minute Krylov runs — complements existing BenchmarkTools for microbenchmarks
+- **OpenBLAS (Julia default)**: Multi-threaded BLAS-3 for dim x dim matrix multiplications in matvec; benchmark with physical core count before switching to MKL
+- **Existing precomputation stack**: FINUFFT/OFT/Bohr dictionaries reused verbatim inside the matvec closure, providing the per-frequency Lindbladian action at O(dim^3) cost per frequency per jump
 
 ### Expected Features
 
-The feature landscape is precisely specified by the reference documents. All seven table-stakes features are required for the milestone to deliver value over v1.3. The effective rate plot is the keystone feature: it feeds initialization data into the two-exponential fit, defines the fitting window, and provides model-free validation of all fitted results. The dependency chain flows from the effective rate plot outward to bootstrap, then to Richardson extrapolation.
+**Must have (table stakes — the milestone does not exist without these):**
+- **Matrix-free `apply_lindbladian!` for all four domains (Bohr, Energy, Time, Trotter)** — the keystone; everything else depends on it; must include both forward L(rho) and adjoint L'(rho) for bieigsolve
+- **KrylovKit `eigsolve` wrapper with `:LR` targeting** — finds steady state + gap mode without shift-invert; request howmany=6-10 for robustness against clustered eigenvalues
+- **`KrylovGapResult` struct** — eigenvalues, spectral gap, convergence count, matvec count, residual norms, fixed point density matrix
+- **Cross-validation against dense `eigen()` at n=4,6** — the correctness gate; no production run at n>=8 until round-trip test and eigsolve validation both pass
+- **Memory estimation pre-flight check** — `krylovdim * 4^n * 16 * 1.5` bytes before any run; guard against OOM
 
-**Must have (table stakes):**
-- **Effective rate plot lambda_eff(t)** — model-free diagnostic `lambda_eff(t) = -(1/tau)*ln|Delta(t+tau)/Delta(t)|` that reveals multi-exponential time regimes and identifies the golden fitting window without fitting assumptions; keystone for all other features
-- **Two-exponential fit with Prony initialization** — root cause fix from Quick-32; model `c1*exp(-g1*t) + c2*exp(-g2*t)` absorbs fast-mode contamination into the second term, analogous to lattice QCD multi-state analysis; Prony two-point method gives reliable initial rates without iteration
-- **Bootstrap error bars (batch-level)** — nonparametric uncertainty quantification using K~100 batches of trajectories, resampling at batch level to avoid 640 MB+ per-trajectory storage; provides correct confidence intervals for the ill-conditioned two-exponential fit
-- **Automatic fitting window selection (SNR + stability)** — removes fragile manual `skip_initial=0.1`; t_max via SNR > 3 threshold, t_min via gamma_1 stability test sweeping window starts
-- **Anti-Hermitian defect computation** — KMS similarity transform `D = rho^{-1/4} L[rho^{1/4}(.)rho^{1/4}] rho^{-1/4}`, decomposed as H+A; ratio ||A||/lambda_gap(H) determines whether real-exponential fitting is appropriate
-- **Delta-Sz symmetry sector labeling** — explains the n=6 zero-overlap mystery from Quick-25 through Quick-27; labels each Lindbladian eigenvector by the dominant Delta_Sz quantum number
-- **Richardson extrapolation for Trotter bias** — formula `gap_rich = 2*gap(delta/2) - gap(delta)` eliminates O(delta) Trotter error; only viable after two-exponential fitting validates monotonic error structure
+**Should have (differentiators):**
+- **Both L (Lindbladian) and E (CPTP channel) formulations** — cross-validates continuous vs discrete; gap from L equals -log(|mu_2(E)|)/delta up to O(delta^2)
+- **`bieigsolve` for left+right eigenvectors at n<=6** — extends existing biorthogonal overlap diagnostics (DIAG-05) beyond the dense regime
+- **Timing benchmarks with 4^n scaling extrapolation** — empirical timing at n=4,6,8 extrapolated to n=10,12 as go/no-go resource estimate
+- **Adaptive krylovdim** — auto-increase from 30 to 50 to 100 if `info.converged < howmany`; prevents silent failure from wrong default
 
-**Should have (add after core validation):**
-- **Summary dashboard (7-panel figure)** — composes all diagnostics into one thesis-quality communicable result
-- **External field comparison (h=0.1J)** — confirms symmetry sector restriction as dominant n=6 error source
-- **Multi-observable minimum-gap selector** — extend `_select_best_observable` to use two-exponential g1 estimates
-
-**Defer (v1.5+):**
-- **n=8 sparse Lindbladian** — explicitly deferred in reference documents; requires KrylovKit.jl and new architecture
-- **Damped-oscillation fit model** — only if anti-Hermitian defect proves significant in practice
-- **GEVP / matrix pencil methods** — only if two-exponential fit proves insufficient
+**Defer to subsequent milestones:**
+- n=10, n=12 production runs (require cluster hardware and empirical parameter tuning from n=8 results)
+- Sector-resolved gap computation (requires symmetry projection infrastructure not yet built)
+- GPU acceleration (data transfer overhead dominates many small dim x dim matrix multiplications)
+- Arnoldi-Lindblad time-evolution approach (higher complexity; only needed if `:LR` targeting fails, which is unlikely)
 
 ### Architecture Approach
 
-The diagnostic layer is purely additive — a post-hoc analysis layer consuming existing result structs and trajectory data. Two new source files are added (`src/diagnostics.jl` for all structural diagnostics, `src/bootstrap.jl` for the batched trajectory runner and bootstrap analysis). Three existing files receive additions with minimal modification risk: `src/fitting.jl` gets `fit_two_exponential_decay()`, `src/trajectories.jl` gets `run_observable_trajectories_batched()`, and `src/QuantumFurnace.jl` gets include and export additions. All new result structs are flat immutable Julia structs following the existing convention (no methods on structs, plain field types).
+The architecture adds a single new file `src/krylov.jl` (~350 lines) without modifying any existing source file. The design mirrors the established domain-dispatch pattern from `jump_workers.jl`: a `_lindbladian_jump_action!` function dispatched on domain type computes L_k(rho) directly on dim x dim density matrices rather than assembling the dim^2 x dim^2 superoperator. A `KrylovWorkspace` struct pre-allocates all scratch matrices once; the closure passed to KrylovKit captures this workspace and produces zero allocation on the hot path except for the unavoidable `copy(vec(d_rho))` stored per Krylov iteration. Precomputation calls `_precompute_data()` and `_precompute_coherent_total_B()` identically to `construct_lindbladian()`, ensuring exact basis and domain consistency.
 
 **Major components:**
-1. **`src/fitting.jl` (modified — new function)** — adds `fit_two_exponential_decay()` returning `TwoExpFitResult`; 5-parameter model with Prony + effective-rate fallback initialization; separation test (g2/g1 > 1.5); kept separate from existing `fit_exponential_decay` to preserve unchanged API
-2. **`src/diagnostics.jl` (new, 500-700 LOC)** — all structural diagnostic functions: `compare_gap_to_exact`, `compute_effective_rates`, `anti_hermitian_defect` (with Gibbs spectrum truncation), `sector_gap_analysis` (with degeneracy detection), `trotter_convergence_sweep`, `run_gap_diagnostics` wrapper; all corresponding result structs
-3. **`src/bootstrap.jl` (new, 300-400 LOC)** — `run_observable_trajectories_batched` (new trajectory runner storing per-batch means in `n_batches x n_obs x n_saves` 3D array), `bootstrap_spectral_gap`, `BootstrapGapResult` with percentile CI; `BatchedTrajectoryResult`
-4. **Include order in QuantumFurnace.jl** — `fitting.jl` then `gap_estimation.jl` then `bootstrap.jl` then `diagnostics.jl`, following the dependency DAG
-
-The critical architectural decision is batch-level bootstrap over per-trajectory storage: `n_batches x n_obs x n_saves` (~3 MB for 100 batches) versus `n_traj x n_obs x n_saves` (640 MB+ for 20k trajectories at n=6). This enables genuine bootstrap distributions with percentile confidence intervals at ~1% of the naive memory cost, using the block bootstrap methodology validated for independent batches.
+1. **`KrylovWorkspace{T}` struct** — 5 pre-allocated dim x dim scratch matrices (d_rho, A_w, LdagL, tmp1, tmp2) reused across all Krylov iterations; eliminates the 256 MB/call allocation problem at n=12
+2. **`_lindbladian_jump_action!` (4 domain-dispatched methods)** — per-jump Lindbladian contribution L_k(rho) in operator form; calls shared `_accumulate_dissipator!` helper for the canonical `A rho A' - 0.5{A'A, rho}` formula
+3. **`build_lindbladian_action()` closure factory** — returns the `f(v) -> w` callable consumed by KrylovKit; captures precomputed data, jump list, config, and workspace by closure
+4. **`krylov_spectral_gap()` public API** — validates inputs, precomputes domain data, calls `eigsolve`, sorts results by |Re(lambda)|, returns `KrylovGapResult`
+5. **`KrylovGapResult` struct (in structs.jl)** — distinct from `LindbladianResult` (no stored matrix), `ExactDiagnosticsResult` (dense only), and `SpectralGapResult` (trajectory-based)
 
 ### Critical Pitfalls
 
-1. **Two-exponential fit parameter non-identifiability** — when g2/g1 < 1.5, the Levenberg-Marquardt Jacobian is ill-conditioned and `stderror(fit)` from LsqFit dramatically underestimates uncertainty; running from 5 different initial guesses gives 5 different (g1, g2) pairs with similar residuals. Prevention: two-stage initialization (single-exp tail fit for g1, residual fit for g2), explicit `g2 > g1` bounds in `curve_fit`, mandatory separation test with fallback to single-exponential tail fit when g2/g1 < 1.5. Never use LsqFit `stderror` for two-exponential uncertainty — use bootstrap exclusively.
+1. **Vectorization convention mismatch** — implementing the matvec with transposed reshape conventions produces wrong eigenvalues that appear numerically plausible. Prevention: mandatory round-trip test `norm(L_dense * vec(rho) - vec(L_matvec(rho))) < 1e-12` for 10 random density matrices at n=4 before any eigsolve call. Use only Julia's native `vec()` and `reshape(v, dim, dim)`; never use `permutedims` or `transpose` in vectorization steps.
 
-2. **rho^{-1/4} blow-up at low temperature** — the KMS similarity transform amplifies Gibbs eigenvalues by the -1/4 power; at beta=10 for the n=6 Heisenberg chain, rho^{-1/4} diagonal entries reach ~10^5, drowning signal in Float64 numerical noise. Prevention: floor on Gibbs eigenvalues at ~1e-12 before taking the -1/4 power; report condition number max(d_k)/min(d_k); validate that BohrDomain defect is < 1e-10 after truncation (the physical ground truth). This truncation must be designed before any anti-Hermitian defect computations.
+2. **Implementing `(E(rho) - rho) / delta` instead of direct Lindblad formula** — catastrophic cancellation loses ~2 digits per order of delta, limiting achievable Krylov tolerance. Prevention: compute L(rho) = sum_k (A_k rho A_k' - 0.5{A_k'A_k, rho}) directly from the dissipator formula, exactly as `_vectorize_liouv_diss_and_add!` does in vector form.
 
-3. **Richardson extrapolation amplifying fitting artifacts** — Quick-30 proved the gap estimation error does NOT follow O(delta^p) structure due to fitting model bias; Richardson applied to poorly-initialized two-exponential fits can produce results worse than the finest-delta un-extrapolated estimate. Prevention: mandatory delta-convergence diagnostic (plot fitted gap vs 3+ delta values) before any extrapolation; gate extrapolation on monotonicity check; always report un-extrapolated estimates alongside extrapolated ones; flag when extrapolated gap falls outside [min, max] of un-extrapolated estimates.
+3. **Basis mismatch between Krylov matvec and dense diagnostics** — using `jump.data` (computational basis) instead of `jump.in_eigenbasis`, or forgetting TrotterDomain uses a different eigenbasis. Prevention: call `_precompute_data(config, ham_or_trott)` identically to `construct_lindbladian()`; validate both BohrDomain and TrotterDomain at n=4; never access `jump.data` inside the Krylov path.
 
-4. **Bootstrap memory blow-up from per-trajectory storage** — naive implementation storing N_traj individual time series at n=6 uses 640 MB+ and makes bootstrap infeasible for N_traj > 10k. Prevention: batch-level bootstrap architecture from the start; `run_observable_trajectories_batched` must be the only supported bootstrap input path; the existing per-trajectory grand-mean runner is not extended.
+4. **Allocating inside the Krylov closure** — any scratch allocation inside the matvec function scales to gigabytes per Krylov solve. Prevention: all workspace pre-allocated in `KrylovWorkspace` before `eigsolve`; the only acceptable allocation inside the closure is the unavoidable `copy(vec(ws.d_rho))`.
 
-5. **Effective rate lambda_eff(t) divergence at sign changes** — when trajectory noise causes Delta(t) to cross zero, the log-ratio diverges to NaN/Inf. Prevention: noise floor cutoff (exclude t where |Delta(t)| < 3*sigma_traj/sqrt(N)), sign-change guard returning NaN with companion boolean mask, and the steady-state value must be the Lindbladian fixed point (not Gibbs state) for TrotterDomain to prevent a systematic offset that corrupts all lambda_eff values.
+5. **Not checking `info.converged`** — KrylovKit returns results silently even when zero eigenvalues converged; `info.converged < howmany` is not an error, just a field. Prevention: always assert `info.converged >= howmany` and fall back to increased `krylovdim` or different starting vector on failure.
 
 ## Implications for Roadmap
 
-Based on the feature dependency graph in FEATURES.md and the build order in ARCHITECTURE.md, five phases are natural. The effective rate plot is the keystone and must exist before bootstrap (which needs to compute lambda_eff per bootstrap sample). The two-exponential fitter must exist before both the effective rate plot (feeds its initialization) and bootstrap (fits each bootstrap resample). Richardson extrapolation requires reliable per-delta gap estimates and is placed last among functional components.
+The feature dependency graph from FEATURES.md and the domain-structured build order from ARCHITECTURE.md both point to the same four-phase progression: matvec correctness first, eigensolver integration second, domain extension third, production scaling fourth. Each phase delivers a testable artifact that validates the previous phase before adding complexity.
 
-### Phase 1: Two-Exponential Fitting Infrastructure
-**Rationale:** Zero dependencies on new code; pure numerical function testable immediately with synthetic data. The `TwoExpFitResult` struct established here is consumed by every downstream phase. Validating convergence and separation quality checks here prevents silently wrong results from propagating through the entire pipeline. This is the lowest-risk high-value starting point.
-**Delivers:** `fit_two_exponential_decay()` in `fitting.jl` with Prony two-point initialization, two-stage effective-rate fallback, separation test (g2/g1 > 1.5 with fallback to single-exponential), LsqFit `confint` for parameter uncertainty, `TwoExpFitResult` struct.
-**Addresses:** Two-exponential fit with Prony init (P0 feature)
-**Avoids:** Pitfall 1 (non-identifiability — separation test and two-stage init), Pitfall 8 (negative amplitude cancellation — cancellation ratio check)
-**Research flag:** Skip — well-documented numerical method; Prony algorithm is textbook; LsqFit API verified from official docs.
+### Phase 1: Core Matvec Infrastructure (EnergyDomain)
 
-### Phase 2: Exact Reference and Structural Diagnostics
-**Rationale:** These diagnostics (exact gap comparison, anti-Hermitian defect, symmetry sector labels, expanded eigenvalue extraction to nev=30) are all independent of each other and of the fitting pipeline. They consume existing `construct_lindbladian` and `run_lindbladian` infrastructure without modification. Building them before the fitting pipeline provides the ground truth references needed to validate Phase 3 and 4 results — in particular, the Lindbladian fixed point computed here is the correct steady-state for lambda_eff in Phase 3.
-**Delivers:** `compare_gap_to_exact()` with `GapComparisonResult` including Lindbladian fixed point; `anti_hermitian_defect()` with Gibbs spectrum truncation and condition number reporting; `sector_gap_analysis()` with `SectorAnalysisResult` and near-degeneracy detection; `run_lindbladian` nev increased to 30; `_thermalize_to_liouv_config()` helper. New file `src/diagnostics.jl` starts here.
-**Addresses:** Anti-Hermitian defect (P1), Delta-Sz symmetry labels (P1), store 20-30 eigenvalues (P2)
-**Avoids:** Pitfall 2 (rho^{-1/4} blow-up — spectrum truncation built in from the start), Pitfall 7 (symmetry label ambiguity — degeneracy detection built in), Pitfall 12 (steady-state mismatch — fixed point available for Phase 3)
-**Research flag:** Targeted audit needed for `_thermalize_to_liouv_config` field mapping — a field-by-field verification of ThermalizeConfig vs LiouvConfig struct definitions is needed before implementation. Skip research-phase for the rest (standard linear algebra).
+**Rationale:** EnergyDomain has the simplest A_w computation (direct `oft!` call, no Bohr-bucket iteration, no NUFFT). Building it first isolates the core dissipator logic from domain-specific complexity. The round-trip test at n=4 is the foundational correctness gate and must exist before any eigensolver is involved. The historical failure in `linearmaps_liouv.jl` was caused by recomputing OFT per iteration without caching; the existing NUFFT prefactor cache eliminates that bottleneck.
 
-### Phase 3: Effective Rate Plot and Automatic Window Selection
-**Rationale:** The effective rate plot is the keystone diagnostic that provides model-free ground truth for all fitting validation. It must exist before the bootstrap pipeline because bootstrap computes lambda_eff curves per bootstrap sample. Automatic window selection is bundled here because it depends directly on the lambda_eff infrastructure and is used by Phase 1's two-exponential fit for t_min determination.
-**Delivers:** `compute_effective_rates()` in `diagnostics.jl` with NaN masking, noise floor cutoff at 3*sigma, midpoint time axis convention, sign-change guard; `EffectiveRateResult` struct; SNR-based t_max selector (SNR > 3); t_min stability test (g1 plateau detection over window-start sweep); steady-state value defaulting to Phase 2's Lindbladian fixed point.
-**Uses:** Phase 1's `fit_two_exponential_decay` for t_min stability loop; Phase 2's Lindbladian fixed point for correct steady-state subtraction
-**Avoids:** Pitfall 3 (lambda_eff divergence — noise floor cutoff and sign-change guard), Pitfall 6 (silent window selection failure — multiple-window comparison), Pitfall 12 (steady-state mismatch — fixed point from Phase 2), Pitfall 14 (wrong time axis — midpoint convention)
-**Research flag:** Skip — the lambda_eff computation is 15 lines of arithmetic; window selection logic is fully specified in reference documents.
+**Delivers:** `KrylovWorkspace{T}` struct, `_accumulate_dissipator!` and `_accumulate_dissipator_adjoint!` shared helpers, `_lindbladian_jump_action!` for EnergyDomain, `build_lindbladian_action()` closure factory, round-trip test passing at n=4 EnergyDomain (with and without coherent term)
 
-### Phase 4: Batched Bootstrap and Richardson Extrapolation
-**Rationale:** Bootstrap requires the new batched trajectory runner, which is the highest-risk new code (touches trajectories.jl) and has the most significant memory implications. Placing it after Phases 1-3 means all analytical diagnostics are available as validation tools when debugging bootstrap outputs. Richardson extrapolation is bundled here because it is a one-line formula once reliable per-delta gap estimates exist from the two-exponential fitter.
-**Delivers:** `run_observable_trajectories_batched()` with `n_batches x n_obs x n_saves` 3D batch storage in new `src/bootstrap.jl`; `bootstrap_spectral_gap()` with percentile CI (not normal approximation); `BootstrapGapResult` including per-bootstrap-sample lambda_eff confidence bands; Richardson extrapolation with mandatory monotonicity precondition gate; `BatchedTrajectoryResult` struct.
-**Uses:** Phase 1 `fit_two_exponential_decay` per bootstrap resample; Phase 3 `compute_effective_rates` for per-sample lambda_eff curves
-**Implements:** Bootstrap architecture component from ARCHITECTURE.md
-**Avoids:** Pitfall 4 (Richardson failure — monotonicity gate required before extrapolation), Pitfall 5 (memory blow-up — batch-level storage from the start), Pitfall 9 (bootstrap lambda_eff bands — per-batch time series enables pointwise CI), Pitfall 13 (degenerate bootstrap samples — minimum B=100 batches)
-**Research flag:** Targeted audit needed for per-batch seeding arithmetic — the `master_seed + batch_idx * ntraj_per_batch` scheme must be verified against the existing `Xoshiro(seed + traj_id)` seeding in `trajectories.jl` before implementation to ensure batch independence. Skip research-phase for bootstrap resampling logic itself (textbook block bootstrap).
+**Addresses:** Matrix-free `apply_lindbladian!` (P0), preallocated workspace pattern (prerequisite for all other phases)
 
-### Phase 5: Integration, Dashboard, and Validation
-**Rationale:** After all diagnostic components are independently validated, the final phase composes them into the `run_gap_diagnostics()` convenience wrapper and the 7-panel summary dashboard. This is the last phase because the summary figure must display results from all prior phases simultaneously and the external field comparison requires all diagnostics to be operational.
-**Delivers:** `run_gap_diagnostics()` wrapper returning `DiagnosticReport` bundling all prior result structs; 7-panel Plots.jl dashboard (spectrum, defect metrics, overlap coefficients, effective rate, delta-convergence, two-exp fit overlay, t_min stability); external field comparison (h=0.1J symmetry-breaking validation); multi-observable minimum-gap selector using two-exponential g1 estimates; final validated gap table for n=4,6 comparing exact vs estimated with sigma discrepancy.
-**Addresses:** Summary dashboard (P2), external field comparison (P2), multi-observable min-gap selector (P2)
-**Research flag:** Skip — Plots.jl multi-panel layout uses documented API already validated in existing docs/ usage; composition of existing structs is mechanical.
+**Avoids:** Pitfalls 3 (vectorization convention), 4 (L vs E confusion), 7 (precision loss) — all addressed by the round-trip test before any eigsolve is attempted
+
+### Phase 2: KrylovKit Integration and Gap Validation
+
+**Rationale:** With the EnergyDomain matvec correct, integrating KrylovKit's `eigsolve` with `:LR` targeting is the next sequential dependency. This phase produces the first Krylov spectral gap estimate and validates it against `extract_leading_eigendata()` at n=4 and n=6. The convergence checking infrastructure and result struct are locked in here.
+
+**Delivers:** KrylovKit.jl added to Project.toml with `[compat]` pin, `krylov_spectral_gap()` public API, `KrylovGapResult` struct in structs.jl, memory estimation function, cross-validation against dense `eigen()` at n=4,6 EnergyDomain with correct eigenvalue sorting and phase-independent eigenvector comparison
+
+**Uses:** KrylovKit.jl v0.10.2 (new production dependency), TimerOutputs.jl (new dev dependency for Krylov profiling)
+
+**Implements:** Architecture components 3-5 (closure factory, public API, result struct)
+
+**Avoids:** Pitfalls 1 (wrong targeting — `:LR` justified by Lindbladian spectrum structure), 5 (basis mismatch — validated against dense), 6 (non-convergence — howmany=6-10 with adaptive krylovdim), 10 (wrong comparison — sort-by-real-part and residual-norm validation)
+
+### Phase 3: Domain Extension and Full Cross-Validation
+
+**Rationale:** With the eigensolver integration validated on EnergyDomain, extending to TrotterDomain, TimeDomain, and BohrDomain follows the established pattern. TrotterDomain is the physically relevant domain for quantum algorithm simulation — it uses a different eigenbasis and must be validated explicitly from the beginning, not as an afterthought. BohrDomain has a distinct two-operator dissipator loop structure requiring its own implementation.
+
+**Delivers:** `_lindbladian_jump_action!` for TrotterDomain and TimeDomain (NUFFT prefactor path), `_lindbladian_jump_action!` for BohrDomain (Bohr-bucket iteration with generalized two-operator dissipator), coherent term `-i[B, rho]` integration, cross-validation at n=4,6 for all four domains (both KMS and GNS balance types), `bieigsolve` integration for left+right eigenvectors at n<=6 (P2 feature, enables overlap analysis)
+
+**Avoids:** Pitfall 5 (basis mismatch — TrotterDomain test is required, not optional)
+
+### Phase 4: Production Scaling and Performance
+
+**Rationale:** After all domains are validated at n<=6, n=8 is the first genuinely Krylov-only regime (the dense Lindbladian would be 64 GB). This phase establishes the empirical performance baseline, tunes BLAS threading, and produces timing data for extrapolating to n=10,12. It also adds the discrete CPTP channel formulation as an independent cross-check.
+
+**Delivers:** n=8 Krylov spectral gap results for all domains, timing benchmarks with 4^n scaling fit, resource estimation report for n=10,12, BLAS thread optimization with restore pattern (mirroring existing `test_threading.jl`), discrete CPTP channel `E(rho)` formulation with `:LM` targeting as cross-check, eigenvalue condition number `kappa(lambda)` computation for error bound reporting
+
+**Uses:** TimerOutputs.jl for hierarchical profiling; `BLAS.set_num_threads()` with `try-finally` restore
+
+**Avoids:** Pitfalls 2 (memory blowup — pre-flight guard established), 8 (BLAS thread contention — thread count optimized), 11 (convergence criteria — kappa(lambda) computed and reported)
 
 ### Phase Ordering Rationale
 
-- Phase 1 first because `TwoExpFitResult` is a dependency of Phases 3, 4, and 5, and it is the easiest to test in isolation with synthetic data without any trajectory infrastructure.
-- Phase 2 before Phase 3 because the Lindbladian fixed point from Phase 2's `compare_gap_to_exact` is needed as the correct steady-state value for lambda_eff computation in Phase 3. Using the wrong steady-state (Gibbs instead of fixed point for TrotterDomain) corrupts all effective rate plots.
-- Phase 3 before Phase 4 because the batched trajectory runner (Phase 4) needs to compute per-bootstrap-sample lambda_eff curves using Phase 3's `compute_effective_rates`. Having the lambda_eff infrastructure ready first avoids implementing it twice.
-- Phase 4 before Phase 5 because the dashboard plots bootstrap confidence bands and Richardson-extrapolated estimates that are produced in Phase 4.
-- This ordering also matches the ARCHITECTURE.md suggested build order: arch phases 1 (two-exp fitting) maps to roadmap Phase 1; arch phases 2-5 (effective rates, exact reference, defect, symmetry) map to roadmap Phases 2-3; arch phases 6-7 (batched runner, bootstrap) map to roadmap Phase 4; arch phase 9 (integration) maps to roadmap Phase 5.
+- Phase 1 before 2: the linear map must be correct before any eigensolver is used. The round-trip test is a hard gate that cannot be deferred.
+- Phase 2 before 3: validate the eigensolver on the simplest domain before adding domain complexity that could obscure bugs. A bug found at n=4 EnergyDomain costs seconds; the same bug found for TrotterDomain after integrating all four domains takes hours to isolate.
+- Phase 3 before 4: all domains must work at small scale before expensive production runs. A TrotterDomain basis bug found at n=4 costs seconds; found at n=10 it costs hours of compute time.
+- The `:LR` targeting decision (from STACK research) eliminates shift-invert entirely, which removes a full category of architectural complexity — no GMRES inner solve, no nested Krylov, no linear system infrastructure.
+- The preallocated workspace pattern (from ARCHITECTURE research) ensures zero hot-path allocation, which is the dominant performance risk at n=12 where a single scratch allocation is 256 MB.
 
 ### Research Flags
 
-Phases needing targeted verification during planning:
-- **Phase 2 (config conversion):** The `_thermalize_to_liouv_config` helper must map all fields between `ThermalizeConfig` and `LiouvConfig` correctly. A field-by-field audit of both struct definitions in `src/` is needed before implementation. Silent field mismatch means running diagnostics against a wrong Lindbladian. This is a 30-minute verification task, not a full research-phase.
-- **Phase 4 (batched trajectory seeding):** The per-batch seed arithmetic must produce statistically independent batches, compatible with the existing `Xoshiro(seed + traj_id)` scheme. Incorrect seeding makes bootstrap confidence intervals invalid. This is also a targeted audit of the seeding code in `trajectories.jl`, not a full research-phase.
+Phases likely needing deeper research during planning:
 
-Phases with standard patterns (skip research-phase):
-- **Phase 1:** Prony algorithm is textbook; LsqFit bounded fitting is documented from official sources with verified API.
-- **Phase 3:** lambda_eff computation is ~15 lines of arithmetic; window selection logic is fully specified in reference documents.
-- **Phase 5:** Plots.jl multi-panel dashboard uses documented API already validated in existing `docs/` usage; composition is mechanical.
+- **Phase 4 (Production Scaling at n=10,12):** Performance characteristics are estimated from O(dim^3) scaling extrapolation, not measured. Actual wall-clock times per matvec, memory behavior under Julia GC pressure, and optimal BLAS thread counts on specific cluster hardware are all empirical questions. Phase 4 should be treated as a research+implementation phase — measure first at n=8, then decide on n=10,12 feasibility.
+- **Phase 3 (BohrDomain two-operator dissipator):** The BohrDomain Lindbladian action is structurally distinct: it uses two different operators (alpha_A_nu1 and A_nu2) in a generalized dissipator `A1 rho A2' - 0.5 A2' A1 rho - 0.5 rho A2' A1`, matching the existing `_vectorize_liouv_diss_and_add!(L, jump_1, jump_2_dag, scalar, ws)` call. The Krylov-side implementation of this generalized dissipator requires careful analysis of the Bohr-bucket loop structure in `jump_workers.jl` lines 11-45 before coding.
+
+Phases with well-documented patterns (skip additional research):
+
+- **Phase 1 (Core Matvec):** The Lindbladian dissipator formula is textbook physics. The `mul!`-based implementation is fully specified. The round-trip test design is unambiguous. No additional research needed.
+- **Phase 2 (KrylovKit Integration):** The `eigsolve` API is thoroughly documented with clear examples. The `:LR` targeting decision is unambiguous given the Lindbladian spectrum structure (all Re(lambda) <= 0 means the gap eigenvalue is extremal under `:LR`). KrylovKit version is pinned to v0.10.2.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | All packages verified against official Julia docs; zero new dependencies confirmed by cross-checking each v1.4 feature against existing stdlib and extras; version compatibility verified for all API calls |
-| Features | HIGH | Feature set precisely specified in `spectral-gap-refinements-instructions.md` and `error_catalogue_spectral_gap_estimation.md`; priorities validated by Quick-30/31/32 empirical data with exact gap comparison |
-| Architecture | HIGH | Based on direct analysis of all 26 source files and 19 test files; complete data flow traced through existing codebase; all integration points identified; build order validated against dependency DAG |
-| Pitfalls | HIGH | Critical pitfalls grounded in Quick-30/31/32 empirical results plus established numerical analysis literature; mitigations are concrete, testable, and cross-referenced to specific code locations |
+| Stack | HIGH | KrylovKit v0.10.2 API verified via official docs (October 2025 generation). `:LR` targeting justified mathematically from Lindbladian spectrum structure, confirmed by Arnoldi-Lindblad paper (peer-reviewed). Alternative packages (ArnoldiMethod.jl, Arpack.jl) explicitly evaluated and rejected with documented reasons. |
+| Features | HIGH | Core features derived from direct codebase analysis (26 source files) and verified KrylovKit API. Feature prioritization follows hard technical dependencies (matvec before eigsolve; validation before production). Performance estimates for n=10,12 are LOW confidence (extrapolated from O(dim^3) scaling, not measured). |
+| Architecture | HIGH | Component boundaries chosen via direct analysis of all existing source files. Domain dispatch pattern mirrors `jump_workers.jl` exactly. Zero modifications to existing files (except `structs.jl` addition and `QuantumFurnace.jl` includes). Historical failure mode in `linearmaps_liouv.jl` fully explained and addressed. |
+| Pitfalls | HIGH | Most pitfalls identified from codebase analysis (existing BLAS thread management in `test_threading.jl`, abandoned prototype in `linearmaps_liouv.jl`) and KrylovKit GitHub issues (#9 memory overhead, #23/#38 degeneracy failures). Low-confidence estimates are explicitly flagged (timing at large n). |
 
 **Overall confidence:** HIGH
 
 ### Gaps to Address
 
-- **Config field mapping (ThermalizeConfig to LiouvConfig):** The `_thermalize_to_liouv_config` helper needs a field-by-field audit against the actual struct definitions before Phase 2 implementation. This is mechanical verification but the consequence of a silent mismatch is running all structural diagnostics against a wrong Lindbladian with no error signal.
-- **Per-batch seeding arithmetic:** The exact seeding scheme for `run_observable_trajectories_batched` needs explicit design verification that batches are statistically independent. Correlated batches silently invalidate bootstrap confidence intervals. Audit the `Xoshiro(seed + traj_id)` logic in `trajectories.jl` before writing the batched runner.
-- **Two-exponential identifiability at n=4:** The n=4 Heisenberg chain has g1=0.173 and g2~0.35 (ratio ~2x), right at the boundary of identifiability per the numerical literature. Whether two-stage Prony initialization reliably recovers g1 at this ratio should be validated early in Phase 1 with actual n=4 trajectory data (not just synthetic). If not, profile likelihood over a g1 grid may be needed.
-- **TrotterDomain fixed point for n=6:** The effective rate computation requires the Lindbladian fixed point for correct steady-state subtraction. For n=6, the Liouvillian is 4096x4096 (dense eigen takes ~30s but is feasible). Confirming `liouv_result.fixed_point` is available from `run_lindbladian` for TrotterDomain with nev=30 should be verified in Phase 2 before Phase 3 depends on it.
+- **Timing at n=10,12:** The O(dim^3) extrapolation suggests hours per Krylov solve at n=12, but the actual cost depends on number of energy labels per jump, BLAS efficiency on specific hardware, and GC behavior. Empirical timing at n=8 (Phase 4) must be completed before committing to n=10,12 runs. Treat Phase 4 as empirical calibration, not just implementation.
+
+- **KrylovKit memory overhead at scale:** GitHub issue #9 (2018) reports ~20x overhead vs Arpack for small problems; the 1.5x safety factor in the budget estimates may be too optimistic or too pessimistic for the large-vector regime at n=12. Validate with `@allocated` wrapping the eigsolve call at n=8 before scaling further.
+
+- **Degenerate eigenvalue behavior at n>=8:** Systems with SZ conservation have eigenvalue multiplets whose density increases with system size. The PITFALLS research identifies this as a moderate risk (Pitfall 6) but the actual multiplet structure at n=8-12 for the target Heisenberg chain is unknown. The existing `detect_multiplets` infrastructure from `diagnostics.jl` could be adapted to predict convergence difficulty before a long run.
+
+- **GNS balance type coverage:** FEATURES.md's cross-validation matrix includes GNS but ARCHITECTURE.md focuses on KMS examples. GNS uses a different `transition` function but the same domain dispatch structure. Should be straightforward but requires explicit test coverage in Phase 3.
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- QuantumFurnace.jl codebase — direct analysis of all 26 source files and 19 test files; all integration points and data flows traced
-- `supplementary-informations/spectral-gap-refinements-instructions.md` — 5-part diagnostic pipeline specification; feature and architecture ground truth
-- `supplementary-informations/error_catalogue_spectral_gap_estimation.md` — 7 catalogued error sources; pitfall grounding
-- Quick-30/31/32 summaries — empirical validation of root cause (fitting model error >> simulation error); Richardson extrapolation failure mechanism confirmed
-- Julia LinearAlgebra documentation — eigen, Hermitian, opnorm, Diagonal; matrix fourth root via eigenbasis approach verified
-- LsqFit.jl official documentation — curve_fit API, bounds, confidence intervals; two-exponential model approach verified
-- Arpack.jl documentation — eigs with sigma (shift-invert) and nev parameters; KrylovKit.jl rejection verified by explicit "no shift-invert" documentation quote
-- KrylovKit.jl eigenvalue documentation — confirms no shift-invert mode; interior eigenvalue finding not supported
-- StatsBase.jl documentation — `sample` function with `replace` keyword; batch bootstrap pattern verified
+
+- [KrylovKit.jl official documentation](https://jutho.github.io/KrylovKit.jl/stable/) — API reference, `eigsolve`/`bieigsolve` signatures, algorithm parameters; generated October 10, 2025
+- [KrylovKit.jl GitHub releases](https://github.com/Jutho/KrylovKit.jl/releases) — v0.10.2, October 11, 2025; confirms version and API stability
+- [KrylovKit.jl eigenvalue problems](https://jutho.github.io/KrylovKit.jl/stable/man/eig/) — `:LR`/`:SR`/`:LM` targeting semantics; explicit no-shift-invert documentation
+- [KrylovKit.jl algorithms reference](https://jutho.github.io/KrylovKit.jl/stable/man/algorithms/) — Arnoldi defaults (krylovdim=30, maxiter=100, tol=1e-12), BiArnoldi for bieigsolve
+- QuantumFurnace.jl codebase (all 26 source files) — direct analysis for integration points, existing patterns, historical failure modes
+- [ArnoldiMethod.jl documentation v0.4.0](https://julialinearalgebra.github.io/ArnoldiMethod.jl/dev/) — evaluated and rejected (no `bieigsolve`, no `exponentiate`)
 
 ### Secondary (MEDIUM confidence)
-- Prony's method (Wikipedia + SIAM J. Sci. Comput. paper) — two-point exponential initialization; mathematical foundation sound and standard
-- Richardson extrapolation for Lindbladian Trotter error (arXiv:2507.22341, DOI:10.1103/kw39-yxq5) — theoretical support for extrapolation when error structure is correct
-- Symmetry classification of many-body Lindbladians (PhysRevX.13.031019) — symmetry sector labeling framework; Delta-Sz approach validated
-- KMS detailed balance and similarity transform (Chen et al. arXiv:2303.18224) — rho^{-1/4} transform mathematical foundation
-- Bootstrap resampling theory (Efron 1979; Efron and Tibshirani 1993) — block bootstrap validity for independent blocks; minimum ~50 blocks for reliable percentile CIs
-- Parameter identifiability in two-exponential models (BMC Systems Biology 2015) — condition number growth as function of rate separation ratio; g2/g1 > 1.5 threshold grounded here
 
-### Tertiary (MEDIUM-LOW confidence)
-- Julia Discourse sparse eigenvalue comparison (Arpack vs KrylovKit vs ArnoldiMethod) — community discussion supporting Arpack choice; not official source
-- Plots.jl vs Makie.jl ecosystem comparison (Julia Discourse) — community discussion supporting Plots.jl for diagnostic purposes; not official benchmark
+- [Arnoldi-Lindblad time evolution (Huybrechts & Roscilde, Quantum 2022)](https://quantum-journal.org/papers/q-2022-02-10-649/) — validates `:LR` approach for Lindbladian spectrum; peer-reviewed
+- [Tensor Network Framework for Lindbladian Spectra (arXiv:2509.07709)](https://arxiv.org/abs/2509.07709) — complex-time Krylov methods for Lindbladian eigenvalues
+- [KrylovKit.jl GitHub Issues #9, #23, #38](https://github.com/Jutho/KrylovKit.jl/issues/9) — memory allocation overhead and degenerate eigenvalue behavior; 2018 report, may not reflect v0.10 behavior
+- [Krylov.jl performance tips](https://jso.dev/Krylov.jl/dev/tips/) — BLAS threading recommendations: use physical cores
+- [QuantumToolbox.jl steadystate](https://qutip.org/QuantumToolbox.jl/stable/users_guide/steadystate) — validates `:SR`/`:LR` approach for Lindbladian steady state; different codebase but same physics
+- [Three approaches for representing Lindblad dynamics (arXiv:1510.08634)](https://arxiv.org/pdf/1510.08634) — vectorization conventions documentation
+
+### Tertiary (LOW confidence, needs empirical validation)
+
+- O(dim^3) matvec timing extrapolations to n=10,12 — formula-based, not measured; requires n=8 benchmarks to calibrate
+- n=12 full Krylov memory budget (~27 GB) — 1.5x KrylovKit overhead factor may be inaccurate for large-vector regime
+- Krylov dimension requirements at n>=8 — system-dependent; empirical tuning required during Phase 4
 
 ---
-*Research completed: 2026-02-19*
+*Research completed: 2026-02-20*
 *Ready for roadmap: yes*

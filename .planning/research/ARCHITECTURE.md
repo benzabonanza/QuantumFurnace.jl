@@ -1,683 +1,586 @@
-# Architecture: Spectral Gap Refinement Diagnostics
+# Architecture Patterns: Krylov-based Lindbladian Spectral Gap Estimation
 
-**Domain:** Diagnostic and analysis layer for spectral gap estimation quality assessment
-**Researched:** 2026-02-19
-**Confidence:** HIGH (direct analysis of all 26 source files, all 19 test files, existing architecture patterns fully traced through data flow)
-
-## Executive Summary
-
-The spectral gap refinement diagnostics milestone adds six new capabilities to the existing `estimate_spectral_gap` pipeline: exact reference comparison, Trotter convergence analysis, effective rate plots, two-exponential fitting, symmetry sector analysis, and bootstrap error bars. The central architectural question is how these capabilities integrate with the existing flat-file module layout (no subdirectories in `src/`).
-
-**Recommendation:** Add a single new file `src/diagnostics.jl` rather than a `src/diagnostics/` subdirectory. The existing codebase uses a flat layout with one file per concern. A subdirectory would break this convention and create an artificial boundary between tightly-coupled code. The diagnostics module is a pure analysis layer that consumes existing result structs and trajectory data -- it does not modify any simulation primitives.
-
-## Existing Architecture Summary (Relevant to Diagnostics)
-
-### Current Data Flow for Spectral Gap Estimation
-
-```
-estimate_spectral_gap(jumps, config, psi0, hamiltonian; ...)
-  |
-  +-> build_preset_trajectory_observables(hamiltonian, num_qubits)
-  |     Returns: (observables::Vector{Matrix{ComplexF64}}, names::Vector{String})
-  |
-  +-> run_observable_trajectories(jumps, config, psi0, hamiltonian; ...)
-  |     Internally: _build_framework_and_seed -> TrajectoryFramework
-  |                 Multi-threaded _run_chunk_obs_only! / _run_chunk_with_obs!
-  |     Returns: ObservableTrajectoryResult{T}
-  |       .times::Vector{Float64}                    # time grid
-  |       .measurements_mean::Matrix{Float64}        # n_obs x n_saves (AVERAGES ONLY)
-  |       .n_trajectories::Int
-  |       .seed::Int
-  |       .rho_mean::Union{Nothing, Matrix{T}}       # nothing when reconstruct_dm=false
-  |
-  +-> fit_exponential_decay(times, obs_series; skip_initial)   [per observable]
-  |     Returns: FitResult
-  |       .gap, .amplitude, .offset, .gap_ci, .gap_se, .r_squared, .converged
-  |       .residuals, .times_used, .values_used
-  |
-  +-> _select_best_observable(fits, names)
-  |
-  +-> SpectralGapResult
-        .gap, .gap_ci, .gap_se, .best_observable, .best_r_squared
-        .per_observable::Vector{FitResult}, .observable_names
-        .ntraj, .total_time, .save_every, .seed, .skip_initial
-```
-
-### Critical Observation: Individual Trajectories Are Lost
-
-The current pipeline accumulates measurements into `mean_data_local::Matrix{Float64}` via `_accumulate_measurements!`. Individual trajectory time series are summed in-place and divided by `ntraj` at the end. **There is no mechanism to retrieve per-trajectory data** -- the chunk functions (`_run_chunk_obs_only!`, `_run_chunk_with_obs!`) accept a shared `mean_data_local` accumulator and add to it.
-
-This is the single most important architectural constraint for bootstrap error bars. The options are:
-1. Store per-trajectory measurements (memory: `ntraj * n_obs * n_saves` Float64s)
-2. Store per-trajectory measurements in batches and bootstrap at the batch level
-3. Re-run trajectories with different seeds (resampling the seed space)
-
-### Existing Integration Points
-
-| Component | Location | Relevant for | Access Pattern |
-|-----------|----------|-------------|----------------|
-| `construct_lindbladian()` | `furnace.jl:42-84` | Exact reference, anti-Hermitian defect | Returns full `L::Matrix{ComplexF64}` (dim^2 x dim^2) |
-| `run_lindbladian()` | `furnace.jl:1-40` | Exact spectral gap reference | Returns `LindbladianResult` with `.liouvillian`, `.spectral_gap` |
-| `eigenbasis_overlap_analysis()` | `gap_estimation.jl:279-327` | Symmetry analysis, mode decomposition | Takes `L`, `observables`, `rho0`; returns `OverlapAnalysisResult` |
-| `fit_exponential_decay()` | `fitting.jl:153-217` | Effective rate, two-exp fitting (extend) | Takes `times`, `values`; returns `FitResult` |
-| `_select_best_observable()` | `gap_estimation.jl:71-99` | Gap estimation selection logic | Internal function, used by `estimate_spectral_gap` |
-| `build_preset_trajectory_observables()` | `convergence.jl:35-106` | Observable construction for all diagnostics | Returns `(observables, names)` in eigenbasis |
-| `run_observable_trajectories()` | `trajectories.jl:740-853` | Trajectory data source for all diagnostics | Returns `ObservableTrajectoryResult` |
-| `_run_chunk_obs_only!()` | `trajectories.jl:478-516` | Bootstrap (needs modification for per-traj storage) | Currently accumulates into shared buffer |
-| `TrajectoryFramework` | `trajectories.jl:79-101` | Thread-safe read-only simulation parameters | Immutable struct, concrete-typed fields |
-| `HamHam` | `hamiltonian.jl:24-39` | Eigenbasis for symmetry analysis | `.eigvals`, `.eigvecs`, `.data`, `.gibbs` |
-| `TrottTrott` | `trotter_domain.jl` | Trotter convergence analysis | `.eigvals`, `.eigvecs` |
-
----
+**Domain:** Matrix-free Krylov eigensolving for Lindbladian spectral gap in QuantumFurnace.jl
+**Researched:** 2026-02-20
+**Confidence:** HIGH (direct analysis of all 26 source files, existing architecture patterns fully traced, KrylovKit API verified via official docs)
 
 ## Recommended Architecture
 
-### Design Principle: Analysis Layer, Not Simulation Layer
+### Design Principle: The Lindbladian Action, Not the Channel, Not the Matrix
 
-All six diagnostic capabilities are **post-hoc analysis** of data that the existing pipeline can produce. None of them require changes to the step-along-trajectory hot loop or the Lindbladian construction machinery. The sole exception is bootstrap, which needs per-trajectory data that the current pipeline discards.
+There are three options for what to wrap as a KrylovKit linear map:
 
-### New Files
+1. **Full Liouvillian matrix L** -- build the dim^2 x dim^2 matrix, pass to KrylovKit as an `AbstractMatrix`. Defeats the purpose of matrix-free methods.
 
-| File | Purpose | LOC Estimate |
-|------|---------|-------------|
-| `src/diagnostics.jl` | All diagnostic structs and functions | 500-700 |
-| `src/bootstrap.jl` | Bootstrap resampling infrastructure (trajectory runner variant + analysis) | 300-400 |
-| `test/test_diagnostics.jl` | Tests for diagnostics module | 300-400 |
-| `test/test_bootstrap.jl` | Tests for bootstrap module | 200-300 |
+2. **CPTP channel E_delta** -- wrap the existing DM thermalization step (`_jump_contribution!` for `AbstractThermalizeConfig`). Eigenvalues cluster around 1.0 (since E_delta(rho) ~ rho + delta*L(rho)), making Krylov convergence poor.
 
-### Modified Files
+3. **Lindbladian generator L** -- compute L(rho) directly from the dissipator formula without forming the full matrix. Eigenvalues have Re(lambda) <= 0; spectral gap = |Re(lambda_2)|.
 
-| File | Change | Risk |
-|------|--------|------|
-| `src/QuantumFurnace.jl` | Add `include()` for new files, new exports | Minimal -- append only |
-| `src/fitting.jl` | Add `fit_two_exponential_decay()` function | Low -- new function, no changes to existing |
-| `src/trajectories.jl` | Add `_run_chunk_obs_per_traj!()` and `run_observable_trajectories_per_traj()` | Moderate -- new function parallel to existing patterns |
+**Recommendation: Option 3 -- wrap the Lindbladian generator L as a matrix-free action.** This is the mathematically clean approach. KrylovKit's Arnoldi with `:SR` (smallest real part, i.e., most negative) directly targets the spectral gap. The existing `_precompute_data()` and coherent B infrastructure is reused verbatim; only the per-iteration action needs new code.
 
-### Unchanged Files
-
-Everything else. The diagnostic layer is purely additive.
-
----
-
-## Component Design
-
-### 1. Exact Reference Comparison
-
-**Purpose:** Compare trajectory-estimated spectral gap against the exact gap from dense Liouvillian eigendecomposition.
-
-**Data flow:**
-```
-construct_lindbladian(jumps, config, hamiltonian)    [existing]
-  -> L::Matrix{ComplexF64}
-  -> eigen(L)                                        [dense eigendecomposition]
-  -> exact_gap = |Re(lambda_2)|
-  -> compare with SpectralGapResult.gap
-
-OR:
-run_lindbladian(jumps, config_liouv, hamiltonian)    [existing]
-  -> LindbladianResult.spectral_gap
-```
-
-**Implementation:** A function `compare_gap_to_exact()` that takes a `SpectralGapResult` and either a `LindbladianResult` or raw `(jumps, config, hamiltonian)`. Returns a struct with the exact gap, trajectory gap, relative error, and whether the trajectory CI contains the exact gap.
-
-**Integration point:** Uses `construct_lindbladian()` from `furnace.jl` to get the Liouvillian, then standard `LinearAlgebra.eigen()` for the full spectrum. The `LiouvConfig` can be constructed from a `ThermalizeConfig` by dropping `mixing_time` and `delta`.
-
-**Key design decision:** The function should accept a pre-computed `LindbladianResult` to avoid redundant Liouvillian construction when the user already has one. Also accept raw inputs for the one-call convenience API.
-
-```julia
-struct GapComparisonResult
-    exact_gap::Float64
-    estimated_gap::Float64
-    relative_error::Float64
-    ci_contains_exact::Bool
-    exact_eigenvalues::Vector{ComplexF64}  # first few, sorted by |Re|
-end
-```
-
-### 2. Anti-Hermitian Defect Computation
-
-**Purpose:** Quantify how far the Lindbladian is from being purely dissipative (Hermitian in the GNS inner product). The anti-Hermitian part indicates coherent contributions or numerical errors.
-
-**Data flow:**
-```
-construct_lindbladian(jumps, config, hamiltonian)    [existing]
-  -> L::Matrix{ComplexF64}
-
-anti_hermitian_defect(L)
-  -> L_H = (L + L')/2    (Hermitian part)
-  -> L_A = (L - L')/2    (anti-Hermitian part)
-  -> defect = ||L_A|| / ||L||    (relative norm)
-```
-
-**Integration point:** Direct access to `construct_lindbladian()`. No new dependencies.
-
-**Note:** For GNS-detailed-balance Lindbladians (with_coherent=false), this defect should be zero up to numerical precision. For KMS with coherent terms, there will be a nonzero anti-Hermitian component from the `B` operator. This diagnostic helps validate whether the coherent term is correctly implemented.
-
-### 3. Trotter Convergence Analysis
-
-**Purpose:** Run spectral gap estimation at multiple Trotter step counts and plot convergence toward the exact (or high-fidelity) value.
-
-**Data flow:**
-```
-For each num_trotter_steps in [1, 2, 5, 10, 20, ...]:
-  trotter = TrottTrott(hamiltonian, t0, num_trotter_steps)
-  jumps_trotter = make_jumps_in_trotter_basis(...)
-  config_trotter = ThermalizeConfig(..., num_trotter_steps_per_t0=num_trotter_steps)
-
-  gap_result = estimate_spectral_gap(jumps_trotter, config_trotter, psi0, hamiltonian;
-      trotter=trotter, ...)
-
-  OR (for exact reference):
-  liouv_config = LiouvConfig(..., num_trotter_steps_per_t0=num_trotter_steps)
-  liouv_result = run_lindbladian(jumps_trotter, liouv_config, hamiltonian; trotter=trotter)
-
-Collect: [(num_steps, gap_estimate, gap_ci, exact_gap)] for each
-```
-
-**Implementation:** A function `trotter_convergence_sweep()` that takes the base parameters and a vector of step counts, runs the estimation at each, and returns a struct collecting all results.
-
-**Key design decision:** This is an orchestration function that calls existing entry points in a loop. It should NOT duplicate any simulation logic. The user provides the base config, and the function clones it with different `num_trotter_steps_per_t0` values.
-
-```julia
-struct TrotterConvergenceResult
-    num_trotter_steps::Vector{Int}
-    estimated_gaps::Vector{Float64}
-    estimated_gap_cis::Vector{Tuple{Float64, Float64}}
-    exact_gaps::Union{Nothing, Vector{Float64}}  # if run_exact=true
-    reference_gap::Union{Nothing, Float64}        # exact gap at highest step count or from BohrDomain
-end
-```
-
-### 4. Effective Rate Plots
-
-**Purpose:** Compute the "instantaneous" or "effective" spectral gap as a function of time window, revealing multi-exponential behavior.
-
-**Data flow:**
-```
-Given ObservableTrajectoryResult (times, measurements_mean):
-
-For each window [t_start, t_end] sliding or expanding:
-  fit = fit_exponential_decay(times[window], obs_series[window])
-  effective_rate[t_start] = fit.gap
-
-Plot: effective_rate vs t_start
-  - Constant: clean single-exponential
-  - Decreasing: multi-exponential (fast transients polluting early times)
-  - Increasing: something wrong (noise dominating late times)
-```
-
-**Implementation:** A function `compute_effective_rates()` that takes a time series and computes the fitted gap over sliding or expanding windows.
-
-**Key design decision:** Use expanding windows (fit from `t_start` to `t_end_fixed`) rather than sliding windows of fixed width. Expanding windows are more stable because they always include the long-time behavior, and the effective rate should converge to the true gap as `t_start` increases past the transient regime.
-
-```julia
-struct EffectiveRateResult
-    t_starts::Vector{Float64}
-    rates::Vector{Float64}
-    r_squareds::Vector{Float64}
-    converged::Vector{Bool}
-    observable_name::String
-end
-```
-
-### 5. Two-Exponential Fitting
-
-**Purpose:** Fit `y(t) = A1*exp(-gap1*t) + A2*exp(-gap2*t) + C` to detect multi-exponential decay and separate the true spectral gap from faster-decaying transients.
-
-**Data flow:**
-```
-Given (times, obs_series):
-  fit_two_exponential_decay(times, obs_series)
-  -> TwoExpFitResult
-       .gap_slow (= spectral gap estimate)
-       .gap_fast (= transient rate)
-       .amplitude_slow, .amplitude_fast, .offset
-       .r_squared, .converged
-```
-
-**Integration point:** Lives in `fitting.jl` alongside `fit_exponential_decay()`. Uses the same `LsqFit.curve_fit` infrastructure. The 5-parameter model (`A1, gap1, A2, gap2, C`) needs careful initialization to avoid the two exponentials collapsing onto the same rate.
-
-**Initialization strategy:**
-1. First fit single-exponential to get an initial rate
-2. Use that as `gap_slow` initial guess
-3. Set `gap_fast = 3 * gap_slow` as initial guess for the transient
-4. Set `A1 = A_single * 0.7`, `A2 = A_single * 0.3` as initial amplitude split
-
-**Key design decision:** The two-exp fit should be a separate function, not an overload of `fit_exponential_decay`. The interfaces differ (5 vs 3 parameters), and the initialization logic is fundamentally different. However, both should return types that `estimate_spectral_gap`-like functions can consume.
-
-```julia
-struct TwoExpFitResult
-    gap_slow::Float64
-    gap_fast::Float64
-    amplitude_slow::Float64
-    amplitude_fast::Float64
-    offset::Float64
-    gap_slow_ci::Tuple{Float64, Float64}
-    gap_slow_se::Float64
-    r_squared::Float64
-    converged::Bool
-    residuals::Vector{Float64}
-    times_used::Vector{Float64}
-    values_used::Vector{Float64}
-end
-```
-
-### 6. Symmetry Sector Analysis
-
-**Purpose:** Decompose the Lindbladian spectrum and observables by symmetry sectors (translation, spin-flip, total Sz) to understand which sectors contain the spectral gap and which observables couple to it.
-
-**Data flow:**
-```
-Given L (Liouvillian), hamiltonian, observables:
-
-eigenbasis_overlap_analysis(L, observables, names, rho0)    [EXISTING]
-  -> OverlapAnalysisResult
-       .eigenvalues, .exact_gap
-       .overlap_coefficients (n_obs x n_modes)
-       .gap_mode_overlap, .relative_gap_overlap
-
-NEW: sector_decomposition(L, hamiltonian, sector_projectors)
-  -> For each sector:
-       Project L into sector: L_sector = P * L * P'
-       Eigendecompose L_sector
-       Find gap within sector
-
-  -> SectorAnalysisResult
-       .sector_names, .sector_gaps, .sector_eigenvalues
-```
-
-**Integration point:** Extends `eigenbasis_overlap_analysis()` from `gap_estimation.jl`. The existing function already does the core eigendecomposition and overlap computation. The new function adds symmetry-aware projectors.
-
-**Key design decision:** Symmetry projectors should be built from the Hamiltonian's symmetries, not hardcoded. For the Heisenberg model specifically, the relevant symmetries are:
-- Total Sz (conserved exactly)
-- Translation (if periodic boundary conditions)
-- Spin-flip Z2 (if no disordering term)
-
-The projector construction is system-specific but the analysis machinery is generic.
-
-```julia
-struct SectorAnalysisResult
-    sector_names::Vector{String}
-    sector_dims::Vector{Int}
-    sector_gaps::Vector{Float64}           # spectral gap within each sector
-    sector_eigenvalues::Vector{Vector{ComplexF64}}  # first few eigenvalues per sector
-    observable_sector_overlaps::Matrix{Float64}     # n_obs x n_sectors
-    global_gap::Float64
-    gap_sector::String                      # which sector contains the global gap
-end
-```
-
-### 7. Bootstrap Error Bars
-
-**Purpose:** Estimate confidence intervals on the spectral gap using bootstrap resampling of trajectory data, providing error bars that account for finite trajectory sampling noise.
-
-**This is the only component that requires modifying the trajectory runner.**
-
-#### The Trajectory Storage Problem
-
-Currently, `_run_chunk_obs_only!` accumulates measurements into a shared `mean_data_local::Matrix{Float64}` (n_obs x n_saves). Individual trajectory measurements are lost after accumulation.
-
-**Recommended approach: Batch-level bootstrap**
-
-Instead of storing all `ntraj` individual trajectories (expensive), store measurements at the batch level:
+### High-Level Architecture
 
 ```
-Run N_batches of batch_size trajectories each.
-For each batch b:
-  batch_mean[b] = mean of batch_size trajectory measurements
-  -> Store batch_mean[b] as one "sample" for bootstrap
+User API                          Internal                              KrylovKit
+---------                         --------                              ---------
 
-Bootstrap:
-  Resample batches with replacement B times
-  For each bootstrap sample:
-    Compute grand mean from resampled batch means
-    Fit exponential decay to bootstrap grand mean
-    Record fitted gap
-
-CI = percentile of bootstrap gap distribution
+krylov_spectral_gap(              build_lindbladian_action(             eigsolve(
+  jumps, config, hamiltonian;       jumps, config, hamiltonian;           lindbladian_action,
+  trotter=nothing,                  trotter=nothing                       x0,
+  n_eigenvalues=6,              ) -> function f(v) -> w                   howmany,
+  krylov_dim=30,                     |                                    which=:SR,
+  tol=1e-10                          |  (closure captures                 tol=tol
+) -> KrylovGapResult                 |   precomputed_data,              )
+                                     |   jumps, config,                 -> (vals, vecs, info)
+                                     |   scratch buffers)
+                                     |
+                                     v
+                                  For each call f(v):
+                                    rho = reshape(v, dim, dim)
+                                    fill!(d_rho, 0)
+                                    for jump in jumps:
+                                      d_rho += dissipator(rho, jump, ...)
+                                    d_rho += -i[B_total, rho]
+                                    return copy(vec(d_rho))
 ```
 
-This requires storing `N_batches x n_obs x n_saves` Float64s instead of `ntraj x n_obs x n_saves`. For typical parameters (100 batches, 8 obs, 200 saves), that is 160K Float64s (~1.3 MB) instead of (10000 traj, 8 obs, 200 saves) = 16M Float64s (~128 MB).
+### Component Boundaries
 
-#### Implementation
+| Component | Responsibility | Location | Status |
+|-----------|---------------|----------|--------|
+| `krylov_spectral_gap()` | User-facing API: validates, precomputes, calls KrylovKit, packages results | New: `src/krylov.jl` | NEW |
+| `build_lindbladian_action()` | Constructs the closure that applies L to vec(rho); captures precomputed data and scratch | New: `src/krylov.jl` | NEW |
+| `_lindbladian_jump_action!()` | Applies ONE jump's Lindbladian contribution to rho (4 domain-dispatched methods) | New: `src/krylov.jl` | NEW |
+| `_accumulate_dissipator!()` | Shared helper: rate * (A rho A^dag - 0.5 {A^dag A, rho}) | New: `src/krylov.jl` | NEW |
+| `KrylovWorkspace` | Scratch buffers for the Lindbladian action (reused across Krylov iterations) | New: `src/krylov.jl` | NEW |
+| `KrylovGapResult` | Result type: eigenvalues, gap, fixed point, convergence info | Add to `src/structs.jl` | NEW |
+| `_precompute_data()` | Domain-specific precomputation (transition, energy labels, NUFFT prefactors) | Existing: `src/furnace_utensils.jl` | REUSE as-is |
+| `_precompute_coherent_total_B()` | Precomputes total B operator for coherent term | Existing: `src/coherent.jl` | REUSE as-is |
+| `oft!()` | Oscillatory Fourier Transform for EnergyDomain A_w computation | Existing: `src/ofts.jl` | REUSE as-is |
+| `_prefactor_view()` | NUFFT prefactor matrix lookup for Time/TrotterDomain | Existing: `src/nufft.jl` | REUSE as-is |
 
-**New trajectory runner variant:**
+### Where New Code Lives
 
-```julia
-function run_observable_trajectories_batched(
-    jumps, config, psi0, hamiltonian;
-    observables, save_every, ntraj_per_batch, n_batches, seed, trotter
-) -> BatchedTrajectoryResult
+**Single new file: `src/krylov.jl`** -- approximately 300-450 lines containing:
+- `KrylovWorkspace` struct (~15 lines)
+- `_accumulate_dissipator!()` and `_accumulate_dissipator_adjoint!()` shared helpers (~40 lines)
+- `_lindbladian_jump_action!` for BohrDomain (~60 lines)
+- `_lindbladian_jump_action!` for EnergyDomain (~50 lines)
+- `_lindbladian_jump_action!` for TimeDomain/TrotterDomain (~50 lines)
+- `build_lindbladian_action()` (~40 lines)
+- `krylov_spectral_gap()` public API (~80 lines)
+- Utility helpers (~30 lines)
+
+**Modified files:**
+- `src/structs.jl` -- add `KrylovGapResult` struct (~25 lines)
+- `src/QuantumFurnace.jl` -- add `include("krylov.jl")` after `linearmaps_liouv.jl`, add exports
+- `Project.toml` -- add KrylovKit dependency
+
+**NO modifications to:** `furnace.jl`, `furnace_utensils.jl`, `coherent.jl`, `jump_workers.jl`, `diagnostics.jl`, `trajectories.jl`, `ofts.jl`, `nufft.jl`, or any other existing source file.
+
+### Data Flow
+
 ```
-
-This function runs `n_batches` groups of `ntraj_per_batch` trajectories, storing per-batch mean measurements. It reuses `_build_framework_and_seed()` once and calls the existing `_run_chunk_obs_only!` machinery per batch.
-
-**Bootstrap analysis function:**
-
-```julia
-function bootstrap_spectral_gap(
-    batched_result::BatchedTrajectoryResult;
-    n_bootstrap=1000, skip_initial=0.0, confidence_level=0.95
-) -> BootstrapGapResult
+krylov_spectral_gap(jumps, config, hamiltonian; trotter, n_eigenvalues, krylov_dim, tol)
+  |
+  +-- validate_config!(config)
+  +-- ham_or_trott = (TrotterDomain ? trotter : hamiltonian)
+  +-- precomputed_data = _precompute_data(config, ham_or_trott)          # REUSE existing
+  +-- B_total = _precompute_coherent_total_B(jumps, ham_or_trott, ...)   # REUSE existing
+  +-- ws = KrylovWorkspace(ComplexF64, dim)                              # NEW workspace
+  |
+  +-- lindbladian_action = build_lindbladian_action(
+  |     jumps, ham_or_trott, config, precomputed_data, B_total, ws)
+  |     |
+  |     +-- Returns closure: function(v::AbstractVector{ComplexF64}) -> Vector{ComplexF64}
+  |           |
+  |           +-- rho = reshape(v, dim, dim)      # reshape view, no copy
+  |           +-- fill!(ws.d_rho, 0)
+  |           +-- for jump in jumps:
+  |           |     _lindbladian_jump_action!(ws.d_rho, rho, jump, ham_or_trott,
+  |           |                               config, precomputed_data, ws)
+  |           +-- if B_total !== nothing:
+  |           |     _coherent_action!(ws.d_rho, rho, B_total, ws)  # -i[B, rho]
+  |           +-- return copy(vec(ws.d_rho))      # MUST be a fresh vector for KrylovKit
+  |
+  +-- x0 = randn(ComplexF64, dim^2)   # random starting vector
+  +-- vals, vecs, info = KrylovKit.eigsolve(
+  |     lindbladian_action, x0, n_eigenvalues, :SR;
+  |     krylovdim=krylov_dim, tol=tol,
+  |     issymmetric=false, ishermitian=false)
+  |
+  +-- perm = sortperm(abs.(real.(vals)))           # sort by proximity to zero
+  +-- spectral_gap = abs(real(vals[perm[2]]))
+  +-- fixed_point = reshape(vecs[perm[1]], dim, dim); normalize
+  +-- gap_mode = reshape(vecs[perm[2]], dim, dim)
+  +-- fixed_point_distance = trace_distance_h(Hermitian(fixed_point), gibbs)
+  +-- Return KrylovGapResult(...)
 ```
-
-This function resamples the batch-level measurements and re-fits the exponential decay for each bootstrap sample.
-
-**New structs:**
-
-```julia
-struct BatchedTrajectoryResult
-    times::Vector{Float64}
-    batch_measurements::Array{Float64, 3}  # n_batches x n_obs x n_saves
-    n_batches::Int
-    ntraj_per_batch::Int
-    total_ntraj::Int
-    seed::Int
-    observable_names::Vector{String}
-end
-
-struct BootstrapGapResult
-    gap::Float64                    # point estimate (mean of bootstrap distribution)
-    gap_median::Float64             # median of bootstrap distribution
-    gap_ci::Tuple{Float64, Float64} # percentile CI
-    gap_se::Float64                 # std of bootstrap distribution
-    bootstrap_gaps::Vector{Float64} # full distribution
-    n_bootstrap::Int
-    per_observable::Vector{BootstrapObservableResult}
-end
-
-struct BootstrapObservableResult
-    name::String
-    gap::Float64
-    gap_ci::Tuple{Float64, Float64}
-    bootstrap_gaps::Vector{Float64}
-end
-```
-
----
-
-## Integration with Existing Architecture
-
-### Module Include Order in QuantumFurnace.jl
-
-The include order in `QuantumFurnace.jl` follows the dependency DAG. The new files should be included at the end, after `gap_estimation.jl` and `results.jl`:
-
-```julia
-# Existing includes (unchanged)
-include("fitting.jl")          # FitResult, fit_exponential_decay
-include("gap_estimation.jl")   # SpectralGapResult, estimate_spectral_gap
-include("results.jl")          # ExperimentResult, save/load
-
-# New includes (added at end)
-include("bootstrap.jl")        # BatchedTrajectoryResult, bootstrap infrastructure
-include("diagnostics.jl")      # All diagnostic functions and result structs
-```
-
-**Rationale for order:**
-- `bootstrap.jl` depends on `trajectories.jl` (TrajectoryFramework, _build_framework_and_seed) and `fitting.jl` (fit_exponential_decay)
-- `diagnostics.jl` depends on `furnace.jl` (construct_lindbladian, run_lindbladian), `gap_estimation.jl` (SpectralGapResult, eigenbasis_overlap_analysis), `fitting.jl` (fit_exponential_decay, fit_two_exponential_decay), and `bootstrap.jl` (BatchedTrajectoryResult)
-
-### Export Organization
-
-Following the existing pattern of grouped exports:
-
-```julia
-# Diagnostics
-export GapComparisonResult, compare_gap_to_exact,
-       EffectiveRateResult, compute_effective_rates,
-       TrotterConvergenceResult, trotter_convergence_sweep,
-       SectorAnalysisResult, sector_gap_analysis,
-       TwoExpFitResult, fit_two_exponential_decay
-
-# Bootstrap
-export BatchedTrajectoryResult, run_observable_trajectories_batched,
-       BootstrapGapResult, bootstrap_spectral_gap
-```
-
-### Config Conversion: ThermalizeConfig -> LiouvConfig
-
-Several diagnostics need a `LiouvConfig` to construct the Lindbladian for exact reference, but the user typically starts from a `ThermalizeConfig`. A helper is needed:
-
-```julia
-function _thermalize_to_liouv_config(config::ThermalizeConfig)
-    LiouvConfig(
-        num_qubits = config.num_qubits,
-        with_coherent = config.with_coherent,
-        with_linear_combination = config.with_linear_combination,
-        domain = config.domain,
-        beta = config.beta,
-        sigma = config.sigma,
-        a = config.a, b = config.b,
-        num_energy_bits = config.num_energy_bits,
-        t0 = config.t0, w0 = config.w0, eta = config.eta,
-        num_trotter_steps_per_t0 = config.num_trotter_steps_per_t0,
-    )
-end
-```
-
-Similarly for GNS variants. This pattern already exists conceptually in the test helpers (`make_small_liouv_config` vs `make_small_thermalize_config`).
-
----
-
-## Anti-Patterns to Avoid
-
-### Anti-Pattern 1: Modifying the Trajectory Step Loop
-**What:** Adding diagnostic hooks or counters inside `step_along_trajectory!`
-**Why bad:** The step loop is the performance-critical hot path. It runs millions of times per gap estimation. Any added overhead there multiplies by `ntraj * num_steps`.
-**Instead:** Keep all diagnostics as post-processing on the output data. The sole modification to the trajectory layer is adding a new runner variant (`run_observable_trajectories_batched`) that stores batch-level data, and this variant calls the existing step function unchanged.
-
-### Anti-Pattern 2: Storing Full Per-Trajectory Time Series
-**What:** Saving `ntraj x n_obs x n_saves` arrays for bootstrap
-**Why bad:** For 10,000 trajectories with 8 observables and 200 time saves, that is 128 MB of Float64 data. The trajectory runner is already designed for accumulation, not storage.
-**Instead:** Use batch-level storage (100 batches of 100 trajectories each). The batch means are sufficient for bootstrap resampling and require only ~1% of the memory.
-
-### Anti-Pattern 3: Subclassing SpectralGapResult
-**What:** Making diagnostics produce subtypes of `SpectralGapResult`
-**Why bad:** Julia structs are final (no inheritance). Even if they were not, the diagnostic results contain fundamentally different information.
-**Instead:** Each diagnostic produces its own result struct. A `DiagnosticReport` wrapper can bundle them with the original `SpectralGapResult`.
-
-### Anti-Pattern 4: Making Diagnostics Depend on Each Other
-**What:** Requiring `TrotterConvergenceResult` to call `compare_gap_to_exact` internally
-**Why bad:** Forces the user to always compute both, even when they want only one. Creates coupling between independent analyses.
-**Instead:** Each diagnostic function is standalone. A convenience `run_all_diagnostics()` can compose them, but they are independently callable.
-
----
 
 ## Patterns to Follow
 
-### Pattern 1: Existing Result Struct Convention
-All existing result structs (`SpectralGapResult`, `FitResult`, `LindbladianResult`, `OverlapAnalysisResult`) are flat immutable structs with no methods. Follow this pattern:
-- Fields are plain types (Float64, Vector, Matrix, Tuple)
-- No methods attached to structs
-- Functions take structs as arguments
-- Constructor is the default positional or @kwdef constructor
+### Pattern 1: Domain-Dispatched Lindbladian Action (Mirrors Existing `_jump_contribution!`)
 
-### Pattern 2: Existing Test Fixture Pattern
-Tests use shared fixtures from `test_helpers.jl` with `SMALL_HAM`, `SMALL_JUMPS`, `SMALL_GIBBS` for fast tests (3-qubit, dim=8) and `TEST_HAM`, `TEST_JUMPS`, `TEST_GIBBS` for higher-fidelity tests (4-qubit, dim=16). New diagnostic tests should use the same fixtures.
+**What:** Write `_lindbladian_jump_action!` as domain-dispatched methods that mirror the mathematical STRUCTURE of the existing `_jump_contribution!` for `AbstractLiouvConfig` in `jump_workers.jl`, but compute L(rho) on a density matrix instead of assembling the dim^2 x dim^2 Liouvillian.
 
-### Pattern 3: Internal Functions Prefixed with _
-Functions not exported are prefixed with `_`. The diagnostic module should follow this for all helpers.
+**When:** Every Krylov iteration calls this for each jump operator.
 
-### Pattern 4: Framework-Once, Run-Many
-The trajectory infrastructure is designed around building `TrajectoryFramework` once and reusing it for many trajectory runs. The batched trajectory runner should use this same pattern: call `_build_framework_and_seed()` once, then loop over batches.
+**Why:** The existing `_jump_contribution!` for `AbstractLiouvConfig` builds the dim^2 x dim^2 matrix by calling `_vectorize_liouv_diss_and_add!` (which uses `_kron!` to place `A kron conj(A)` etc. into L). We need the ACTION of that matrix on a vector. Mathematically: instead of building L and computing L*v, we compute L(rho) directly where rho = reshape(v, dim, dim).
 
----
+The mapping from vectorized Liouvillian terms to density matrix operations is:
 
-## Data Flow Diagrams
+| Vectorized term (in `_jump_contribution!`) | Direct action on rho |
+|--------------------------------------------|---------------------|
+| `_kron!(L, A, conj(A), rate)` adds rate*(A kron conj(A)) | `d_rho += rate * A * rho * A'` |
+| `_kron!(L, A'A, I, -0.5*rate)` | `d_rho -= 0.5*rate * A'A * rho` |
+| `_kron!(L, I, (A'A)^T, -0.5*rate)` | `d_rho -= 0.5*rate * rho * A'A` |
+| `_kron!(L, B, I, -1im)` (coherent) | `d_rho -= 1im * B * rho` |
+| `_kron!(L, I, B^T, +1im)` (coherent) | `d_rho += 1im * rho * B` |
 
-### Full Diagnostic Pipeline (One-Call API)
+**Example (EnergyDomain):**
+```julia
+function _lindbladian_jump_action!(
+    d_rho::Matrix{<:Complex},
+    rho::Matrix{<:Complex},
+    jump::JumpOp,
+    hamiltonian::HamHam,
+    config::AbstractLiouvConfig{EnergyDomain},
+    precomputed_data,
+    ws::KrylovWorkspace,
+)
+    (; transition, gamma_norm_factor, energy_labels) = precomputed_data
+    prefactor = config.w0 / (config.sigma * sqrt(2 * pi)) * gamma_norm_factor
 
-```
-run_gap_diagnostics(jumps, config, psi0, hamiltonian; ...)
-  |
-  +-> estimate_spectral_gap(...)                      [existing, unchanged]
-  |     -> SpectralGapResult
-  |
-  +-> compare_gap_to_exact(gap_result, jumps, config, hamiltonian)
-  |     -> construct_lindbladian(...)                  [existing]
-  |     -> eigen(L)
-  |     -> GapComparisonResult
-  |
-  +-> run_observable_trajectories_batched(...)         [NEW runner]
-  |     -> BatchedTrajectoryResult
-  |
-  +-> bootstrap_spectral_gap(batched_result)
-  |     -> resample batch means B times
-  |     -> fit_exponential_decay per resample
-  |     -> BootstrapGapResult
-  |
-  +-> compute_effective_rates(times, obs_series)
-  |     -> expanding window fits
-  |     -> EffectiveRateResult
-  |
-  +-> fit_two_exponential_decay(times, obs_series)    [NEW in fitting.jl]
-  |     -> TwoExpFitResult
-  |
-  +-> sector_gap_analysis(L, hamiltonian, observables)
-  |     -> build symmetry projectors
-  |     -> project L into sectors
-  |     -> eigendecompose per sector
-  |     -> SectorAnalysisResult
-  |
-  +-> DiagnosticReport (bundles everything)
+    if jump.hermitian
+        for w_raw in energy_labels
+            w_raw > 1e-12 && continue
+            w = abs(w_raw)
+            oft!(ws.A_w, jump, w, hamiltonian, config.sigma)
+            _accumulate_dissipator!(d_rho, rho, ws.A_w, prefactor * transition(w), ws)
+            if w > 1e-12
+                _accumulate_dissipator_adjoint!(d_rho, rho, ws.A_w,
+                    prefactor * transition(-w), ws)
+            end
+        end
+    else
+        for w in energy_labels
+            oft!(ws.A_w, jump, w, hamiltonian, config.sigma)
+            _accumulate_dissipator!(d_rho, rho, ws.A_w, prefactor * transition(w), ws)
+        end
+    end
+end
 ```
 
-### Bootstrap Data Flow (Detailed)
+### Pattern 2: Shared Dissipator Accumulation Helpers
 
+**What:** Two small helper functions that accumulate the standard Lindblad dissipator term.
+
+**When:** Called from every domain's `_lindbladian_jump_action!`.
+
+**Why:** All four domains share the same dissipator formula `D(A, rho) = A rho A^dag - 0.5{A^dag A, rho}`. Only the computation of A (the filtered/projected jump operator) differs per domain. Factoring out the dissipator accumulation eliminates code duplication across domains.
+
+```julia
+"""
+Accumulate: d_rho += rate * (A * rho * A' - 0.5 * A'A * rho - 0.5 * rho * A'A)
+"""
+function _accumulate_dissipator!(
+    d_rho::Matrix{<:Complex},
+    rho::Matrix{<:Complex},
+    A::AbstractMatrix{<:Complex},
+    rate::Real,
+    ws::KrylovWorkspace,
+)
+    # A * rho * A'
+    mul!(ws.tmp1, A, rho)
+    mul!(ws.tmp2, ws.tmp1, A')
+    d_rho .+= rate .* ws.tmp2
+
+    # -0.5 * A'A * rho - 0.5 * rho * A'A
+    mul!(ws.LdagL, A', A)
+    mul!(ws.tmp1, ws.LdagL, rho)
+    d_rho .-= (0.5 * rate) .* ws.tmp1
+    mul!(ws.tmp1, rho, ws.LdagL)
+    d_rho .-= (0.5 * rate) .* ws.tmp1
+    return nothing
+end
+
+"""
+Accumulate dissipator with A' as the Lindblad operator (negative-frequency partner):
+d_rho += rate * (A' * rho * A - 0.5 * AA' * rho - 0.5 * rho * AA')
+"""
+function _accumulate_dissipator_adjoint!(
+    d_rho::Matrix{<:Complex},
+    rho::Matrix{<:Complex},
+    A::AbstractMatrix{<:Complex},
+    rate::Real,
+    ws::KrylovWorkspace,
+)
+    # A' * rho * A
+    mul!(ws.tmp1, A', rho)
+    mul!(ws.tmp2, ws.tmp1, A)
+    d_rho .+= rate .* ws.tmp2
+
+    # -0.5 * AA' * rho - 0.5 * rho * AA'
+    mul!(ws.LdagL, A, A')
+    mul!(ws.tmp1, ws.LdagL, rho)
+    d_rho .-= (0.5 * rate) .* ws.tmp1
+    mul!(ws.tmp1, rho, ws.LdagL)
+    d_rho .-= (0.5 * rate) .* ws.tmp1
+    return nothing
+end
 ```
-run_observable_trajectories_batched(jumps, config, psi0, hamiltonian;
-    observables, ntraj_per_batch=100, n_batches=100, ...)
-  |
-  +-> _build_framework_and_seed(...)                  [existing, called once]
-  |     -> fw::TrajectoryFramework, actual_seed::Int
-  |
-  +-> For batch_idx in 1:n_batches:
-  |     batch_seed = actual_seed + (batch_idx - 1) * ntraj_per_batch
-  |     mean_data_batch = zeros(n_obs, n_saves)
-  |
-  |     [Multi-threaded within batch: same pattern as run_observable_trajectories]
-  |     _run_chunk_obs_only!(ws, fw, psi0, chunk, batch_seed, ...)
-  |       -> accumulates into mean_data_batch
-  |
-  |     mean_data_batch ./= ntraj_per_batch
-  |     batch_measurements[batch_idx, :, :] = mean_data_batch
-  |
-  +-> BatchedTrajectoryResult(times, batch_measurements, ...)
 
-bootstrap_spectral_gap(batched_result; n_bootstrap=1000, ...)
-  |
-  +-> grand_mean = mean(batch_measurements, dims=1)   # for point estimate
-  |
-  +-> For b in 1:n_bootstrap:
-  |     resampled_indices = rand(1:n_batches, n_batches)  # with replacement
-  |     resampled_mean = mean(batch_measurements[resampled_indices, :, :], dims=1)
-  |     For each observable:
-  |       fit = fit_exponential_decay(times, resampled_mean[obs_idx, :])
-  |       record fit.gap
-  |
-  +-> Compute percentile CI from bootstrap gap distribution
-  +-> BootstrapGapResult
+### Pattern 3: Closure-Based Linear Map for KrylovKit
+
+**What:** KrylovKit accepts `f(x) -> y` where x and y are vectors. We build a closure that captures all precomputed data and scratch space, making the closure itself zero-allocation on the hot path (except the final `copy(vec(d_rho))`).
+
+**When:** Constructing the linear map for `KrylovKit.eigsolve`.
+
+**Why:** KrylovKit calls the linear map O(krylov_dim * n_restarts) times. Each call must be fast. Closures in Julia are efficient when the captured variables are type-stable.
+
+**Critical detail:** KrylovKit internally stores the returned vectors to build the Krylov subspace. The closure MUST return a new vector (or a copy) each time, not a view into the same buffer. Use `copy(vec(ws.d_rho))` to produce a fresh allocation. This is the one unavoidable allocation per Krylov iteration.
+
+```julia
+function build_lindbladian_action(
+    jumps::Vector{JumpOp},
+    ham_or_trott::Union{HamHam, TrottTrott},
+    config::AbstractLiouvConfig,
+    precomputed_data,
+    B_total::Union{Nothing, Matrix{<:Complex}},
+    ws::KrylovWorkspace,
+)
+    dim = ham_or_trott isa HamHam ? size(ham_or_trott.data, 1) :
+                                     size(ham_or_trott.eigvecs, 1)
+
+    function action(v::AbstractVector{<:Complex})
+        rho = reshape(v, dim, dim)
+        fill!(ws.d_rho, 0)
+
+        for jump in jumps
+            _lindbladian_jump_action!(ws.d_rho, rho, jump,
+                ham_or_trott, config, precomputed_data, ws)
+        end
+
+        if B_total !== nothing
+            # Coherent: -i[B, rho] = -i*B*rho + i*rho*B
+            mul!(ws.tmp1, B_total, rho)
+            ws.d_rho .-= 1im .* ws.tmp1
+            mul!(ws.tmp1, rho, B_total)
+            ws.d_rho .+= 1im .* ws.tmp1
+        end
+
+        return copy(vec(ws.d_rho))
+    end
+
+    return action
+end
 ```
 
----
+### Pattern 4: Reuse Existing Precomputation Verbatim
+
+**What:** Call the exact same `_precompute_data()` and `_precompute_coherent_total_B()` functions that `construct_lindbladian()` and `run_thermalization()` use.
+
+**When:** Setting up the Krylov solve.
+
+**Why:** The precomputed data (transition functions, gamma_norm_factor, energy labels, NUFFT prefactors, coherent B) is domain-specific and already battle-tested across 26 phases of development. Duplicating or reimplementing this logic would introduce bugs and diverge from the validated Liouvillian construction.
+
+```julia
+# In krylov_spectral_gap():
+precomputed_data = _precompute_data(config, ham_or_trott)   # exact same call as furnace.jl
+B_total = _precompute_coherent_total_B(jumps, ham_or_trott, config, precomputed_data)
+```
+
+### Pattern 5: Config Acceptance -- LiouvConfig Only
+
+**What:** `krylov_spectral_gap()` accepts `AbstractLiouvConfig` (not `AbstractThermalizeConfig`).
+
+**When:** API design.
+
+**Why:** The Krylov solver computes the Lindbladian's eigenvalues, which are independent of the thermalization time step delta and mixing time. These are parameters of the CPTP channel approximation, not the generator. Using `AbstractLiouvConfig` makes this explicit and avoids confusion.
+
+The existing `run_lindbladian()` already follows this pattern. A user who has a `ThermalizeConfig` can construct the corresponding `LiouvConfig` by dropping `mixing_time` and `delta`. A helper function for this conversion is recommended (see Pattern in existing `_thermalize_to_liouv_config` pattern from diagnostics research).
+
+## Anti-Patterns to Avoid
+
+### Anti-Pattern 1: Forming the Full Liouvillian Then Using KrylovKit
+
+**What:** Building the full dim^2 x dim^2 dense Liouvillian matrix and then passing it to KrylovKit.
+
+**Why bad:** At 12 qubits, the Liouvillian is 16M x 16M = 2 petabytes. The existing `construct_lindbladian()` works for n<=6 (dim^2 = 4096) but is fundamentally unscalable. Using KrylovKit on a dense matrix provides no advantage over the existing `eigs()` approach.
+
+**Instead:** Use the matrix-free action described above.
+
+### Anti-Pattern 2: Wrapping the DM Channel (E_delta) Instead of the Lindbladian (L)
+
+**What:** Using the existing `_jump_contribution!(evolving_dm, ...)` for `AbstractThermalizeConfig` as the linear map.
+
+**Why bad:**
+1. Channel eigenvalues are mu_i = 1 + delta * lambda_i + O(delta^2). For delta=0.01, all eigenvalues cluster near 1.0. KrylovKit's Arnoldi must resolve |mu_1 - mu_2| ~ delta * gap, which is tiny.
+2. The Kraus channel includes nonlinear PSD clamping (K0, U_residual, `_finalize_kraus_step!`) that makes it NOT a true linear operator. The eigenvalues of the approximate channel differ from the Lindbladian's.
+3. The delta-dependence means the "gap" depends on the time step, which is a nuisance parameter.
+
+**Instead:** Compute L(rho) directly from the dissipator formula.
+
+### Anti-Pattern 3: Allocating Inside the Lindbladian Action Closure
+
+**What:** Creating new matrices/vectors inside the closure that gets called per Krylov iteration.
+
+**Why bad:** At 12 qubits, a single dim x dim ComplexF64 allocation is 256 MB and triggers GC pressure. KrylovKit calls the action hundreds of times.
+
+**Instead:** Pre-allocate all scratch in `KrylovWorkspace` and reuse. The only allocation per call is `copy(vec(ws.d_rho))` (128 MB at 12 qubits) which is unavoidable since KrylovKit stores the result.
+
+### Anti-Pattern 4: Modifying the Existing `_jump_contribution!` Methods
+
+**What:** Adding Lindbladian-action logic to the existing `_jump_contribution!` methods in `jump_workers.jl`.
+
+**Why bad:** The existing methods serve two distinct purposes (Liouvillian matrix assembly for `AbstractLiouvConfig`, DM channel application for `AbstractThermalizeConfig`). Adding a third mode (density-matrix-level Lindbladian action) would require a third dispatch dimension or runtime branching, making the code harder to maintain.
+
+**Instead:** Write new `_lindbladian_jump_action!` methods in `src/krylov.jl`. They share the same mathematical structure but have clean, purpose-built signatures without the vectorization/Kronecker machinery of the Liouvillian methods or the Kraus/K0/residual machinery of the channel methods.
+
+## Domain-Specific Architecture Details
+
+### How Each Domain Affects the Krylov Computation
+
+All four domains share the same Lindbladian structure:
+```
+L(rho) = sum_jumps sum_w [ rate(w) * D(A_w, rho) ] - i[B_total, rho]
+where D(A, rho) = A rho A' - 0.5 {A'A, rho}
+```
+
+The domains differ in HOW A_w is computed and what the prefactor/rate is.
+
+| Domain | A_w computation | Basis for rho | B computation | Precomputed data |
+|--------|----------------|---------------|---------------|-----------------|
+| **Bohr** | Sparse Bohr-bucket projection: `alpha(bohr_freqs, nu) .* jump.in_eigenbasis` | H eigenbasis | `B_bohr()` | `alpha` fn, `bohr_dict`, `gamma_norm_factor` |
+| **Energy** | Gaussian filter: `oft!(A_w, jump, w, hamiltonian, sigma)` | H eigenbasis | `B_bohr()` | `transition` fn, `energy_labels`, `gamma_norm_factor` |
+| **Time** | NUFFT prefactors: `jump.in_eigenbasis .* nufft_prefactor_view(w)` | H eigenbasis | `B_time()` | `transition`, `energy_labels`, `oft_nufft_prefactors`, `b_minus/b_plus` |
+| **Trotter** | NUFFT prefactors: `jump.in_eigenbasis .* nufft_prefactor_view(w)` | Trotter eigenbasis | `B_trotter()` | Same as Time but using `trotter.eigvecs/eigvals_t0` |
+
+**Basis handling:** For Bohr/Energy/Time domains, all density matrices live in the Hamiltonian eigenbasis. For TrotterDomain, they live in the Trotter eigenbasis. This is handled automatically because `jump.in_eigenbasis` is already constructed in the correct basis at JumpOp creation time. The Krylov vectors (length dim^2) represent vectorized density matrices in whichever basis the domain uses. No explicit basis transformation is needed in the Krylov action.
+
+### BohrDomain: Distinct Loop Structure
+
+BohrDomain does NOT iterate over an energy grid. Instead it iterates over Bohr frequency buckets from `hamiltonian.bohr_dict`. For each bucket nu2, it constructs:
+- `alpha_A_{nu1}[i,j] = alpha(bohr_freqs[i,j], nu2) * jump.in_eigenbasis[i,j]` (Kossakowski-weighted jump, dense matrix)
+- `A_{nu2}` is a SPARSE operator: only the entries (i,j) where `bohr_freqs[i,j] == nu2` are nonzero
+
+The dissipator for each (nu1, nu2) pair is: `D(alpha_A_{nu1}, A_{nu2}^dag, rho)`. This is a generalized dissipator where the two operators differ: `alpha_A_{nu1} * rho * A_{nu2} - 0.5 * A_{nu2} * alpha_A_{nu1} * rho - 0.5 * rho * A_{nu2} * alpha_A_{nu1}`.
+
+This matches the existing two-operator form `_vectorize_liouv_diss_and_add!(L, jump_1, jump_2_dag, scalar, ws)` used in the Bohr Liouvillian construction.
+
+The Krylov action for BohrDomain needs a generalized dissipator helper that takes two different operators:
+
+```julia
+function _accumulate_dissipator_two_ops!(
+    d_rho::Matrix{<:Complex},
+    rho::Matrix{<:Complex},
+    A1::AbstractMatrix{<:Complex},   # alpha_A_{nu1}
+    A2_dag::AbstractMatrix{<:Complex}, # A_{nu2}^dag (sparse)
+    rate::Real,
+    ws::KrylovWorkspace,
+)
+    # rate * (A1 * rho * A2_dag' - 0.5 * A2_dag' * A1 * rho - 0.5 * rho * A2_dag' * A1)
+    # Note: A2_dag' = A2 (adjoint of the adjoint)
+    mul!(ws.tmp1, A1, rho)
+    mul!(ws.tmp2, ws.tmp1, A2_dag')     # A1 * rho * A2
+    d_rho .+= rate .* ws.tmp2
+
+    mul!(ws.tmp1, A2_dag', A1)           # A2 * A1
+    mul!(ws.tmp2, ws.tmp1, rho)
+    d_rho .-= (0.5 * rate) .* ws.tmp2
+    mul!(ws.tmp2, rho, ws.tmp1)
+    d_rho .-= (0.5 * rate) .* ws.tmp2
+end
+```
+
+Wait -- examining the existing BohrDomain Liouvillian code more carefully. The `_jump_contribution!` for BohrDomain in `jump_workers.jl` lines 11-45 does:
+
+```julia
+alpha_A_nu1 = alpha(bohr_freqs, nu2) .* jump.in_eigenbasis  # full dim x dim
+A_nu_2_dag = sparse(rows, cols, conj(vals), dim, dim)         # sparse projection
+_vectorize_liouv_diss_and_add!(L, alpha_A_nu1, A_nu_2_dag, gamma_norm_factor, ws)
+```
+
+So the dissipator is: `gamma_norm * (alpha_A * rho * A_nu2 - 0.5 * A_nu2 * alpha_A * rho - 0.5 * rho * A_nu2 * alpha_A)`. The density-matrix action version needs to construct `A_nu2_dag` as a sparse matrix (or apply it element-by-element). Given that BohrDomain is the "highest approximation" domain and typically used only for small systems, constructing the sparse matrix is fine.
+
+### Energy/Time/Trotter: Shared Loop Structure
+
+These three domains share the same loop: iterate over energy labels, compute A_w, accumulate the standard single-operator dissipator. They differ only in how A_w is formed:
+- **Energy:** `oft!(A_w, jump, w, hamiltonian, sigma)` -- in-place Gaussian filter
+- **Time/Trotter:** `A_w[i,j] = jump.in_eigenbasis[i,j] * nufft_prefactors[i,j,k(w)]` -- elementwise multiply with precomputed NUFFT
+
+Time and Trotter share nearly identical Krylov action code. The only difference is implicit: `ham_or_trott` is a `HamHam` for TimeDomain and a `TrottTrott` for TrotterDomain, and `jump.in_eigenbasis` is already in the correct basis.
+
+## Result Type Design
+
+### New: KrylovGapResult
+
+```julia
+"""
+    KrylovGapResult
+
+Result of Krylov-based Lindbladian spectral gap estimation.
+
+# Fields
+- `spectral_gap::Float64`: |Re(lambda_2)|, the Lindbladian spectral gap.
+- `eigenvalues::Vector{ComplexF64}`: Leading eigenvalues sorted by |Re(lambda)|.
+- `fixed_point::Matrix{ComplexF64}`: Normalized density matrix from lambda_1 eigenvector.
+- `fixed_point_distance::Float64`: Trace distance from fixed point to Gibbs state.
+- `gap_mode::Matrix{ComplexF64}`: Density-matrix-shaped eigenvector for lambda_2.
+- `converged::Int`: Number of converged eigenvalues (from KrylovKit info).
+- `residual_norms::Vector{Float64}`: Residual norms for each eigenvalue.
+- `n_matvecs::Int`: Number of Lindbladian action evaluations (from info.numops).
+- `krylov_dim::Int`: Krylov subspace dimension used.
+- `tol::Float64`: Convergence tolerance used.
+"""
+struct KrylovGapResult
+    spectral_gap::Float64
+    eigenvalues::Vector{ComplexF64}
+    fixed_point::Matrix{ComplexF64}
+    fixed_point_distance::Float64
+    gap_mode::Matrix{ComplexF64}
+    converged::Int
+    residual_norms::Vector{Float64}
+    n_matvecs::Int
+    krylov_dim::Int
+    tol::Float64
+end
+```
+
+**Relationship to existing types:**
+- `LindbladianResult` stores the full Liouvillian matrix + 2 eigenvalues. `KrylovGapResult` stores NO matrix but more eigenvalues.
+- `ExactDiagnosticsResult` provides 6 diagnostic outputs from dense eigen. `KrylovGapResult` provides spectral data from matrix-free Krylov.
+- `SpectralGapResult` is trajectory-based (stochastic). `KrylovGapResult` is Krylov-based (deterministic, exact up to tolerance).
+
+## Workspace Design
+
+```julia
+struct KrylovWorkspace{T<:Complex}
+    d_rho::Matrix{T}     # output accumulator: L(rho)
+    A_w::Matrix{T}       # filtered jump operator at frequency w
+    LdagL::Matrix{T}     # L^dag L or similar product scratch
+    tmp1::Matrix{T}      # general scratch 1
+    tmp2::Matrix{T}      # general scratch 2
+end
+
+function KrylovWorkspace(::Type{T}, dim::Int) where {T<:Complex}
+    Zm() = zeros(T, dim, dim)
+    return KrylovWorkspace{T}(Zm(), Zm(), Zm(), Zm(), Zm())
+end
+```
+
+**Memory budget at key qubit counts:**
+
+| n_qubits | dim | dim^2 | KrylovWorkspace (5 matrices) | Krylov subspace (kd=20) | Total |
+|----------|-----|-------|------------------------------|------------------------|-------|
+| 4 | 16 | 256 | 20 KB | 40 KB | <1 MB |
+| 6 | 64 | 4,096 | 320 KB | 640 KB | ~1 MB |
+| 8 | 256 | 65,536 | 5 MB | 10 MB | ~15 MB |
+| 10 | 1,024 | 1,048,576 | 80 MB | 160 MB | ~250 MB |
+| 12 | 4,096 | 16,777,216 | 1.3 GB | 2.6 GB | ~4 GB |
+
+At n=12 with krylov_dim=20, the total memory is approximately 4 GB, feasible on a 16+ GB workstation.
+
+## Validation Strategy
+
+### Cross-Validation Against Dense Eigen (n=4,6)
+
+For small systems where the dense Liouvillian is feasible, validate that:
+1. `krylov_result.spectral_gap` matches `exact_diagnostics.eigen.spectral_gap` to within `tol`.
+2. `krylov_result.fixed_point_distance` is near zero.
+3. All Krylov eigenvalues match the leading dense eigenvalues.
+
+This leverages the existing `construct_lindbladian()` + `run_exact_diagnostics()` infrastructure.
+
+```julia
+# Validation test structure:
+for domain in [BohrDomain(), EnergyDomain(), TimeDomain(), TrotterDomain()]
+    L_dense = construct_lindbladian(jumps, liouv_config, hamiltonian; trotter=trotter)
+    exact = run_exact_diagnostics(L_dense, hamiltonian, gibbs; ...)
+
+    krylov = krylov_spectral_gap(jumps, liouv_config, hamiltonian; trotter=trotter)
+
+    @test isapprox(krylov.spectral_gap, exact.eigen.spectral_gap; rtol=1e-6)
+    @test krylov.fixed_point_distance < 1e-6
+end
+```
+
+### Linearity Verification
+
+Verify that the Lindbladian action is actually linear by checking `f(a*x + b*y) == a*f(x) + b*f(y)` for random x, y and scalars a, b. This catches bugs where scratch buffers are incorrectly reused or where the action has inadvertent state.
 
 ## Scalability Considerations
 
-| Concern | 3-qubit (dim=8) | 4-qubit (dim=16) | 5-qubit (dim=32) |
-|---------|-----------------|-------------------|-------------------|
-| Lindbladian construction | 64x64 matrix, <1s | 256x256 matrix, ~2s | 1024x1024 matrix, ~30s |
-| Dense eigendecomposition | 64x64, instant | 256x256, <1s | 1024x1024, ~10s |
-| Trajectory simulation (1000 traj) | ~5s | ~30s | ~5min |
-| Batched trajectories (100 batches x 100 traj) | ~50s | ~5min | ~50min |
-| Bootstrap (1000 resamples) | <1s (fitting only) | <1s (fitting only) | <1s (fitting only) |
-| Sector analysis (build projectors + project + eigen) | Trivial | ~2s | ~30s |
-| Memory: batch measurements (100 x 8 x 200) | 1.3 MB | 1.3 MB | 1.3 MB |
+| Concern | n=4 (dim=16) | n=6 (dim=64) | n=8 (dim=256) | n=10 (dim=1024) | n=12 (dim=4096) |
+|---------|-------------|-------------|--------------|----------------|----------------|
+| One L(rho) eval (3 jumps, EnergyDomain) | <1ms | ~5ms | ~200ms | ~5s | ~2min (est.) |
+| Full Krylov solve (kd=20, 2 restarts) | <1s | ~1s | ~10s | ~5min | ~2hr (est.) |
+| Full dense Liouvillian | instant | ~2s | ~30s (2GB) | impossible | impossible |
+| Dense eigen of L | instant | ~1s | ~30min | impossible | impossible |
+| Krylov advantage factor | none | ~2x | ~100x | infinity | infinity |
 
-**Key insight:** The bottleneck is always trajectory simulation, never the analysis. Bootstrap resampling and fitting is orders of magnitude cheaper than running trajectories. This validates the batch-level bootstrap approach: the dominant cost is running the batched trajectories, and the bootstrap analysis itself is negligible.
+**Key bottleneck at large n:** Each L(rho) involves O(n_jumps * n_energy_labels) matrix multiplications of size dim x dim. The cost per mul! is O(dim^3) via BLAS. With truncated energy labels (~200-400) and 36 jumps (3 Paulis x 12 qubits), each L(rho) requires ~10,000 mul! calls at dim=4096.
 
----
+**Estimated times with BLAS threading (8 cores):**
+- Single mul!(dim=4096): ~2ms with multi-threaded BLAS
+- Per L(rho): ~20 seconds
+- Full Krylov (40 iterations): ~13 minutes
 
-## Suggested Build Order
+This is the breakthrough: matrix-free Krylov at n=10-12 takes minutes to hours, while forming the full Liouvillian is impossible (terabytes of memory).
 
-The build order follows the dependency chain and enables incremental testing:
+## Build Order (Incremental Testing)
 
-### Phase 1: Two-Exponential Fitting (0 dependencies on new code)
+### Phase 1: Core Infrastructure and EnergyDomain (Test at n=4)
 
-**File:** `src/fitting.jl` (add `fit_two_exponential_decay`)
-**Why first:** Pure numerical function with no dependencies on the rest of the diagnostic infrastructure. Can be tested immediately with synthetic data. Establishes the `TwoExpFitResult` struct that other diagnostics will reference.
-**Tests:** Synthetic two-exponential data recovery, initialization from single-exp fit, degenerate case (two rates collapse to one).
+1. Add KrylovKit to `Project.toml`
+2. `KrylovWorkspace` struct
+3. `_accumulate_dissipator!()` and `_accumulate_dissipator_adjoint!()` helpers
+4. `_lindbladian_jump_action!` for EnergyDomain
+5. `build_lindbladian_action()` (EnergyDomain path)
+6. `krylov_spectral_gap()` API
+7. `KrylovGapResult` in `src/structs.jl`
+8. Test: Krylov gap matches dense eigen for n=4 EnergyDomain (with and without coherent)
 
-### Phase 2: Effective Rate Analysis (depends on Phase 1)
+**Why EnergyDomain first:** Simplest A_w computation (direct `oft!`), no NUFFT dependency, no Bohr-bucket iteration.
 
-**File:** `src/diagnostics.jl` (begin file)
-**Why second:** Pure analysis of existing time series data. Uses `fit_exponential_decay` (existing) over sliding windows. No trajectory runner changes needed.
-**Tests:** Synthetic multi-exponential data showing rate convergence, constant-rate data showing flat effective rate.
+### Phase 2: Remaining Domains (Test at n=4,6)
 
-### Phase 3: Exact Reference Comparison (0 dependencies on new code)
+9. `_lindbladian_jump_action!` for TimeDomain/TrotterDomain (NUFFT prefactors)
+10. `_lindbladian_jump_action!` for BohrDomain (Bohr buckets, generalized dissipator)
+11. Coherent term action integration
+12. Cross-domain validation at n=4 and n=6 for all 4 domains
+13. TrotterDomain-specific test (verify basis handling)
 
-**File:** `src/diagnostics.jl` (add to file)
-**Why third:** Uses existing `construct_lindbladian()` and `run_lindbladian()`. Needs the `_thermalize_to_liouv_config()` helper. Independent of Phases 1-2.
-**Tests:** Compare trajectory gap against exact gap for 3-qubit system, verify CI containment.
+### Phase 3: Scaling and Polish (n=8+)
 
-### Phase 4: Anti-Hermitian Defect (0 dependencies on new code)
+14. Test at n=8 (first size with genuine Krylov advantage)
+15. Performance profiling and optimization
+16. BLAS threading configuration
+17. Krylov parameter guidance (krylov_dim, tol defaults)
+18. Integration with existing diagnostics pipeline
 
-**File:** `src/diagnostics.jl` (add to file)
-**Why fourth:** Trivial function on a matrix. Can be done at any time. Grouped here because it pairs logically with exact reference.
-**Tests:** Zero defect for Hermitian matrix, known defect for skew-Hermitian addition.
+## Dependency: KrylovKit.jl
 
-### Phase 5: Symmetry Sector Analysis (depends on Phase 3)
+KrylovKit.jl is NOT currently in `Project.toml`. It must be added as a dependency.
 
-**File:** `src/diagnostics.jl` (add to file)
-**Why fifth:** Needs Liouvillian from Phase 3's infrastructure. The projector construction is the complex part.
-**Tests:** Verify total Sz conservation for Heisenberg model, verify gap sector identification.
+**Why KrylovKit over Arpack (already a dependency):**
+1. KrylovKit accepts `f(x) -> y` directly; Arpack requires wrapping in `LinearMap`.
+2. KrylovKit's Krylov-Schur algorithm with thick restarts is more modern than Arpack's IRAM.
+3. KrylovKit returns richer convergence info.
+4. KrylovKit works with arbitrary Julia vector types.
 
-### Phase 6: Batched Trajectory Runner (0 dependencies on diagnostics)
+**Historical context:** The existing `linearmaps_liouv.jl` contains a commented-out prototype that attempted matrix-free Liouvillian maps via Arpack. The comment says "Sadly, slow. Misery." This was because the prototype recomputed OFT per Krylov iteration WITHOUT the NUFFT prefactor cache (which was added later in the project). With current precomputed NUFFT prefactors, the matrix-free approach should be dramatically faster.
 
-**File:** `src/bootstrap.jl` (begin file)
-**Why sixth:** The new trajectory runner variant. Independent of all diagnostics. This is the highest-risk change because it touches the trajectory infrastructure (though only adding a new function, not modifying existing ones).
-**Tests:** Verify batched results match non-batched grand mean, verify per-batch data storage.
-
-### Phase 7: Bootstrap Analysis (depends on Phase 6)
-
-**File:** `src/bootstrap.jl` (add to file)
-**Why seventh:** Requires Phase 6's `BatchedTrajectoryResult`. The bootstrap resampling itself is straightforward.
-**Tests:** Known-distribution bootstrap coverage, CI width decreases with ntraj.
-
-### Phase 8: Trotter Convergence Sweep (0 dependencies on diagnostics)
-
-**File:** `src/diagnostics.jl` (add to file)
-**Why eighth:** Orchestration function that loops over existing `estimate_spectral_gap`. Independent of other diagnostics but computationally expensive to test. Placed last because it is the least likely to have subtle bugs (it is just a loop).
-**Tests:** Verify convergence trend for 3-qubit system with 2-3 Trotter step counts.
-
-### Phase 9: Integration (depends on all above)
-
-**File:** `src/diagnostics.jl` (add convenience wrapper)
-**Why last:** Bundle all diagnostics into a single-call `run_gap_diagnostics()` API.
-**Tests:** End-to-end test on 3-qubit system.
-
----
-
-## Result Struct Summary
-
-| Struct | Fields | Produced By | Lives In |
-|--------|--------|-------------|----------|
-| `TwoExpFitResult` | gap_slow, gap_fast, amplitudes, offset, CI, R2, residuals | `fit_two_exponential_decay()` | `fitting.jl` |
-| `EffectiveRateResult` | t_starts, rates, r_squareds, converged, observable_name | `compute_effective_rates()` | `diagnostics.jl` |
-| `GapComparisonResult` | exact_gap, estimated_gap, relative_error, ci_contains_exact | `compare_gap_to_exact()` | `diagnostics.jl` |
-| `TrotterConvergenceResult` | num_steps[], gaps[], CIs[], exact_gaps[] | `trotter_convergence_sweep()` | `diagnostics.jl` |
-| `SectorAnalysisResult` | sector_names, sector_gaps, sector_eigenvalues, overlaps | `sector_gap_analysis()` | `diagnostics.jl` |
-| `BatchedTrajectoryResult` | times, batch_measurements (3D array), metadata | `run_observable_trajectories_batched()` | `bootstrap.jl` |
-| `BootstrapGapResult` | gap, gap_ci, gap_se, bootstrap_gaps[], per_observable | `bootstrap_spectral_gap()` | `bootstrap.jl` |
-| `BootstrapObservableResult` | name, gap, gap_ci, bootstrap_gaps[] | (part of BootstrapGapResult) | `bootstrap.jl` |
-| `DiagnosticReport` | comparison, effective_rates, two_exp_fits, sector, bootstrap | `run_gap_diagnostics()` | `diagnostics.jl` |
-
----
+**The LinearMaps dependency is already present** in `Project.toml` but is unused (the code in `linearmaps_liouv.jl` is fully commented out). KrylovKit does not need `LinearMaps` since it accepts plain functions.
 
 ## Sources
 
-- Direct analysis of all source files in `src/` (26 files, ~6,274 LOC)
-- Direct analysis of all test files in `test/` (19 files, ~4,366 LOC)
-- Existing architecture documentation: `.planning/codebase/ARCHITECTURE.md`
-- Previous milestone research: `.planning/research/ARCHITECTURE.md` (v1.3 spectral gap estimation)
-- Julia LsqFit.jl documentation for multi-parameter fitting patterns
-- Bootstrap methodology: Efron & Tibshirani (1993) batch bootstrap for dependent data
+- [KrylovKit.jl documentation](https://jutho.github.io/KrylovKit.jl/stable/)
+- [KrylovKit.jl eigsolve API](https://jutho.github.io/KrylovKit.jl/stable/man/eig/)
+- [KrylovKit.jl GitHub repository](https://github.com/Jutho/KrylovKit.jl)
+- Existing codebase: `src/jump_workers.jl` (Liouvillian assembly + channel application patterns)
+- Existing codebase: `src/furnace.jl` (run_lindbladian entry point, precomputation flow)
+- Existing codebase: `src/linearmaps_liouv.jl` (abandoned matrix-free prototype with historical context)
+- Existing codebase: `src/diagnostics.jl` (dense exact diagnostics for validation reference)
+- Existing codebase: `src/furnace_utensils.jl` (_precompute_data domain dispatch)
+- Existing codebase: `src/qi_tools.jl` (_vectorize_liouv_diss_and_add! for understanding L(rho) semantics)

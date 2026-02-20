@@ -1,346 +1,310 @@
-# Stack Research: Spectral Gap Refinement Diagnostics
+# Technology Stack: Matrix-Free Krylov Spectral Gap Estimation
 
-**Domain:** Advanced spectral analysis, bootstrap statistics, two-exponential fitting, similarity transforms, diagnostic visualization for quantum Lindbladian simulation
-**Researched:** 2026-02-19
-**Confidence:** HIGH (existing deps verified from codebase; new capabilities analyzed against official docs and Julia ecosystem)
+**Project:** QuantumFurnace.jl -- Krylov-based Lindbladian spectral gap at up to 12 qubits
+**Researched:** 2026-02-20
+**Confidence:** HIGH (primary recommendations verified via official docs and GitHub releases)
+
+---
 
 ## Scope
 
-This stack research covers ONLY the additions needed for v1.4 Spectral Gap Refinement -- the diagnostic and improved estimation capabilities described in the spectral-gap-refinements-instructions.md (Tasks 1.1--5.2).
+This STACK.md covers ONLY the additions needed for matrix-free Krylov eigensolving of the Lindbladian superoperator at scales where the full dim^2 x dim^2 Liouvillian matrix cannot be stored (n > 6 qubits). It does NOT re-research the existing stack (LinearAlgebra, Arpack, LsqFit, FINUFFT, etc.) which remains unchanged.
 
-Specifically:
-1. Anti-Hermitian defect computation (similarity transform with rho^{+/-1/4})
-2. Effective rate plot lambda_eff(t) computation
-3. Bootstrap resampling over trajectories for error bars
-4. Two-exponential fitting with robust initialization (Prony method)
-5. Richardson extrapolation for delta-convergence
-6. Automatic fitting window selection (SNR-based t_max, stability-based t_min)
-7. Symmetry sector labeling on Lindbladian eigenvectors
-8. Dashboard/summary figure generation
-
-It does NOT re-research the existing stack. The v1.3 STACK.md covered LsqFit.jl (already in [deps]), Arpack.jl, single-exponential fitting, and log-linear initial guess. All of those remain valid and unchanged.
-
-## Verdict: Zero New Production Dependencies
-
-The existing production dependency set is sufficient for ALL v1.4 features. The key insight: every new capability (two-exponential fitting, bootstrap, Richardson extrapolation, matrix fourth roots, symmetry labeling) can be implemented with LinearAlgebra + LsqFit + existing stdlib, with plotting handled via the already-present extras dependency on Plots.jl. No new `[deps]` entries needed.
+The milestone target: compute the spectral gap `|Re(lambda_2)|` of the Lindbladian or the leading eigenvalue of the CPTP channel `E = I + delta*L` for systems up to 12 qubits (dim = 4096, vectorized dim^2 = 16,777,216).
 
 ---
 
-## Existing Stack (Relevant to v1.4 Features)
+## Critical Design Insight: Lindbladian Spectrum Structure
 
-### Already in [deps] -- Used Directly by New Features
+All Lindbladian eigenvalues have `Re(lambda) <= 0`. The steady state has `lambda_1 = 0`, and the spectral gap is `|Re(lambda_2)|` where `lambda_2` is the eigenvalue with the second-largest (least negative) real part. This means:
 
-| Existing Dep | v1.4 Role | Sufficient? |
-|---|---|---|
-| **LsqFit.jl** (0.15) | Two-exponential fitting: same `curve_fit` with 5-param model `c1*exp(-g1*t) + c2*exp(-g2*t)` + bounds. Confidence intervals via `confint`. | YES -- no API changes needed. Two-exponential is just a different model function passed to the same `curve_fit`. |
-| **LinearAlgebra** (stdlib) | Matrix fourth root via eigendecomposition: `F = eigen(Hermitian(rho)); rho_quarter = F.vectors * Diagonal(F.values .^ 0.25) * F.vectors'`. Also: `opnorm()` for anti-Hermitian defect, `eigen()` for full Lindbladian diagonalization (n<=6), `Hermitian()` wrapper. | YES -- `eigen(Hermitian(...))` guarantees real eigenvalues for the Gibbs state; raising diagonal to 1/4 power is trivial. |
-| **Arpack.jl** (0.5.4) | Leading 20-30 eigenvalues via shift-invert `eigs(L, nev=30, sigma=shift)`. Already used for 2 eigenvalues in `run_lindbladian`; just increase `nev`. | YES -- shift-invert mode already working for Lindbladian. Increasing nev from 2 to 20-30 is the only change. |
-| **Optim.jl** (1) | NOT directly used for fitting (LsqFit handles that), but available if custom loss functions needed for fitting window optimization. | Not needed for v1.4. Keep as-is. |
-| **SparseArrays** (stdlib) | Lindbladian stored as dense (dim^2 x dim^2) for n<=6. Sparse not needed at these sizes. | No change. |
+- **lambda_1 = 0 is the EXTREMAL eigenvalue in the `:LR` (largest real part) direction.**
+- **lambda_2 is the SECOND extremal eigenvalue in that same direction.**
 
-### Already in [extras] -- Used in Scripts/Tests
-
-| Existing Extra | v1.4 Role | Sufficient? |
-|---|---|---|
-| **Plots.jl** (1) | Dashboard figures (Task 5.1). Multi-panel layout via `plot(p1, p2, ..., layout=(rows, cols))`. Supports PNG, PDF, SVG output. Already in `[extras]` and `[compat]` with bounds. | YES for diagnostic scripts. See plotting section below for detailed analysis. |
-| **StatsBase** (0.34) | `mean`, `std`, `sample` (with replacement) for bootstrap resampling. `sample(1:N, N; replace=true)` gives bootstrap indices. | YES -- `StatsBase.sample` with `replace=true` is the standard Julia bootstrap primitive. |
-| **HypothesisTests** (0.11) | Statistical validation of gap estimates. | YES -- no change. |
-| **StableRNGs** (1) | Reproducible bootstrap seeds. | YES -- no change. |
-| **Statistics** (stdlib) | `mean`, `std`, `var` for bootstrap statistics, SNR computation. Already resolved in Manifest. | YES -- stdlib, always available. |
+Therefore, Krylov methods with `:LR` targeting can find the spectral gap WITHOUT shift-invert. This is the key enabler: no need for matrix factorization, no need for solving linear systems. Standard Arnoldi with `:LR` will converge to the steady state first, then the gap mode second. We need `howmany=2` (or a few more for robustness).
 
 ---
 
-## Feature-by-Feature Stack Analysis
+## Recommended Stack
 
-### 1. Anti-Hermitian Defect (Task 1.2): Matrix Fourth Root
+### New Production Dependency: KrylovKit.jl
 
-**What's needed:** Compute rho^{1/4} and rho^{-1/4} for the Gibbs state to form the similarity-transformed generator D = rho^{-1/4} * L[rho^{1/4} * (.) * rho^{1/4}] * rho^{-1/4}.
+| Technology | Version | Purpose | Why |
+|------------|---------|---------|-----|
+| **KrylovKit.jl** | 0.10.2 | Matrix-free Krylov eigensolving via Arnoldi for non-Hermitian Lindbladian | Pure Julia, accepts ANY callable as linear map (no wrapping needed), supports `:LR` for Lindbladian spectrum, `bieigsolve` provides left eigenvectors for biorthogonal decomposition, `exponentiate` for matrix exponential action |
 
-**Stack decision: Use LinearAlgebra.eigen() on Hermitian Gibbs state. No new dependency.**
+**Confidence: HIGH** -- Version verified via [GitHub releases](https://github.com/Jutho/KrylovKit.jl/releases) (v0.10.2, October 11, 2025). Documentation verified via [official docs](https://jutho.github.io/KrylovKit.jl/stable/) (generated October 10, 2025).
 
-**Confidence: HIGH** -- Verified from Julia docs and codebase analysis.
+**Why KrylovKit.jl over alternatives:**
 
-**Rationale:** The Gibbs state rho_beta is diagonal in the energy eigenbasis (already computed in `HamHam.gibbs`). The project stores it as a `Hermitian{Complex{T}, Matrix{Complex{T}}}`. Two paths exist:
+| Criterion | KrylovKit.jl | ArnoldiMethod.jl | Arpack.jl (existing) |
+|-----------|-------------|-------------------|---------------------|
+| Matrix-free (callable) | YES -- any callable `f(x)` | YES -- needs `mul!(y,A,x)` | NO for shift-invert (needs explicit matrix for factorization) |
+| `:LR` targeting | YES | YES | YES (but `which=:LR` in Arpack is different from shift-invert `sigma`) |
+| Left eigenvectors | YES via `bieigsolve`/`BiArnoldi` | NO | NO (Arpack.jl wraps only partial Arpack -- no left eigvec support) |
+| `exponentiate(t, A, x)` | YES -- computes `exp(tA)x` matrix-free | NO | NO |
+| Pure Julia | YES | YES | NO (Fortran wrapper) |
+| Memory control | `krylovdim` parameter controls subspace size | `maxdim` parameter | `ncv` parameter |
+| Actively maintained | YES (Oct 2025 release) | YES (Feb 2025 release v0.4.0) | Maintenance-mode |
+| AD/differentiability | YES (gradient support) | NO | NO |
 
-**Path A (preferred): Exploit diagonal structure in eigenbasis.**
-The `HamHam` struct stores `eigvals` and `eigvecs`. The Gibbs state in the eigenbasis is `Diagonal(exp.(-beta .* eigvals) ./ Z)`. Fourth root is simply `Diagonal((exp.(-beta .* eigvals) ./ Z) .^ 0.25)`. Transform back to computational basis if needed via `eigvecs * D * eigvecs'`. This is O(dim^2), exact, and numerically stable (all Gibbs eigenvalues are strictly positive).
+**The decisive factor is `:LR` + callable interface + `bieigsolve`.** ArnoldiMethod.jl is also excellent (pure Julia, `mul!`-based, good memory control via `ArnoldiWorkspace`), but it lacks `bieigsolve` for left eigenvectors and `exponentiate` for time evolution. Since we need left eigenvectors for the biorthogonal overlap diagnostics (DIAG-05), KrylovKit is the clear winner.
+
+### New Development Dependency: TimerOutputs.jl
+
+| Technology | Version | Purpose | Why |
+|------------|---------|---------|-----|
+| **TimerOutputs.jl** | 0.5 | Hierarchical timing/memory profiling of Krylov iterations | `@timeit` sections for matvec cost, orthogonalization, convergence -- critical for tuning `krylovdim` and understanding where time goes at 10-12 qubits |
+
+**Confidence: HIGH** -- Standard Julia profiling package. Already used by ITensors.jl and other large Julia numerical packages.
+
+BenchmarkTools.jl is already in `[extras]` for microbenchmarks. TimerOutputs.jl complements it for coarse-grained profiling of multi-minute Krylov runs where `@benchmark` is impractical.
+
+### Existing Dependencies: No Changes Required
+
+| Existing Dep | Role in Krylov Milestone | Change Needed |
+|---|---|---|
+| **LinearAlgebra** (stdlib) | `mul!` for BLAS-3 matrix products in matvec, `BLAS.set_num_threads()` for thread control | NONE |
+| **LinearMaps.jl** (3) | Already in `[deps]`. Could optionally wrap the matvec as `LinearMap` for Arpack compatibility, but KrylovKit does NOT need it (accepts bare callables) | NONE (keep for backward compat with existing dense Arpack path) |
+| **Arpack.jl** (0.5.4) | Keep for dense Lindbladian at n<=6. The existing `run_lindbladian` with `eigs(L, sigma=shift)` remains the gold standard for small systems | NONE |
+| **FINUFFT.jl** (3) | NUFFT prefactor computation for Time/Trotter domains -- used INSIDE the matvec | NONE |
+| **SparseArrays** (stdlib) | Sparse Bohr-frequency indexing inside matvec | NONE |
+
+---
+
+## How KrylovKit.jl Integrates with QuantumFurnace
+
+### The Matrix-Free Linear Map
+
+KrylovKit's `eigsolve` accepts a plain Julia function `f(x) -> y` as the linear operator. The Lindbladian action `L(rho)` on a vectorized density matrix is:
 
 ```julia
-# In energy eigenbasis: rho is diagonal
-gibbs_eigs = exp.(-beta .* hamiltonian.eigvals)
-gibbs_eigs ./= sum(gibbs_eigs)
-rho_quarter_diag = Diagonal(gibbs_eigs .^ 0.25)
-rho_inv_quarter_diag = Diagonal(gibbs_eigs .^ (-0.25))
+function apply_lindbladian_matvec(v::Vector{ComplexF64},
+                                   jumps, config, ham_or_trott, precomputed_data)
+    dim = isqrt(length(v))
+    rho = reshape(v, dim, dim)      # View, no allocation
+    d_rho = zeros(ComplexF64, dim, dim)  # Preallocated workspace
 
-# In computational basis (if needed for Lindbladian that's in computational basis):
-V = hamiltonian.eigvecs
-rho_quarter = V * rho_quarter_diag * V'
-rho_inv_quarter = V * rho_inv_quarter_diag * V'
-```
-
-**Path B (for TrotterDomain): General eigendecomposition.**
-In TrotterDomain, the Gibbs state is NOT diagonal in the Trotter eigenbasis. The Lindbladian and Gibbs state are both in the Trotter basis. Use:
-
-```julia
-F = eigen(Hermitian(Matrix(gibbs_in_trotter_basis)))
-rho_quarter = F.vectors * Diagonal(F.values .^ 0.25) * F.vectors'
-rho_inv_quarter = F.vectors * Diagonal(F.values .^ (-0.25)) * F.vectors'
-```
-
-This is safe because `Hermitian()` guarantees real eigenvalues. The Gibbs state is positive definite (all eigenvalues > 0), so the quarter-power is well-defined and real.
-
-**Numerical concern: near-zero eigenvalues.**
-For high beta (low temperature), some Gibbs eigenvalues approach zero, making rho^{-1/4} diverge. At n=6 with beta=1 (the current test case), the smallest Gibbs eigenvalue is ~exp(-beta * E_max) / Z, which is well above machine epsilon. For beta >> 1, a regularization floor `max(eigval, epsilon)` may be needed, but this is a v1.4+ concern. **No new package needed.**
-
-### 2. Effective Rate Plot lambda_eff(t) (Task 2.1): Pure Arithmetic
-
-**What's needed:** Compute lambda_eff(t) = -ln|Delta(t+tau)/Delta(t)| / tau from the trajectory-averaged signal.
-
-**Stack decision: Pure Julia arithmetic. No dependency at all.**
-
-**Confidence: HIGH** -- This is a 15-line function using only division, abs, log, and array indexing.
-
-```julia
-function effective_rate(Delta::Vector{Float64}, dt::Float64; lag::Int=3)
-    n = length(Delta)
-    tau = lag * dt
-    t_vals = [(i-1)*dt for i in 1:(n-lag)]
-    lambda_eff = Vector{Float64}(undef, n-lag)
-    for i in 1:(n-lag)
-        d_now = Delta[i]
-        d_later = Delta[i + lag]
-        if d_now != 0.0 && d_later != 0.0 && sign(d_now) == sign(d_later)
-            lambda_eff[i] = -log(abs(d_later / d_now)) / tau
-        else
-            lambda_eff[i] = NaN
+    # Accumulate: d_rho = sum_k L_k(rho) = sum_k [A_k rho A_k' - 0.5{A_k'A_k, rho}]
+    for jump in jumps
+        for (w, A_w) in frequency_components(jump, config, precomputed_data)
+            # A_w rho A_w'
+            tmp = A_w * rho * A_w'       # Two BLAS-3 mul! calls
+            d_rho .+= gamma_w .* tmp
+            # -0.5 * {A_w'A_w, rho}
+            LdL = A_w' * A_w
+            d_rho .-= 0.5 .* gamma_w .* (LdL * rho + rho * LdL)
         end
     end
-    return t_vals, lambda_eff
-end
-```
 
-### 3. Bootstrap Resampling (Task 2.2): StatsBase.sample + Custom Loop
-
-**What's needed:** Resample N_traj trajectories with replacement, recompute averaged signal, recompute lambda_eff, collect statistics.
-
-**Stack decision: Use StatsBase.sample (already in test extras) for index sampling. No new dependency.**
-
-**Confidence: HIGH** -- StatsBase.sample with `replace=true` is the standard Julia primitive for bootstrap.
-
-**Critical design consideration:** The current `run_observable_trajectories` does NOT store per-trajectory measurements -- it accumulates into `mean_data` and divides by `ntraj`. For bootstrap, we need per-trajectory data OR we need a modified trajectory runner.
-
-**Two approaches (architecture decision, not a stack decision):**
-
-**Approach A: Store per-trajectory measurements.** Add a `measurements_per_traj::Array{Float64, 3}` field (n_obs x n_saves x n_traj) to ObservableTrajectoryResult. Memory: for n=6, 8 observables, 500 save points, 10000 trajectories = 8 * 500 * 10000 * 8 bytes = 320 MB. Feasible for n<=6 validation but NOT for production use at larger n.
-
-**Approach B: Batch-level bootstrap.** Run K independent trajectory batches (e.g., K=200 batches of ntraj/K trajectories each). Store per-batch means. Bootstrap resample at the batch level. Memory: 8 * 500 * 200 * 8 bytes = 6.4 MB. This is the approach used in lattice QCD (jackknife/bootstrap over configurations).
-
-**Recommended: Approach B (batch-level bootstrap).** The trajectory runner already supports deterministic per-trajectory seeding via `Xoshiro(seed + traj_id)`. Run batches sequentially, store per-batch mean arrays, then bootstrap over batch indices using `StatsBase.sample(1:K, K; replace=true)`.
-
-```julia
-using StatsBase: sample
-# After collecting batch_means::Vector{Matrix{Float64}}  (K matrices of size n_obs x n_saves)
-n_boot = 200
-boot_gaps = Vector{Float64}(undef, n_boot)
-for b in 1:n_boot
-    idx = sample(1:K, K; replace=true)
-    boot_mean = mean(batch_means[idx])  # requires Statistics.mean
-    # compute lambda_eff or fit from boot_mean
-    boot_gaps[b] = ...
-end
-gap_se = std(boot_gaps)
-```
-
-**Why NOT Bootstrap.jl:** Bootstrap.jl provides infrastructure for standard bootstrap workflows, but our use case is non-standard (resampling trajectory batches, then re-fitting). The custom loop above is 10 lines and gives full control. Adding Bootstrap.jl would be dependency bloat for no benefit.
-
-### 4. Two-Exponential Fitting (Task 3.1): LsqFit.jl with 5-Parameter Model
-
-**What's needed:** Fit `Delta(t) = c1 * exp(-g1 * t) + c2 * exp(-g2 * t)` with constraint `0 < g1 < g2`.
-
-**Stack decision: LsqFit.jl (already in [deps]). No new dependency.**
-
-**Confidence: HIGH** -- Verified that LsqFit supports arbitrary model functions with bounded parameters.
-
-```julia
-# Two-exponential model
-_two_exp_model(t, p) = @. p[1] * exp(-p[2] * t) + p[3] * exp(-p[4] * t) + p[5]
-
-# Parameters: [c1, g1, c2, g2, offset]
-# Bounds: g1 > 0, g2 > g1 (enforce g2 > some_minimum)
-lower = [-Inf, 0.0, -Inf, 0.0, -Inf]
-upper = [Inf, Inf, Inf, Inf, Inf]
-
-fit = curve_fit(_two_exp_model, times, data, p0; lower=lower, upper=upper)
-```
-
-**The challenge is initialization, not the fitting library.** Two-exponential fits are notoriously sensitive to initial conditions. The instructions describe two initialization strategies:
-
-**Strategy A: Effective-rate-informed initialization.**
-Read plateau value from lambda_eff plot as g1_init, early-time value as g2_init. Simple, requires lambda_eff to be computed first.
-
-**Strategy B: Prony two-point method.**
-Pick two time points, form ratios, solve quadratic for decay constants. More automated but sensitive to noise in the chosen points.
-
-Both strategies are ~20 lines of pure Julia arithmetic. No external package needed. The Prony method in particular does NOT need SignalDecomposition.jl or any signal processing package -- it's a 2x2 linear algebra problem:
-
-```julia
-function _prony_two_exp_init(t, Delta; t_frac_a=0.2, t_frac_b=0.5)
-    n = length(t)
-    ia = max(1, round(Int, t_frac_a * n))
-    ib = max(ia+2, round(Int, t_frac_b * n))
-    im = div(ia + ib, 2)
-    dt_half = t[im] - t[ia]
-
-    r1 = Delta[im] / Delta[ia]
-    r2 = Delta[ib] / Delta[im]
-
-    # z1 + z2 = r1 + r2,  z1 * z2 = r1 * r2  (Prony relations)
-    S = r1 + r2
-    P = r1 * r2
-    disc = S^2 - 4*P
-    if disc < 0
-        # Complex roots: fall back to single-exponential init
-        return nothing
+    # Add coherent part if applicable: -i[B, rho]
+    if B !== nothing
+        d_rho .-= 1im .* (B * rho - rho * B)
     end
-    z1 = (S + sqrt(disc)) / 2
-    z2 = (S - sqrt(disc)) / 2
 
-    # Convert to decay rates
-    g1 = -log(max(abs(z1), 1e-10)) / dt_half
-    g2 = -log(max(abs(z2), 1e-10)) / dt_half
-    if g1 > g2; g1, g2 = g2, g1; end  # ensure g1 < g2
-
-    # Amplitudes from linear system
-    # Delta[ia] = c1*exp(-g1*t[ia]) + c2*exp(-g2*t[ia])
-    # Delta[ib] = c1*exp(-g1*t[ib]) + c2*exp(-g2*t[ib])
-    E = [exp(-g1*t[ia]) exp(-g2*t[ia]); exp(-g1*t[ib]) exp(-g2*t[ib])]
-    c = E \ [Delta[ia]; Delta[ib]]
-
-    return [c[1], g1, c[2], g2, 0.0]  # offset = 0 initially
+    return vec(d_rho)
 end
 ```
 
-### 5. Richardson Extrapolation (Task 3.2): Pure Arithmetic
+**Key point:** Each matvec costs O(n_jumps * n_freqs * dim^2 * dim) for the matrix multiplications. At 12 qubits (dim=4096), each `mul!` is a 4096x4096 complex matrix multiply = O(dim^3) = O(68 billion) flops. This is expensive but feasible with BLAS-3.
 
-**What's needed:** Combine gap estimates at delta and delta/2: `gap_rich = 2*gap(delta/2) - gap(delta)`.
+**The existing code already has the building blocks:**
+- `_jump_contribution!` for `LiouvConfig` (Liouvillian construction) accumulates `A_w rho A_w' - 0.5{...}` into a vectorized matrix via `_vectorize_liouv_diss_and_add!`.
+- `_jump_contribution!` for `ThermalizeConfig` (DM simulator) applies the CPTP channel to a density matrix directly.
+- The Krylov matvec is a hybrid: it applies the Lindbladian to a density matrix (like the DM simulator) but returns the result as a vector (like the Liouvillian constructor).
 
-**Stack decision: One-line formula. No dependency.**
+The new code extracts the "accumulate L(rho)" logic from the existing `_jump_contribution!` functions, removing the Kraus/TP-correction overhead (which is only for the DM simulator's CPTP channel).
 
-**Confidence: HIGH** -- This is literally one line of arithmetic.
-
-```julia
-gap_richardson = 2 * gap_half_delta - gap_delta
-sigma_richardson = sqrt(4 * sigma_half_delta^2 + sigma_delta^2)
-```
-
-**Why NOT Richardson.jl:** The Richardson.jl package (v1.4.0, Dec 2020) is designed for adaptive extrapolation of scalar functions with automatic convergence detection. Our use case is a one-shot linear extrapolation from two or three points -- literally `2*f(h/2) - f(h)`. Adding a package dependency for this would be absurd. Richardson.jl would be useful if we were doing higher-order Richardson with automatic order detection, but the instructions explicitly describe the simple two-point formula.
-
-### 6. Automatic Fitting Window Selection (Task 3.3): SNR + Stability
-
-**What's needed:**
-- t_max: last time where SNR(t) = |Delta(t)| / sigma_Delta(t) > 3
-- t_min: stability test -- sweep t_min, look for plateau in fitted g1
-
-**Stack decision: Pure Julia loops and array operations. Statistics.std for variance. No new dependency.**
-
-**Confidence: HIGH** -- This is iterative fitting with varying parameters, all using existing LsqFit infrastructure.
-
-SNR computation requires per-timepoint variance from the bootstrap batches. This feeds directly into the batch-level data collection discussed in section 3 above.
-
-### 7. Symmetry Sector Labeling (Task 4.1): LinearAlgebra + Eigenbasis Indexing
-
-**What's needed:** Compute S_z quantum numbers for each energy eigenstate, then label each Lindbladian eigenvector by the Delta_S_z sectors it has support in.
-
-**Stack decision: Pure Julia. Pauli Z matrix already exists in the codebase (see `src/hamiltonian.jl` exports `Z`). Total S_z = sum of Z_i/2 for each eigenstate.**
-
-**Confidence: HIGH** -- The only operation is computing Z_total = sum(pad_term(Z, i, n)) in the energy eigenbasis, then checking which (i,j) blocks of each Lindbladian eigenvector (reshaped to dim x dim) have non-zero weight.
+### The eigsolve Call
 
 ```julia
-# Compute S_z for each energy eigenstate
-Z_total = sum(pad_term([Z], i, n_qubits) for i in 1:n_qubits)  # existing pad_term
-Sz_values = [real(hamiltonian.eigvecs[:, k]' * Z_total * hamiltonian.eigvecs[:, k]) / 2
-             for k in 1:dim]
+using KrylovKit
 
-# For each Lindbladian eigenvector reshaped to dim x dim:
-# entry (i,j) corresponds to |E_i><E_j| with Delta_Sz = Sz[i] - Sz[j]
-function label_symmetry_sector(eigvec, dim, Sz_values; threshold=1e-6)
-    R = reshape(eigvec, dim, dim)
-    delta_sz_weights = Dict{Float64, Float64}()
-    for i in 1:dim, j in 1:dim
-        w = abs2(R[i, j])
-        w < threshold && continue
-        dsz = round(Sz_values[i] - Sz_values[j], digits=6)
-        delta_sz_weights[dsz] = get(delta_sz_weights, dsz, 0.0) + w
+# Construct closure capturing all precomputed data
+function make_lindbladian_map(jumps, config, ham_or_trott, precomputed_data)
+    dim = size(ham_or_trott.data, 1)
+    # Preallocate workspace (reused across matvec calls)
+    ws = KrylovMatvecWorkspace(dim)  # new struct with scratch matrices
+
+    function L_matvec(v::Vector{ComplexF64})
+        return apply_lindbladian_action!(ws, v, jumps, config, ham_or_trott, precomputed_data)
     end
-    return delta_sz_weights
+    return L_matvec
 end
+
+L = make_lindbladian_map(jumps, config, ham_or_trott, precomputed_data)
+x0 = randn(ComplexF64, dim^2)  # Random initial vector
+
+# Find 2-5 eigenvalues with largest real part (steady state + gap)
+vals, vecs, info = eigsolve(L, x0, 5, :LR;
+    krylovdim = 30,       # Krylov subspace size
+    maxiter = 300,         # Max restarts
+    tol = 1e-8,            # Convergence tolerance
+    eager = true,          # Check convergence after each expansion
+    verbosity = 1,         # Print convergence info
+)
+
+# vals[1] ~ 0 (steady state), vals[2] = spectral gap eigenvalue
+spectral_gap = abs(real(vals[2]))
 ```
 
-### 8. Dashboard/Summary Figures (Task 5.1): Plots.jl
+### Left Eigenvectors via bieigsolve
 
-**What's needed:** 7-panel diagnostic figure with eigenvalue spectrum, defect metrics, overlap coefficients, effective rate plot, delta-convergence, fit overlay, and t_min stability.
-
-**Stack decision: Use Plots.jl (already in [extras] with compat bounds). Generate figures in diagnostic scripts, not in production src/.**
-
-**Confidence: HIGH** -- Plots.jl is already a project dependency (extras section), already has compat bounds (`Plots = "1"`), and the docs Project.toml already uses it.
-
-**Why Plots.jl and not CairoMakie:**
-
-| Factor | Plots.jl | CairoMakie |
-|--------|----------|------------|
-| Already in Project.toml | YES (extras) | NO |
-| Multi-panel layout | `plot(p1, p2, ..., layout=(r,c))` -- simple | `Figure()`/`Axis` -- more flexible but more verbose |
-| Publication quality | Good with GR backend (default) | Better (vector graphics focus) |
-| Dependency weight | GR backend is lightweight | CairoMakie 0.15.8 brings Makie 0.24.8, Cairo, FreeType, GeometryBasics + many transitive deps |
-| Learning curve for team | Low (already used in docs) | Higher (scene graph model) |
-| Julia compat | Plots 1.x works with Julia 1.11+ | CairoMakie 0.15.8 requires Julia 1.3+ (fine) but Makie ecosystem adds ~30 packages |
-
-**Verdict: Use Plots.jl.** The diagnostic figures are for internal validation and paper drafts, not for interactive dashboards. Plots.jl's `plot(; layout=...)` handles the 7-panel figure adequately. If publication-quality vector graphics are needed later, CairoMakie can be considered, but adding ~30 new transitive dependencies for slightly nicer fonts is not justified at this stage.
-
-**Plots.jl usage pattern for dashboard:**
+For the overlap diagnostics (DIAG-05), we need biorthogonal left eigenvectors:
 
 ```julia
-using Plots
-
-# Panel A: Eigenvalue spectrum
-p1 = scatter(real.(eigs), imag.(eigs); xlabel="Re(lambda)", ylabel="Im(lambda)",
-             marker_z=delta_sz_labels, title="Lindbladian Spectrum")
-
-# Panel D: Effective rate plot
-p4 = plot(t_eff, lambda_eff; ribbon=sigma_eff, xlabel="t", ylabel="lambda_eff(t)",
-          title="Effective Rate")
-hline!([exact_gap]; linestyle=:dash, label="Exact gap")
-
-# Combine into dashboard
-dashboard = plot(p1, p2, p3, p4, p5, p6, p7; layout=(4, 2), size=(1200, 1600))
-savefig(dashboard, "diagnostic_dashboard.png")
+# BiArnoldi: simultaneous left and right eigenvectors
+vals, (vecs_right, vecs_left), (info_r, info_l) = bieigsolve(
+    L, x0, x0, 5, :LR;
+    krylovdim = 30,
+    maxiter = 300,
+    tol = 1e-8,
+)
+# vecs_left satisfy L' * w = conj(lambda) * w
+# Biorthogonality: dot(vecs_left[i], vecs_right[j]) ~ delta_{ij}
 ```
+
+**Important:** `bieigsolve` requires BOTH `L(v)` and `L'(w)` (adjoint action). The adjoint Lindbladian `L'(rho)` has a known form:
+`L'(rho) = sum_k gamma_k * (A_k' rho A_k - 0.5{A_k'A_k, rho})` (swap A and A'). This is straightforward to implement alongside the forward map.
 
 ---
 
-## What Arpack.jl Can Do for Extended Eigenvalue Computation
+## Memory Budget Analysis
 
-The existing `run_lindbladian` uses `eigs(liouv, nev=2, sigma=shift, tol=1e-12)` to get the two smallest-magnitude eigenvalues. For v1.4 Task 1.1, we need the leading 20-30 eigenvalues and their eigenvectors.
+### Per-Vector Cost
 
-**Stack decision: Keep Arpack.jl. Increase nev to 20-30. No change to dependency.**
+At n qubits: dim = 2^n, vectorized = dim^2 = 4^n.
 
-**Confidence: HIGH** -- Arpack's shift-invert mode supports arbitrary nev up to dim-1.
+| Qubits | dim | dim^2 | Bytes per vector (ComplexF64) | Bytes |
+|--------|-----|-------|------------------------------|-------|
+| 6 | 64 | 4,096 | 32 KB | Trivial |
+| 8 | 256 | 65,536 | 512 KB | Trivial |
+| 10 | 1,024 | 1,048,576 | 8 MB | Manageable |
+| 11 | 2,048 | 4,194,304 | 32 MB | Significant |
+| 12 | 4,096 | 16,777,216 | 128 MB | Heavy |
 
-```julia
-# Current (v1.3):
-eigvals, eigvecs = eigs(liouv, nev=2, sigma=shift, tol=1e-12)
+### KrylovKit Memory Model
 
-# New (v1.4):
-eigvals, eigvecs = eigs(liouv, nev=30, sigma=shift, tol=1e-12)
-# Returns 30 eigenvalues nearest to shift, with their eigenvectors.
+The Arnoldi method stores a Krylov basis of `krylovdim` vectors plus a few scratch vectors. Total Krylov memory:
+
+```
+memory_krylov = (krylovdim + ~5) * bytes_per_vector
 ```
 
-For n=6, the Lindbladian is 4096 x 4096 (dense). Arpack with shift-invert at this size takes ~seconds and is well within capabilities. No need for KrylovKit.jl or any other eigenvalue solver.
+For `bieigsolve`, double this (both left and right Krylov bases):
 
-**Why NOT switch to KrylovKit.jl:**
-KrylovKit.jl (v0.8+) does NOT support shift-invert mode. Its `eigsolve` only finds extremal eigenvalues (largest or smallest magnitude/real part). For finding eigenvalues near zero in a non-Hermitian Lindbladian, shift-invert is essential. KrylovKit's documentation explicitly warns: "since no (shift-and)-invert is used, this will only be successful if you somehow know that eigenvalues close to zero are also close to the periphery of the spectrum." For our Lindbladian, eigenvalues near zero are interior eigenvalues, NOT extremal. Arpack's Fortran-based shift-invert is the right tool here.
+```
+memory_bieigsolve = 2 * (krylovdim + ~5) * bytes_per_vector
+```
 
-KrylovKit.jl would be relevant for n=8+ (dim=65536) where the Lindbladian is too large to factorize for shift-invert. That's deferred to a future milestone (Task 5.3 is explicitly deferred in the instructions).
+| Qubits | krylovdim=30 eigsolve | krylovdim=30 bieigsolve | krylovdim=50 eigsolve |
+|--------|----------------------|------------------------|----------------------|
+| 8 | 18 MB | 36 MB | 28 MB |
+| 10 | 288 MB | 576 MB | 448 MB |
+| 11 | 1.1 GB | 2.2 GB | 1.8 GB |
+| 12 | 4.5 GB | 9.0 GB | 7.0 GB |
+
+### Matvec Workspace
+
+The matvec itself needs scratch matrices for the dim x dim operations:
+
+```
+workspace = ~6 * dim * dim * 16 bytes  # 6 scratch matrices of size dim x dim
+```
+
+| Qubits | dim | Workspace |
+|--------|-----|-----------|
+| 8 | 256 | 6 MB |
+| 10 | 1,024 | 96 MB |
+| 12 | 4,096 | 1.5 GB |
+
+### Total Memory Budget
+
+| Qubits | Krylov (k=30) | Workspace | NUFFT Prefactors | Total | Fits in... |
+|--------|---------------|-----------|------------------|-------|------------|
+| 8 | 18 MB | 6 MB | ~50 MB | ~75 MB | Laptop (16 GB) |
+| 10 | 288 MB | 96 MB | ~200 MB | ~600 MB | Laptop (16 GB) |
+| 11 | 1.1 GB | 384 MB | ~400 MB | ~2 GB | Workstation (64 GB) |
+| 12 | 4.5 GB | 1.5 GB | ~800 MB | ~7 GB | Cluster node (512 GB) |
+
+**Verdict:** 12 qubits with `krylovdim=30` needs ~7 GB for `eigsolve`, ~12 GB for `bieigsolve`. Well within the 512 GB cluster budget. Even a 64 GB workstation handles 11 qubits comfortably.
+
+**Note on KrylovKit memory overhead:** [Issue #9](https://github.com/Jutho/KrylovKit.jl/issues/9) reports KrylovKit allocates ~20x more than Arpack for equivalent problems due to its flexible vector type design. For our case, the overhead is in the orthogonalization, not the vector storage. The 20x factor applies to small problems; for our large vectors, the orthogonalization overhead (O(krylovdim^2 * dim^2)) is dwarfed by vector storage. Real overhead is likely 1.5-2x the theoretical minimum. Budget accordingly.
+
+---
+
+## BLAS Threading Strategy
+
+### The Problem
+
+Each Krylov matvec performs multiple dim x dim matrix multiplications via BLAS-3 (`mul!`). Julia's BLAS (OpenBLAS or MKL) uses its own thread pool. If Julia also uses multiple threads, BLAS threads and Julia threads compete for CPU cores, causing oversubscription and cache thrashing.
+
+### The Solution
+
+For Krylov eigensolving (inherently sequential outer loop), set BLAS threads high and Julia threads to 1:
+
+```julia
+using LinearAlgebra
+BLAS.set_num_threads(N_physical_cores)  # Let BLAS parallelize the mul! calls
+# Julia threading is NOT used in the Krylov loop itself
+```
+
+KrylovKit's Arnoldi loop is sequential: matvec -> orthogonalize -> check convergence -> repeat. The parallelism lives inside each matvec (BLAS-3 matrix multiply).
+
+| System | BLAS threads | Julia threads | Rationale |
+|--------|-------------|---------------|-----------|
+| Laptop (4 cores) | 4 | 1 | BLAS owns all cores for mat-mul |
+| Workstation (16 cores) | 16 | 1 | Same -- Krylov loop is sequential |
+| Cluster node (64 cores) | 32-64 | 1 | OpenBLAS saturates at ~32 threads for large matrices; MKL scales better |
+
+**At 12 qubits (4096x4096 matrices):** Each BLAS-3 `mul!` is O(68G) flops. With 64 BLAS threads on a cluster node, each `mul!` takes ~1-2 seconds. A matvec with ~100 frequency components and 3 jumps performs ~1000 `mul!` calls = ~1000-2000 seconds per matvec. With `krylovdim=30` and 100 restarts, this is ~1-2 days of compute. This motivates:
+
+1. **Precomputation of jump-OFT products** to reduce the number of `mul!` calls per matvec.
+2. **Exploiting Hermitian symmetry** of jumps (half the frequency grid).
+3. **Starting with smaller systems** (n=8-10) to validate before scaling.
+
+---
+
+## Preconditioning and Convergence Acceleration
+
+### Why NOT Shift-Invert
+
+Shift-invert requires solving `(L - sigma*I) \ v` at each Krylov step, which requires either:
+- Factorizing the dim^2 x dim^2 matrix (impossible for n > 6), OR
+- Iteratively solving with GMRES (each GMRES iteration needs a matvec, creating a nested Krylov loop that is expensive and numerically delicate).
+
+Since `:LR` targeting works directly (lambda_1=0 is extremal), shift-invert is unnecessary.
+
+### Convergence Considerations
+
+The gap between `lambda_1 = 0` and `lambda_2` determines convergence rate. If the spectral gap is small (slow mixing), the ratio `|lambda_2| / |lambda_3|` may be close to 1, requiring more Krylov iterations. Typical convergence:
+
+- **Well-separated gap:** `krylovdim=30`, `maxiter=100` should suffice.
+- **Clustered eigenvalues near 0:** Increase `krylovdim` to 50-80 and `maxiter` to 500. Memory cost grows linearly.
+- **Very small gap (slow mixing):** The Krylov method may struggle if `|lambda_2|` is much smaller than `|lambda_end|` (the most negative eigenvalue). In this regime, consider working with the CPTP channel `E = I + delta*L` instead, where `E`'s leading eigenvalue is 1 (maps to steady state) and the second eigenvalue is `1 + delta*lambda_2` (maps to gap). For small delta, the gap eigenvalue of E is closer to the extremal eigenvalue 1, improving Krylov convergence.
+
+### Alternative: Power Iteration on the CPTP Channel
+
+For the CPTP channel `E(rho)`, the leading eigenvalue is 1 (largest magnitude). This makes `:LM` targeting natural. The spectral gap of L maps to `|1 - mu_2|/delta` where `mu_2` is the second eigenvalue of E. This approach:
+
+- Uses the EXISTING `_jump_contribution!` for `ThermalizeConfig` directly (the DM simulator step IS the channel application).
+- Converges faster when the gap is very small (because `mu_2 ~ 1` is near the extremal eigenvalue `mu_1 = 1`).
+- BUT: introduces discretization error (delta-dependent). Richardson extrapolation can correct this.
+
+**Recommendation:** Implement both L-based (`eigsolve` with `:LR`) and E-based (`eigsolve` with `:LM`) approaches. Use L-based as the primary method (exact, no delta dependence). Use E-based as a fallback/cross-validation (faster convergence for small gaps, but needs delta extrapolation).
+
+---
+
+## Alternatives Considered
+
+| Category | Recommended | Alternative | Why Not |
+|----------|-------------|-------------|---------|
+| Krylov solver | **KrylovKit.jl** (0.10.2) | ArnoldiMethod.jl (0.4.0) | No `bieigsolve` (left eigvecs), no `exponentiate`. ArnoldiMethod has better memory control (`ArnoldiWorkspace` pre-allocation) but lacks critical features. |
+| Krylov solver | KrylovKit.jl | Arpack.jl (0.5.4, existing) | Arpack needs explicit matrix for shift-invert. Cannot do matrix-free. Keep for n<=6 dense path. |
+| Krylov solver | KrylovKit.jl | Krylov.jl (JSO ecosystem) | Krylov.jl focuses on linear systems (GMRES, CG, etc.), not eigenvalue problems. No `eigsolve`. |
+| Linear map wrapper | Direct callable (KrylovKit native) | LinearMaps.jl (existing) | KrylovKit accepts bare functions. No need to wrap. LinearMaps.jl stays for Arpack backward compat. |
+| Profiling | TimerOutputs.jl | BenchmarkTools.jl (existing) | BenchmarkTools for micro-benchmarks, TimerOutputs for profiling multi-minute Krylov runs with section-level breakdown. Complementary. |
+| BLAS | OpenBLAS (Julia default) | MKL.jl | MKL may be faster for large matrices on Intel CPUs, but adds proprietary dependency. Benchmark first with OpenBLAS, switch to MKL only if profiling shows BLAS is bottleneck. |
 
 ---
 
@@ -348,43 +312,59 @@ KrylovKit.jl would be relevant for n=8+ (dim=65536) where the Lindbladian is too
 
 | Package | Why Evaluated | Why NOT Adding |
 |---------|---------------|----------------|
-| **Bootstrap.jl** | Bootstrap resampling for error bars on lambda_eff and gap estimates | Our bootstrap is non-standard (batch-level trajectory resampling + re-fitting). A 10-line loop with `StatsBase.sample` gives full control. Bootstrap.jl's API is designed for standard statistic-on-sample workflows. |
-| **Richardson.jl** (v1.4.0) | Richardson extrapolation for delta-convergence | One-line formula: `2*gap(delta/2) - gap(delta)`. Adding a dependency for this is absurd overhead. Richardson.jl's adaptive polynomial extrapolation is overkill for a fixed two-point linear combination. |
-| **KrylovKit.jl** | Alternative sparse eigenvalue solver | No shift-invert mode. Cannot find eigenvalues near zero for non-Hermitian Lindbladian. Arpack is the right tool for n<=6. |
-| **CairoMakie.jl** (0.15.8) | Publication-quality vector graphics | Adds ~30 transitive dependencies (Makie 0.24.8, Cairo, FreeType, GeometryBasics, etc.). Plots.jl already in extras and sufficient for diagnostic figures. Consider for paper polish milestone only. |
-| **SignalDecomposition.jl** | Prony/ESPRIT method for multi-exponential decomposition | Immature Julia package. Prony two-point initialization is ~20 lines of arithmetic. No external package needed. |
-| **Measurements.jl** | Uncertainty propagation | Heavyweight for propagating bootstrap error through Richardson formula. Manual formula `sigma_rich = sqrt(4*sigma1^2 + sigma2^2)` is simpler and more transparent. |
-| **Statistics.jl** (stdlib) as production dep | mean, std for bootstrap/SNR | Already available as stdlib. Use in scripts/tests only (already works via `using Statistics`). Not needed as `[deps]` entry since diagnostic functions can take pre-computed statistics as arguments. |
+| **ArnoldiMethod.jl** | Pure Julia alternative to KrylovKit | Missing `bieigsolve` and `exponentiate`. If we only needed forward eigsolve, ArnoldiMethod would be competitive. But left eigenvectors for DIAG-05 overlap analysis are essential. |
+| **ArnoldiMethodTransformations.jl** | Shift-invert for ArnoldiMethod | Shift-invert is unnecessary (`:LR` works for Lindbladian). Would add complexity for no benefit. |
+| **Krylov.jl** | JSO linear solver ecosystem | No eigenvalue solver. Wrong tool for this problem. |
+| **ExponentialUtilities.jl** | Matrix exponential action `expmv` | KrylovKit.jl already provides `exponentiate` which does the same thing. No need for a second package. |
+| **MKL.jl** | Potentially faster BLAS for Intel | Premature optimization. Benchmark with OpenBLAS first. MKL adds non-trivial binary dependency. |
+| **CUDA.jl** / **GPUArrays.jl** | GPU acceleration of matvec | The matvec is many small (dim x dim) BLAS-3 calls, not one giant matmul. GPU data transfer overhead would dominate. Defer to a future GPU milestone if needed. |
+| **Distributed.jl** (for Krylov) | Distributed matvec | The Krylov loop is sequential. Distributing the matvec across nodes adds MPI-like complexity. The parallelism should be within BLAS. |
+| **IncompleteLU.jl** / **ILUZero.jl** | Preconditioners for shift-invert GMRES | Shift-invert is not needed. These are for sparse linear system preconditioning. |
 
 ---
 
-## Recommended Stack Changes Summary
+## Project.toml Changes
 
-### Production Dependencies [deps]: NO CHANGES
-
-The existing dependency set is sufficient:
-
-| Package | Status | Role in v1.4 |
-|---------|--------|--------------|
-| LsqFit (0.15) | Already present | Two-exponential fitting (new model function, same API) |
-| LinearAlgebra (stdlib) | Already present | Matrix fourth root, opnorm for defect, full eigendecomposition |
-| Arpack (0.5.4) | Already present | 20-30 eigenvalue extraction (increase nev) |
-| SparseArrays (stdlib) | Already present | Lindbladian storage (no change) |
-
-### Test/Script Dependencies [extras]: NO CHANGES
-
-| Package | Status | Role in v1.4 |
-|---------|--------|--------------|
-| Plots (1) | Already present | Diagnostic dashboard figures |
-| StatsBase (0.34) | Already present | Bootstrap index sampling via `sample(replace=true)` |
-| HypothesisTests (0.11) | Already present | Gap estimate statistical validation |
-| StableRNGs (1) | Already present | Reproducible bootstrap seeds |
-
-### Project.toml Changes: NONE
+### Production Dependencies [deps]: Add KrylovKit
 
 ```toml
-# No changes to [deps], [compat], [extras], or [targets]
-# Everything needed is already declared.
+[deps]
+# ... existing deps unchanged ...
+KrylovKit = "0b1a1467-8014-51b9-945f-bf0ae24f4b77"
+
+[compat]
+# ... existing compat unchanged ...
+KrylovKit = "0.10"
+```
+
+### Development/Profiling Dependencies [extras]: Add TimerOutputs
+
+```toml
+[extras]
+# ... existing extras unchanged ...
+TimerOutputs = "a759f4b9-e2f1-59dc-863e-4aeb61b1ea8f"
+
+[compat]
+# ... existing compat unchanged ...
+TimerOutputs = "0.5"
+```
+
+### Test Targets: Add TimerOutputs
+
+```toml
+[targets]
+test = ["Test", "BenchmarkTools", "Debugger", "StableRNGs", "HypothesisTests", "StatsBase", "Aqua", "TimerOutputs"]
+```
+
+---
+
+## Installation
+
+```bash
+# In Julia REPL:
+using Pkg
+Pkg.add("KrylovKit")
+Pkg.add("TimerOutputs")  # for benchmarking scripts
 ```
 
 ---
@@ -395,109 +375,73 @@ The existing dependency set is sufficient:
 
 | New File | Dependencies Used | Purpose |
 |----------|-------------------|---------|
-| `src/diagnostics.jl` | LinearAlgebra (eigen, opnorm, Hermitian, Diagonal) | Anti-Hermitian defect, symmetry sector labeling, exact reference data |
-| `src/effective_rate.jl` | None (pure arithmetic) | lambda_eff(t) computation, SNR computation |
-| `src/two_exp_fit.jl` | LsqFit (curve_fit, confint, stderror, coef) | Two-exponential model definition, Prony initialization, fitting window selection |
-| `src/richardson.jl` | None (pure arithmetic) | Richardson extrapolation formula and error propagation |
-
-### New Files (scripts/ or experiments/)
-
-| New File | Dependencies Used | Purpose |
-|----------|-------------------|---------|
-| `experiments/diagnostics/run_diagnostics.jl` | Plots, StatsBase, Statistics | Full diagnostic pipeline: run trajectories, compute diagnostics, generate dashboard |
-| `experiments/diagnostics/bootstrap_analysis.jl` | StatsBase (sample), Statistics (mean, std) | Batch-level bootstrap for error bars |
+| `src/krylov_matvec.jl` | LinearAlgebra (`mul!`), existing domain logic | Matrix-free `L(rho)` and `L'(rho)` actions, with preallocated workspace |
+| `src/krylov_eigsolve.jl` | KrylovKit (`eigsolve`, `bieigsolve`) | Krylov-based spectral gap estimation: wrapper around KrylovKit with Lindbladian-specific defaults |
+| `src/krylov_channel.jl` | KrylovKit (`eigsolve`) | CPTP channel eigensolve (`E(rho)` with `:LM`), delta extrapolation |
 
 ### Modified Files (src/)
 
 | File | Change | Stack Impact |
 |------|--------|--------------|
-| `src/QuantumFurnace.jl` | Add `include` for new files, add exports for new public functions | No new `using` statements needed |
-| `src/furnace.jl` | Modify `run_lindbladian` to support `nev` parameter (default 2, allow 20-30) | Same Arpack API, just parameterize `nev` |
-| `src/fitting.jl` | Keep existing `fit_exponential_decay` unchanged. New two-exponential functions go in separate file. | No modification to existing LsqFit usage |
+| `src/QuantumFurnace.jl` | `using KrylovKit`, new `include()` lines, new exports | One new `using` statement |
+| `src/structs.jl` | New `KrylovMatvecWorkspace` struct, new `KrylovGapResult` result struct | No new deps |
+| `src/diagnostics.jl` | Optional: adapt `extract_leading_eigendata` to accept Krylov results alongside dense eigen | No new deps |
+
+### New Files (experiments/)
+
+| New File | Dependencies Used | Purpose |
+|----------|-------------------|---------|
+| `experiments/krylov/benchmark_matvec.jl` | TimerOutputs, BenchmarkTools | Profile single matvec cost across qubit counts |
+| `experiments/krylov/validate_against_dense.jl` | Existing dense eigen, new Krylov | Cross-validate Krylov gap vs dense gap at n<=6 |
+| `experiments/krylov/scaling_study.jl` | TimerOutputs | Measure time and memory scaling n=4..12 |
 
 ---
 
-## Numerical Considerations
+## Verification Plan
 
-### Matrix Fourth Root Stability
+### Step 1: Cross-Validate at n=4,6 (Dense Reference Exists)
 
-For the anti-Hermitian defect computation, rho^{-1/4} involves inverting the fourth root of potentially small eigenvalues:
+```julia
+# Dense reference (existing)
+L_dense = construct_lindbladian(jumps, config, hamiltonian)
+F = eigen(L_dense)
+gap_dense = abs(real(sort(F.values, by=x->abs(real(x)))[2]))
 
-| Scenario | Smallest Gibbs Eigenvalue | rho^{-1/4} Magnitude | Risk |
-|----------|---------------------------|----------------------|------|
-| n=4, beta=1 | ~0.04 | ~2.2 | None |
-| n=6, beta=1 | ~0.003 | ~4.3 | None |
-| n=6, beta=5 | ~1e-10 | ~5600 | Moderate (amplifies numerical errors in Lindbladian) |
-| n=6, beta=10 | ~1e-22 | ~1e5 | HIGH (similarity transform numerically meaningless) |
+# Krylov
+L_map = make_lindbladian_map(jumps, config, ham_or_trott, precomputed_data)
+vals, _, _ = eigsolve(L_map, x0, 5, :LR; krylovdim=30, tol=1e-10)
+gap_krylov = abs(real(vals[2]))
 
-**Recommendation:** Compute the condition number of the similarity transform (max/min of rho^{-1/4} diagonal entries). If > 1e8, warn that the defect metric is unreliable. For the Heisenberg chain at beta=1, this is not an issue.
+@assert abs(gap_dense - gap_krylov) / gap_dense < 1e-6
+```
 
-### Two-Exponential Fit Conditioning
+### Step 2: Scale to n=8 (Krylov Only)
 
-The condition of a two-exponential fit depends on the ratio g2/g1. If g2/g1 < 2, the two exponentials are nearly indistinguishable and the Jacobian becomes ill-conditioned, leading to:
-- Non-convergence of Levenberg-Marquardt
-- Huge confidence intervals
-- Rate estimates that swap (g1 and g2 exchange roles)
+At n=8 (dim=256, dim^2=65536): dense Lindbladian is 65536 x 65536 = 32 GB. Too large for dense, but trivial for Krylov (each vector is 512 KB). This is the first "Krylov-only" regime.
 
-**Mitigation built into LsqFit:** The `maxIter` parameter (default 1000) prevents infinite loops. The `confint` function returns Inf when the Jacobian is rank-deficient (the codebase already handles this for single-exponential in `fitting.jl` lines 201-208). The same `try/catch LinearAlgebra.SingularException` pattern should be applied to two-exponential fits.
+### Step 3: Scale to n=10, 12
 
-### Bootstrap Sample Size
-
-For K batches, the number of distinct bootstrap samples is `binomial(2K-1, K)`. With K=200 and N_boot=200, each bootstrap resample gives an independent gap estimate. The standard error on the bootstrap SE itself is ~SE/sqrt(2*N_boot), so N_boot=200 gives ~5% precision on the error estimate. Sufficient for diagnostic purposes.
-
----
-
-## Alternatives Considered
-
-| Category | Recommended | Alternative | Why Not |
-|----------|-------------|-------------|---------|
-| Eigenvalues | Arpack.jl (shift-invert) | KrylovKit.jl | No shift-invert; cannot target interior eigenvalues |
-| Eigenvalues | Arpack.jl | ArnoldiMethod.jl | Pure Julia but also no shift-invert mode |
-| Two-exp fitting | LsqFit.jl | Optim.jl + manual Jacobian | LsqFit handles Jacobian, CIs, and convergence tracking. Reimplementing is error-prone. |
-| Two-exp fitting | LsqFit.jl | Custom IRLS/Prony standalone | Prony only for initialization; LsqFit for refinement is standard practice |
-| Bootstrap | StatsBase.sample + loop | Bootstrap.jl | Non-standard use case (batch resampling + refitting); 10-line loop is clearer |
-| Richardson | Manual formula | Richardson.jl | One-line computation; package adds dependency for no benefit |
-| Plotting | Plots.jl (GR backend) | CairoMakie.jl | ~30 extra transitive deps; Plots.jl already in project, sufficient quality |
-| Plotting | Plots.jl | UnicodePlots.jl | No file output; terminal-only; not suitable for paper figures |
-| Matrix power | eigen + diagonal ^ 0.25 | General `A^0.25` operator | Exploiting known diagonal structure in eigenbasis is more efficient and numerically stable |
-
----
-
-## Version Compatibility
-
-All v1.4 features use existing packages at their current versions. No version bumps needed.
-
-| Package | Current Version | v1.4 API Used | Compatibility |
-|---------|----------------|---------------|---------------|
-| LsqFit | 0.15 | `curve_fit` with 5-param model, `confint`, `stderror`, `coef` | Same API as single-exponential. Verified from v0.15 docs. |
-| Arpack | 0.5.4 | `eigs(L; nev=30, sigma=shift)` | `nev` parameter supported since Arpack inception. |
-| LinearAlgebra | stdlib (Julia 1.11) | `eigen(Hermitian(...))`, `opnorm`, `Diagonal`, `norm` | All standard stdlib functions. |
-| Plots | 1 | `plot(layout=...)`, `scatter`, `hline!`, `savefig` | Standard Plots.jl API. |
-| StatsBase | 0.34 | `sample(1:N, N; replace=true)` | Core StatsBase function, stable since v0.30+. |
-| Statistics | stdlib | `mean`, `std`, `var` | Standard stdlib functions. |
-
-**No version conflicts.** No new packages to resolve. No compat bound changes needed.
+Systematic benchmarks tracking: time per matvec, number of matvecs to convergence, total wall time, peak memory.
 
 ---
 
 ## Sources
 
-- [Julia LinearAlgebra documentation](https://docs.julialang.org/en/v1/stdlib/LinearAlgebra/) -- eigen, Hermitian, opnorm, Diagonal. HIGH confidence.
-- [LsqFit.jl official documentation](https://julianlsolvers.github.io/LsqFit.jl/latest/) -- curve_fit API, bounds, confidence intervals. HIGH confidence.
-- [LsqFit.jl Getting Started](https://julianlsolvers.github.io/LsqFit.jl/latest/getting_started/) -- Multi-parameter models, weighted fitting. HIGH confidence.
-- [KrylovKit.jl eigenvalue problems](https://jutho.github.io/KrylovKit.jl/stable/man/eig/) -- Confirmed NO shift-invert mode. Quote: "since no (shift-and)-invert is used, this will only be successful if you somehow know that eigenvalues close to zero are also close to the periphery of the spectrum." HIGH confidence.
-- [Arpack.jl documentation](https://arpack.julialinearalgebra.org/latest/) -- eigs API with sigma (shift-invert) and nev parameters. HIGH confidence.
-- [Arpack.jl GitHub](https://github.com/JuliaLinearAlgebra/Arpack.jl) -- v0.5.4, Julia wrapper for arpack-ng Fortran library. HIGH confidence.
-- [Richardson.jl GitHub](https://github.com/JuliaMath/Richardson.jl) -- v1.4.0 (Dec 2020). Only dependency: LinearAlgebra. Evaluated and rejected (overkill for one-line formula). HIGH confidence.
-- [Bootstrap.jl GitHub](https://github.com/juliangehring/Bootstrap.jl) -- Evaluated and rejected (non-standard use case). HIGH confidence.
-- [Plots.jl vs Makie.jl discussion](https://discourse.julialang.org/t/what-are-the-biggest-differences-between-makie-jl-and-plots-jl/76643) -- Ecosystem comparison. MEDIUM confidence (community discussion, not official).
-- [CairoMakie.jl in Makie monorepo](https://github.com/MakieOrg/Makie.jl/tree/master/CairoMakie) -- v0.15.8, requires Makie 0.24.8. Evaluated and deferred. HIGH confidence.
-- [Makie.jl releases](https://github.com/JuliaPlots/Makie.jl/releases) -- v0.24.8 (Dec 5, 2024). HIGH confidence.
-- [StatsBase.jl documentation](https://juliastats.org/StatsBase.jl/stable/) -- sample function with replace keyword. HIGH confidence.
-- [Prony's method Wikipedia](https://en.wikipedia.org/wiki/Prony%27s_method) -- Mathematical foundation for two-exponential initialization. HIGH confidence (textbook method).
-- Eigendecomposition-based matrix power: f(A) = V * f(Lambda) * V^{-1} for diagonalizable A. Standard numerical linear algebra (Golub & Van Loan). HIGH confidence.
-- [Julia Discourse: sparse eigenvalues](https://discourse.julialang.org/t/suggestions-needed-diagonalizing-large-hermitian-sparse-matrix/96580) -- Comparison of Arpack, KrylovKit, ArnoldiMethod for sparse eigenproblems. MEDIUM confidence.
+- [KrylovKit.jl official documentation](https://jutho.github.io/KrylovKit.jl/stable/) -- API reference, algorithm descriptions. HIGH confidence. Generated October 10, 2025.
+- [KrylovKit.jl GitHub releases](https://github.com/Jutho/KrylovKit.jl/releases) -- v0.10.2, October 11, 2025. HIGH confidence.
+- [KrylovKit.jl eigenvalue problems](https://jutho.github.io/KrylovKit.jl/stable/man/eig/) -- `eigsolve`, `bieigsolve` API with `:LR`/`:SR`/`:LM` selectors. Explicit note: "since no (shift-and)-invert is used, this will only be successful if you somehow know that eigenvalues close to zero are also close to the periphery of the spectrum." For Lindbladians, lambda=0 IS the periphery under `:LR`. HIGH confidence.
+- [KrylovKit.jl available algorithms](https://jutho.github.io/KrylovKit.jl/stable/man/algorithms/) -- Arnoldi parameters: `krylovdim` (default 30), `maxiter` (default 100), `tol` (default 1e-12). BiArnoldi for `bieigsolve`. HIGH confidence.
+- [KrylovKit.jl memory allocation issue #9](https://github.com/Jutho/KrylovKit.jl/issues/9) -- Reports ~20x memory overhead vs Arpack for small problems due to flexible vector type design. MEDIUM confidence (2018 issue, may have improved).
+- [ArnoldiMethod.jl documentation](https://julialinearalgebra.github.io/ArnoldiMethod.jl/dev/) -- `partialschur` API, `ArnoldiWorkspace` for pre-allocation. v0.4.0 (Feb 2025). HIGH confidence.
+- [ArnoldiMethod.jl releases](https://github.com/JuliaLinearAlgebra/ArnoldiMethod.jl/releases) -- v0.4.0 released February 22, 2025. HIGH confidence.
+- [BifurcationKit eigensolver docs](https://github.com/bifurcationkit/BifurcationKitDocs.jl/blob/main/docs/src/eigensolver.md) -- Documents how to implement custom shift-invert with KrylovKit GMRES. MEDIUM confidence (third-party docs).
+- [Krylov.jl performance tips](https://jso.dev/Krylov.jl/dev/tips/) -- BLAS threading recommendations: use physical cores, not logical. HIGH confidence.
+- [Julia BLAS threading issue #27962](https://github.com/JuliaLang/julia/issues/27962) -- `BLAS.set_num_threads()` overhead and interaction with Julia threads. HIGH confidence.
+- [TimerOutputs.jl GitHub](https://github.com/KristofferC/TimerOutputs.jl) -- `@timeit` macro for hierarchical profiling. HIGH confidence.
+- [QuantumToolbox.jl](https://qutip.org/QuantumToolbox.jl/stable/users_guide/steadystate) -- Uses `eigsolve` for Lindbladian steady state. Validates the `:SR`/`:LR` approach. MEDIUM confidence (different codebase but same physics).
+- [Arnoldi-Lindblad time evolution paper](https://arxiv.org/pdf/2109.01648) -- Discusses Arnoldi methods applied to Lindbladian operators, validates the Krylov approach for open quantum systems. HIGH confidence (peer-reviewed).
 
 ---
-*Stack research for: QuantumFurnace.jl v1.4 Spectral Gap Refinement Diagnostics*
-*Researched: 2026-02-19*
+
+*Stack research for: QuantumFurnace.jl Krylov-based Lindbladian spectral gap estimation*
+*Researched: 2026-02-20*

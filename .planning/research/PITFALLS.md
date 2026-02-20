@@ -1,325 +1,383 @@
-# Domain Pitfalls: Spectral Gap Refinement Diagnostics
+# Domain Pitfalls: Krylov-Based Lindbladian Spectral Gap Estimation
 
-**Domain:** Adding two-exponential fitting, Richardson extrapolation, effective rate plots, bootstrap error bars, anti-Hermitian defect diagnosis, symmetry sector analysis, and automatic fitting window selection to an existing quantum trajectory simulator (QuantumFurnace.jl v1.3)
-**Researched:** 2026-02-19
-**Confidence:** HIGH (codebase analysis of fitting.jl/gap_estimation.jl/trajectories.jl + established numerical analysis + lessons from Quick-22 through Quick-32 investigations)
+**Domain:** Adding matrix-free Krylov eigensolving (KrylovKit.jl) to existing Lindbladian simulator (QuantumFurnace.jl) for spectral gap estimation at n=8..12 qubits
+**Researched:** 2026-02-20
+**Confidence:** HIGH (codebase analysis of furnace.jl/gap_estimation.jl/diagnostics.jl/qi_tools.jl + KrylovKit.jl official documentation + Arpack.jl existing usage patterns + numerical linear algebra literature)
 
-**Relationship to prior research:** This document supersedes the v1.3 research PITFALLS.md (2026-02-16) for the v1.4 milestone. Many v1.3 pitfalls remain relevant (basis mismatch, noise floor, symmetry selection) but are now understood empirically. This document focuses on **new** pitfalls specific to the seven features being added in v1.4, plus integration pitfalls from connecting them to the existing system.
+**Relationship to prior research:** This document covers pitfalls specific to the Krylov eigensolving milestone. The v1.4 PITFALLS.md (2026-02-19) covered trajectory-based diagnostics pitfalls. This document focuses on the distinct challenges of integrating matrix-free Krylov methods into the existing dense-eigendecomposition and trajectory infrastructure.
 
 ---
 
 ## Critical Pitfalls
 
-Mistakes that produce silently wrong spectral gap estimates, introduce false conclusions about which error source dominates, or require rewrites.
+Mistakes that produce wrong spectral gap values, cause out-of-memory crashes, or require architectural rewrites.
 
 ---
 
-### Pitfall 1: Two-Exponential Fit Parameter Non-Identifiability (Sloppy Direction)
+### Pitfall 1: Targeting Interior Eigenvalues Without Shift-Invert (Wrong Eigenvalues Returned)
 
 **What goes wrong:**
-The two-exponential model `f(t) = A1*exp(-g1*t) + A2*exp(-g2*t) + C` has 5 parameters. When the two decay rates g1 and g2 are within a factor of ~2 of each other, the model becomes structurally non-identifiable: many different (A1,g1,A2,g2) combinations produce nearly identical residuals. The Levenberg-Marquardt optimizer (LsqFit.jl `curve_fit`) converges to whichever local minimum is closest to the initial guess, and the resulting g1 can vary by 50-300% depending on initialization.
+The Lindbladian L has eigenvalue 0 (steady state) and all other eigenvalues with Re(lambda) < 0. The spectral gap eigenvalue lambda_1 has the smallest nonzero |Re(lambda)|, making it an **interior** eigenvalue -- neither extremal in magnitude nor in real part. Calling `KrylovKit.eigsolve(L_matvec, v0, 2, :LR)` targets the eigenvalues with largest real part. This correctly finds lambda_0 = 0 (steady state), but the second eigenvalue returned is the one with the **second-largest** real part -- which IS the spectral gap eigenvalue lambda_1 **only if** Re(lambda_1) > Re(lambda) for all other eigenvalues. For the Lindbladian, this is exactly the definition of the spectral gap, so `:LR` is the correct `which` parameter. However, there is a subtle trap: if eigenvalues exist with Re(lambda) very close to Re(lambda_1) but different imaginary parts, Arnoldi may converge to those instead, or oscillate between candidates without converging.
+
+The CPTP channel E = I + delta*L has a different spectrum. Its eigenvalue 1 (steady state) is the largest in magnitude, and the spectral gap eigenvalue has |mu_1| closest to 1 among non-steady-state eigenvalues. Using `:LM` correctly targets eigenvalue 1 first, then mu_1 second. But if delta is too large, some channel eigenvalues may have |mu| > 1 (violating complete positivity), and `:LM` returns those spurious eigenvalues instead.
 
 **Why it happens:**
-This is a fundamental property of sums of exponentials, not a software bug. The condition number of the Jacobian matrix at the solution grows as `~1/(g2-g1)^2` when the rates are close. For the n=4 Heisenberg chain, the exact spectral gap is g1=0.173 and the second decay rate is g2~0.35 (ratio ~2x), which is right at the boundary of identifiability. The Hessian has a "sloppy direction" where A1 and A2 can trade off against g1 and g2 with almost no change in the cost function.
+KrylovKit.jl does NOT implement shift-and-invert mode natively. The `EigSorter` and `ClosestTo` options sort the Krylov subspace eigenvalues but do NOT change the operator being applied. The documentation explicitly states: "no (shift-and)-invert is used." This means finding interior eigenvalues requires either (a) the target eigenvalues being naturally extremal under the chosen sorting, or (b) manually constructing a shifted-inverted operator `(L - sigma*I)^{-1}`, which requires solving a linear system at every Krylov iteration -- defeating the matrix-free advantage.
 
-**Specific manifestation in QuantumFurnace:** The existing `fit_exponential_decay` in fitting.jl uses `_log_linear_initial_guess` which estimates parameters from the tail (lines 73-101). For a two-exponential model, this approach gives the SLOW rate reliably but gives an unreliable fast rate, because the tail is dominated by the slow component. The fast component's amplitude and rate are determined almost entirely by the initial transient, which has low signal-to-noise in trajectory data.
+The existing code in `furnace.jl` (line 17) uses Arpack with `sigma=1e-9*(1+1im)` for shift-invert mode on a dense matrix. This approach requires the dense matrix to exist, which is impossible at n=12.
 
 **How to avoid:**
-1. **Constrain g2 > g1 explicitly.** Without this constraint, the optimizer can swap the two components, doubling the effective number of local minima. Use LsqFit.jl parameter bounds: `lower = [-Inf, 0.0, -Inf, ?, -Inf]` where `?` is `g1 + epsilon` (requires sequential fitting).
-2. **Two-stage initialization.** First fit single-exponential to the tail (t > 0.5*T) to get g1_init. Then fit single-exponential to `data - A1_init*exp(-g1_init*t)` in the head (t < 0.3*T) to get g2_init. Use (A1_init, g1_init, A2_init, g2_init, C_init) as the starting point.
-3. **Profile likelihood for g1.** Fix g1 at a grid of values, optimize over (A1, A2, g2, C) for each, and plot the profile likelihood. The minimum of this profile gives g1 with reliable uncertainty even when the full 5D landscape is sloppy.
-4. **Accept that g2 is unreliable.** For spectral gap estimation, g1 is what matters. Report g2 with an explicit "LOW confidence" flag and do NOT use g2 for Richardson extrapolation or other downstream calculations.
-5. **Implement a separation test.** If the fitted g2/g1 < 1.5, flag the fit as "rates too close for reliable two-exponential decomposition." Fall back to single-exponential tail fit.
+1. **For the Lindbladian L:** Use `which=:LR` (largest real part). The spectral gap eigenvalue has the largest real part among all nonzero eigenvalues (it is the "least negative" real part). Request `howmany=4` or more eigenvalues to have a safety margin, then post-filter to find the one with smallest |Re(lambda)| among non-steady-state eigenvalues.
+2. **For the CPTP channel E:** Use `which=:LM` (largest magnitude). The steady state eigenvalue 1 is the largest, and the spectral gap eigenvalue has the second-largest magnitude. Verify that no eigenvalue has |mu| > 1 + epsilon (CPTP violation).
+3. **For L with eigenvalue clustering near the gap:** Increase `krylovdim` substantially (50-100 for n=8, 100-200 for n>=10). More Krylov vectors resolve clustered eigenvalues better.
+4. **Validate against dense results at n=4,6.** The existing `extract_leading_eigendata` function (diagnostics.jl) returns exact eigenvalues via dense `eigen(L)`. Any Krylov gap estimate at n=4 or n=6 that disagrees with the dense gap by more than the requested tolerance is a bug.
 
 **Warning signs:**
-- LsqFit.jl `stderror(fit)` reports standard errors on g1 and g2 that are comparable to or larger than the gap between them.
-- Running the fit from 5 different initial guesses gives 5 different (g1, g2) pairs with similar residuals.
-- The covariance matrix `vcov(fit)` has a condition number > 10^6.
-- A1 and A2 have opposite signs (the optimizer is using cancellation to achieve a better fit).
+- `info.converged < howmany` -- fewer eigenvalues converged than requested.
+- The Krylov gap at n=4 disagrees with `extract_leading_eigendata` gap by more than 1e-6.
+- Multiple eigenvalues returned with nearly identical real parts but different imaginary parts (degenerate multiplet was not fully resolved).
+- Re(lambda) > 0 for any returned eigenvalue of L (unphysical: Lindbladian eigenvalues must have Re <= 0).
 
-**Phase to address:** Two-exponential fitting implementation (early phase). Must be the FIRST thing validated before using two-exp fits for any downstream diagnostic.
+**Phase to address:** Initial Krylov integration phase. This is the first thing to get right. Wrap in a validation test that compares Krylov vs dense at n=4.
+
+**Memory/time context:** No additional memory cost -- this is about choosing the right algorithm parameters, not about memory.
 
 ---
 
-### Pitfall 2: Anti-Hermitian Defect Blow-Up from rho^{-1/4} at Low Temperature
+### Pitfall 2: Krylov Subspace Memory Blowup at Large System Sizes
 
 **What goes wrong:**
-The KMS similarity transform uses `rho^{1/4}` and `rho^{-1/4}` to map the Lindbladian to a self-adjoint operator: `L_tilde = rho^{-1/4} * L * rho^{1/4}`. For the Gibbs state `rho = exp(-beta*H) / Z`, the eigenvalues of `rho` are `exp(-beta*E_k) / Z`. At low temperature (beta=10, n=6), the ratio of the smallest to largest eigenvalue of `rho` is `exp(-beta*(E_max - E_min))`. For the Heisenberg chain with n=6, the bandwidth is ~12J, so this ratio is `exp(-120) ~ 10^{-52}`. The `rho^{-1/4}` transform amplifies this by the -1/4 power: `10^{-52*(-1/4)} = 10^{13}`. This means a matrix element of L that couples a high-energy state to a low-energy state gets amplified by a factor of ~10^{13}.
+The Arnoldi iteration stores `krylovdim` vectors, each of length dim^2 = 4^n (ComplexF64 = 16 bytes per element). The memory cost is:
+
+| n (qubits) | dim | dim^2 (vector length) | Bytes per vector | krylovdim=30 | krylovdim=100 |
+|-------------|-----|-----------------------|------------------|--------------|---------------|
+| 4 | 16 | 256 | 4 KB | 120 KB | 400 KB |
+| 6 | 64 | 4,096 | 64 KB | 1.9 MB | 6.4 MB |
+| 8 | 256 | 65,536 | 1 MB | 30 MB | 100 MB |
+| 10 | 1,024 | 1,048,576 | 16 MB | 480 MB | 1.6 GB |
+| 12 | 4,096 | 16,777,216 | 256 MB | 7.5 GB | 25 GB |
+
+At n=12 with krylovdim=100, the Krylov subspace alone consumes 25 GB. Add the scratch vectors for the matvec (Kraus operators, density matrix buffers) and orthogonalization workspace, and the total easily exceeds 32 GB. On a 512 GB cluster node this is fine, but on a 4-thread laptop for benchmarking, n=10 with krylovdim=100 already consumes 1.6 GB just for the Krylov basis.
+
+Additionally, KrylovKit.jl has been documented to allocate ~20x more memory than expected due to internal copies during the orthonormalization process (see GitHub issue #9). Each restart cycle may trigger significant temporary allocations.
 
 **Why it happens:**
-The similarity transform is mathematically well-defined (rho is positive definite, so rho^{-1/4} exists) but numerically catastrophic. In Float64, machine epsilon is ~10^{-16}. A 10^{13} amplification means that numerical noise at the 10^{-16} level becomes noise at the 10^{-3} level in L_tilde. The anti-Hermitian defect `||L_tilde - L_tilde^dagger|| / ||L_tilde||` will be dominated by this amplified noise, NOT by physical violation of KMS detailed balance.
+The Arnoldi method inherently requires storing the full Krylov subspace for orthogonalization. The Krylov-Schur variant used by KrylovKit.jl keeps a portion of the subspace after thick restarts, but the peak memory during each cycle is `krylovdim` full vectors. At n=12, each vector is 256 MB, so even modest krylovdim values create large memory footprints.
 
-**Specific manifestation in QuantumFurnace:** The existing `gibbs_state_in_eigen` (qi_tools.jl line 198) computes the Gibbs state correctly. But `hamiltonian.gibbs` is stored as a `Hermitian` matrix. Computing `rho^{-1/4}` requires eigendecomposition: `rho = V * D * V'`, `rho^{-1/4} = V * D^{-1/4} * V'` where `D^{-1/4} = diag(d_k^{-1/4})`. For d_k ~ 10^{-52}, d_k^{-1/4} ~ 10^{13}. This is computed correctly in principle but the subsequent matrix multiplications lose all precision for components involving small eigenvalues of rho.
-
-**Consequences:**
-- The normality ratio `||[L_tilde, L_tilde^dagger]|| / ||L_tilde||^2` reports a large anti-Hermitian defect even for the exact KMS Lindbladian (BohrDomain), which is known to be exactly self-adjoint in the GNS inner product. This leads to the false conclusion that the Lindbladian construction has a bug.
-- Any diagnostic that relies on L_tilde (e.g., verifying that eigenvalues of L_tilde are real) will be corrupted.
+The second factor is that KrylovKit.jl's internal `basistransform!` function in `orthonormal.jl` creates temporary copies during the modified Gram-Schmidt process with iterative refinement (the default orthogonalizer `ModifiedGramSchmidtIR()`).
 
 **How to avoid:**
-1. **Truncate the Gibbs state spectrum.** When computing `rho^{-1/4}`, set a floor on the eigenvalues: `d_k_floor = max(d_k, epsilon_floor)` where `epsilon_floor ~ 1e-12`. This limits the amplification to `(1e-12)^{-1/4} ~ 5600`, which is manageable. Document that this truncation limits the diagnostic to the "thermally accessible" subspace.
-2. **Work in the projected subspace.** Identify the k eigenvalues of rho with `d_k > threshold` (e.g., threshold = 1e-10 * max(d_k)). Project L onto this k-dimensional subspace, then compute the similarity transform in the reduced space. This is mathematically cleaner than truncation.
-3. **Use the normality ratio relative to the projected norm.** Report `||anti-Hermitian part of L_tilde_projected|| / ||L_tilde_projected||` where both norms are in the projected subspace.
-4. **Validate against BohrDomain.** For BohrDomain (exact KMS), the anti-Hermitian defect after projection should be at machine precision (~1e-14). If it is not, the projection threshold is too aggressive. For TrotterDomain, the defect measures the actual KMS violation from Trotterization.
-5. **Report the condition number** `max(d_k)/min(d_k)` and warn when it exceeds 10^{10}.
+1. **Compute memory budget before running.** Before launching eigsolve, compute `mem_estimate = krylovdim * 4^n * 16 * 1.5` (the 1.5x factor accounts for KrylovKit internals). If this exceeds available RAM, reduce krylovdim or abandon the run.
+2. **Start with small krylovdim and increase.** Use krylovdim=30 as default (KrylovKit's default). If convergence fails, increase to 50, then 100. Log memory usage at each step.
+3. **Use maxiter to compensate for small krylovdim.** More restarts with a smaller subspace can converge with less peak memory. Set maxiter=200-500 when krylovdim is kept small.
+4. **For n=12, target krylovdim=30-50.** At krylovdim=50, the Krylov subspace is ~12.5 GB. With scratch space and Julia overhead, total memory should be under 20 GB. This is feasible on a 512 GB node.
+5. **Profile with `Base.summarysize` or `@allocated`.** Wrap the eigsolve call and measure peak allocation to catch memory surprises early.
+6. **Consider Float32 for exploratory runs at n=12.** Halves the Krylov subspace memory. But see Pitfall 7 on precision -- only use this for rough gap estimates, not for validation.
 
 **Warning signs:**
-- Anti-Hermitian defect > 1e-6 for BohrDomain (should be ~0 for exact KMS).
-- The defect INCREASES when switching from TrotterDomain to BohrDomain (impossible if code is correct).
-- `rho^{-1/4}` matrix has entries > 10^{10}.
+- Julia GC activity spikes (visible via `GC.gc_live_bytes()` or `--track-allocation=user`).
+- System swap usage increases (check `/proc/meminfo` or `free -h`).
+- OOM kill on Linux (the process simply disappears).
+- Eigsolve taking hours at n=12 when it took minutes at n=10 (may indicate thrashing rather than computation).
 
-**Phase to address:** Anti-Hermitian defect diagnosis phase. The truncation/projection strategy must be designed BEFORE computing any similarity transforms.
+**Phase to address:** Memory budgeting phase. Must be established BEFORE attempting n>=10 runs. Build a `memory_estimate(n_qubits, krylovdim)` utility function.
 
 ---
 
-### Pitfall 3: Effective Rate lambda_eff(t) Divergence at Sign Changes
+### Pitfall 3: Vectorization Convention Mismatch (Column-Stacking vs Row-Stacking)
 
 **What goes wrong:**
-The effective rate is defined as `lambda_eff(t) = -d/dt log|Delta(t)|` where `Delta(t) = <O>(t) - <O>_ss` is the observable deviation from steady state. In practice this is computed as `lambda_eff(t_i) = -log|Delta(t_{i+1})/Delta(t_i)| / dt`. When `Delta(t)` passes through zero (sign change due to noise or oscillation), the ratio `Delta(t_{i+1})/Delta(t_i)` becomes negative, and `log(negative)` is undefined. Even near a zero crossing, `|Delta(t_{i+1})/Delta(t_i)|` can be astronomically large or small, producing NaN, +Inf, or -Inf in lambda_eff.
+The existing dense Lindbladian construction in `qi_tools.jl` uses the column-stacking (Watrous) convention for vectorization:
+
+```
+vec(rho) = [rho[:,1]; rho[:,2]; ...]   (column-major, Julia default)
+L * vec(rho) = vec(L_super(rho))
+```
+
+where the superoperator satisfies:
+```
+L_super(rho) = sum_k (A_k rho A_k^dagger - 0.5 {A_k^dagger A_k, rho})
+```
+
+The vectorized form uses `kron(A, conj(A))` for the sandwich term (line 77 of qi_tools.jl) and `kron(A^dagger A, I)` and `kron(I, (A^dagger A)^T)` for the anticommutator terms (lines 80-81). This is the standard column-stacking convention where `vec(AXB) = (B^T kron A) vec(X)`.
+
+When implementing the matrix-free matvec, the operator must apply the Lindbladian to a vectorized density matrix and return the vectorized result. The crucial operation is:
+
+```julia
+rho = reshape(v, dim, dim)     # un-vectorize
+result = L_action(rho)          # apply Lindbladian
+return vec(result)              # re-vectorize
+```
+
+If `reshape` and `vec` use different conventions (e.g., if someone writes `reshape(v, dim, dim)'` to get row-major or uses `permutedims`), the result is silently wrong. Julia's `vec` and `reshape` are both column-major by default, so this is consistent **as long as nobody transposes**.
+
+The specific trap: the existing Kraus-based step function (`_jump_contribution!` for thermalization in jump_workers.jl) operates on density matrices directly (not on vectorized form). When wrapping this for Krylov matvec, the temptation is to copy the Kraus application logic. But the Kraus operators are applied as `A_w * rho * A_w^dagger` (sandwich), while the vectorized Lindbladian applies `kron(A_w, conj(A_w)) * vec(rho)`. These are equivalent ONLY under column-major vectorization.
 
 **Why it happens:**
-For trajectory-averaged observables, `Delta(t)` is the mean over N trajectories. At late times when `|Delta(t)|` is comparable to the statistical noise `sigma/sqrt(N)`, the sign of Delta(t) fluctuates randomly between consecutive time points. This happens at `t ~ (1/gap) * log(A * sqrt(N) / sigma)`. For n=4 with gap~0.17, A~1, N=20000, sigma~1: `t ~ 6 * log(141) ~ 30`. Beyond t~30, lambda_eff is dominated by noise.
+The existing codebase has two representation pathways that have never needed to interoperate:
+1. Dense Lindbladian (dim^2 x dim^2 matrix) built via `construct_lindbladian` using `_kron!` and `_vectorize_liouv_diss_and_add!`. This uses column-major vec.
+2. Trajectory stepping (`step_along_trajectory!`) which works with state vectors psi, never with vectorized density matrices.
 
-Even at earlier times, the observable may have oscillatory components (from non-zero imaginary parts of Lindbladian eigenvalues, see v1.3 Pitfall 1) that cause Delta(t) to change sign. Multi-exponential decay where the fast component has a different sign from the slow component also causes a zero crossing.
-
-**Specific manifestation in QuantumFurnace:** The existing trajectory infrastructure returns `measurements_mean` as a matrix (convergence.jl). The effective rate plot requires computing `Delta(t) = measurements_mean[i, :] .- O_ss` and then the discrete derivative of `log|Delta|`. A naive implementation will produce NaN at every zero crossing.
-
-**Consequences:**
-- The effective rate plot has gaps or spikes that look like bugs but are physically meaningful (they indicate the boundary of the usable fitting window).
-- Automatic fitting window selection algorithms that scan lambda_eff for a plateau will crash or produce nonsensical windows if they encounter NaN/Inf.
-- Plotting lambda_eff with NaN values causes gaps in plots that confuse interpretation.
+The new Krylov path introduces a third pathway: matrix-free matvec that must be consistent with pathway (1) for validation but uses the computational approach of pathway (2). Mixing conventions between these pathways produces wrong eigenvalues.
 
 **How to avoid:**
-1. **Guard the log.** Use `lambda_eff(t_i) = -log(max(|Delta(t_{i+1})/Delta(t_i)|, epsilon)) / dt` where `epsilon = 1e-15`. This prevents NaN but produces a large negative lambda_eff at zero crossings.
-2. **Mark invalid points explicitly.** Return lambda_eff as a vector of `Union{Float64, Nothing}` or use NaN with a companion boolean mask `valid[i]`. The plotting and window selection code must respect this mask.
-3. **Compute lambda_eff from a smoothed Delta(t).** Apply a Savitzky-Golay filter or running median to Delta(t) before computing the log-derivative. This suppresses the single-point noise that causes sign flips. BUT: smoothing introduces bias in the effective rate at early times where Delta(t) changes rapidly. Use a smoothing window that is small compared to 1/gap.
-4. **Use absolute value consistently.** Work with `|Delta(t)|` throughout, not `Delta(t)`. The effective rate is well-defined for `|Delta(t)|` as long as it is monotonically decreasing. If `|Delta(t)|` is not monotonically decreasing, that itself is diagnostic information (indicates multi-exponential structure or oscillations).
-5. **Define a noise floor cutoff.** Compute `noise_floor(t) = std_over_trajectories(O(t)) / sqrt(N)`. Exclude time points where `|Delta(t)| < 3 * noise_floor(t)` from the lambda_eff computation entirely.
+1. **Use Julia's native `vec()` and `reshape(v, dim, dim)` everywhere.** Never use `permutedims`, `transpose`, or `PermutedDimsArray` in the vectorization/unvectorization step.
+2. **Write a round-trip test:** Build the dense Lindbladian L_dense for n=4. For 10 random density matrices rho, verify that `L_dense * vec(rho) == vec(L_matvec(rho))` to machine precision. This is the single most important validation test.
+3. **Put the vectorization convention in a docstring and NEVER deviate.** The convention is: `vec(rho)` stacks columns, `reshape(vec_rho, dim, dim)` recovers the density matrix.
+4. **Be explicit about the Kraus-to-Lindbladian relationship.** The Lindbladian action is `L(rho) = sum_k (A_k rho A_k^dagger) - rho` (after normalization). The CPTP channel is `E(rho) = sum_k K_k rho K_k^dagger`. These are related by `L = (E - I) / delta`. Implement the matvec as the Lindbladian action, NOT as the channel action, to match the dense L matrix.
 
 **Warning signs:**
-- lambda_eff contains NaN or Inf values.
-- lambda_eff has sharp spikes (>10x the median value) at isolated time points.
-- lambda_eff oscillates with amplitude comparable to the plateau value.
+- The round-trip test fails: `norm(L_dense * vec(rho) - vec(L_matvec(rho))) > 1e-10`.
+- The Krylov steady-state eigenvector, when reshaped to a density matrix, is not Hermitian.
+- The spectral gap from Krylov disagrees with dense by more than the tolerance but the steady state eigenvalue is correct (indicating the matvec is partially correct but has a sign or transpose error).
 
-**Phase to address:** Effective rate plot implementation. The noise floor cutoff and sign-change handling must be built into the lambda_eff computation function, not handled ad-hoc by the caller.
+**Phase to address:** Core matvec implementation phase. The round-trip test must pass before ANY Krylov eigensolving is attempted.
 
 ---
 
-### Pitfall 4: Richardson Extrapolation Making Things Worse (Wrong Error Structure)
+### Pitfall 4: CPTP Channel vs Lindbladian Spectrum Confusion
 
 **What goes wrong:**
-Richardson extrapolation assumes the error in the gap estimate has the form `gap_est(delta) = gap_exact + C*delta^p + O(delta^{p+1})` for some known order p (typically p=1 or p=2). The formula then cancels the leading error term. Quick-30 conclusively proved that the gap estimation error does NOT follow this structure: the error/delta ratio varied by 96x across delta=0.1, 0.01, 0.001, and Richardson extrapolation provided only 1.0x improvement. Applying Richardson extrapolation when the assumption is violated can produce results that are WORSE than the un-extrapolated estimate.
+The project has two operator representations:
+1. **Lindbladian L**: eigenvalues are {0, lambda_1, lambda_2, ...} with Re(lambda_k) < 0. The spectral gap is |Re(lambda_1)|.
+2. **CPTP channel E = I + delta*L**: eigenvalues are {1, mu_1, mu_2, ...} with |mu_k| < 1 (for small enough delta). The spectral gap is 1 - |mu_1|.
+
+These are related by `mu_k = 1 + delta * lambda_k`, so `|Re(lambda_1)| = (1 - Re(mu_1)) / delta` approximately. But this relationship holds exactly only in the limit delta -> 0. For finite delta:
+- The channel may not be CPTP if delta is too large (eigenvalues escape the unit disk).
+- The channel eigenvalues have a delta-dependent shift: `mu_k = 1 + delta * lambda_k` is exact for the relationship between the generators, but the physical channel eigenvalues also acquire O(delta^2) corrections from the Trotterized evolution.
+
+The dangerous mistake: computing the Krylov eigenvalues of the CPTP channel E (which is what the existing trajectory framework naturally provides as a matvec) and then forgetting to convert back to Lindbladian eigenvalues, or converting with the wrong delta, or using the Trotterized channel eigenvalues as if they were exact Lindbladian eigenvalues.
 
 **Why it happens:**
-The gap estimation error has at least three sources with different delta-dependence:
-1. **Trotter discretization error:** O(delta) per trajectory step, accumulates over T/delta steps, but this affects the trajectory-averaged density matrix, NOT the fitted gap rate directly. Quick-32 confirmed this error is small (~1e-3) and does decrease monotonically with delta.
-2. **Fitting model error:** The single-exponential fit captures a weighted average of multiple decay modes. Different delta values produce different effective Kraus channels that excite spectral modes with different weights, causing the "effective gap" from fitting to vary non-monotonically with delta. This is delta-independent in magnitude (~37-49% for Mz_stagg) but delta-dependent in direction.
-3. **Statistical noise:** Adds O(1/sqrt(N)) noise to the gap estimate, uncorrelated with delta.
-
-Richardson extrapolation cancels only source (1), which is already the smallest contributor. Source (2), which dominates, has NO clean power-law dependence on delta. Applying Richardson amplifies source (2) because the formula `gap_rich = (delta2 * gap(delta1) - delta1 * gap(delta2)) / (delta2 - delta1)` subtracts two similar numbers, amplifying their fitting-error differences.
-
-**Specific manifestation in QuantumFurnace:** Quick-30 data (30-SUMMARY.md lines 66-72): for the (0.01, 0.1) pair, Richardson gave 49.83% error vs 48.72% for the finer estimate alone. For the (0.001, 0.01) pair, Richardson gave 35.88% vs 37.17%. The "improvement" is within noise, and for some observables Richardson makes things noticeably worse.
+The existing trajectory code (`step_along_trajectory!` in trajectories.jl) implements a single step of the CPTP channel. It is natural to wrap this as a matvec for the channel E, not for the Lindbladian L. But the diagnostics infrastructure (`extract_leading_eigendata`, `eigenbasis_overlap_analysis`) works with the Lindbladian L. Mixing these two representations leads to factor-of-delta errors or comparison bugs.
 
 **How to avoid:**
-1. **Do NOT apply Richardson extrapolation to single-exponential gap estimates.** This is a settled conclusion from Quick-30. The code should not even offer this as an automatic option.
-2. **For two-exponential fits:** Re-evaluate whether Richardson is viable by checking if the TWO-exponential gap estimate has clean O(delta^p) error structure. Run the same delta-sweep experiment as Quick-30 but with two-exponential fitting. Only if error/delta is approximately constant across 3+ delta values should Richardson be applied.
-3. **If Richardson is applied:** Always report the un-extrapolated estimates alongside the extrapolated one, and flag when the extrapolated estimate is OUTSIDE the range of the un-extrapolated estimates (which indicates the extrapolation diverged).
-4. **Implement a delta-convergence diagnostic BEFORE Richardson.** Plot the fitted gap vs delta for 3+ delta values. If the curve is monotonic with consistent curvature, Richardson is appropriate. If the curve is non-monotonic or noisy, Richardson is contraindicated. This diagnostic should be a required precondition, not an optional check.
+1. **Decide up front: Krylov on L or Krylov on E.** The Lindbladian matvec computes `L(rho)` directly. The channel matvec computes `E(rho)`. They have different spectra.
+2. **Recommendation: Implement Krylov on L (Lindbladian) for consistency with dense diagnostics.** The dense code uses `eigen(L)`. The Krylov code should target the same operator. Build the Lindbladian matvec from scratch using the Kraus operators: `L(rho) = (1/delta) * (E(rho) - rho)`.
+3. **If using the channel E:** Target `:LM` (largest magnitude) to find eigenvalue 1 and the spectral gap eigenvalue. Convert: `lambda_k = (mu_k - 1) / delta`. Document this conversion prominently.
+4. **Cross-validate:** At n=4, compute both the dense Lindbladian eigenvalues and the dense channel eigenvalues. Verify the relationship `mu_k = 1 + delta * lambda_k` holds to expected precision.
+5. **Watch the delta dependence.** The spectral gap from the channel converges to the Lindbladian gap only as delta -> 0. If using the channel, run at multiple delta values and extrapolate (Richardson extrapolation from v1.4 diagnostics).
 
 **Warning signs:**
-- Richardson-extrapolated gap is outside the range [min(gap_estimates), max(gap_estimates)].
-- The extrapolated gap is negative.
-- The "improvement factor" (error_rich / error_finest) is > 0.9 (no improvement) or > 1.0 (degradation).
+- The gap from Krylov-on-channel is delta-dependent (changes significantly when delta is halved).
+- The gap from Krylov-on-channel disagrees with dense L gap by more than O(delta) relative error.
+- Eigenvalues of the channel have |mu| > 1 (CPTP violation, delta too large).
 
-**Phase to address:** Delta-convergence diagnosis phase. The diagnostic must PRECEDE any Richardson extrapolation. The extrapolation itself should be gated on a monotonicity check.
+**Phase to address:** Matvec design phase. The L-vs-E decision must be made and documented before implementation. The recommended approach is to implement `L(rho) = (E(rho) - rho) / delta` to reuse existing Kraus infrastructure.
 
 ---
 
-### Pitfall 5: Bootstrap Storing Individual Trajectory Data Blows Memory for n=6
+### Pitfall 5: Basis Mismatch Between Krylov Matvec and Dense Diagnostics
 
 **What goes wrong:**
-Bootstrap error bars on the spectral gap require access to per-trajectory (or per-batch) observable time series, not just the grand mean. The naive implementation stores per-trajectory data: a matrix of size `(n_obs, n_saves, n_traj)`. For n=6 (dim=64), 8 observables, save_every=10, delta=0.01, mixing_time=50 (5000 steps, 500 saves), and 20,000 trajectories: 8 * 500 * 20000 * 8 bytes = 640 MB. For 50,000 trajectories: 1.6 GB. This exceeds reasonable memory budgets for a diagnostic tool and prevents running multiple bootstrap analyses in a session.
+The existing codebase operates in different bases depending on the domain:
+- **BohrDomain**: Hamiltonian eigenbasis. Jump operators stored as `jump.in_eigenbasis = eigvecs' * jump.data * eigvecs`.
+- **TrotterDomain**: Trotter eigenbasis. Jump operators transformed via `trotter.eigvecs' * jump.data * trotter.eigvecs`.
+- **Diagnostics** (`run_exact_diagnostics`): Takes the Lindbladian L and works in whichever basis L was constructed in.
+
+The Krylov matvec must operate in the **same basis** as the dense Lindbladian was constructed in. If the matvec applies Kraus operators in the computational basis while the dense L was built in the eigenbasis, the eigenvalues will be correct (eigenvalues are basis-independent) but the eigenvectors will be in different bases, making cross-validation of eigenvectors impossible.
+
+More dangerously: if the matvec uses jump operators from `jump.data` (computational basis) but the Hamiltonian evolution uses `hamiltonian.eigvecs` (eigenbasis), the intermediate steps may be inconsistent. The existing `construct_lindbladian` in `furnace.jl` carefully selects the basis via `ham_or_trott` (line 48-53) and uses `jump.in_eigenbasis`. The matrix-free path must replicate this basis selection exactly.
 
 **Why it happens:**
-The existing `run_observable_trajectories` (trajectories.jl) only returns `measurements_mean`, the average over all trajectories. It does not store per-trajectory data. Adding bootstrap requires either: (a) storing all per-trajectory data, (b) re-running trajectories with different subsets, or (c) accumulating per-batch statistics during the run. Option (a) is the obvious implementation but is memory-prohibitive. Option (b) is wasteful (re-runs trajectories). Option (c) is efficient but requires modifying the trajectory runner.
-
-**Specific manifestation in QuantumFurnace:** The existing batch infrastructure in `run_trajectories_convergence` (convergence.jl) already computes per-batch density matrices but does NOT store per-batch observable time series. The `_run_batch_no_obs!` function accumulates the density matrix sum. The `_run_chunk_with_obs!` function accumulates measurements into `mean_data_local` but averages across all trajectories in the chunk. There is no existing mechanism to return per-batch measurement arrays.
+The basis selection logic is scattered across multiple files: `furnace.jl` chooses `ham_or_trott`, `furnace_utensils.jl` precomputes domain-specific data, `jump_workers.jl` applies jumps in the chosen basis. When building a new matrix-free path, it is easy to accidentally use `jump.data` instead of `jump.in_eigenbasis`, or to forget that the TrotterDomain requires `trotter.eigvecs` instead of `hamiltonian.eigvecs`.
 
 **How to avoid:**
-1. **Block bootstrap over trajectory batches.** Modify the trajectory runner to run in fixed batches (e.g., batch_size=200) and store per-BATCH mean time series: `(n_obs, n_saves, n_batches)`. For 100 batches of 200: 8 * 500 * 100 * 8 bytes = 3.2 MB. Bootstrap then resamples over the 100 batch indices, recomputing the mean for each bootstrap sample as a weighted sum of batch means.
-2. **Online sufficient statistics.** During the trajectory run, maintain two running accumulators: `sum_obs[i, t]` and `sum_obs_sq[i, t]` (the latter for variance estimation). This requires zero additional memory beyond 2 * n_obs * n_saves floats, but only gives the normal-approximation confidence interval, not the full bootstrap distribution.
-3. **Two-pass approach.** First pass: run all trajectories, store only the grand mean. Second pass: run bootstrap samples (smaller batches) with different seeds. This avoids storing any per-trajectory data but costs ~2x the compute.
-4. **Recommendation: Option 1 (block bootstrap) with batch_size=200.** This matches the existing adaptive sampling batch structure and provides genuine bootstrap distributions while keeping memory at ~3 MB. The block bootstrap is valid because trajectories within different batches are independent (different RNG seeds via `Xoshiro(master_seed + traj_id)`).
+1. **Reuse the existing precomputation pipeline.** Call `_precompute_data(config, ham_or_trott)` exactly as `construct_lindbladian` does. This ensures the same domain-specific setup.
+2. **The matrix-free function should accept the same (jumps, config, hamiltonian; trotter) signature** as `construct_lindbladian`. Internally, it should replicate the basis selection: `ham_or_trott = config.domain isa TrotterDomain ? trotter : hamiltonian`.
+3. **Validate at n=4 in BOTH BohrDomain and TrotterDomain.** Build the dense L for BohrDomain, compare with Krylov matvec for BohrDomain. Repeat for TrotterDomain. Both must match.
+4. **Use `jump.in_eigenbasis` exclusively in the matvec, never `jump.data`.** The `.data` field is in computational basis and is only used for constructing `.in_eigenbasis`.
 
 **Warning signs:**
-- Julia process memory exceeds 4 GB during bootstrap (for n=6 simulations that should use ~500 MB).
-- Out-of-memory crashes during bootstrap with large trajectory counts.
-- Bootstrap resampling takes longer than the original trajectory run (indicates data is being re-loaded from disk).
+- Round-trip test passes for BohrDomain but fails for TrotterDomain (or vice versa).
+- Eigenvectors from Krylov, when reshaped and compared to dense eigenvectors, are rotated by a unitary transformation (basis mismatch).
+- The fixed point from Krylov does not match the Gibbs state in the expected basis.
 
-**Phase to address:** Bootstrap error bar implementation. The per-batch storage mechanism must be designed before any bootstrap code is written. Modify `run_observable_trajectories` or create a new variant.
+**Phase to address:** Matvec implementation phase. Include TrotterDomain tests from the beginning, not as an afterthought.
 
 ---
 
-### Pitfall 6: Automatic Window Selection Fails Silently on Multi-Exponential Data
+### Pitfall 6: Non-Convergence of Arnoldi for Clustered or Degenerate Eigenvalues
 
 **What goes wrong:**
-The "golden window" for single-exponential fitting is the time range where the fast modes have decayed but the signal is still above the noise floor. Automatic window selection looks for this window by scanning the effective rate lambda_eff(t) for a plateau. On clean single-exponential data, this works well: lambda_eff is approximately constant for t > 3/g2 and t < T_noise.
+The Lindbladian of a system with symmetries (e.g., SZ conservation in the Heisenberg chain) has eigenvalue multiplets -- groups of eigenvalues with identical or nearly identical real parts but different imaginary parts. The existing diagnostics code (`detect_multiplets` in diagnostics.jl) already handles this for dense eigendecomposition. But Krylov methods struggle with degenerate or clustered eigenvalues:
 
-But with multi-exponential data (which is the reality for trajectory observables), lambda_eff has a monotonically DECREASING profile from g2 at early times to g1 at late times, with no clean plateau. The automatic selector either: (a) picks the entire time range (too wide, biased by fast modes), (b) picks the late-time tail (too narrow, dominated by noise), or (c) declares failure and returns no window.
+1. **Degenerate eigenvalues:** If lambda_1 and lambda_2 have the same value, the Arnoldi iteration may return a random linear combination of their eigenvectors, or fail to converge to both.
+2. **Near-degenerate eigenvalues:** If |lambda_1 - lambda_2| is very small relative to the Krylov subspace dimension, the Krylov-Schur restart may not separate them. The residual norm for their Schur vectors may stagnate above the tolerance.
+3. **Complex conjugate pairs:** For a real Lindbladian (which this is NOT -- the Lindbladian is complex), eigenvalues come in conjugate pairs. For the complex Lindbladian here, this is not guaranteed, but near-conjugate pairs may still appear and cause convergence difficulties.
+
+The n=4 Heisenberg chain has well-separated eigenvalues (the exact diagnostics show distinct multiplets). But at n=8+, the eigenvalue density near the spectral gap increases, and multiplets become denser. The probability of near-degeneracy at the gap boundary increases with system size.
 
 **Why it happens:**
-The concept of a "golden window" assumes a single dominant decay mode in the data. For the n=4 Heisenberg chain, the spectral gap mode has overlap with most observables, but the second decay mode also has significant overlap (Quick-30 showed this causes 37-49% single-exponential fitting error). The transition from the "fast mode dominated" regime to the "slow mode dominated" regime is gradual, spanning several decay times. There is no sharp boundary.
+The Arnoldi iteration builds a Krylov subspace by repeatedly applying the operator. When two eigenvalues are close, the Krylov subspace cannot distinguish their eigenvectors until enough iterations have been performed. The number of iterations needed grows as ~O(1/gap_between_eigenvalues). With thick restarts, the Krylov-Schur algorithm can partially mitigate this, but it still struggles when the gap between eigenvalues is smaller than the achievable residual norm.
 
-**Consequences:**
-- Silent failure: the automatic selector returns a window, but it is not the "right" window. The resulting gap estimate is biased, and the user does not know the window was problematic.
-- Window selection depends on noise realization: running with different seeds produces different windows, which produce different gap estimates. This inflates the apparent bootstrap uncertainty but does not capture the systematic bias from window placement.
-- The two-exponential fit (which is supposed to eliminate the need for careful window selection) is itself sensitive to the fitting window (see Pitfall 1), creating a circularity.
+KrylovKit.jl has a documented issue (#23, #38) where degenerate eigenvalues cause convergence failure. The v0.10 release added `BlockLanczos` for Hermitian problems with degeneracies, and `BiArnoldi` for non-Hermitian problems, but the standard Arnoldi `eigsolve` still has this limitation.
 
 **How to avoid:**
-1. **Do NOT rely on automatic window selection as the sole method.** Always offer manual override and report which window was selected so the user can verify.
-2. **Implement multiple window strategies and compare.** Run fits with: (a) skip_initial=0.1, (b) skip_initial=0.3, (c) skip_initial=0.5, and (d) the noise-floor-determined window. Report all four gap estimates. If they agree within bootstrap error bars, the result is robust. If they disagree significantly, flag the result as window-dependent.
-3. **Use the effective rate plot as a DIAGNOSTIC, not as an input to automatic selection.** Plot lambda_eff(t) and let the user identify the plateau visually. The automatic selector is a convenience, not a substitute for judgment.
-4. **For two-exponential fits: use the full signal window.** The whole point of two-exponential fitting is to capture both modes simultaneously, eliminating the need for window selection. Use skip_initial=0.0 (or a very small value to avoid initial-state artifacts) and fit the full time range. If the two-exponential fit converges, it implicitly handles the mode separation.
-5. **Plateau detection with explicit quality metric.** If implementing automatic selection: compute lambda_eff in rolling windows of width W. For each window position, compute the coefficient of variation (std/mean) of lambda_eff within the window. The "best" window is where this CV is minimized. Report the CV value so the user knows how flat the plateau actually is. A CV > 0.2 means there is no reliable plateau.
+1. **Request more eigenvalues than needed.** Instead of `howmany=2`, use `howmany=6` or `howmany=10`. This gives the Krylov subspace room to resolve nearby eigenvalues. Post-filter to find the spectral gap.
+2. **Increase krylovdim.** The rule of thumb is `krylovdim >= 3 * howmany` (KrylovKit documentation). For near-degenerate problems, use `krylovdim >= 5 * howmany`.
+3. **Always check `info.converged`.** KrylovKit does NOT warn if fewer eigenvalues converge than requested (prior to v0.10 defaults). Always assert `info.converged >= howmany` and handle the failure case.
+4. **Use multiple random starting vectors.** If convergence fails from one starting vector, try others. Different starting vectors project differently onto the eigenspaces and may help.
+5. **Consider BiArnoldi** (KrylovKit v0.10+) if both left and right eigenvectors are needed, which the existing diagnostics infrastructure requires for overlap analysis.
+6. **For the spectral gap specifically:** The gap eigenvalue must have converged. Even if some higher eigenvalues fail to converge, the gap estimate may still be reliable if the first few eigenvalues converged.
 
 **Warning signs:**
-- The automatic selector returns a window spanning less than 2 decay times (not enough data for reliable fitting).
-- Different trajectory seeds produce windows that differ by more than 30%.
-- The gap estimate changes by more than 20% when the window is shifted by +/- 10%.
+- `info.converged == 0` or `info.converged == 1` when 2+ were requested.
+- Running eigsolve twice with different random starting vectors gives different eigenvalues.
+- The returned eigenvalues change significantly when krylovdim is increased by 50%.
+- Residual norms plateau above the tolerance and do not decrease with more iterations.
 
-**Phase to address:** Automatic window selection implementation. Must be designed alongside, not after, the effective rate plot.
+**Phase to address:** Krylov convergence tuning phase. After basic matvec is validated, systematically test convergence at n=6,8,10 and build adaptive parameter selection.
 
 ---
 
-### Pitfall 7: Symmetry Sector Labels Ambiguous Near Degeneracies
+### Pitfall 7: Numerical Precision Loss in Matrix-Free Matvec
 
 **What goes wrong:**
-Symmetry sector labeling assigns quantum numbers (like total Sz, crystal momentum k, or parity) to Lindbladian eigenvalues. This requires identifying which symmetry sector each eigenvector belongs to by computing overlap with symmetry projectors. When two eigenvalues are nearly degenerate (|lambda_i - lambda_j| / |lambda_i| < 1e-6), the corresponding eigenvectors are arbitrary linear combinations within the degenerate subspace, and the symmetry labels become ambiguous or wrong.
+The matrix-free Lindbladian action computes `L(rho) = (1/delta) * (sum_k K_k rho K_k^dagger - rho)` or equivalently the Lindblad dissipator directly. Each evaluation involves:
+1. Applying Kraus/jump operators to a density matrix (matrix-matrix multiplications).
+2. Subtracting the original density matrix (cancellation).
+3. Summing over all jump operators and frequency components.
+
+The subtraction in step 2 is catastrophic cancellation when `E(rho)` is close to `rho` (which it always is for small delta). If `delta = 0.01` and `E(rho) - rho` has relative magnitude delta, then dividing by delta recovers order-1 quantities, but the absolute precision is reduced by a factor of delta. In Float64, this means losing ~2 digits of precision for delta=0.01.
+
+More seriously, if the matvec accumulates contributions from many jump operators and frequency components (as the existing `construct_lindbladian` does), rounding errors accumulate. For n=12 with 3*n=36 jump operators and ~2^11 frequency components each, the total number of floating-point operations per matvec is O(dim^2 * n_jumps * n_freqs) = O(16M * 36 * 2048) ~ 10^12 FLOPs. Rounding errors at the 10^{-16} level accumulate as sqrt(10^12) * 10^{-16} = 10^{-10}. This limits the achievable Krylov tolerance to ~10^{-10} at best for n=12.
+
+Additionally, each Krylov iteration applies the matvec once and orthogonalizes against all previous Krylov vectors. Orthogonalization errors compound over iterations. With krylovdim=50 iterations, the accumulated orthogonality loss can be O(krylovdim * eps_matvec).
 
 **Why it happens:**
-The `eigen()` decomposition of the Liouvillian returns orthogonal eigenvectors, but within a degenerate subspace, any orthonormal basis is valid. Julia's `eigen()` (LAPACK) picks a basis that is numerically convenient, not one that respects the symmetry. If eigenvalues lambda_1 and lambda_2 differ by less than the numerical precision of the eigendecomposition (~1e-12 for a well-conditioned matrix), the returned eigenvectors v1 and v2 will be random linear combinations of the true symmetry eigenstates. Applying a symmetry projector P_k to v1 will give a non-zero overlap for MULTIPLE symmetry sectors, making the assignment ambiguous.
+The matrix-free approach trades memory for computation. Instead of storing the dim^2 x dim^2 Lindbladian matrix (impossible at n>=8), we recompute the action each time. But each recomputation is subject to rounding errors, and these errors are not identical across iterations (unlike a stored matrix, where the matrix-vector product has consistent rounding behavior). This means the linear operator seen by Arnoldi is not exactly the same at each iteration -- it has a tiny fluctuating perturbation from rounding errors.
 
-**Specific manifestation in QuantumFurnace:** The existing `eigenbasis_overlap_analysis` (gap_estimation.jl line 279) uses `eigen(L)` and sorts by `abs.(real.(F.values))`. For the n=6 periodic Heisenberg chain, Quick-25 showed the gap mode lives in the k=pi momentum sector. The second gap mode (lambda_3) may be in a different sector. If lambda_2 and lambda_3 are close, their sector labels will be mixed up.
-
-**Consequences:**
-- The symmetry sector analysis reports contradictory labels for nearly degenerate eigenvalues.
-- The "gap mode sector" diagnostic incorrectly identifies which sector the gap mode belongs to, leading to wrong observable selection recommendations.
-- Users may conclude that a symmetry-breaking observable is needed when the symmetry assignment itself is wrong.
+The catastrophic cancellation in `(E(rho) - rho) / delta` is particularly insidious because it looks like the code is working (the magnitudes are correct) but the noise floor is elevated.
 
 **How to avoid:**
-1. **Detect near-degeneracies explicitly.** Before labeling, compute pairwise separations `|lambda_i - lambda_j|` for eigenvalues near the gap. Flag any pair with separation < threshold (e.g., 1e-8 * |lambda_gap|) as "ambiguous sector assignment."
-2. **Use simultaneous diagonalization.** Instead of diagonalizing L alone, diagonalize L together with the symmetry operator (e.g., the translation operator T). The simultaneous eigendecomposition picks a basis that respects the symmetry even within degenerate subspaces. This requires that [L, T] = 0 (which Quick-25 verified for the translation operator).
-3. **Apply symmetry projectors to the degenerate SUBSPACE, not individual eigenvectors.** If lambda_i and lambda_j are nearly degenerate, project the 2D subspace span(v_i, v_j) onto each symmetry sector. Report "this degenerate subspace contains modes from sectors k_a and k_b" rather than "v_i is in sector k_a."
-4. **For practical purposes: label the GAP mode first.** The gap mode is typically non-degenerate (there is a unique slowest decay rate). Label it unambiguously. Only flag the degeneracy issue for higher modes.
+1. **Implement the Lindbladian action directly, NOT as `(E(rho) - rho) / delta`.** Compute `L(rho) = sum_k (A_k rho A_k^dagger - 0.5 * {A_k^dagger A_k, rho})` directly, without the E-I-divide-by-delta pathway. This avoids the catastrophic cancellation. The existing `_vectorize_liouv_diss_and_add!` function computes exactly this in vectorized form; the matrix-free version should compute the same thing in operator form.
+2. **Validate the matvec precision.** At n=4, compute `norm(L_dense * v - L_matvec(v)) / norm(L_dense * v)` for multiple random vectors. This relative error should be at most ~10^{-12} at n=4. Track how it degrades with n.
+3. **Set the Krylov tolerance appropriately.** Do not set `tol=1e-12` if the matvec has 10^{-10} precision. A reasonable tolerance is `tol = max(1e-8, estimated_matvec_precision * 100)`.
+4. **Use the `ModifiedGramSchmidtIR()` orthogonalizer** (KrylovKit default). The iterative refinement step re-orthogonalizes to combat loss of orthogonality. Do NOT switch to plain `ModifiedGramSchmidt()` to save time.
+5. **Consider using the CPTP channel E directly with `:LM`** if the Lindbladian direct computation proves too noisy. The channel avoids the subtraction-and-division step.
 
 **Warning signs:**
-- Two adjacent eigenvalues differ by less than 1e-8 * |gap|.
-- The symmetry projector gives overlap > 0.1 with multiple sectors for a single eigenvector.
-- The sector label changes when a small perturbation (random field h ~ 1e-8) is added to the Hamiltonian.
+- The residual norm reported by KrylovKit plateaus at 10^{-8} or worse despite requesting 10^{-12}.
+- At n=4, the Krylov eigenvalues match dense eigenvalues to only 6-8 digits instead of 12+.
+- The Krylov eigenvectors are not orthogonal to each other (check `abs(dot(v1, v2)) > 1e-6`).
+- The computed steady-state eigenvalue is not close to 0 (for L) or 1 (for E).
 
-**Phase to address:** Symmetry sector labeling implementation. Degeneracy detection must be the first step, before any sector assignment.
+**Phase to address:** Matvec validation phase. Quantify the precision at each system size before trusting the eigenvalue results.
 
 ---
 
 ## Moderate Pitfalls
 
-Mistakes that cause significant debugging time or wrong intermediate results but are recoverable.
-
 ---
 
-### Pitfall 8: Two-Exponential Fit Converges to Negative Amplitude (Cancellation Artifact)
+### Pitfall 8: BLAS Thread Contention During Krylov Iteration
 
 **What goes wrong:**
-The two-exponential model `A1*exp(-g1*t) + A2*exp(-g2*t) + C` has no physical constraint requiring A1, A2 > 0. The optimizer may find that the best fit has A1 > 0 and A2 < 0 (or vice versa), where the two exponentials partially cancel. This produces a curve that looks superficially like an exponential decay but is actually a difference of two exponentials. The fitted g1 in this case does NOT correspond to the spectral gap -- it can be arbitrarily different.
+The Krylov iteration involves dense matrix-vector products (BLAS Level 2) and matrix-matrix products (BLAS Level 3) for orthogonalization. If Julia is started with multiple threads (`-t 4`) and BLAS also uses multiple threads (default on most systems), the total thread count becomes `Julia_threads * BLAS_threads`. On a 4-core laptop, this means 16 threads competing for 4 cores, causing severe performance degradation from context switching and cache thrashing.
+
+The existing trajectory code (`test_threading.jl`) already handles this correctly: it sets `BLAS.set_num_threads(1)` during multi-threaded trajectory sampling and restores afterward. But the Krylov iteration is a different use pattern -- it is inherently serial (each iteration depends on the previous), so Julia threading is not used for the eigensolve itself. However, the matvec (applying the Lindbladian) may benefit from BLAS threads for the matrix-matrix multiplications `A * rho * A'`.
 
 **Why it happens:**
-For trajectory-averaged observables, the expansion `<O>(t) - <O>_ss = sum_k c_k * exp(lambda_k * t)` can have coefficients c_k of either sign, depending on the observable and initial state. If c_1 > 0 and c_2 < 0, then A1 > 0 and A2 < 0 is the physically correct decomposition. But if both c_1, c_2 > 0 and the data has noise, the optimizer might find a spurious solution with one negative amplitude that exploits cancellation to fit noise features.
+At n=12, `rho` is a 4096x4096 matrix. The Kraus application `A_w * rho * A_w'` involves two dim x dim matrix multiplications, each O(dim^3) = O(64 billion) FLOPs. BLAS multithreading is genuinely helpful here -- a single matvec at n=12 takes ~seconds with 1 BLAS thread and ~hundreds of ms with 4 BLAS threads. But if the Krylov iteration also launches Julia threads for something (e.g., parallel Kraus operator application), the two threading levels conflict.
 
 **How to avoid:**
-1. **Constrain amplitudes to be positive** (`lower = [0.0, 0.0, 0.0, 0.0, -Inf]`) if the physics guarantees positive overlap coefficients. For the observables in `build_preset_trajectory_observables`, this is NOT guaranteed -- overlaps can have either sign.
-2. **Instead: flag but do not reject negative amplitudes.** If one amplitude is negative, check whether the other amplitude exceeds the negative one in magnitude at t=0 (which is required for a physically decaying signal). Report "mixed-sign amplitudes" as a diagnostic.
-3. **Detect cancellation.** Compute `A1*exp(-g1*t) + A2*exp(-g2*t)` at t=0 and compare to `|A1| + |A2|`. If `|A1 + A2| < 0.3 * (|A1| + |A2|)`, there is significant cancellation. The fitted rates in this case are unreliable.
+1. **Set BLAS threads = physical cores during Krylov iteration.** The matvec is compute-bound on BLAS operations. Let BLAS use all cores. Do not use Julia `@threads` for the matvec.
+2. **Do NOT parallelize the inner Krylov loop.** KrylovKit's Arnoldi iteration is inherently serial. The only parallelism opportunity is inside the matvec.
+3. **Profile the matvec at n=8 and n=10.** Measure wall-clock time per matvec with 1, 2, 4 BLAS threads. Choose the optimal setting.
+4. **Use `BLAS.set_num_threads()` with a restore pattern** (as in the existing trajectory code). Wrap the eigsolve call in a try-finally that restores the original BLAS thread count.
+5. **For the cluster (512 GB, many cores):** Use BLAS threads = 8-16 for the matvec. Do not launch multiple Krylov eigensolves in parallel (memory constraint dominates).
 
 **Warning signs:**
-- A1 and A2 have opposite signs.
-- `|A1| + |A2|` is much larger than the observed signal amplitude `|Delta(0)|`.
-- The residuals have a characteristic "W" shape (two crossings instead of one).
+- Krylov iteration is slower at n=10 than expected based on n=8 scaling (should scale as ~16x for dim doubling, not 100x).
+- CPU utilization is >100% per core (visible in `top` or `htop`) indicating thread oversubscription.
+- System load average >> number of physical cores.
 
-**Phase to address:** Two-exponential fitting validation tests.
+**Phase to address:** Performance tuning phase, after correctness is established.
 
 ---
 
-### Pitfall 9: Bootstrap Error Bars on lambda_eff(t) Require Per-Batch Time Series
+### Pitfall 9: Wrong Starting Vector for Krylov Iteration
 
 **What goes wrong:**
-Computing bootstrap error bars on the effective rate plot `lambda_eff(t)` requires resampling per-batch observable time series and recomputing lambda_eff for each bootstrap sample. This is a different computation from bootstrap on the fitted gap (which resamples the gap fit). If the implementation only supports bootstrap on the gap parameter, the user cannot get uncertainty bands on the lambda_eff plot.
+KrylovKit's `eigsolve(f, v0, howmany, which)` requires an initial vector `v0` to seed the Krylov subspace. If `v0` has zero or negligible overlap with the target eigenspace, convergence is extremely slow or fails entirely. For the spectral gap, we need overlap with both the steady-state eigenvector (lambda=0) and the gap eigenvector (lambda_1).
+
+The steady-state eigenvector is `vec(rho_beta)` (the vectorized Gibbs state). The gap eigenvector is unknown a priori. If `v0` is orthogonal to the gap eigenvector, the Krylov subspace will not contain any component of that eigenmode, and Arnoldi will converge to higher eigenvalues instead.
+
+A common naive choice is `v0 = randn(ComplexF64, dim^2)`, which has overlap with all eigenmodes in expectation. This works but may converge slowly if the random vector has unusually small overlap with the gap mode.
 
 **Why it happens:**
-The lambda_eff computation involves a nonlinear transformation (log of the ratio) applied to each time point independently. Bootstrapping the fitted gap gives a scalar confidence interval. Bootstrapping lambda_eff(t) gives a function-valued confidence band. These are different quantities and require different implementations.
+For n=12, dim^2 = 16M. A random vector has overlap ~O(1/sqrt(dim^2)) = O(1/4096) with any particular eigenvector. This is usually sufficient for the largest-real-part eigenvalues to emerge, but convergence may take many iterations. For the gap eigenvalue, which is the SECOND-largest real part, convergence requires the first eigenvalue to be resolved first (so the Krylov subspace can "deflate" it), and then the second to emerge from the remaining subspace.
 
 **How to avoid:**
-1. **Design the bootstrap infrastructure to return per-batch time series**, not just per-batch gap estimates. This is the same data structure needed for Pitfall 5 (memory management). Store `batch_measurements[batch_idx][obs_idx, time_idx]` and use it for both gap bootstrap and lambda_eff bootstrap.
-2. **Compute lambda_eff for each bootstrap sample.** For each resampled set of batch indices, compute the resampled mean time series, then compute lambda_eff on that resampled mean. Collect N_bootstrap lambda_eff curves and compute pointwise percentiles for the confidence band.
-3. **Handle NaN propagation.** Some bootstrap samples will have more noise than others, producing NaN in lambda_eff at earlier time points. The confidence band computation must handle NaN: use `nanquantile` or equivalent.
+1. **Use `v0 = vec(rho_0 - rho_beta)` where `rho_0` is a physically motivated initial state** (e.g., maximally mixed state or the all-up state). This removes the steady-state component and enhances the gap-mode component.
+2. **At minimum, use `v0 = randn(ComplexF64, dim^2)` normalized.** This has nonzero overlap with all eigenmodes with probability 1.
+3. **For the channel E:** Use `v0 = vec(rho_0)` where `rho_0` is NOT the Gibbs state. The Gibbs state is the eigenvalue-1 eigenvector, and using it as v0 would miss the gap eigenvalue entirely.
+4. **If convergence is slow, try multiple starting vectors.** Run eigsolve 3 times with different random seeds and take the result with the smallest residual.
 
 **Warning signs:**
-- Bootstrap confidence band on lambda_eff is missing (only scalar gap CI is implemented).
-- The confidence band has gaps at time points where some bootstrap samples produced NaN.
+- `info.converged == 1` but `info.converged < howmany` (only the steady state converged).
+- All returned eigenvalues are near 0 (for L) or near 1 (for E) -- the algorithm found the steady state but nothing else.
+- The number of matvec applications (`info.numops`) is near `maxiter * krylovdim` (exhausted all iterations without convergence).
 
-**Phase to address:** Bootstrap implementation. Design the data flow for both gap bootstrap and lambda_eff bootstrap simultaneously.
+**Phase to address:** Initial Krylov implementation phase. Use the physically motivated starting vector from the beginning.
 
 ---
 
-### Pitfall 10: Testing Two-Exponential Fits Against Stochastic Simulation Output
+### Pitfall 10: Comparing Krylov vs Dense Results Incorrectly
 
 **What goes wrong:**
-Tests for the two-exponential fitting function need test data. Using synthetic data (known amplitudes, rates, noise) validates the fitting algorithm but does NOT test the full pipeline (trajectory simulation -> fitting). Using actual trajectory data makes tests non-deterministic (different seeds give different results) and slow (trajectory simulation dominates test time). The temptation is to test only with synthetic data, which misses integration issues like basis mismatches, wrong steady-state subtraction, or observable normalization errors.
+Cross-validation requires comparing Krylov eigenvalues/eigenvectors with dense results at n=4,6. Several comparison mistakes are common:
+
+1. **Phase ambiguity in eigenvectors.** Eigenvectors are defined only up to a complex phase. `v_krylov = exp(i*theta) * v_dense` is perfectly valid. Comparing `norm(v_krylov - v_dense)` will show a large difference even though the eigenvectors are the same.
+2. **Ordering ambiguity.** The Krylov eigensolver returns eigenvalues in the order determined by `which`, while dense `eigen()` returns them in an implementation-specific order. The existing diagnostics code sorts by `abs.(real.(eigenvalues))` (line 173 of diagnostics.jl), but the Krylov results need the same sorting before comparison.
+3. **Degenerate eigenvalue subspaces.** If two eigenvalues are equal (within tolerance), their eigenvectors span a 2D subspace. Any basis of this subspace is valid. Comparing individual eigenvectors is meaningless; instead, compare the subspace projection.
+4. **Different left/right eigenvector normalization.** KrylovKit returns right eigenvectors normalized to unit norm. The dense code computes left eigenvectors via `inv(V_right)` (diagnostics.jl line 183). The biorthonormality `V_left' * V_right = I` may have a different normalization convention than KrylovKit's right eigenvectors.
 
 **Why it happens:**
-The fitting function (`fit_exponential_decay`, fitting.jl) is a pure numerical function: it takes (times, values) and returns a FitResult. Testing it with synthetic data is straightforward and fast. The integration test (trajectory -> observables -> fitting -> gap) requires building the full system (Hamiltonian, Lindbladian, Kraus operators) and running trajectories, which takes 30-60 seconds for n=4 with 1000 trajectories.
-
-**Specific manifestation in QuantumFurnace:** The existing test suite has both: test_fitting.jl tests the fitting function with clean and noisy synthetic data (fast, deterministic), and test_gap_estimation.jl tests the full pipeline with the SMALL system (n=3, 500 trajectories, fast). But the n=3 system is too small and simple to exercise two-exponential behavior -- its spectral structure is dominated by a single decay mode. The n=4 system is needed but makes tests take ~30 seconds.
+Dense eigendecomposition (LAPACK `eigen`) and Krylov methods use fundamentally different algorithms. They produce equivalent but differently parametrized results. Naive element-wise comparison fails.
 
 **How to avoid:**
-1. **Three-tier testing strategy:**
-   - **Unit tests (fast, synthetic):** Test the two-exponential fitting function with known parameters. Include edge cases: rates close together, one amplitude zero, negative amplitudes, noisy data. These run in <1 second.
-   - **Integration tests (medium, n=3):** Test the full pipeline with the SMALL system. Even though n=3 may not show two-exponential behavior clearly, it validates that the data flows correctly from trajectory simulation to fitting.
-   - **Validation tests (slow, n=4, optional/CI-only):** Run the full pipeline with n=4, 1000 trajectories, seed=42. Compare the fitted gap against the exact Liouvillian gap. Mark these as `@testset "slow"` and skip in regular test runs. These are the critical tests but they take 30+ seconds.
-2. **Generate reference two-exponential data from the Liouvillian.** For n=4, compute `exp(t*L) * vec(rho0)` exactly and extract the observable time series. This gives clean two-exponential data (no stochastic noise) that can be used in fast deterministic tests. The reference data can be pre-computed and stored.
-3. **Use deterministic seeding (seed=42) in integration tests** and test for consistency (same seed -> same result) rather than accuracy (fitted gap close to exact gap). This is already the pattern in test_gap_estimation.jl.
+1. **Compare eigenvalues only for validation.** Sort both sets by real part (largest first), then compare `abs(lambda_krylov[k] - lambda_dense[k]) < tol` for the first few eigenvalues.
+2. **For eigenvector comparison, use the residual norm.** For right eigenvector v: `residual = norm(L * v - lambda * v) / norm(v)`. This is phase-independent and should be near machine epsilon for dense, and near the Krylov tolerance for Krylov.
+3. **For subspace comparison with degeneracies:** Compute the projection matrix `P = V * V'` for the degenerate subspace from both methods. Compare `norm(P_krylov - P_dense)`.
+4. **Use the existing `extract_leading_eigendata` as ground truth.** Its eigenvalues are sorted consistently. Compare Krylov eigenvalues against `eigen_result.eigenvalues[1:howmany]`.
+5. **Build a dedicated `validate_krylov_vs_dense(n_qubits, config, ...)` function** that performs all these comparisons and returns a pass/fail with diagnostic messages.
 
 **Warning signs:**
-- Two-exponential fitting tests all use synthetic data but fail on actual trajectory data.
-- Integration tests pass but validation against exact Liouvillian fails.
-- Tests are flaky (pass sometimes, fail other times) because they depend on stochastic simulation output without proper tolerance handling.
+- Eigenvalue comparison shows large differences for some eigenvalues but not others (ordering mismatch).
+- Eigenvector comparison shows `norm(v_krylov - v_dense) ~ 2` (phase flip, not a real difference).
+- Validation passes at n=4 but fails at n=6 (indicates a real bug, not a comparison artifact).
 
-**Phase to address:** Every phase that adds a new diagnostic. Each feature needs all three test tiers.
-
----
-
-### Pitfall 11: Observable-Level vs DM-Level Error Conflation
-
-**What goes wrong:**
-The delta-convergence diagnostic compares gap estimates at different delta values. But the "gap estimation error" has two components: (a) the trajectory simulation error (how well the simulated rho matches exp(t*L)*rho0) and (b) the fitting error (how well the single/two-exponential model captures the true multi-exponential decay). Quick-32 proved that component (a) is O(1e-3) and monotonic in delta, while component (b) is O(10-50%) and non-monotonic. If the delta-convergence diagnostic only reports the total error, it will conflate these two components and misattribute fitting errors to simulation errors.
-
-**How to avoid:**
-1. **Report both components separately.** For each delta value, compute: (a) `trace_distance(rho_traj, rho_exact)` as the simulation error, and (b) `|gap_fitted - gap_exact|` as the total estimation error. The difference `(b) - (a)` gives the fitting contribution.
-2. **Use the Quick-32 approach.** Compare trajectory-averaged OBSERVABLE values (not just fitted gaps) against exact values from exp(t*L). This separates simulation correctness from fitting model adequacy.
-
-**Phase to address:** Delta-convergence diagnosis phase.
+**Phase to address:** Validation framework phase, implemented alongside the core Krylov solver.
 
 ---
 
-### Pitfall 12: Steady-State Value Mismatch Between Lindbladian Fixed Point and Gibbs State for Effective Rate
+### Pitfall 11: Convergence Criteria -- When Is the Gap Estimate "Good Enough"?
 
 **What goes wrong:**
-The effective rate computation requires `Delta(t) = <O>(t) - <O>_ss`. For approximate domains (TrotterDomain), the Lindbladian fixed point differs from the Gibbs state (v1.3 Pitfall 9). Using `<O>_gibbs` instead of `<O>_fixed_point` introduces a constant offset that makes Delta(t) approach a non-zero value at late times, corrupting the effective rate plot. The lambda_eff(t) will NOT plateau at the spectral gap but will instead show a gradual decrease toward zero (as the constant offset dominates over the exponential decay).
+The Krylov tolerance `tol` controls the residual norm of the Schur decomposition, NOT the absolute error in the eigenvalue. For non-Hermitian operators, the relationship between residual norm and eigenvalue error depends on the **condition number of the eigenvalue**, which can be much larger than 1 for non-normal operators.
+
+For the Lindbladian (which is non-normal due to the anti-Hermitian part), the eigenvalue condition number `kappa(lambda_k) = 1 / |<l_k, r_k>|` where `l_k` and `r_k` are the left and right eigenvectors. The eigenvalue error satisfies `|lambda_exact - lambda_krylov| <= kappa(lambda_k) * residual_norm`. If `kappa(lambda_1) = 100` (moderate non-normality) and `residual_norm = 1e-8`, the eigenvalue error can be as large as `1e-6`.
+
+For the spectral gap, which is the DIFFERENCE between two eigenvalues (lambda_0 = 0 and lambda_1), the gap error is bounded by the sum of the individual eigenvalue errors.
+
+**Why it happens:**
+The KMS similarity transform analysis (DIAG-03/04 in diagnostics.jl) already quantifies non-normality via the anti-Hermitian defect ratio. At low temperature (beta=10, n=6), the defect ratio can be O(1) or larger, meaning eigenvalue condition numbers are elevated. This problem worsens at larger system sizes and lower temperatures.
 
 **How to avoid:**
-1. **Always use the Lindbladian fixed point** from `liouv_result.fixed_point` when available (n=4,6 where exact diagonalization is feasible).
-2. **For large systems where the Liouvillian is not available:** use the trajectory-averaged observable at the final time point `<O>(T_final)` as an estimate of `<O>_ss`. This introduces noise but avoids the systematic bias from Gibbs/fixed-point mismatch. Alternatively, use the Gibbs value and document the expected offset.
-3. **Diagnostic: plot `Delta(T_final)` for each observable.** If it is not approximately zero, the steady-state value is wrong.
+1. **Request tighter tolerance than you need.** If you need the gap to 4 significant figures, set `tol=1e-10` (with the expectation that eigenvalue error is ~kappa * tol ~ 100 * 1e-10 = 1e-8, giving ~8 digits).
+2. **Compute the eigenvalue condition number from the Krylov result.** KrylovKit returns right eigenvectors. If using BiArnoldi, you also get left eigenvectors. Compute `kappa = 1 / abs(dot(l_k, r_k))` and use it to bound the eigenvalue error.
+3. **Use the residual norm as a diagnostic, not as the accuracy guarantee.** Report both the residual norm and the estimated eigenvalue accuracy (`kappa * residual`).
+4. **Cross-validate with trajectory-based gap estimation** (the existing `estimate_spectral_gap`). The trajectory estimate has different error characteristics (statistical, not algebraic) and provides an independent check.
+5. **For the gap specifically:** Compute at least 4-6 eigenvalues. If eigenvalues 2 and 3 have similar real parts, the gap may be a degenerate multiplet. Report the gap with uncertainty bounds.
 
-**Phase to address:** Effective rate plot implementation. The steady-state computation must be a required input to the lambda_eff function.
+**Warning signs:**
+- The Krylov gap changes by more than 10% when tol is tightened from 1e-8 to 1e-10 (indicates the gap was not converged at the looser tolerance).
+- The eigenvalue condition number `kappa` > 1000 (severe non-normality, gap accuracy may be poor).
+- The Krylov gap disagrees with the trajectory-based gap by more than the trajectory confidence interval.
+
+**Phase to address:** Gap estimation API phase, when wrapping the raw eigsolve into a user-facing function with error bounds.
 
 ---
 
@@ -327,42 +385,44 @@ The effective rate computation requires `Delta(t) = <O>(t) - <O>_ss`. For approx
 
 ---
 
-### Pitfall 13: Bootstrap Resampling Indices With Replacement Can Produce Degenerate Samples
+### Pitfall 12: Forgetting to Normalize the Krylov Eigenvector Before Reshaping to Density Matrix
 
 **What goes wrong:**
-With B batches (e.g., B=100), a bootstrap sample draws B indices with replacement from {1,...,B}. For small B, there is a non-negligible probability that a bootstrap sample consists of repeated copies of very few unique batches (e.g., 80% from one batch). The gap fitted to such a degenerate sample may have extreme values (very high or low), inflating the bootstrap confidence interval.
+The eigenvector from KrylovKit has unit norm in the vector sense (`norm(v) = 1`). When reshaped to a density matrix via `reshape(v, dim, dim)`, the result has `tr(rho) != 1` in general (because trace is not the same as vector norm). The existing code in `furnace.jl` (lines 26-27) correctly handles this:
+```julia
+steady_state_dm = reshape(steady_state_vec, size(hamiltonian.data))
+hermitianize!(steady_state_dm)
+steady_state_dm ./= tr(steady_state_dm)
+```
+Forgetting the `./= tr(...)` step means the density matrix is not normalized, which corrupts any downstream computation (trace distances, fidelity, expectation values).
 
-**How to avoid:**
-- Use at least B=50 batches (100 preferred). With B=100 and standard bootstrap theory, the probability of a degenerate sample is negligible.
-- Consider the block bootstrap variant: for each bootstrap sample, draw blocks of consecutive batches rather than individual batches. This preserves any temporal correlations between batches (though for this system, batches are independent by construction).
+**How to avoid:** Always normalize after reshaping. Copy the existing pattern from `furnace.jl` and `diagnostics.jl`.
 
-**Phase to address:** Bootstrap implementation (minor concern, just set B large enough).
+**Phase to address:** Eigenvector post-processing, part of the initial implementation.
 
 ---
 
-### Pitfall 14: Plotting Effective Rate on Wrong Time Axis
+### Pitfall 13: KrylovKit Version Incompatibility
 
 **What goes wrong:**
-The effective rate lambda_eff is computed from pairs of consecutive time points: `lambda_eff(t_i) = -log|Delta(t_{i+1})/Delta(t_i)| / (t_{i+1} - t_i)`. This value should be plotted at the midpoint `(t_i + t_{i+1})/2`, not at `t_i` or `t_{i+1}`. Plotting at `t_i` introduces a systematic half-step offset that shifts the apparent plateau position, biasing any automatic window selection that uses the lambda_eff time axis.
+KrylovKit v0.10 introduced breaking API changes: `BiArnoldi`, `BlockLanczos`, and changes to the `ConvergenceInfo` struct. Code written against v0.8 may not work with v0.10 and vice versa. The `eigsolve` return signature also changed subtly (the info struct gained new fields).
 
-**How to avoid:**
-- Return the midpoint times alongside lambda_eff values: `times_eff[i] = (times[i] + times[i+1]) / 2`.
-- Document the time axis convention in the function docstring.
+**How to avoid:** Pin the KrylovKit version in `Project.toml`. Test against the pinned version. Add it to `[compat]` with a specific version range.
 
-**Phase to address:** Effective rate implementation (minor, but easy to get wrong).
+**Phase to address:** Dependency management, first thing when adding KrylovKit to the project.
 
 ---
 
-### Pitfall 15: Confusing bootstrap Standard Error with bootstrap Confidence Interval
+### Pitfall 14: Not Exploiting Hermiticity of the Density Matrix in the Krylov Vector
 
 **What goes wrong:**
-The bootstrap gives a distribution of gap estimates. The standard error is the standard deviation of this distribution. The 95% confidence interval is the [2.5th, 97.5th] percentile of this distribution. For non-normal distributions (which is common for gap estimates, since the gap is bounded below by 0), these can differ significantly. Reporting "bootstrap SE" as the uncertainty and then computing "gap +/- 1.96*SE" assumes normality, which may not hold.
+The Krylov vectors are ComplexF64 vectors of length dim^2. But the density matrix they represent is Hermitian: `rho[i,j] = conj(rho[j,i])`. This means only dim*(dim+1)/2 real parameters are independent, not dim^2 complex parameters. Ignoring this means the Krylov subspace has twice the effective dimension it needs, wasting memory and iterations.
 
-**How to avoid:**
-- Report the percentile-based confidence interval directly, not a normal approximation.
-- Also report the SE for comparison, but label it clearly as "bootstrap SE (normal approximation)" and the CI as "bootstrap CI (percentile method)."
+However, the Lindbladian is non-Hermitian, so the Krylov iteration (Arnoldi) cannot exploit the density matrix Hermiticity. The operator `L(rho)` does NOT preserve Hermiticity in general (it does physically, but the action on the vectorized form does not reduce to a real-symmetric problem). So this is NOT something that can be fixed by switching to Lanczos.
 
-**Phase to address:** Bootstrap error bar reporting.
+**How to avoid:** Accept that Arnoldi on the full dim^2-dimensional space is necessary. Do not attempt to project onto the "Hermitian subspace" during Krylov iteration -- this would break the Arnoldi recurrence.
+
+**Phase to address:** No action needed. This is a "do not attempt this optimization" warning.
 
 ---
 
@@ -372,48 +432,54 @@ Shortcuts that seem reasonable but create long-term problems.
 
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
 |----------|-------------------|----------------|-----------------|
-| Hardcoding `skip_initial=0.1` for all observables | Quick results, no per-observable tuning | Wrong window for observables with different decay profiles; biased gap estimates | Never -- always use per-observable window or the automatic selector |
-| Storing bootstrap results only as scalar CIs | Small result structs | Cannot reconstruct per-time-point lambda_eff bands or diagnose non-normal bootstrap distributions | MVP only; full bootstrap distribution needed for publication |
-| Using LsqFit.jl `stderror` for two-exponential fit uncertainties | Free with the fit, no extra computation | Dramatically underestimates uncertainty due to ill-conditioning (see Pitfall 1); misleads about parameter identifiability | Never for two-exponential fits; acceptable only for single-exponential fits as a diagnostic |
-| Computing anti-Hermitian defect without rho^{-1/4} spectrum truncation | Simpler code, no threshold parameter | Misleading defect values at low temperature (see Pitfall 2); false alarm about KMS violation | Only for high-temperature (beta < 2) where condition number is manageable |
-| Selecting best observable by smallest fitted gap without cross-checking | Simple selection criterion | Systematically picks observables that underestimate the gap (Quick-30: Mz_stagg at 37-49% vs YY_avg at 2-6%) | Acceptable for quick estimates; must cross-check for publication-quality results |
+| Using `(E(rho) - rho) / delta` for the Lindbladian matvec instead of direct Lindblad formula | Reuses existing Kraus infrastructure with minimal code | Catastrophic cancellation loses ~2 digits per factor of delta; limits achievable precision | Never for the Lindbladian. Acceptable only if eigensolving the channel E directly. |
+| Hardcoding krylovdim=30 for all system sizes | Simple API, no parameter tuning needed | Convergence failure at n>=10 where eigenvalue density is higher; silent wrong results if info.converged not checked | Only for n<=8 where eigenvalues are well-separated |
+| Skipping TrotterDomain validation | Faster development (only test BohrDomain) | Basis mismatch bugs surface late when TrotterDomain is needed for physical predictions | Never -- TrotterDomain is the physically relevant domain |
+| Storing dense Kraus operators for the matvec | Simple code, each operator is a dim x dim matrix | 36 operators * dim^2 * 16 bytes = 36 * 256 MB = 9 GB at n=12 | Acceptable up to n=10 (~576 MB). At n=12, need lazy/on-the-fly Kraus computation. |
+
+---
 
 ## Integration Gotchas
 
-Common mistakes when connecting new v1.4 features to the existing v1.3 infrastructure.
+Common mistakes when connecting Krylov results to the existing QuantumFurnace infrastructure.
 
-| Integration | Common Mistake | Correct Approach |
-|-------------|----------------|------------------|
-| Two-exp fitting with existing `FitResult` | Trying to reuse `FitResult` struct (which has 3 params: A, gap, C) for 5 params | Create a new `TwoExpFitResult` struct with fields for both rates, both amplitudes, and offset |
-| Bootstrap with `run_observable_trajectories` | Expecting per-batch data from existing function | Modify function to accept a `store_per_batch::Bool` kwarg, or create a new `run_observable_trajectories_batched` variant |
-| Lambda_eff using `measurements_mean` from `ObservableTrajectoryResult` | Computing lambda_eff directly from the stored mean (which has already averaged out per-trajectory information) | This is correct for the mean lambda_eff; for bootstrap bands, need per-batch data (see Pitfall 9) |
-| Symmetry sector analysis with `eigenbasis_overlap_analysis` | Assuming the existing function's eigendecomposition respects symmetry | The existing `eigen(L)` does NOT respect symmetry. Need a separate simultaneous diagonalization step (see Pitfall 7) |
-| Anti-Hermitian defect with `LindbladianResult` | Using `liouv_result.liouvillian` directly for the similarity transform | The Liouvillian is in the vectorized (Liouville) form. The similarity transform `rho^{-1/4} L rho^{1/4}` acts on the operator level, requiring reshaping each column of L into a matrix, transforming, and reshaping back |
-| Delta-convergence with `estimate_spectral_gap` | Running `estimate_spectral_gap` at multiple delta values and comparing | This works but conflates simulation and fitting errors (see Pitfall 11). Instead, also compare trajectory-averaged observable values against exact exp(t*L) results, as Quick-32 demonstrated |
+| Integration Point | Common Mistake | Correct Approach |
+|-------------------|----------------|------------------|
+| Krylov vs `extract_leading_eigendata` | Comparing eigenvalues without matching sort order | Sort both by `abs(real(lambda))`, then compare pairwise |
+| Krylov eigenvectors vs `eigenbasis_overlap_analysis` | Passing Krylov vectors into overlap analysis without reshaping | Reshape to density matrix, ensure same basis as L was constructed in |
+| Krylov gap vs `estimate_spectral_gap` (trajectory) | Expecting exact agreement | Trajectory estimate has O(delta) bias + statistical noise; agreement to ~10% is good |
+| KrylovKit + existing Arpack dependency | Both active, different APIs, version conflicts | Consider replacing Arpack with KrylovKit for the dense path too (Arpack only needed in `furnace.jl`) |
+| Dense diagnostics at n=6 for validation | Running `run_exact_diagnostics` at n=8+ (4096^2 dense matrix) | n=6 is the ceiling for dense; n=8+ is Krylov-only territory |
+
+---
 
 ## Performance Traps
 
-Patterns that work at small scale but fail at larger system sizes.
+Patterns that work at small scale but fail as system size grows.
 
 | Trap | Symptoms | Prevention | When It Breaks |
 |------|----------|------------|----------------|
-| Dense eigendecomposition of full Liouvillian for symmetry sector analysis | OOM or multi-hour runtime | Use Arpack shift-invert for just the leading 10-20 eigenvalues; only do full eigen for n<=4 (dim^2 <= 256) | n=6: Liouvillian is 4096x4096 (dense eigen takes ~30s, OK). n=8: 65536x65536 (impossible, 32 GB) |
-| Storing the full Liouvillian as a dense matrix for anti-Hermitian defect | Memory: dim^4 * 16 bytes. n=6: 4096^2 * 16 = 268 MB (OK). n=8: 65536^2 * 16 = 69 GB (impossible) | For n>6, use sparse Liouvillian and iterative methods for the defect norm; or restrict defect analysis to n<=6 | n=8 (dim=256, Liouvillian dim=65536) |
-| Two-exponential fitting with multi-start (5 initial guesses x 8 observables x 100 bootstrap samples) | 4000 fits per delta value; ~20 seconds for n=4 | Reduce multi-start to 3 guesses; skip fitting for observables that failed single-exponential quality check (R^2 < 0.5) | When bootstrap sample count > 200 or observable count > 10 |
-| Per-batch storage for n=8 with 1000 batches | 8 obs * 500 saves * 1000 batches * 8 bytes = 32 MB (manageable) but if save_every is too small (1 instead of 10), it becomes 320 MB | Always use save_every >= 10 for gap estimation; store only the number of batches needed for bootstrap (100 is enough) | When save_every < 5 or n_batches > 500 |
+| Dense Kraus operators stored in memory | OOM at n=12 | Compute Kraus operators on-the-fly using NUFFT/OFT; only store jump.in_eigenbasis | n=12: 36 operators * 4096^2 * 16 bytes ~ 9 GB |
+| krylovdim=100 at n=12 | 25 GB Krylov basis + scratch = OOM on most machines | Start with krylovdim=30, increase only with memory headroom | n=12 with krylovdim>50 exceeds 16 GB for Krylov basis alone |
+| Full orthogonalization at n=12 | Each orthogonalization pass is O(krylovdim * dim^2) = O(50 * 16M) ~ 800M operations | Accept: this is intrinsic to Arnoldi. Reduce krylovdim if too slow. | n=12 with krylovdim=50: ~40 seconds per Krylov iteration |
+| Matvec recomputing everything from scratch | Matvec takes minutes at n=12 (36 jumps * 2048 frequencies * dim^2 work) | Precompute and cache Kraus operators if memory allows; or precompute partial sums | n=10+: matvec time dominates total runtime |
+| Trajectory validation at n=12 | 1000 trajectories * many steps * large dim = weeks of compute | Use Krylov for gap estimation, trajectory only for sanity checks at n<=8 | n=10+: trajectory approach becomes impractical for gap estimation |
+
+---
 
 ## "Looks Done But Isn't" Checklist
 
 Things that appear complete but are missing critical pieces.
 
-- [ ] **Two-exponential fitting:** Often missing the separation test (g2/g1 > 1.5 check) -- verify that the code flags when rates are too close for reliable decomposition
-- [ ] **Bootstrap error bars:** Often missing the per-batch time series storage mechanism -- verify that the trajectory runner actually returns per-batch data, not just the grand mean
-- [ ] **Effective rate plot:** Often missing the noise floor cutoff -- verify that lambda_eff is NaN/masked beyond the noise floor, not plotted with spurious values
-- [ ] **Richardson extrapolation:** Often missing the precondition check (monotonic delta-convergence) -- verify that the code refuses to extrapolate when the error structure is not O(delta^p)
-- [ ] **Anti-Hermitian defect:** Often missing the spectrum truncation for rho^{-1/4} -- verify that the code has a floor on Gibbs eigenvalues and reports the effective condition number
-- [ ] **Symmetry sector labels:** Often missing the degeneracy detection -- verify that near-degenerate eigenvalues are flagged as "ambiguous sector"
-- [ ] **Automatic window selection:** Often missing the quality metric (CV of lambda_eff in the selected window) -- verify that the code reports HOW FLAT the plateau is, not just WHERE it is
-- [ ] **Testing:** Often missing validation against exact Liouvillian -- verify that at least one test compares the diagnostic output against known exact results (not just synthetic data)
+- [ ] **Matvec implementation:** Often missing the coherent term (B operator). The existing `construct_lindbladian` adds it separately via `_precompute_coherent_total_B` and `_vectorize_liouvillian_coherent!`. The matrix-free path must include this term if `config.with_coherent == true`.
+- [ ] **Convergence check:** `eigsolve` returns results even when `info.converged == 0`. Always check `info.converged >= howmany`.
+- [ ] **Gap extraction:** Getting lambda_0 and lambda_1 right requires sorting by `abs(real(lambda))`, not by `abs(lambda)` or by `real(lambda)` (the latter would put the most negative eigenvalue first).
+- [ ] **Eigenvector normalization:** Unit-norm vector != trace-1 density matrix. Must normalize by trace after reshaping.
+- [ ] **TrotterDomain support:** BohrDomain works != TrotterDomain works. The basis selection, precomputation, and Kraus operator source differ.
+- [ ] **Memory estimation:** "Works at n=8" does NOT mean "works at n=10". Compute memory budget explicitly: `krylovdim * 4^n * 16 * 1.5` bytes for the Krylov subspace alone.
+- [ ] **Multiple eigenvalue request:** Requesting only `howmany=2` may miss the spectral gap if there are near-degenerate eigenvalues clustered near lambda_0. Request 4-10.
+
+---
 
 ## Recovery Strategies
 
@@ -421,14 +487,18 @@ When pitfalls occur despite prevention, how to recover.
 
 | Pitfall | Recovery Cost | Recovery Steps |
 |---------|---------------|----------------|
-| Two-exp fit non-identifiable (Pitfall 1) | LOW | Fall back to single-exponential tail fit; report g1 from tail with bootstrap CI |
-| rho^{-1/4} blow-up (Pitfall 2) | LOW | Recompute with spectrum truncation threshold; compare BohrDomain vs TrotterDomain defect |
-| lambda_eff divergence (Pitfall 3) | LOW | Apply noise floor cutoff retroactively; recompute with smoothing |
-| Richardson worsens estimate (Pitfall 4) | LOW | Discard Richardson result; use the finest-delta un-extrapolated estimate |
-| Memory blow-up from per-trajectory storage (Pitfall 5) | MEDIUM | Kill the process; redesign with block bootstrap; re-run trajectory simulation with per-batch storage |
-| Silent window selection failure (Pitfall 6) | MEDIUM | Re-run with multiple manual windows; compare results; identify the actual usable range from lambda_eff plot |
-| Ambiguous symmetry labels (Pitfall 7) | LOW | Add small random perturbation to break degeneracy; re-label; verify labels are consistent |
-| Negative amplitude in two-exp fit (Pitfall 8) | LOW | Check if the physics allows mixed-sign amplitudes; if spurious, constrain to positive amplitudes and refit |
+| Wrong eigenvalues (Pitfall 1) | LOW | Change `which` parameter; increase `howmany`; validate against dense at n=4 |
+| Memory blowup (Pitfall 2) | LOW | Kill process; reduce krylovdim; add memory estimation guard |
+| Vectorization mismatch (Pitfall 3) | MEDIUM | Rewrite the matvec; requires re-running all validation tests |
+| L vs E confusion (Pitfall 4) | MEDIUM | Rewrite the matvec to use the correct operator; rerun validation |
+| Basis mismatch (Pitfall 5) | HIGH | Debug which basis is wrong; may require restructuring the matvec to match domain logic |
+| Non-convergence (Pitfall 6) | LOW | Increase krylovdim and maxiter; try multiple starting vectors |
+| Precision loss (Pitfall 7) | MEDIUM | Switch from (E-I)/delta to direct Lindblad formula; requires new matvec implementation |
+| BLAS contention (Pitfall 8) | LOW | Set BLAS.set_num_threads() appropriately |
+| Bad starting vector (Pitfall 9) | LOW | Change v0 to physically motivated choice |
+| Wrong comparison (Pitfall 10) | LOW | Fix the comparison logic; eigenvalue sort order |
+
+---
 
 ## Pitfall-to-Phase Mapping
 
@@ -436,48 +506,65 @@ How roadmap phases should address these pitfalls.
 
 | Pitfall | Prevention Phase | Verification |
 |---------|------------------|--------------|
-| Two-exp non-identifiability (1) | Two-exponential fitting | Multi-start test: 5 initial guesses give same g1 within 10%; separation test passes |
-| rho^{-1/4} blow-up (2) | Anti-Hermitian defect diagnosis | BohrDomain defect < 1e-10 after truncation; condition number reported |
-| lambda_eff divergence (3) | Effective rate plot | No NaN in returned lambda_eff; noise floor cutoff applied; sign-change points marked |
-| Richardson failure (4) | Delta-convergence diagnosis | Monotonicity test runs before Richardson; non-monotonic data blocks extrapolation |
-| Memory blow-up (5) | Bootstrap error bars | n=6 with 20k trajectories and 100 bootstrap samples uses < 50 MB for stored batch data |
-| Window selection failure (6) | Automatic window selection | Multiple-window comparison shows gap estimates agree within 2x bootstrap SE |
-| Symmetry label ambiguity (7) | Symmetry sector analysis | Degeneracy flag triggers for eigenvalue pairs closer than 1e-8 * |gap| |
-| Negative amplitude (8) | Two-exponential fitting | Cancellation ratio (|A1+A2|/(|A1|+|A2|)) > 0.3 for all converged fits |
-| Bootstrap lambda_eff (9) | Bootstrap error bars | Per-batch time series stored; pointwise CI band computed |
-| Testing stochastic output (10) | All diagnostic phases | Each feature has unit tests (synthetic), integration tests (n=3), and validation tests (n=4, optional) |
-| Error conflation (11) | Delta-convergence diagnosis | Both simulation error (rho distance) and total estimation error (gap distance) reported separately |
-| Steady-state mismatch (12) | Effective rate plot | Uses liouv_result.fixed_point when available; plots Delta(T_final) as diagnostic |
+| 1: Wrong eigenvalue targeting | Krylov API design | Test: Krylov gap matches dense gap at n=4 to 10 digits |
+| 2: Memory blowup | Memory budget utilities | Test: `memory_estimate(12, 50)` returns < 512 GB; OOM guard in eigsolve wrapper |
+| 3: Vectorization mismatch | Core matvec implementation | Test: `norm(L_dense * vec(rho) - vec(L_matvec(rho))) < 1e-12` for 10 random rho at n=4 |
+| 4: L vs E confusion | Matvec design document | Test: explicit formula for L(rho) vs E(rho) in docstring; eigenvalue conversion documented |
+| 5: Basis mismatch | Matvec implementation | Test: round-trip test passes for both BohrDomain and TrotterDomain at n=4 |
+| 6: Non-convergence | Convergence tuning phase | Test: `info.converged >= howmany` asserted; adaptive krylovdim fallback |
+| 7: Precision loss | Matvec validation | Test: relative precision of matvec quantified at n=4,6,8; tol set accordingly |
+| 8: BLAS contention | Performance tuning | Test: eigsolve benchmarked with different BLAS thread counts; optimal choice documented |
+| 9: Bad starting vector | API design | Test: default v0 = vec(rho_0 - rho_beta); convergence in <100 matvec applications at n=8 |
+| 10: Wrong comparison | Validation framework | Test: `validate_krylov_vs_dense(n=4)` passes; comparison handles phase, ordering, degeneracy |
+| 11: Convergence criteria | Gap estimation API | Test: gap reported with error bounds; kappa(lambda) computed |
+| 12: Eigenvector normalization | Post-processing utilities | Test: `abs(tr(reshape(v, dim, dim))) - 1 > eps` triggers normalization |
+| 13: Version incompatibility | Project.toml setup | KrylovKit version pinned in [compat]; CI tests pass against pinned version |
+| 14: Hermiticity exploitation | Documentation | Docstring explicitly states: do NOT project onto Hermitian subspace during Arnoldi |
+
+---
+
+## Memory Budget Reference Table
+
+Essential reference for phase planning. All values for ComplexF64 (16 bytes/element).
+
+| n | dim | dim^2 | 1 vector | krylovdim=30 | krylovdim=50 | krylovdim=100 | Dense L matrix |
+|---|-----|-------|----------|--------------|--------------|---------------|----------------|
+| 4 | 16 | 256 | 4 KB | 120 KB | 200 KB | 400 KB | 1 MB |
+| 6 | 64 | 4,096 | 64 KB | 1.9 MB | 3.2 MB | 6.4 MB | 256 MB |
+| 8 | 256 | 65,536 | 1 MB | 30 MB | 50 MB | 100 MB | 64 GB |
+| 10 | 1,024 | 1,048,576 | 16 MB | 480 MB | 800 MB | 1.6 GB | 16 TB |
+| 12 | 4,096 | 16,777,216 | 256 MB | 7.5 GB | 12.5 GB | 25 GB | 4 PB |
+
+**Implication:** Dense eigendecomposition is feasible only for n<=6 (256 MB matrix). Arpack shift-invert is feasible at n<=7 (requires dense matrix or sparse factorization). Krylov matrix-free is the ONLY option for n>=8.
+
+**Kraus operator storage** (for the matvec):
+
+| n | n_jumps (3 Paulis * n sites) | Operator size | Total Kraus storage |
+|---|------------------------------|---------------|---------------------|
+| 8 | 24 | 256x256 = 1 MB | 24 MB |
+| 10 | 30 | 1024x1024 = 16 MB | 480 MB |
+| 12 | 36 | 4096x4096 = 256 MB | 9 GB |
+
+At n=12, storing all Kraus operators in memory alongside the Krylov subspace is feasible on the 512 GB node but tight. Total: 9 GB (Kraus) + 12.5 GB (Krylov, krylovdim=50) + 5 GB (scratch) ~ 27 GB.
 
 ---
 
 ## Sources
 
-### Verified from codebase (HIGH confidence)
-- QuantumFurnace.jl fitting.jl: single-exponential model `A*exp(-gap*t)+C`, log-linear initial guess, LsqFit.jl `curve_fit` with parameter bounds
-- QuantumFurnace.jl gap_estimation.jl: `estimate_spectral_gap` pipeline, `_select_best_observable` smallest-gap criterion, `eigenbasis_overlap_analysis` full dense eigendecomposition
-- QuantumFurnace.jl trajectories.jl: `run_observable_trajectories` returns `measurements_mean` (grand average only), no per-batch storage; `_run_chunk_obs_only!` accumulates into shared `mean_data_local`
-- QuantumFurnace.jl convergence.jl: `run_trajectories_convergence` has batch structure but stores only per-batch density matrix (via `_run_batch_no_obs!`), not per-batch observable time series
-- Quick-30 (30-SUMMARY.md): Gap estimation error NOT O(delta); error/delta varies 96x; Richardson extrapolation 1.0x improvement (ineffective)
-- Quick-32 (32-SUMMARY.md): Trajectory simulation correct; observable errors O(1e-3) and monotonic; fitting procedure is sole source of 37-49% gap estimation error
-- Quick-25 (25-PLAN.md): n=6 gap mode in k=pi momentum sector; all k=0 observables have zero overlap
-
-### Established numerical analysis (HIGH confidence)
-- [Parameter identifiability in two-exponential models](https://bmcsystbiol.biomedcentral.com/articles/10.1186/s12918-015-0219-2): Ill-conditioning of sums-of-exponentials fitting depends on ratio of decay constants and signal-to-noise
-- [On the accuracy of Prony's method for recovery of exponential sums with closely spaced exponents](https://www.sciencedirect.com/science/article/abs/pii/S1063520324000642): Numerical conditioning of exponential sum recovery degrades as exponent separation decreases
-- [Levenberg-Marquardt algorithm](https://en.wikipedia.org/wiki/Levenberg%E2%80%93Marquardt_algorithm): Damping regularizes ill-conditioned Jacobian; convergence depends on initialization
-- [Richardson extrapolation](https://en.wikipedia.org/wiki/Richardson_extrapolation): Requires error to be a power series in the discretization parameter; fails when assumption is violated
-- [Fitting sum of exponentials is ill-conditioned](https://randorithms.com/2020/03/08/exponential-sum-fits.html): On moving from two- to three-exponential models, the condition deteriorates badly
-- [Modified Prony Algorithm for Exponential Function Fitting](https://epubs.siam.org/doi/abs/10.1137/0916008): SVD-based approaches improve numerical stability over direct Prony for noisy data
-- Bootstrap resampling theory (Efron 1979): Block bootstrap valid for independent blocks; minimum ~50 blocks for reliable percentile CIs
-
-### Domain knowledge (HIGH confidence)
-- Similarity transform `rho^{-1/4} L rho^{1/4}` condition number grows as `exp(beta * bandwidth / 4)` -- exponential in inverse temperature and system size
-- For KMS-detailed-balanced Lindbladians, L_tilde is self-adjoint (all eigenvalues real) in exact arithmetic; any non-real eigenvalues indicate either approximation error or numerical artifacts
-- Effective rate `lambda_eff(t) = -d/dt log|Delta(t)|` is model-free but requires |Delta(t)| > 0 at all computed points
-- Near-degenerate eigenvalue subspaces have arbitrary eigenvector orientation under standard eigendecomposition (LAPACK `dsyev`/`zheev`)
-- Quick-30 empirically confirmed: single-exponential gap estimation error is dominated by fitting model mismatch (delta-independent), not Trotter discretization (delta-dependent)
+- [KrylovKit.jl Eigenvalue Problems Documentation](https://jutho.github.io/KrylovKit.jl/stable/man/eig/) -- eigsolve API, `which` parameters, convergence semantics
+- [KrylovKit.jl Available Algorithms](https://jutho.github.io/KrylovKit.jl/stable/man/algorithms/) -- Arnoldi defaults: krylovdim=30, maxiter=100, tol=1e-12
+- [KrylovKit.jl GitHub Issues #9, #23, #38](https://github.com/Jutho/KrylovKit.jl/issues/9) -- memory allocation concerns, degenerate eigenvalue issues
+- [KrylovKit.jl Releases](https://github.com/Jutho/KrylovKit.jl/releases) -- v0.10 changes: BiArnoldi, BlockLanczos
+- [Arpack.jl Standard Eigen Decomposition](https://julialinearalgebra.github.io/Arpack.jl/stable/eigs/) -- shift-invert sigma parameter
+- [Arnoldi iteration failure modes (Embree, Virginia Tech)](https://personal.math.vt.edu/embree/66909.pdf) -- convergence proof gaps for non-Hermitian case
+- [Implicitly Restarted Arnoldi Methods (STFC report RAL-TR-97-058)](https://epubs.stfc.ac.uk/manifestation/1345/RAL-TR-97-058.pdf) -- restart strategies
+- [Tensor Network Framework for Lindbladian Spectra (arXiv:2509.07709)](https://arxiv.org/html/2509.07709) -- Krylov methods for Lindbladian spectral gap
+- [Krylov complexity in open quantum systems (arXiv:2303.04175)](https://arxiv.org/html/2303.04175v2) -- bi-Lanczos for non-Hermitian Lindbladians
+- [Julia BLAS threading discussion](https://discourse.julialang.org/t/julia-threads-vs-blas-threads/8914) -- thread contention patterns
+- [ITensors.jl Multithreading guide](https://itensor.github.io/ITensors.jl/dev/Multithreading.html) -- BLAS thread management best practices
+- [Three approaches for representing Lindblad dynamics (arXiv:1510.08634)](https://arxiv.org/pdf/1510.08634) -- vectorization conventions
+- QuantumFurnace.jl codebase analysis: `furnace.jl` (shift-invert Arpack usage), `qi_tools.jl` (vectorization convention), `diagnostics.jl` (dense eigendecomposition), `jump_workers.jl` (per-domain Lindbladian construction), `trajectories.jl` (CPTP channel stepping), `test_threading.jl` (BLAS thread management)
 
 ---
-*Pitfalls research for: v1.4 Spectral Gap Refinement -- Adding diagnostics to QuantumFurnace.jl*
-*Researched: 2026-02-19*
+*Pitfalls research for: Krylov-based Lindbladian spectral gap estimation in QuantumFurnace.jl*
+*Researched: 2026-02-20*
