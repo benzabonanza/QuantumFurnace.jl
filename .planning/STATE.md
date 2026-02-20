@@ -12,14 +12,14 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 Phase: 29 of 31 (Eigensolver Integration)
 Plan: 0 of TBD complete
 Status: Ready
-Last activity: 2026-02-20 -- Completed Phase 28 (Domain Extension, 2/2 plans)
+Last activity: 2026-02-20 -- Completed Quick-35 (Krylov matvec dissipator convention fix)
 
 Progress: [████░░░░░░] 40% (v1.5 phases 27-31, phases 27-28 complete)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 75 (v1.0: 10, v1.1: 16, quick: 18, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 4)
+- Total plans completed: 76 (v1.0: 10, v1.1: 16, quick: 19, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 4)
 
 **By Milestone:**
 
@@ -50,6 +50,8 @@ Recent decisions affecting current work:
 - _measure_matvec_allocs helper to avoid @testset soft-scope variable boxing (v1.5, 28-01)
 - Kron-derived 2op dissipator formula (B_dag'*rho*A' sandwich) instead of physics convention (v1.5, 28-02)
 - Dedicated _accumulate_adjoint_dissipator_2op! with all-N BLAS flags for real-valued BohrDomain (v1.5, 28-02)
+- kron(A,B)vec(X)=vec(B*X*A^T) convention consistently applied to all matvec terms (quick-35)
+- Anticommutator uses (L'L)^T, coherent uses i[B^T, rho] -- matches dense vectorization exactly (quick-35)
 
 ### Deferred from v1.4
 
@@ -77,5 +79,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-20
-Stopped at: Completed Phase 28 (Domain Extension) -- ready for Phase 29 (Eigensolver Integration)
+Stopped at: Completed Quick-35 (Krylov matvec convention fix) -- ready for Phase 29 (Eigensolver Integration)
 Resume file: None
