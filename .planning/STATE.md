@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-20)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.5 Krylov Gap Estimation -- Phase 28 (Other-Domain Dispatch)
+**Current focus:** v1.5 Krylov Gap Estimation -- Phase 29 (Eigensolver Integration)
 
 ## Current Position
 
-Phase: 28 of 31 (Other-Domain Dispatch)
-Plan: 2 of 2 complete
-Status: Phase Complete
-Last activity: 2026-02-20 -- Completed 28-02 (BohrDomain Matvec)
+Phase: 29 of 31 (Eigensolver Integration)
+Plan: 0 of TBD complete
+Status: Ready
+Last activity: 2026-02-20 -- Completed Phase 28 (Domain Extension, 2/2 plans)
 
-Progress: [█████░░░░░] 50% (v1.5 phases 27-31, phase 28 complete)
+Progress: [████░░░░░░] 40% (v1.5 phases 27-31, phases 27-28 complete)
 
 ## Performance Metrics
 
@@ -77,5 +77,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-20
-Stopped at: Completed 28-02-PLAN.md (BohrDomain Matvec) -- Phase 28 complete, ready for Phase 29
+Stopped at: Completed Phase 28 (Domain Extension) -- ready for Phase 29 (Eigensolver Integration)
 Resume file: None

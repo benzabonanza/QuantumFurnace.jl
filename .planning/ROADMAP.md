@@ -84,7 +84,7 @@ Full details: [milestones/v1.4-ROADMAP.md](milestones/v1.4-ROADMAP.md)
 **Milestone Goal:** Matrix-free spectral gap estimation via KrylovKit.jl, enabling gap computation for system sizes (up to ~12 qubits) where the full Lindbladian matrix cannot be stored.
 
 - [x] **Phase 27: Core Matvec Infrastructure** - KrylovWorkspace, EnergyDomain matvec, coherent term, adjoint, round-trip correctness gate
-- [ ] **Phase 28: Domain Extension** - Matrix-free Lindbladian action for TimeDomain, TrotterDomain, and BohrDomain
+- [x] **Phase 28: Domain Extension** - Matrix-free Lindbladian action for TimeDomain, TrotterDomain, and BohrDomain
 - [ ] **Phase 29: Eigensolver Integration** - KrylovKit eigsolve wrapper, CPTP channel path, result struct, memory guard, convergence handling
 - [ ] **Phase 30: Cross-Validation** - Krylov gap vs dense eigen() at n=4,6; L-vs-E consistency; KMS-vs-GNS comparison
 - [ ] **Phase 31: Scaling Benchmarks** - Timing and memory at n=3-7, 4^n scaling fit, per-matvec breakdown, extrapolation to n=10,12
@@ -114,11 +114,11 @@ Plans:
   1. `apply_lindbladian!` for TimeDomain passes round-trip test against dense at n=4 (KMS + GNS), using NUFFT prefactors from existing `_precompute_data()`
   2. `apply_lindbladian!` for TrotterDomain passes round-trip test at n=4 (KMS + GNS), operating in Trotter eigenbasis (trotter.eigvecs) and producing results consistent with dense construction
   3. `apply_lindbladian!` for BohrDomain passes round-trip test at n=4 (KMS + GNS), using Bohr frequency bucket iteration with the generalized two-operator dissipator
-**Plans:** 2 plans
+**Plans:** 2 plans -- completed 2026-02-20
 
 Plans:
-- [ ] 28-01-PLAN.md -- Time/Trotter forward+adjoint matvec with NUFFT prefactors, round-trip and allocation tests
-- [ ] 28-02-PLAN.md -- BohrDomain forward+adjoint matvec with 2op dissipator, bucket iteration, round-trip and duality tests
+- [x] 28-01-PLAN.md -- Time/Trotter forward+adjoint matvec with NUFFT prefactors, round-trip and allocation tests
+- [x] 28-02-PLAN.md -- BohrDomain forward+adjoint matvec with 2op dissipator, bucket iteration, round-trip and duality tests
 
 ### Phase 29: Eigensolver Integration
 **Goal**: Users can compute spectral gaps via a single `krylov_spectral_gap()` call that wraps KrylovKit eigsolve, with both Lindbladian (:LR) and CPTP channel (:LM) targeting
@@ -198,7 +198,7 @@ Phases execute in numeric order: 27 -> 28 -> 29 -> 30 -> 31
 | 25. Spectral Gap Validation Overhaul | v1.3 | 3/3 | Complete | 2026-02-18 |
 | 26. Exact Reference and Structural Diagnostics | v1.4 | 2/2 | Complete | 2026-02-19 |
 | 27. Core Matvec Infrastructure | v1.5 | 2/2 | Complete | 2026-02-20 |
-| 28. Domain Extension | v1.5 | 0/TBD | Not started | - |
+| 28. Domain Extension | v1.5 | 2/2 | Complete | 2026-02-20 |
 | 29. Eigensolver Integration | v1.5 | 0/TBD | Not started | - |
 | 30. Cross-Validation | v1.5 | 0/TBD | Not started | - |
 | 31. Scaling Benchmarks | v1.5 | 0/TBD | Not started | - |
