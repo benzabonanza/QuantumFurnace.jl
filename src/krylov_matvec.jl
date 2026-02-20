@@ -329,3 +329,163 @@ function apply_adjoint_lindbladian!(
 
     return ws.rho_out
 end
+
+"""
+    apply_lindbladian!(ws, rho, config, hamiltonian) -> ws.rho_out
+
+Compute L(rho) for `TimeDomain` and `TrotterDomain` configs, storing the result in `ws.rho_out`.
+
+Mirrors `_jump_contribution!` for `AbstractLiouvConfig{Union{TimeDomain, TrotterDomain}}` in
+`jump_workers.jl`, replacing vectorized superoperator accumulation with direct matrix-on-matrix
+operations via `_accumulate_dissipator!`.
+
+Key differences from `EnergyDomain`:
+- OFT computation uses NUFFT prefactors (`_prefactor_view`) instead of Gaussian filter (`_krylov_oft!`)
+- Scalar prefactor: `w0 * t0^2 * sigma * sqrt(2/pi) / (2pi) * gamma_norm_factor`
+  (from `jump_workers.jl:109`)
+
+Uses concrete-typed `ws.jump_eigenbases` and `ws.jump_hermitian` to avoid
+boxing allocations from `JumpOp`'s abstract `in_eigenbasis::Matrix{<:Complex}` field.
+
+# Arguments
+- `ws::KrylovWorkspace`: pre-allocated workspace (scratch matrices + precomputed data)
+- `rho::Matrix{<:Complex}`: input density matrix (dim x dim)
+- `config::AbstractLiouvConfig{D}`: Lindbladian configuration (TimeDomain or TrotterDomain)
+- `hamiltonian::HamHam`: Hamiltonian with eigenbasis data
+
+# Returns
+`ws.rho_out` -- the output matrix (dim x dim), overwritten in-place each call.
+"""
+function apply_lindbladian!(
+    ws::KrylovWorkspace{T},
+    rho::Matrix{T},
+    config::AbstractLiouvConfig{D},
+    hamiltonian::HamHam,
+) where {T<:Complex, D<:Union{TimeDomain, TrotterDomain}}
+    (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = ws.precomputed_data
+
+    # Zero output accumulator (CRITICAL: must be zeroed each call)
+    fill!(ws.rho_out, 0)
+
+    # Coherent term: -i[B, rho] = -i*B*rho + i*rho*B (identical to EnergyDomain)
+    B = ws.B_total
+    if B !== nothing
+        mul!(ws.tmp1, B, rho)
+        @. ws.rho_out += -1im * ws.tmp1
+        mul!(ws.tmp1, rho, B)
+        @. ws.rho_out += 1im * ws.tmp1
+    end
+
+    # Dissipator: sum over jumps, sum over energy labels
+    # Time/Trotter prefactor from jump_workers.jl:109
+    prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
+
+    for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
+        is_herm = ws.jump_hermitian[k]
+        if is_herm
+            for w_raw in energy_labels
+                # Iterate only half-grid (w <= 0) and mirror manually
+                w_raw > 1e-12 && continue
+                w = abs(w_raw)
+
+                # NUFFT OFT: replace _krylov_oft! with prefactor view multiply
+                nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
+                @. ws.jump_oft = eigenbasis * nufft_prefactor_matrix
+
+                scalar_w = prefactor * transition(w)
+                _accumulate_dissipator!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
+
+                if w > 1e-12
+                    # Negative-frequency partner: L = A(omega)'
+                    scalar_neg = prefactor * transition(-w)
+                    _accumulate_dissipator_adj_L!(ws.rho_out, ws.jump_oft, rho, scalar_neg, ws)
+                end
+            end
+        else
+            for w in energy_labels
+                nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
+                @. ws.jump_oft = eigenbasis * nufft_prefactor_matrix
+                scalar_w = prefactor * transition(w)
+                _accumulate_dissipator!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
+            end
+        end
+    end
+
+    return ws.rho_out
+end
+
+"""
+    apply_adjoint_lindbladian!(ws, rho, config, hamiltonian) -> ws.rho_out
+
+Compute L*(rho) (Hilbert-Schmidt adjoint) for `TimeDomain` and `TrotterDomain` configs.
+
+Mirrors `_jump_contribution!` for `AbstractLiouvConfig{Union{TimeDomain, TrotterDomain}}`
+with the adjoint modifications:
+1. Coherent term sign flip: `+i[B, rho]` instead of `-i[B, rho]`
+2. Dissipator sandwich swap: `L rho L'` becomes `L' rho L` (anticommutator unchanged)
+
+Same NUFFT prefactor computation and scalar prefactor as the forward method
+(no prefactor changes for adjoint, per CONTEXT.md).
+
+# Arguments
+Same as `apply_lindbladian!` for `Union{TimeDomain, TrotterDomain}`.
+
+# Returns
+`ws.rho_out` -- the adjoint Lindbladian action on rho.
+"""
+function apply_adjoint_lindbladian!(
+    ws::KrylovWorkspace{T},
+    rho::Matrix{T},
+    config::AbstractLiouvConfig{D},
+    hamiltonian::HamHam,
+) where {T<:Complex, D<:Union{TimeDomain, TrotterDomain}}
+    (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = ws.precomputed_data
+
+    # Zero output accumulator
+    fill!(ws.rho_out, 0)
+
+    # Adjoint coherent term: +i[B, rho] = +i*B*rho - i*rho*B (sign flip vs forward)
+    B = ws.B_total
+    if B !== nothing
+        mul!(ws.tmp1, B, rho)
+        @. ws.rho_out += 1im * ws.tmp1      # +i instead of -i
+        mul!(ws.tmp1, rho, B)
+        @. ws.rho_out -= 1im * ws.tmp1      # -i instead of +i
+    end
+
+    # Adjoint dissipator: D_L*(rho) = L' rho L - 0.5 {L'L, rho}
+    # Same prefactor as forward (no changes for adjoint)
+    prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
+
+    for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
+        is_herm = ws.jump_hermitian[k]
+        if is_herm
+            for w_raw in energy_labels
+                w_raw > 1e-12 && continue
+                w = abs(w_raw)
+
+                # NUFFT OFT: replace _krylov_oft! with prefactor view multiply
+                nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
+                @. ws.jump_oft = eigenbasis * nufft_prefactor_matrix
+
+                scalar_w = prefactor * transition(w)
+                _accumulate_adjoint_dissipator!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
+
+                if w > 1e-12
+                    scalar_neg = prefactor * transition(-w)
+                    # Negative-frequency partner: original L = A(omega)'
+                    _accumulate_adjoint_dissipator_adj_L!(ws.rho_out, ws.jump_oft, rho, scalar_neg, ws)
+                end
+            end
+        else
+            for w in energy_labels
+                nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
+                @. ws.jump_oft = eigenbasis * nufft_prefactor_matrix
+                scalar_w = prefactor * transition(w)
+                _accumulate_adjoint_dissipator!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
+            end
+        end
+    end
+
+    return ws.rho_out
+end
