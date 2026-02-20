@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-19)
 Phase: 27 of 30 (Two-Exponential Fitting Infrastructure)
 Plan: 0 of TBD in current phase
 Status: Ready to plan
-Last activity: 2026-02-19 -- Phase 26 verified and complete (7/7 must-haves)
+Last activity: 2026-02-20 -- Completed quick task 34: Extend exact diagnostics to support TrotterDomain
 
 Progress: [░░░░░░░░░░] 0%
 
