@@ -327,7 +327,7 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    compute_sz_labels(eigen_result, hamiltonian; n_modes=20) -> Vector{SzSectorLabel}
+    compute_sz_labels(eigen_result, eigvecs, n_qubits; n_modes=20) -> Vector{SzSectorLabel}
 
 Assign Delta_Sz quantum numbers to each Lindbladian eigenvector based on the
 density matrix support structure.
@@ -335,22 +335,28 @@ density matrix support structure.
 For each eigenvector R_k (reshaped as a dim x dim matrix), computes the weight
 in each (i,j) element and groups by Delta_Sz = Sz(E_i) - Sz(E_j). Reports the
 dominant sector and purity fraction.
+
+# Arguments
+- `eigen_result`: EigenDecompositionResult from DIAG-01.
+- `eigvecs`: Unitary matrix whose columns define the working basis (e.g.
+  `hamiltonian.eigvecs` for BohrDomain, `trotter.eigvecs` for TrotterDomain).
+- `n_qubits`: Number of qubits in the system.
+- `n_modes`: Number of leading modes to label (default: 20).
 """
-function compute_sz_labels(eigen_result::EigenDecompositionResult, hamiltonian::HamHam;
-                            n_modes::Int=20)
-    dim = size(hamiltonian.data, 1)
-    n = Int(log2(dim))
+function compute_sz_labels(eigen_result::EigenDecompositionResult, eigvecs::Matrix{<:Complex},
+                            n_qubits::Int; n_modes::Int=20)
+    dim = size(eigvecs, 1)
     n_modes_actual = min(n_modes, length(eigen_result.eigenvalues))
 
     # Build total Sz operator in computational basis: sum(Z_i)/2
     Sz_comp = zeros(ComplexF64, dim, dim)
-    for site in 1:n
-        Sz_comp .+= Matrix{ComplexF64}(pad_term([Z], n, site))
+    for site in 1:n_qubits
+        Sz_comp .+= Matrix{ComplexF64}(pad_term([Z], n_qubits, site))
     end
     Sz_comp ./= 2
 
-    # Transform to Hamiltonian eigenbasis
-    V = hamiltonian.eigvecs
+    # Transform to working eigenbasis
+    V = eigvecs
     Sz_eigen = V' * Sz_comp * V
     sz_vals = real.(diag(Sz_eigen))
 
@@ -388,6 +394,17 @@ function compute_sz_labels(eigen_result::EigenDecompositionResult, hamiltonian::
     end
 
     return labels
+end
+
+"""
+    compute_sz_labels(eigen_result, hamiltonian::HamHam; n_modes=20) -> Vector{SzSectorLabel}
+
+Convenience method: delegates to the eigvecs-based method using `hamiltonian.eigvecs`.
+"""
+function compute_sz_labels(eigen_result::EigenDecompositionResult, hamiltonian::HamHam;
+                            n_modes::Int=20)
+    n_qubits = Int(log2(size(hamiltonian.data, 1)))
+    return compute_sz_labels(eigen_result, hamiltonian.eigvecs, n_qubits; n_modes=n_modes)
 end
 
 # ---------------------------------------------------------------------------
@@ -453,10 +470,15 @@ Run all six DIAG diagnostics in a single call, returning a bundled result.
 # Arguments
 - `L::Matrix{ComplexF64}`: Full dense Lindbladian superoperator.
 - `hamiltonian::HamHam`: Hamiltonian with eigenbasis data.
-- `gibbs::Hermitian`: Gibbs state (in Hamiltonian eigenbasis).
+- `gibbs::Hermitian`: Gibbs state (in the working basis -- Hamiltonian eigenbasis
+  for BohrDomain, Trotter eigenbasis for TrotterDomain).
 
 # Keyword Arguments
-- `observables`: Observable matrices (in eigenbasis). Default: [Z1, H_diag].
+- `basis_eigvecs`: Unitary matrix defining the working basis. When `nothing` (default),
+  uses `hamiltonian.eigvecs` (backward compatible with BohrDomain). For TrotterDomain,
+  pass `trotter.eigvecs` so that default observables, initial states, and Sz labels
+  are all constructed in the Trotter eigenbasis.
+- `observables`: Observable matrices (in working basis). Default: [Z1, H].
 - `observable_names`: Observable names. Default: ["Z1", "H"].
 - `initial_states`: Initial density matrices. Default: [|0>^n, |+>^n, I/dim].
 - `initial_state_names`: Names for initial states. Default: ["all_up", "all_plus", "maximally_mixed"].
@@ -467,6 +489,7 @@ function run_exact_diagnostics(
     L::Matrix{ComplexF64},
     hamiltonian::HamHam,
     gibbs::Hermitian;
+    basis_eigvecs::Union{Nothing, Matrix{<:Complex}}=nothing,
     observables::Union{Nothing, Vector{<:Matrix{<:Complex}}}=nothing,
     observable_names::Union{Nothing, Vector{String}}=nothing,
     initial_states::Union{Nothing, Vector{<:Matrix{<:Complex}}}=nothing,
@@ -476,6 +499,9 @@ function run_exact_diagnostics(
 )
     dim = size(hamiltonian.data, 1)
     n = Int(log2(dim))
+
+    # Working basis: trotter.eigvecs for TrotterDomain, hamiltonian.eigvecs otherwise
+    V = basis_eigvecs === nothing ? hamiltonian.eigvecs : Matrix{ComplexF64}(basis_eigvecs)
 
     # DIAG-01: eigendata extraction
     eigen_result = extract_leading_eigendata(L; n_modes=n_modes)
@@ -488,26 +514,24 @@ function run_exact_diagnostics(
 
     # Build default observables if not provided
     if observables === nothing
-        V = hamiltonian.eigvecs
-        # Z1 in eigenbasis
+        # Z1 in working basis
         Z1_comp = Matrix{ComplexF64}(pad_term([Z], n, 1))
         Z1_eigen = Matrix{ComplexF64}(V' * Z1_comp * V)
-        # H diagonal in eigenbasis
-        H_eigen = Matrix{ComplexF64}(diagm(ComplexF64.(hamiltonian.eigvals)))
+        # H in working basis (diagonal when V = hamiltonian.eigvecs, non-diagonal otherwise)
+        H_eigen = Matrix{ComplexF64}(V' * hamiltonian.data * V)
         observables = Matrix{ComplexF64}[Z1_eigen, H_eigen]
         observable_names = String["Z1", "H"]
     end
 
     # Build default initial states if not provided
     if initial_states === nothing
-        V = hamiltonian.eigvecs
-        # |0>^n (all spins up) -- transform to eigenbasis
+        # |0>^n (all spins up) -- transform to working basis
         psi0_comp = zeros(ComplexF64, dim)
         psi0_comp[1] = 1.0
         psi0_eigen = V' * psi0_comp
         rho_up = psi0_eigen * psi0_eigen'
 
-        # |+>^n (all X-plus) -- transform to eigenbasis
+        # |+>^n (all X-plus) -- transform to working basis
         psi_plus_comp = fill(ComplexF64(1 / sqrt(2^n)), 2^n)
         psi_plus_eigen = V' * psi_plus_comp
         rho_plus = psi_plus_eigen * psi_plus_eigen'
@@ -529,8 +553,8 @@ function run_exact_diagnostics(
         push!(overlaps_vec, overlap)
     end
 
-    # DIAG-06: symmetry sector labels
-    sz_labels = compute_sz_labels(eigen_result, hamiltonian; n_modes=n_modes)
+    # DIAG-06: symmetry sector labels (use working basis eigvecs)
+    sz_labels = compute_sz_labels(eigen_result, V, n; n_modes=n_modes)
 
     # Multiplet detection
     multiplets = detect_multiplets(eigen_result.eigenvalues)
