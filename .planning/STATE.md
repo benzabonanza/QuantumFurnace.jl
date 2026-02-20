@@ -10,16 +10,16 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 ## Current Position
 
 Phase: 28 of 31 (Other-Domain Dispatch)
-Plan: 0 of TBD complete
-Status: Ready
-Last activity: 2026-02-20 -- Completed Phase 27 (Core Matvec Infrastructure, 2/2 plans)
+Plan: 1 of 2 complete
+Status: In Progress
+Last activity: 2026-02-20 -- Completed 28-01 (Time/Trotter Domain Matvec)
 
-Progress: [██░░░░░░░░] 20% (v1.5 phases 27-31, phase 27 complete)
+Progress: [████░░░░░░] 40% (v1.5 phases 27-31, phase 28 plan 1/2 complete)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 73 (v1.0: 10, v1.1: 16, quick: 18, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 2)
+- Total plans completed: 74 (v1.0: 10, v1.1: 16, quick: 18, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 3)
 
 **By Milestone:**
 
@@ -30,7 +30,7 @@ Progress: [██░░░░░░░░] 20% (v1.5 phases 27-31, phase 27 comp
 | v1.2 Multi-threading | 12-19 | 15 (+3 quick) | 2026-02-15 to 2026-02-16 |
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
-| v1.5 Krylov Gap Estimation | 27-31 | TBD | 2026-02-20 to -- |
+| v1.5 Krylov Gap Estimation | 27-31 | 3 | 2026-02-20 to -- |
 
 ## Accumulated Context
 
@@ -46,6 +46,8 @@ Recent decisions affecting current work:
 - BLAS.gemm!/axpy! instead of mul!/broadcast for zero-allocation hot path (v1.5, 27-02)
 - Concrete-typed jump_eigenbases in KrylovWorkspace to avoid JumpOp abstract field boxing (v1.5, 27-02)
 - Separate _accumulate_adjoint_dissipator! preserving {L'L, rho} anticommutator (v1.5, 27-02)
+- _prefactor_view + broadcast multiply for zero-alloc NUFFT OFT in Krylov hot path (v1.5, 28-01)
+- _measure_matvec_allocs helper to avoid @testset soft-scope variable boxing (v1.5, 28-01)
 
 ### Deferred from v1.4
 
@@ -73,5 +75,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-20
-Stopped at: Completed Phase 27 (27-02-PLAN.md) -- ready for Phase 28 (other-domain dispatch)
+Stopped at: Completed 28-01-PLAN.md (Time/Trotter Domain Matvec) -- ready for 28-02 (BohrDomain)
 Resume file: None
