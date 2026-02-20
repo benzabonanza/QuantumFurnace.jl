@@ -10,16 +10,16 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 ## Current Position
 
 Phase: 27 of 31 (Core Matvec Infrastructure)
-Plan: --
-Status: Ready to plan
-Last activity: 2026-02-20 -- Roadmap created for v1.5 milestone
+Plan: 1 of 2 complete
+Status: Executing
+Last activity: 2026-02-20 -- Completed 27-01 (KrylovWorkspace + EnergyDomain matvec)
 
-Progress: [░░░░░░░░░░] 0% (v1.5 phases 27-31)
+Progress: [██░░░░░░░░] 10% (v1.5 phases 27-31, plan 27-01 done)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 71 (v1.0: 10, v1.1: 16, quick: 18, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2)
+- Total plans completed: 72 (v1.0: 10, v1.1: 16, quick: 18, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 1)
 
 **By Milestone:**
 
@@ -42,6 +42,9 @@ Recent decisions affecting current work:
 - Dense eigen() for exact diagnostics (v1.4): provides the reference for Krylov cross-validation
 - Canonical 6-observable set (v1.4): available for trajectory-based comparison if needed
 - Biorthogonal overlap formula (v1.4): left+right eigenvectors for diagnostics
+- KrylovWorkspace{T,PD} dual type params for zero-overhead NamedTuple access (v1.5, 27-01)
+- 3-arg mul! + @. broadcasting pattern for guaranteed zero-alloc with Adjoint wrappers (v1.5, 27-01)
+- Lazy adjoint ws.jump_oft' passed directly to dissipator helper (v1.5, 27-01)
 
 ### Deferred from v1.4
 
@@ -69,5 +72,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-20
-Stopped at: v1.5 roadmap created -- ready to plan Phase 27
+Stopped at: Completed 27-01-PLAN.md -- ready for 27-02 (round-trip tests)
 Resume file: None
