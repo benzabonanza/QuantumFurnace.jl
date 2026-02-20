@@ -24,10 +24,11 @@ end
 
 Accumulate `scalar * D_L(rho)` into `out` in-place:
 
-    D_L(rho) = L * rho * L' - 0.5 * (L'L * rho + rho * L'L)
+    D_L(rho) = conj(L) * rho * L^T - 0.5 * (L'L * rho + rho * L'L)
 
+Matches the dense kron convention: `kron(L, conj(L))` un-vectorizes to `conj(L) rho L^T`.
 Uses `ws.tmp1`, `ws.tmp2`, `ws.LdagL` as scratch. Uses BLAS.gemm! for
-Adjoint arguments to avoid boxing allocations from `mul!` with Adjoint wrappers.
+Adjoint/Transpose arguments to avoid boxing allocations from `mul!` with wrappers.
 """
 function _accumulate_dissipator!(
     out::Matrix{T},
@@ -42,18 +43,19 @@ function _accumulate_dissipator!(
     # L'L -> ws.LdagL
     BLAS.gemm!('C', 'N', CT, L_op, L_op, ZT, ws.LdagL)
 
-    # Term 1: scalar * L * rho * L'
-    BLAS.gemm!('N', 'N', CT, L_op, rho, ZT, ws.tmp1)      # tmp1 = L * rho
-    BLAS.gemm!('N', 'C', CT, ws.tmp1, L_op, ZT, ws.tmp2)   # tmp2 = L * rho * L'
-    BLAS.axpy!(T(scalar), ws.tmp2, out)
-
-    # Term 2: -0.5 * scalar * L'L * rho
-    BLAS.gemm!('N', 'N', CT, ws.LdagL, rho, ZT, ws.tmp1)   # tmp1 = L'L * rho
+    # Term 2: -0.5 * scalar * L'L * rho  (anticommutator, unchanged)
+    BLAS.gemm!('N', 'N', CT, ws.LdagL, rho, ZT, ws.tmp1)
     BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
 
-    # Term 3: -0.5 * scalar * rho * L'L
-    BLAS.gemm!('N', 'N', CT, rho, ws.LdagL, ZT, ws.tmp1)   # tmp1 = rho * L'L
+    # Term 3: -0.5 * scalar * rho * L'L  (anticommutator, unchanged)
+    BLAS.gemm!('N', 'N', CT, rho, ws.LdagL, ZT, ws.tmp1)
     BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
+
+    # Term 1: scalar * conj(L) * rho * L^T  (LdagL now free as scratch)
+    @. ws.tmp2 = conj(L_op)                                    # tmp2 = conj(L)
+    BLAS.gemm!('N', 'N', CT, ws.tmp2, rho, ZT, ws.tmp1)        # tmp1 = conj(L) * rho
+    BLAS.gemm!('N', 'T', CT, ws.tmp1, L_op, ZT, ws.LdagL)     # LdagL = conj(L) * rho * L^T
+    BLAS.axpy!(T(scalar), ws.LdagL, out)
 
     return nothing
 end
@@ -63,9 +65,9 @@ end
 
 Accumulate `scalar * D_{L'}(rho)` into `out` in-place, where the operator is L' (adjoint of L):
 
-    D_{L'}(rho) = L' * rho * L - 0.5 * ((L')' L' * rho + rho * (L')' L')
-                = L' * rho * L - 0.5 * (L L' * rho + rho * L L')
+    D_{L'}(rho) = L^T * rho * conj(L) - 0.5 * (L L' * rho + rho * L L')
 
+Matches kron convention with M = L^H: `conj(M) rho M^T = conj(L^H) rho (L^H)^T = L^T rho conj(L)`.
 Used for the negative-frequency partner in the Hermitian half-grid optimization.
 """
 function _accumulate_dissipator_adj_L!(
@@ -78,21 +80,22 @@ function _accumulate_dissipator_adj_L!(
     CT = one(T)
     ZT = zero(T)
 
-    # (L')' L' = L L' -> ws.LdagL
+    # (L')' L' = L L' -> ws.LdagL  (unchanged)
     BLAS.gemm!('N', 'C', CT, L_op, L_op, ZT, ws.LdagL)
 
-    # Term 1: scalar * L' * rho * L
-    BLAS.gemm!('C', 'N', CT, L_op, rho, ZT, ws.tmp1)       # tmp1 = L' * rho
-    BLAS.gemm!('N', 'N', CT, ws.tmp1, L_op, ZT, ws.tmp2)   # tmp2 = L' * rho * L
-    BLAS.axpy!(T(scalar), ws.tmp2, out)
-
-    # Term 2: -0.5 * scalar * L L' * rho
+    # Term 2: -0.5 * scalar * L L' * rho  (anticommutator, unchanged)
     BLAS.gemm!('N', 'N', CT, ws.LdagL, rho, ZT, ws.tmp1)
     BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
 
-    # Term 3: -0.5 * scalar * rho * L L'
+    # Term 3: -0.5 * scalar * rho * L L'  (anticommutator, unchanged)
     BLAS.gemm!('N', 'N', CT, rho, ws.LdagL, ZT, ws.tmp1)
     BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
+
+    # Term 1: scalar * L^T * rho * conj(L)  (LdagL now free)
+    @. ws.tmp2 = conj(L_op)                                    # tmp2 = conj(L)
+    BLAS.gemm!('T', 'N', CT, L_op, rho, ZT, ws.tmp1)           # tmp1 = L^T * rho
+    BLAS.gemm!('N', 'N', CT, ws.tmp1, ws.tmp2, ZT, ws.LdagL)  # LdagL = L^T * rho * conj(L)
+    BLAS.axpy!(T(scalar), ws.LdagL, out)
 
     return nothing
 end
@@ -102,10 +105,10 @@ end
 
 Accumulate `scalar * D_L*(rho)` (Hilbert-Schmidt adjoint dissipator) into `out` in-place:
 
-    D_L*(rho) = L' * rho * L - 0.5 * (L'L * rho + rho * L'L)
+    D_L*(rho) = L^T * rho * conj(L) - 0.5 * (L'L * rho + rho * L'L)
 
-The sandwich term changes from `L rho L'` (forward) to `L' rho L` (adjoint),
-but the anticommutator `{L'L, rho}` stays the same.
+HS adjoint of `conj(L) rho L^T` is `L^T rho conj(L)` (X -> X^H, Y -> Y^H).
+The anticommutator `{L'L, rho}` stays the same.
 """
 function _accumulate_adjoint_dissipator!(
     out::Matrix{T},
@@ -120,18 +123,19 @@ function _accumulate_adjoint_dissipator!(
     # L'L -> ws.LdagL (same as forward -- anticommutator is unchanged)
     BLAS.gemm!('C', 'N', CT, L_op, L_op, ZT, ws.LdagL)
 
-    # Term 1: scalar * L' * rho * L  (adjoint sandwich: L' rho L instead of L rho L')
-    BLAS.gemm!('C', 'N', CT, L_op, rho, ZT, ws.tmp1)       # tmp1 = L' * rho
-    BLAS.gemm!('N', 'N', CT, ws.tmp1, L_op, ZT, ws.tmp2)   # tmp2 = L' * rho * L
-    BLAS.axpy!(T(scalar), ws.tmp2, out)
-
-    # Term 2: -0.5 * scalar * L'L * rho  (same as forward)
+    # Term 2: -0.5 * scalar * L'L * rho  (anticommutator, unchanged)
     BLAS.gemm!('N', 'N', CT, ws.LdagL, rho, ZT, ws.tmp1)
     BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
 
-    # Term 3: -0.5 * scalar * rho * L'L  (same as forward)
+    # Term 3: -0.5 * scalar * rho * L'L  (anticommutator, unchanged)
     BLAS.gemm!('N', 'N', CT, rho, ws.LdagL, ZT, ws.tmp1)
     BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
+
+    # Term 1: scalar * L^T * rho * conj(L)  (LdagL now free)
+    @. ws.tmp2 = conj(L_op)                                    # tmp2 = conj(L)
+    BLAS.gemm!('T', 'N', CT, L_op, rho, ZT, ws.tmp1)           # tmp1 = L^T * rho
+    BLAS.gemm!('N', 'N', CT, ws.tmp1, ws.tmp2, ZT, ws.LdagL)  # LdagL = L^T * rho * conj(L)
+    BLAS.axpy!(T(scalar), ws.LdagL, out)
 
     return nothing
 end
@@ -142,9 +146,9 @@ end
 Accumulate `scalar * D_{L'}*(rho)` into `out` in-place, where the original operator is L'
 and we take the Hilbert-Schmidt adjoint of the resulting superoperator:
 
-    D_{L'}*(rho) = (L')' * rho * L' - 0.5 * ((L')' L' * rho + rho * (L')' L')
-                 = L * rho * L' - 0.5 * (L L' * rho + rho * L L')
+    D_{L'}*(rho) = conj(L) * rho * L^T - 0.5 * (L L' * rho + rho * L L')
 
+Forward for M=L^H gives sandwich `L^T rho conj(L)`. HS adjoint: `conj(L) rho L^T`.
 Used for the negative-frequency partner in the adjoint Hermitian half-grid.
 """
 function _accumulate_adjoint_dissipator_adj_L!(
@@ -157,21 +161,22 @@ function _accumulate_adjoint_dissipator_adj_L!(
     CT = one(T)
     ZT = zero(T)
 
-    # (L')' L' = L L' -> ws.LdagL
+    # (L')' L' = L L' -> ws.LdagL  (unchanged)
     BLAS.gemm!('N', 'C', CT, L_op, L_op, ZT, ws.LdagL)
 
-    # Term 1: scalar * L * rho * L'  (adjoint of D_{L'} sandwich)
-    BLAS.gemm!('N', 'N', CT, L_op, rho, ZT, ws.tmp1)       # tmp1 = L * rho
-    BLAS.gemm!('N', 'C', CT, ws.tmp1, L_op, ZT, ws.tmp2)   # tmp2 = L * rho * L'
-    BLAS.axpy!(T(scalar), ws.tmp2, out)
-
-    # Term 2: -0.5 * scalar * L L' * rho
+    # Term 2: -0.5 * scalar * L L' * rho  (anticommutator, unchanged)
     BLAS.gemm!('N', 'N', CT, ws.LdagL, rho, ZT, ws.tmp1)
     BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
 
-    # Term 3: -0.5 * scalar * rho * L L'
+    # Term 3: -0.5 * scalar * rho * L L'  (anticommutator, unchanged)
     BLAS.gemm!('N', 'N', CT, rho, ws.LdagL, ZT, ws.tmp1)
     BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
+
+    # Term 1: scalar * conj(L) * rho * L^T  (LdagL now free)
+    @. ws.tmp2 = conj(L_op)                                    # tmp2 = conj(L)
+    BLAS.gemm!('N', 'N', CT, ws.tmp2, rho, ZT, ws.tmp1)        # tmp1 = conj(L) * rho
+    BLAS.gemm!('N', 'T', CT, ws.tmp1, L_op, ZT, ws.LdagL)     # LdagL = conj(L) * rho * L^T
+    BLAS.axpy!(T(scalar), ws.LdagL, out)
 
     return nothing
 end
@@ -260,10 +265,10 @@ Compute L*(rho) (Hilbert-Schmidt adjoint) for `EnergyDomain` configs.
 
 Differences from forward `apply_lindbladian!`:
 1. Coherent term sign flip: `+i[B, rho]` instead of `-i[B, rho]`
-2. Dissipator sandwich swap: `L rho L'` becomes `L' rho L` (anticommutator unchanged)
+2. Dissipator sandwich swap: `conj(L) rho L^T` becomes `L^T rho conj(L)` (anticommutator unchanged)
 
 Uses `_accumulate_adjoint_dissipator!` which correctly preserves the `{L'L, rho}`
-anticommutator while swapping only the sandwich term.
+anticommutator while computing the HS-adjoint sandwich term.
 
 Shares the same `KrylovWorkspace` as the forward function.
 
@@ -295,9 +300,9 @@ function apply_adjoint_lindbladian!(
         @. ws.rho_out -= 1im * ws.tmp1      # -i instead of +i
     end
 
-    # Adjoint dissipator: D_L*(rho) = L' rho L - 0.5 {L'L, rho}
+    # Adjoint dissipator: D_L*(rho) = L^T rho conj(L) - 0.5 {L'L, rho}
     # Same L_op as forward, but uses _accumulate_adjoint_dissipator! which
-    # swaps the sandwich (L rho L' -> L' rho L) while keeping anticommutator {L'L, rho}.
+    # computes the HS-adjoint sandwich while keeping anticommutator {L'L, rho}.
     prefactor = (config.w0 / (config.sigma * sqrt(2 * pi))) * gamma_norm_factor
 
     for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
@@ -337,14 +342,10 @@ Accumulate `scalar * D_kron(A, B_dag)(rho)` into `out` in-place for the BohrDoma
 two-operator dissipator. The formula is derived from the dense code's kron vectorization
 convention (see `_vectorize_liouv_diss_and_add!` in qi_tools.jl):
 
-    D_kron(A, B_dag)(rho) = B_dag' * rho * A' - 0.5*((B_dag*A)' * rho + rho * (B_dag*A)')
+    D_kron(A, B_dag)(rho) = B_dag^T * rho * A^T - 0.5*((B_dag*A)^T * rho + rho * (B_dag*A)^T)
 
 Where `A` = alpha_A_nu1 (jump_1 in the dense code) and `B_dag` = A_nu2_dag (jump_2).
-The kron identity `(P kron Q) vec(X) = vec(Q X P^T)` gives the un-vectorized form:
-  `kron(j1, j2^T) vec(rho) = vec(j2^T * rho * j1^T)` with j1=A, j2=B_dag.
-
-For real-valued operators (which BohrDomain always produces: real eigenbasis + real alpha),
-adjoint = transpose, so 'C' flags are equivalent to 'T'.
+The kron identity `kron(j1, j2^T) vec(rho) = vec(j2^T * rho * j1^T)` with j1=A, j2=B_dag.
 
 Uses `ws.LdagL`, `ws.tmp1`, `ws.tmp2` as scratch. The caller must ensure `A` and `B_dag`
 are NOT stored in any of these scratch buffers.
@@ -363,18 +364,18 @@ function _accumulate_dissipator_2op!(
     # B_dag * A -> ws.LdagL (anticommutator base product)
     BLAS.gemm!('N', 'N', CT, B_dag, A, ZT, ws.LdagL)
 
-    # Term 1: scalar * B_dag' * rho * A'
-    BLAS.gemm!('C', 'N', CT, B_dag, rho, ZT, ws.tmp1)      # tmp1 = B_dag' * rho
-    BLAS.gemm!('N', 'C', CT, ws.tmp1, A, ZT, ws.tmp2)       # tmp2 = B_dag' * rho * A'
+    # Term 2: -0.5 * scalar * (B_dag*A)^T * rho  (anticommutator)
+    BLAS.gemm!('T', 'N', CT, ws.LdagL, rho, ZT, ws.tmp1)
+    BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
+
+    # Term 3: -0.5 * scalar * rho * (B_dag*A)^T  (anticommutator)
+    BLAS.gemm!('N', 'T', CT, rho, ws.LdagL, ZT, ws.tmp1)
+    BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
+
+    # Term 1: scalar * B_dag^T * rho * A^T
+    BLAS.gemm!('T', 'N', CT, B_dag, rho, ZT, ws.tmp1)      # tmp1 = B_dag^T * rho
+    BLAS.gemm!('N', 'T', CT, ws.tmp1, A, ZT, ws.tmp2)       # tmp2 = B_dag^T * rho * A^T
     BLAS.axpy!(T(scalar), ws.tmp2, out)
-
-    # Term 2: -0.5 * scalar * (B_dag*A)' * rho
-    BLAS.gemm!('C', 'N', CT, ws.LdagL, rho, ZT, ws.tmp1)   # tmp1 = LdagL' * rho
-    BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
-
-    # Term 3: -0.5 * scalar * rho * (B_dag*A)'
-    BLAS.gemm!('N', 'C', CT, rho, ws.LdagL, ZT, ws.tmp1)   # tmp1 = rho * LdagL'
-    BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
 
     return nothing
 end
@@ -408,21 +409,26 @@ function _accumulate_adjoint_dissipator_2op!(
     CT = one(T)
     ZT = zero(T)
 
-    # B_dag * A -> ws.LdagL (anticommutator product, used without transpose for adjoint)
+    # B_dag * A -> ws.LdagL
     BLAS.gemm!('N', 'N', CT, B_dag, A, ZT, ws.LdagL)
 
-    # Term 1: scalar * B_dag * rho * A  (no transpose/adjoint flags -- real-valued operators)
-    BLAS.gemm!('N', 'N', CT, B_dag, rho, ZT, ws.tmp1)      # tmp1 = B_dag * rho
-    BLAS.gemm!('N', 'N', CT, ws.tmp1, A, ZT, ws.tmp2)       # tmp2 = B_dag * rho * A
+    # conj(B_dag*A) for anticommutator terms
+    @. ws.tmp2 = conj(ws.LdagL)                                # tmp2 = conj(B_dag*A)
+
+    # Term 2: -0.5 * scalar * conj(B_dag*A) * rho
+    BLAS.gemm!('N', 'N', CT, ws.tmp2, rho, ZT, ws.tmp1)
+    BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
+
+    # Term 3: -0.5 * scalar * rho * conj(B_dag*A)
+    BLAS.gemm!('N', 'N', CT, rho, ws.tmp2, ZT, ws.tmp1)
+    BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
+
+    # Term 1: scalar * conj(B_dag) * rho * conj(A)
+    @. ws.tmp2 = conj(B_dag)                                   # tmp2 = conj(B_dag)
+    BLAS.gemm!('N', 'N', CT, ws.tmp2, rho, ZT, ws.tmp1)        # tmp1 = conj(B_dag) * rho
+    @. ws.LdagL = conj(A)                                      # LdagL = conj(A), free to reuse
+    BLAS.gemm!('N', 'N', CT, ws.tmp1, ws.LdagL, ZT, ws.tmp2)  # tmp2 = conj(B_dag) * rho * conj(A)
     BLAS.axpy!(T(scalar), ws.tmp2, out)
-
-    # Term 2: -0.5 * scalar * B_dag*A * rho
-    BLAS.gemm!('N', 'N', CT, ws.LdagL, rho, ZT, ws.tmp1)
-    BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
-
-    # Term 3: -0.5 * scalar * rho * B_dag*A
-    BLAS.gemm!('N', 'N', CT, rho, ws.LdagL, ZT, ws.tmp1)
-    BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
 
     return nothing
 end
@@ -648,7 +654,7 @@ Compute L*(rho) (Hilbert-Schmidt adjoint) for `TimeDomain` and `TrotterDomain` c
 Mirrors `_jump_contribution!` for `AbstractLiouvConfig{Union{TimeDomain, TrotterDomain}}`
 with the adjoint modifications:
 1. Coherent term sign flip: `+i[B, rho]` instead of `-i[B, rho]`
-2. Dissipator sandwich swap: `L rho L'` becomes `L' rho L` (anticommutator unchanged)
+2. Dissipator sandwich swap: `conj(L) rho L^T` becomes `L^T rho conj(L)` (anticommutator unchanged)
 
 Same NUFFT prefactor computation and scalar prefactor as the forward method
 (no prefactor changes for adjoint, per CONTEXT.md).
@@ -679,7 +685,7 @@ function apply_adjoint_lindbladian!(
         @. ws.rho_out -= 1im * ws.tmp1      # -i instead of +i
     end
 
-    # Adjoint dissipator: D_L*(rho) = L' rho L - 0.5 {L'L, rho}
+    # Adjoint dissipator: D_L*(rho) = L^T rho conj(L) - 0.5 {L'L, rho}
     # Same prefactor as forward (no changes for adjoint)
     prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
 
