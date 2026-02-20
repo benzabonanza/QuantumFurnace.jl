@@ -114,10 +114,11 @@ Plans:
   1. `apply_lindbladian!` for TimeDomain passes round-trip test against dense at n=4 (KMS + GNS), using NUFFT prefactors from existing `_precompute_data()`
   2. `apply_lindbladian!` for TrotterDomain passes round-trip test at n=4 (KMS + GNS), operating in Trotter eigenbasis (trotter.eigvecs) and producing results consistent with dense construction
   3. `apply_lindbladian!` for BohrDomain passes round-trip test at n=4 (KMS + GNS), using Bohr frequency bucket iteration with the generalized two-operator dissipator
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 28-01: TBD
+- [ ] 28-01-PLAN.md -- Time/Trotter forward+adjoint matvec with NUFFT prefactors, round-trip and allocation tests
+- [ ] 28-02-PLAN.md -- BohrDomain forward+adjoint matvec with 2op dissipator, bucket iteration, round-trip and duality tests
 
 ### Phase 29: Eigensolver Integration
 **Goal**: Users can compute spectral gaps via a single `krylov_spectral_gap()` call that wraps KrylovKit eigsolve, with both Lindbladian (:LR) and CPTP channel (:LM) targeting
