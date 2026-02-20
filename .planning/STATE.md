@@ -76,6 +76,12 @@ None
 
 None
 
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 35 | Fix Krylov matvec dissipator convention to match dense kron-based convention for complex jump operators | 2026-02-20 | ca813c9 | [35-fix-krylov-matvec-dissipator-convention-](./quick/35-fix-krylov-matvec-dissipator-convention-/) |
+
 ## Session Continuity
 
 Last session: 2026-02-20
