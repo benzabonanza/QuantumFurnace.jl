@@ -100,11 +100,11 @@ Full details: [milestones/v1.4-ROADMAP.md](milestones/v1.4-ROADMAP.md)
   2. Coherent term -i[B, rho] is included when `with_coherent=true` for KMS configs, and the round-trip test passes with coherent term enabled
   3. Adjoint Lindbladian L'(rho) (dissipator with A <-> A' swap) passes its own round-trip test against dense adjoint at n=4
   4. KrylovWorkspace pre-allocates all scratch matrices at construction time and the matvec hot path produces zero heap allocations (verified by `@allocated`)
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 27-01: TBD
-- [ ] 27-02: TBD
+- [ ] 27-01-PLAN.md -- KrylovWorkspace struct + constructor, apply_lindbladian!, apply_adjoint_lindbladian!, _accumulate_dissipator!
+- [ ] 27-02-PLAN.md -- Module integration, test helpers, round-trip correctness tests, allocation regression tests
 
 ### Phase 28: Domain Extension
 **Goal**: Matrix-free Lindbladian action works for all four domains, with proper NUFFT prefactors (Time), Trotter eigenbasis (Trotter), and Bohr bucket iteration (Bohr)
