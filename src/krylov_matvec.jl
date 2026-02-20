@@ -331,6 +331,230 @@ function apply_adjoint_lindbladian!(
 end
 
 """
+    _accumulate_dissipator_2op!(out, A, B_dag, rho, scalar, ws) -> nothing
+
+Accumulate `scalar * D(A, B_dag)(rho)` into `out` in-place for the BohrDomain two-operator
+dissipator:
+
+    D(A, B_dag)(rho) = A * rho * B_dag' - 0.5*(B_dag * A * rho + rho * B_dag * A)
+
+Where:
+- `A` = alpha_A_nu1 (dense alpha-weighted eigenbasis, dim x dim)
+- `B_dag` = A_nu2_dag (dense matrix built via scatter, dim x dim)
+- The "right" operator in the sandwich is `B_dag'` (adjoint of B_dag)
+- The anticommutator product is `B_dag * A`
+
+This is fundamentally different from the single-operator dissipator where `A = B = L`.
+Uses `ws.LdagL`, `ws.tmp1`, `ws.tmp2` as scratch. The caller must ensure `A` and `B_dag`
+are NOT stored in any of these scratch buffers.
+"""
+function _accumulate_dissipator_2op!(
+    out::Matrix{T},
+    A::Matrix{T},
+    B_dag::Matrix{T},
+    rho::Matrix{T},
+    scalar::Real,
+    ws,
+) where {T<:Complex}
+    CT = one(T)
+    ZT = zero(T)
+
+    # B_dag * A -> ws.LdagL (anticommutator product)
+    BLAS.gemm!('N', 'N', CT, B_dag, A, ZT, ws.LdagL)
+
+    # Term 1: scalar * A * rho * B_dag'
+    BLAS.gemm!('N', 'N', CT, A, rho, ZT, ws.tmp1)         # tmp1 = A * rho
+    BLAS.gemm!('N', 'C', CT, ws.tmp1, B_dag, ZT, ws.tmp2)  # tmp2 = A * rho * B_dag'
+    BLAS.axpy!(T(scalar), ws.tmp2, out)
+
+    # Term 2: -0.5 * scalar * B_dag*A * rho
+    BLAS.gemm!('N', 'N', CT, ws.LdagL, rho, ZT, ws.tmp1)
+    BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
+
+    # Term 3: -0.5 * scalar * rho * B_dag*A
+    BLAS.gemm!('N', 'N', CT, rho, ws.LdagL, ZT, ws.tmp1)
+    BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
+
+    return nothing
+end
+
+"""
+    _accumulate_adjoint_dissipator_2op!(out, A, B_dag, rho, scalar, ws) -> nothing
+
+Accumulate `scalar * D*(A, B_dag)(rho)` (Hilbert-Schmidt adjoint of the two-operator
+dissipator) into `out` in-place:
+
+    D*(A, B_dag)(rho) = A' * rho * B_dag - 0.5*(A' * B_dag * rho + rho * A' * B_dag)
+
+This is NOT a simple argument swap of the forward dissipator. The key differences:
+- Sandwich: `A * rho * B_dag'` (forward) becomes `A' * rho * B_dag` (adjoint)
+- Anticommutator: `B_dag * A` (forward) becomes `A' * B_dag` (adjoint)
+
+A simple swap of A and B_dag would give sandwich `B_dag * rho * A'` which is incorrect
+(should be `A' * rho * B_dag`). See RESEARCH.md Pitfall 5 for the full derivation.
+
+Uses `ws.LdagL`, `ws.tmp1`, `ws.tmp2` as scratch.
+"""
+function _accumulate_adjoint_dissipator_2op!(
+    out::Matrix{T},
+    A::Matrix{T},
+    B_dag::Matrix{T},
+    rho::Matrix{T},
+    scalar::Real,
+    ws,
+) where {T<:Complex}
+    CT = one(T)
+    ZT = zero(T)
+
+    # A' * B_dag -> ws.LdagL (adjoint anticommutator product)
+    BLAS.gemm!('C', 'N', CT, A, B_dag, ZT, ws.LdagL)
+
+    # Term 1: scalar * A' * rho * B_dag
+    BLAS.gemm!('C', 'N', CT, A, rho, ZT, ws.tmp1)          # tmp1 = A' * rho
+    BLAS.gemm!('N', 'N', CT, ws.tmp1, B_dag, ZT, ws.tmp2)   # tmp2 = A' * rho * B_dag
+    BLAS.axpy!(T(scalar), ws.tmp2, out)
+
+    # Term 2: -0.5 * scalar * A'*B_dag * rho
+    BLAS.gemm!('N', 'N', CT, ws.LdagL, rho, ZT, ws.tmp1)
+    BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
+
+    # Term 3: -0.5 * scalar * rho * A'*B_dag
+    BLAS.gemm!('N', 'N', CT, rho, ws.LdagL, ZT, ws.tmp1)
+    BLAS.axpy!(T(-0.5 * scalar), ws.tmp1, out)
+
+    return nothing
+end
+
+"""
+    apply_lindbladian!(ws, rho, config, hamiltonian) -> ws.rho_out
+
+Compute L(rho) for `BohrDomain` configs, storing the result in `ws.rho_out`.
+
+BohrDomain is fundamentally different from Energy/Time/Trotter:
+- Iterates over Bohr frequency buckets (`hamiltonian.bohr_dict` keys) instead of energy labels
+- Uses a generalized two-operator dissipator D(A, B_dag) where A and B_dag differ
+- Entrywise alpha computation: `alpha(bohr_freqs, nu_2) * eigenbasis` per bucket
+- No Hermitian half-grid optimization (no energy_labels loop, no transition function)
+- Scalar is just `gamma_norm_factor` (no w0/sigma prefactor formula)
+
+A_nu2_dag is built by scattering `conj(eigenbasis[i,j])` to position `[j,i]`
+(the dagger operation: swap indices and conjugate). One dense buffer is allocated
+per matvec call and reused across bucket iterations (zeroed + scattered each iteration).
+
+# Arguments
+- `ws::KrylovWorkspace`: pre-allocated workspace (scratch matrices + precomputed data)
+- `rho::Matrix{<:Complex}`: input density matrix (dim x dim)
+- `config::AbstractLiouvConfig{BohrDomain}`: Lindbladian configuration
+- `hamiltonian::HamHam`: Hamiltonian with bohr_dict and bohr_freqs
+
+# Returns
+`ws.rho_out` -- the output matrix (dim x dim), overwritten in-place each call.
+"""
+function apply_lindbladian!(
+    ws::KrylovWorkspace{T},
+    rho::Matrix{T},
+    config::AbstractLiouvConfig{BohrDomain},
+    hamiltonian::HamHam,
+) where {T<:Complex}
+    (; alpha, gamma_norm_factor) = ws.precomputed_data
+    dim = size(rho, 1)
+    fill!(ws.rho_out, 0)
+
+    # Coherent term: -i[B, rho] = -i*B*rho + i*rho*B (identical to other domains)
+    B = ws.B_total
+    if B !== nothing
+        mul!(ws.tmp1, B, rho)
+        @. ws.rho_out += -1im * ws.tmp1
+        mul!(ws.tmp1, rho, B)
+        @. ws.rho_out += 1im * ws.tmp1
+    end
+
+    # Allocate A_nu2_dag buffer (one allocation per matvec -- acceptable for Bohr)
+    A_nu2_dag = zeros(T, dim, dim)
+
+    for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
+        for nu_2 in keys(hamiltonian.bohr_dict)
+            # alpha_A: dense alpha-weighted eigenbasis
+            @. ws.jump_oft = alpha(hamiltonian.bohr_freqs, nu_2) * eigenbasis
+
+            # Build A_nu2_dag via index scatter (avoid sparse() allocation)
+            fill!(A_nu2_dag, 0)
+            indices = hamiltonian.bohr_dict[nu_2]
+            @inbounds for idx in indices
+                i = idx[1]; j = idx[2]
+                A_nu2_dag[j, i] = conj(eigenbasis[i, j])
+            end
+
+            _accumulate_dissipator_2op!(ws.rho_out, ws.jump_oft, A_nu2_dag, rho, gamma_norm_factor, ws)
+        end
+    end
+
+    return ws.rho_out
+end
+
+"""
+    apply_adjoint_lindbladian!(ws, rho, config, hamiltonian) -> ws.rho_out
+
+Compute L*(rho) (Hilbert-Schmidt adjoint) for `BohrDomain` configs.
+
+Same bucket iteration structure as the forward method but with:
+1. Coherent term sign flip: `+i[B, rho]` instead of `-i[B, rho]`
+2. Dissipator: uses `_accumulate_adjoint_dissipator_2op!` (dedicated adjoint helper,
+   NOT a simple argument swap -- see RESEARCH.md Pitfall 5)
+
+The adjoint two-operator dissipator computes:
+    D*(A, B_dag)(rho) = A' * rho * B_dag - 0.5*(A' * B_dag * rho + rho * A' * B_dag)
+
+# Arguments
+Same as `apply_lindbladian!` for `BohrDomain`.
+
+# Returns
+`ws.rho_out` -- the adjoint Lindbladian action on rho.
+"""
+function apply_adjoint_lindbladian!(
+    ws::KrylovWorkspace{T},
+    rho::Matrix{T},
+    config::AbstractLiouvConfig{BohrDomain},
+    hamiltonian::HamHam,
+) where {T<:Complex}
+    (; alpha, gamma_norm_factor) = ws.precomputed_data
+    dim = size(rho, 1)
+    fill!(ws.rho_out, 0)
+
+    # Adjoint coherent term: +i[B, rho] = +i*B*rho - i*rho*B (sign flip vs forward)
+    B = ws.B_total
+    if B !== nothing
+        mul!(ws.tmp1, B, rho)
+        @. ws.rho_out += 1im * ws.tmp1      # +i instead of -i
+        mul!(ws.tmp1, rho, B)
+        @. ws.rho_out -= 1im * ws.tmp1      # -i instead of +i
+    end
+
+    # Allocate A_nu2_dag buffer (one allocation per matvec -- acceptable for Bohr)
+    A_nu2_dag = zeros(T, dim, dim)
+
+    for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
+        for nu_2 in keys(hamiltonian.bohr_dict)
+            # alpha_A: dense alpha-weighted eigenbasis (same as forward)
+            @. ws.jump_oft = alpha(hamiltonian.bohr_freqs, nu_2) * eigenbasis
+
+            # Build A_nu2_dag via index scatter (same as forward)
+            fill!(A_nu2_dag, 0)
+            indices = hamiltonian.bohr_dict[nu_2]
+            @inbounds for idx in indices
+                i = idx[1]; j = idx[2]
+                A_nu2_dag[j, i] = conj(eigenbasis[i, j])
+            end
+
+            # Use dedicated adjoint 2op helper (NOT simple argument swap)
+            _accumulate_adjoint_dissipator_2op!(ws.rho_out, ws.jump_oft, A_nu2_dag, rho, gamma_norm_factor, ws)
+        end
+    end
+
+    return ws.rho_out
+end
+
+"""
     apply_lindbladian!(ws, rho, config, hamiltonian) -> ws.rho_out
 
 Compute L(rho) for `TimeDomain` and `TrotterDomain` configs, storing the result in `ws.rho_out`.
