@@ -2,19 +2,16 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-02-19)
+See: .planning/PROJECT.md (updated 2026-02-20)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.4 Spectral Gap Refinement -- Phase 27 (Two-Exponential Fitting Infrastructure)
+**Current focus:** Between milestones — v1.4 archived (partial), ready for next milestone
 
 ## Current Position
 
-Phase: 27 of 30 (Two-Exponential Fitting Infrastructure)
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-02-20 -- Completed quick task 34: Extend exact diagnostics to support TrotterDomain
-
-Progress: [░░░░░░░░░░] 0%
+Phase: None (between milestones)
+Status: Ready for /gsd:new-milestone
+Last activity: 2026-02-20 -- Archived v1.4 milestone (partial, Phase 26 only)
 
 ## Performance Metrics
 
@@ -29,23 +26,24 @@ Progress: [░░░░░░░░░░] 0%
 | v1.1 Reduce | 6-11 | 16 (+5 quick) | 2026-02-15 |
 | v1.2 Multi-threading | 12-19 | 15 (+3 quick) | 2026-02-15 to 2026-02-16 |
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
-| v1.4 Spectral Gap Refinement | 26-30 | 2 | 2026-02-19 to - |
+| v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
 
 ## Accumulated Context
 
 ### Decisions
 
 All decisions logged in PROJECT.md Key Decisions table.
-Recent context for v1.4:
-- All trajectory runs use `with_coherent=true`, 4 threads, Trotter steps = 10, delta is the Trotter parameter
-- Batch-level bootstrap (~3 MB) chosen over per-trajectory storage (~640 MB+) -- memory safe within 40 GB budget
-- Two-exponential fitting is the root cause fix for non-monotonic delta-scaling (Quick-32 conclusion)
-- Lindbladian fixed point (not Gibbs state) must be used as steady-state for TrotterDomain lambda_eff
-- Dense eigen() used for DIAG-01 (Arpack cannot compute left eigenvectors needed for overlap formula)
-- DIAG-03/04 defect_ratio > 0.1 is advisory-only warning, does not gate computation
-- Canonical 6-observable set: Z1, X1, Z1_Zhalf, H, Rand_traceless, Mz_stagg (replaces v1.3 8-obs set)
-- Biorthogonal overlap formula: c_k = Tr[O R_k] * Tr[L_k^dagger (rho_0 - rho_beta)] via explicit left+right eigenvectors
-- run_exact_diagnostics accepts basis_eigvecs keyword for TrotterDomain; controls default observables, initial states, and Sz labels
+
+### Deferred from v1.4
+
+The following v1.4 requirements were deferred and may be picked up in a future milestone:
+- FIT-01/02/03: Two-exponential fitting with Prony initialization
+- RATE-01/02/03/04: Effective rate lambda_eff(t) and automatic window selection
+- BOOT-01/02/03: Batched bootstrap uncertainty quantification
+- RICH-01/02/03: Richardson extrapolation with monotonicity gate
+- VAL-01/02/03/04: Diagnostic dashboard and final validation
+
+See: .planning/milestones/v1.4-ROADMAP.md and v1.4-REQUIREMENTS.md for full details.
 
 ### Pending Todos
 
@@ -53,9 +51,7 @@ None
 
 ### Blockers/Concerns
 
-- Phase 27: `_thermalize_to_liouv_config` field mapping needs targeted audit before implementation
-- Phase 29: Per-batch seeding arithmetic needs verification against existing `Xoshiro(seed + traj_id)` scheme
-- Phase 26: n=4 has g2/g1 ~ 2x, right at identifiability boundary -- validate Prony initialization early with real data
+None (milestone archived)
 
 ### Quick Tasks Completed
 
@@ -80,5 +76,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-20
-Stopped at: Quick task 34 complete -- TrotterDomain diagnostics support added
+Stopped at: v1.4 milestone archived (partial) — ready for new milestone
 Resume file: None

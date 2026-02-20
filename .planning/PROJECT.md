@@ -57,24 +57,15 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 - ✓ Eigenbasis overlap diagnostic (`eigenbasis_overlap_analysis` → `OverlapAnalysisResult`) -- v1.3
 - ✓ n=4 spectral gap cross-validated to 0.72% against exact Liouvillian eigenvalue (20k trajectories) -- v1.3
 - ✓ LsqFit.jl dependency for Levenberg-Marquardt fitting with bounded parameters -- v1.3
+- ✓ Dense left+right eigenvector extraction with biorthonormal basis for exact Lindbladian diagnostics (DIAG-01) -- v1.4
+- ✓ Lindbladian fixed point computation and trace distance to Gibbs state (DIAG-02) -- v1.4
+- ✓ KMS similarity transform anti-Hermitian defect analysis with advisory warning (DIAG-03/04) -- v1.4
+- ✓ Observable overlap coefficients via biorthogonal formula c_k = Tr[O R_k] * Tr[L_k^dagger(rho_0 - rho_beta)] (DIAG-05) -- v1.4
+- ✓ Delta-Sz symmetry sector labeling with purity fractions and multiplet detection (DIAG-06) -- v1.4
+- ✓ Canonical 6-observable set: Z1, X1, Z1_Zhalf, H, Rand_traceless, Mz_stagg (replacing v1.3 8-obs set) -- v1.4
+- ✓ run_exact_diagnostics bundle with TrotterDomain support via basis_eigvecs keyword -- v1.4
 
 ### Active
-
-## Current Milestone: v1.4 Spectral Gap Refinement
-
-**Goal:** Build comprehensive diagnostics and improved estimation methods for spectral gap estimation, validated against exact results at n=4,6, to produce reliable gap estimates for larger systems.
-
-**Target features:**
-- Exact Lindbladian reference data (leading eigenvalues, eigenvectors, fixed point deviation)
-- Anti-Hermitian defect diagnosis (KMS similarity transform, normality ratio)
-- Observable overlap analysis with exact eigenvectors (mode decomposition)
-- δ-convergence diagnosis and Richardson extrapolation
-- Effective rate plot λ_eff(t) — model-free instantaneous decay diagnostic
-- Bootstrap error bars on λ_eff(t) via trajectory resampling
-- Two-exponential fitting with robust initialization and automatic window selection
-- Symmetry sector labeling on Lindbladian eigenvalues (ΔSz quantum numbers)
-- External field comparison tests (h=0 vs h=0.1J)
-- Summary diagnostic dashboard and final validated estimates
 
 **Future milestones:**
 - [ ] 1D Ising model Hamiltonian generation
@@ -103,8 +94,8 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 
 ## Context
 
-**Current State (v1.3 shipped):**
-- 6,274 LOC src + 4,366 LOC test (Julia), 666 tests passing
+**Current State (v1.4 partial, Phase 26 shipped):**
+- 6,869 LOC src + 3,931 LOC test (Julia)
 - Tech stack: Julia, LinearAlgebra, FINUFFT, Arpack, LsqFit, BSON, StableRNGs, LibGit2, Dates
 - Both DM and trajectory simulation validated and cross-checked
 - Multi-threaded trajectory engine with per-thread workspace/RNG, BLAS control, deterministic seeding
@@ -112,17 +103,20 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 - Adaptive convergence-driven batching with configurable threshold, patience, and hard cap
 - Batch-level convergence tracking (trace distance, ZZ correlations, energy)
 - BSON experiment serialization with full metadata for reproducibility
-- Spectral gap estimation from trajectory-based observable decay with 8-observable preset bundle
-- Eigenbasis overlap diagnostic for understanding which observables couple to Lindbladian gap mode
-- n=4 gap estimation achieves <1% accuracy; n=6 limited by symmetry-protected gap mode (documented)
-- Simplified result structs (LindbladianResult, DMSimulationResult, SpectralGapResult, OverlapAnalysisResult) and 3-level call chain
+- Spectral gap estimation from trajectory-based observable decay with 6-observable canonical set
+- Eigenbasis overlap diagnostic with biorthogonal left+right eigenvector formula
+- Exact Lindbladian diagnostics: eigendata, fixed point, KMS defect, overlap coefficients, Sz sectors, multiplets
+- run_exact_diagnostics bundle with TrotterDomain support via basis_eigvecs keyword
+- n=4 gap estimation achieves <1% accuracy; n=6 gap mode symmetry-protected (diagnosed via DIAG-06)
+- Simplified result structs (LindbladianResult, DMSimulationResult, SpectralGapResult, OverlapAnalysisResult, ExactDiagnosticsResult) and 3-level call chain
 - Core structs parameterized on `{T<:AbstractFloat}` (Float64 default, Float32-ready)
 - API organized: physics building blocks exported, implementation details `_`-prefixed
 
 **Known Limitations:**
-- n=6 periodic Heisenberg chain: all preset observables have zero overlap with gap mode due to translational + discrete symmetry protection. Gap estimation accuracy ~10.7% for this system. (v1.4 target: diagnose and address via symmetry sector analysis)
-- Single-exponential fitting produces non-monotonic error at small delta. (v1.4 target: two-exponential fitting with automatic window selection)
-- Richardson extrapolation ineffective for single-exponential gap estimation error. (v1.4 target: revisit with two-exponential fitting + δ-convergence diagnosis)
+- n=6 periodic Heisenberg chain: gap mode has translational + discrete symmetry protection. Diagnosed via Sz sector labeling (DIAG-06). Disorder (random field) breaks symmetry but introduces bias.
+- Single-exponential fitting produces non-monotonic error at small delta due to multi-mode contamination (Quick-32 confirmed as fitting artifact, not simulation error)
+- Richardson extrapolation ineffective for single-exponential gap estimation error
+- Two-exponential fitting, bootstrap uncertainty, and Richardson extrapolation deferred from v1.4
 
 **Theoretical Foundation:**
 The package implements quantum Gibbs samplers from three key papers:
@@ -177,7 +171,12 @@ Results needed for publication: convergence curves (trace distance vs. steps), m
 | Consolidated single observable builder (v1.3 Phase 25) | build_preset_trajectory_observables replaces 4 separate builders | ✓ Good -- cleaner API, single entry point, 8-observable bundle |
 | CrossValidationResult removed (v1.3 Phase 25) | Thin wrapper over manual comparison; eigenbasis_overlap_analysis more useful | ✓ Good -- simpler API surface, overlap analysis provides more insight |
 | abs(real(spectral_gap)) for exact gap (v1.3) | Complex eigenvalues: real part gives decay rate; imaginary part gives oscillation frequency | ✓ Good -- locked decision, enforced throughout |
+| Dense eigen() for exact diagnostics (v1.4) | Arpack cannot compute left eigenvectors needed for biorthogonal overlap formula | ✓ Good -- handles n<=6 (4096x4096) in seconds |
+| Biorthogonal overlap formula c_k = Tr[O R_k] * Tr[L_k^dagger(rho_0 - rho_beta)] (v1.4) | Proper steady-state subtraction using exact left+right eigenvectors | ✓ Good -- explains zero-overlap mystery at n=6 |
+| Canonical 6-observable set replacing 8-obs bundle (v1.4) | Z1, X1, Z1_Zhalf, H, Rand_traceless, Mz_stagg — physically motivated from supplementary info | ✓ Good -- cleaner set, random traceless adds coverage |
+| Advisory-only defect warning at 0.1 threshold (v1.4) | Defect ratio is informational, does not gate computation | ✓ Good -- non-blocking diagnostics |
+| Left eigenvectors via transpose(inv(V_right)) (v1.4) | Transpose (not conjugate transpose) for proper biorthogonality Tr[L_k R_j] = delta_kj | ✓ Good -- validated against known systems |
 | Qiskit for circuit generation (Python interop) | Qiskit is the standard for quantum circuit representation; Julia quantum circuit ecosystem less mature | -- Pending |
 
 ---
-*Last updated: 2026-02-19 after v1.4 milestone start*
+*Last updated: 2026-02-20 after v1.4 milestone (partial) completion*

@@ -88,3 +88,27 @@
 
 ---
 
+
+## v1.4 Spectral Gap Refinement (Partial — Shipped: 2026-02-20)
+
+**Started:** 2026-02-19 | **Shipped:** 2026-02-20 (partial — Phase 26 only, Phases 27-30 deferred)
+**Phases:** 26 (1 of 5 planned) | **Plans:** 2 + 1 quick task | **Commits:** 21 since v1.3
+**Julia LOC:** 6,869 src + 3,931 test | **Files changed:** 38 (+5,882 / -1,947)
+**Git range:** feat(26-01)..035cfc4
+
+**Delivered:** Exact Lindbladian diagnostics infrastructure — dense eigendecomposition with biorthonormal left+right eigenvectors, KMS similarity transform defect analysis, observable overlap coefficients via biorthogonal formula, Delta-Sz symmetry sector labeling, and canonical 6-observable set. TrotterDomain support added via basis_eigvecs keyword.
+
+**Key accomplishments:**
+1. Dense left+right eigenvector extraction enabling biorthogonal overlap formula c_k = Tr[O R_k] * Tr[L_k^dagger(rho_0 - rho_beta)]
+2. Lindbladian fixed point computation with trace distance to Gibbs state verification
+3. KMS diagonal similarity transform for anti-Hermitian defect diagnosis (advisory-only at 0.1 threshold)
+4. Delta-Sz symmetry sector labeling explaining n=6 zero-overlap gap mode (translational + discrete symmetry protection)
+5. Canonical 6-observable set (Z1, X1, Z1_Zhalf, H, Rand_traceless, Mz_stagg) replacing v1.3 8-obs bundle
+6. run_exact_diagnostics bundle with TrotterDomain support via basis_eigvecs keyword
+
+**Deferred to future milestone:** Two-exponential fitting (FIT), effective rate plots (RATE), bootstrap uncertainty (BOOT), Richardson extrapolation (RICH), validation dashboard (VAL) — 17 requirements
+
+**Archives:** [v1.4-ROADMAP.md](milestones/v1.4-ROADMAP.md) | [v1.4-REQUIREMENTS.md](milestones/v1.4-REQUIREMENTS.md)
+
+---
+
