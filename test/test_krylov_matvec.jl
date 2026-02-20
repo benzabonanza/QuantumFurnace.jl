@@ -1,5 +1,6 @@
 using Test
 using LinearAlgebra
+using Random
 using QuantumFurnace
 
 # test_helpers.jl is already included by runtests.jl
@@ -326,6 +327,74 @@ end
             rhs = tr(Lstar_X' * Y)
 
             @test abs(lhs - rhs) < 1e-11
+        end
+    end
+
+    # ========================================================================
+    # Quick-35: Complex non-Hermitian jump operator round-trip tests
+    # Validates that Krylov matvec matches dense kron convention for
+    # general complex operators (where conj(J) rho J^T != J rho J').
+    # ========================================================================
+
+    # Create a single complex non-Hermitian jump operator for the 4-qubit test system
+    let rng = MersenneTwister(42)
+        raw_jump = randn(rng, ComplexF64, DIM, DIM) ./ sqrt(DIM)
+        jump_in_eigen = TEST_HAM.eigvecs' * raw_jump * TEST_HAM.eigvecs
+        # Not orthogonal, not Hermitian
+        complex_jump = JumpOp(raw_jump, jump_in_eigen, false, false)
+        complex_jumps = JumpOp[complex_jump]
+
+        # Testset 20: Round-trip with complex jump (EnergyDomain forward)
+        @testset "Round-trip: complex jump forward (EnergyDomain)" begin
+            config = make_liouv_config(EnergyDomain(); with_coherent=true)
+            L_dense = construct_lindbladian(complex_jumps, config, TEST_HAM)
+            ws = KrylovWorkspace(config, TEST_HAM, complex_jumps)
+            for _ in 1:10
+                rho = Matrix(random_density_matrix(NUM_QUBITS))
+                v_dense = L_dense * vec(rho)
+                L_rho = apply_lindbladian!(ws, rho, config, TEST_HAM)
+                @test norm(v_dense - vec(L_rho)) < 1e-12
+            end
+        end
+
+        # Testset 21: Round-trip with complex jump (EnergyDomain adjoint)
+        @testset "Round-trip: complex jump adjoint (EnergyDomain)" begin
+            config = make_liouv_config(EnergyDomain(); with_coherent=true)
+            L_dense = construct_lindbladian(complex_jumps, config, TEST_HAM)
+            ws = KrylovWorkspace(config, TEST_HAM, complex_jumps)
+            for _ in 1:10
+                rho = Matrix(random_density_matrix(NUM_QUBITS))
+                v_adj_dense = L_dense' * vec(rho)
+                L_adj_rho = apply_adjoint_lindbladian!(ws, rho, config, TEST_HAM)
+                @test norm(v_adj_dense - vec(L_adj_rho)) < 1e-12
+            end
+        end
+
+        # Testset 22: Adjoint duality with complex jump (EnergyDomain)
+        @testset "Adjoint duality: complex jump (EnergyDomain)" begin
+            config = make_liouv_config(EnergyDomain(); with_coherent=true)
+            ws = KrylovWorkspace(config, TEST_HAM, complex_jumps)
+            for _ in 1:5
+                X = Matrix(random_density_matrix(NUM_QUBITS))
+                Y = Matrix(random_density_matrix(NUM_QUBITS))
+                L_Y = copy(apply_lindbladian!(ws, Y, config, TEST_HAM))
+                lhs = tr(X' * L_Y)
+                Lstar_X = copy(apply_adjoint_lindbladian!(ws, X, config, TEST_HAM))
+                rhs = tr(Lstar_X' * Y)
+                @test abs(lhs - rhs) < 1e-11
+            end
+        end
+
+        # Testset 23: Round-trip with complex jump (TimeDomain forward + adjoint)
+        @testset "Round-trip: complex jump (TimeDomain)" begin
+            config_td = make_liouv_config(TimeDomain(); with_coherent=true)
+            L_dense_td = construct_lindbladian(complex_jumps, config_td, TEST_HAM)
+            ws_td = KrylovWorkspace(config_td, TEST_HAM, complex_jumps)
+            for _ in 1:10
+                rho = Matrix(random_density_matrix(NUM_QUBITS))
+                @test norm(L_dense_td * vec(rho) - vec(apply_lindbladian!(ws_td, rho, config_td, TEST_HAM))) < 1e-12
+                @test norm(L_dense_td' * vec(rho) - vec(apply_adjoint_lindbladian!(ws_td, rho, config_td, TEST_HAM))) < 1e-12
+            end
         end
     end
 
