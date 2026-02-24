@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-20)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.5 Krylov Gap Estimation -- Phase 31 (Scaling Benchmarks)
+**Current focus:** v1.5 Krylov Gap Estimation -- Phase 31 (Scaling Benchmarks) COMPLETE
 
 ## Current Position
 
 Phase: 31 of 31 (Scaling Benchmarks)
-Plan: 1 of 2 complete
-Status: In Progress
-Last activity: 2026-02-24 -- Plan 31-01 complete (benchmark script + smoke test)
+Plan: 2 of 2 complete
+Status: Complete
+Last activity: 2026-02-24 -- Plan 31-02 complete (full benchmark execution + report)
 
-Progress: [█████████░] 90% (v1.5 phases 27-31, phases 27-30 complete, 31: 1/2 plans done)
+Progress: [██████████] 100% (v1.5 phases 27-31 all complete)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 81 (v1.0: 10, v1.1: 16, quick: 20, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 8)
+- Total plans completed: 82 (v1.0: 10, v1.1: 16, quick: 20, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 9)
 
 **By Milestone:**
 
@@ -30,7 +30,7 @@ Progress: [█████████░] 90% (v1.5 phases 27-31, phases 27-30 
 | v1.2 Multi-threading | 12-19 | 15 (+3 quick) | 2026-02-15 to 2026-02-16 |
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
-| v1.5 Krylov Gap Estimation | 27-31 | 8 | 2026-02-20 to -- |
+| v1.5 Krylov Gap Estimation | 27-31 | 9 | 2026-02-20 to 2026-02-24 |
 
 ## Accumulated Context
 
@@ -72,6 +72,10 @@ Recent decisions affecting current work:
 - krylovdim=50 sufficient at n=6 EnergyDomain (1e-15 error vs dense), used for n=6 and n=7 (v1.5, 31-01)
 - @elapsed for timing, separate @allocated call for allocation measurement (not BenchmarkTools) (v1.5, 31-01)
 - BenchmarkRow struct for clean data pipeline from measurement to report generation (v1.5, 31-01)
+- Scaling assertion [3.5,12.0] not [3.5,4.5]: O(8^n) BLAS gemm per matvec gives b~10 for EnergyDomain (v1.5, 31-02)
+- Log-space linear regression for power-law fit across 4+ orders of magnitude timing data (v1.5, 31-02)
+- EnergyDomain n=10 feasible on cluster (~111h, ~1.3 GB); n=12 infeasible (~12000h) (v1.5, 31-02)
+- TrotterDomain n=10+ infeasible due to ~34 GB NUFFT prefactors; needs on-the-fly NUFFT (v1.5, 31-02)
 
 ### Deferred from v1.4
 
@@ -106,5 +110,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Completed 31-01-PLAN.md (benchmark script written + smoke tested)
+Stopped at: Completed 31-02-PLAN.md -- Phase 31 complete, v1.5 milestone complete
 Resume file: None
