@@ -9,14 +9,48 @@ using QuantumFurnace
 # Comprehensive tests for krylov_eigsolve.jl: spectral gap, channel path,
 # domain coverage, guard rails, and eigenvalue properties.
 # Phase 29: Eigensolver Integration
+# Quick-36: Faithful Chen channel for apply_delta_channel!
 # ============================================================================
 
 @testset "Krylov Eigsolve" begin
 
     # ========================================================================
-    # Testset 1: apply_delta_channel! round-trip vs dense
+    # Testset 1: apply_delta_channel! faithful Chen channel
     # ========================================================================
-    @testset "apply_delta_channel! round-trip vs dense" begin
+    @testset "apply_delta_channel! faithful Chen channel" begin
+        config_therm = make_thermalize_config(EnergyDomain(); with_coherent=true, delta=0.01)
+        config_liouv = make_liouv_config(EnergyDomain(); with_coherent=true)
+        ws = KrylovWorkspace(config_therm, TEST_HAM, TEST_JUMPS)
+        delta = config_therm.delta
+
+        # Dense Lindbladian for Euler comparison
+        L_dense = construct_lindbladian(TEST_JUMPS, config_liouv, TEST_HAM)
+        I_d2 = Matrix{ComplexF64}(LinearAlgebra.I(DIM^2))
+
+        for _ in 1:5
+            rho = Matrix(random_density_matrix(NUM_QUBITS))
+
+            # Faithful Chen channel
+            apply_delta_channel!(ws, rho, config_liouv, TEST_HAM)
+            rho_chen = copy(ws.rho_out)
+
+            # Trace preservation: tr(E(rho)) == tr(rho)
+            @test isapprox(real(tr(rho_chen)), real(tr(rho)); atol=1e-10)
+
+            # Positivity: eigenvalues of E(rho) >= -eps for valid density matrix input
+            eigs = eigvals(Hermitian(rho_chen))
+            @test all(eigs .> -1e-10)
+
+            # O(delta^2) close to Euler: |E_chen(rho) - E_euler(rho)| < C * delta^2
+            v_euler = (I_d2 + delta * L_dense) * vec(rho)
+            @test norm(vec(rho_chen) - v_euler) < 50 * delta^2
+        end
+    end
+
+    # ========================================================================
+    # Testset 1b: Legacy Euler apply_delta_channel! still works
+    # ========================================================================
+    @testset "apply_delta_channel! legacy Euler" begin
         config = make_liouv_config(EnergyDomain(); with_coherent=true)
         L_dense = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
         ws = KrylovWorkspace(config, TEST_HAM, TEST_JUMPS)
@@ -27,7 +61,7 @@ using QuantumFurnace
             rho = Matrix(random_density_matrix(NUM_QUBITS))
             # Dense: (I + delta * L) * vec(rho)
             v_dense = (I_d2 + delta * L_dense) * vec(rho)
-            # Krylov: apply_delta_channel!
+            # Krylov: apply_delta_channel! (legacy 5-arg Euler form)
             apply_delta_channel!(ws, rho, delta, config, TEST_HAM)
             @test isapprox(vec(ws.rho_out), v_dense; atol=1e-12)
         end
@@ -107,8 +141,10 @@ using QuantumFurnace
         result = krylov_spectral_gap(config_therm, TEST_HAM, TEST_JUMPS;
             krylovdim=30, howmany=4)
 
-        # Channel path has O(delta^2) error from linear approximation
-        @test isapprox(result.spectral_gap, dense_result.spectral_gap; rtol=1e-3)
+        # Channel path has O(delta^2) error from eigenvalue conversion formula
+        # lambda_L = (mu-1)/delta is exact for linear channel but approximate for
+        # faithful Chen channel whose eigenvalues differ from 1+delta*lambda by O(delta^2)
+        @test isapprox(result.spectral_gap, dense_result.spectral_gap; rtol=2e-3)
 
         # Channel-specific fields are populated
         @test result.channel_eigenvalues !== nothing

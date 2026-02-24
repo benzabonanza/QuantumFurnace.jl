@@ -138,26 +138,79 @@ end
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# apply_delta_channel!
+# apply_delta_channel! -- Faithful Chen CPTP channel (Eq. 3.2)
 # ---------------------------------------------------------------------------
 
 """
-    apply_delta_channel!(ws, rho, delta, config_liouv, hamiltonian) -> ws.rho_out
+    apply_delta_channel!(ws, rho, config_liouv, hamiltonian) -> ws.rho_out
 
-Compute the CPTP channel action E(rho) = rho + delta * L(rho).
+Apply the faithful Chen CPTP channel (Eq. 3.2) to a density matrix.
 
-First computes L(rho) via `apply_lindbladian!` (writing to `ws.rho_out`),
-then overwrites `ws.rho_out` with `rho + delta * ws.rho_out`.
+Uses precomputed channel matrices (K0, U_residual, U_coherent) from the workspace
+(populated by the ThermalizeConfig constructor). The per-matvec computation is:
+
+    1. Coherent rotation: rho_eff = U_coherent * rho * U_coherent' (if coherent enabled)
+    2. Jump sandwich: rho_jump = delta * sum rate^2 * L * rho_eff * L'
+    3. Assembly: E(rho) = K0 * rho_eff * K0' + rho_jump + U_res * rho_eff * U_res'
 
 # Arguments
-- `ws::KrylovWorkspace{T}`: Pre-allocated workspace
+- `ws::KrylovWorkspace{T}`: Pre-allocated workspace with channel fields populated
 - `rho::Matrix{T}`: Input density matrix (dim x dim)
-- `delta::Real`: Time step from ThermalizeConfig
-- `config_liouv::AbstractLiouvConfig`: Lindbladian configuration (NOT ThermalizeConfig)
+- `config_liouv::AbstractLiouvConfig`: Lindbladian configuration (for sandwich dispatch)
 - `hamiltonian::HamHam`: Hamiltonian
 
 # Returns
 `ws.rho_out` containing E(rho).
+"""
+function apply_delta_channel!(
+    ws::KrylovWorkspace{T},
+    rho::Matrix{T},
+    config_liouv::AbstractLiouvConfig,
+    hamiltonian::HamHam,
+) where {T<:Complex}
+    K0 = ws.channel_K0
+    U_res = ws.channel_U_residual
+    U_coh = ws.channel_U_coherent
+    delta = ws.channel_delta
+
+    # 1. Coherent rotation: rho_eff = U_coh * rho * U_coh'
+    #    Use ws.LdagL as scratch for rho_eff (safe: LdagL not used until sandwich loop)
+    if U_coh !== nothing
+        mul!(ws.tmp1, U_coh, rho)
+        mul!(ws.LdagL, ws.tmp1, U_coh')
+        rho_eff = ws.LdagL
+    else
+        rho_eff = rho
+    end
+
+    # 2. Accumulate jump sandwich: rho_jump = delta * sum rate^2 * L * rho_eff * L'
+    fill!(ws.channel_rho_jump, 0)
+    _accumulate_jump_sandwich!(ws.channel_rho_jump, ws, rho_eff, delta, config_liouv, hamiltonian)
+
+    # 3. Need a safe copy of rho_eff before overwriting rho_out
+    #    If U_coh !== nothing, rho_eff = ws.LdagL (not aliased with rho_out) -- safe
+    #    If U_coh === nothing, rho_eff = rho (input arg) -- safe
+    #    So rho_eff is always safe to read after we write rho_out.
+
+    # Assembly: rho_out = K0 * rho_eff * K0' + rho_jump + U_res * rho_eff * U_res'
+    mul!(ws.tmp1, K0, rho_eff)
+    mul!(ws.rho_out, ws.tmp1, K0')
+
+    ws.rho_out .+= ws.channel_rho_jump
+
+    mul!(ws.tmp1, U_res, rho_eff)
+    mul!(ws.rho_out, ws.tmp1, U_res', 1.0, 1.0)
+
+    return ws.rho_out
+end
+
+"""
+    apply_delta_channel!(ws, rho, delta, config_liouv, hamiltonian) -> ws.rho_out
+
+Legacy Euler approximation: E(rho) = rho + delta * L(rho).
+
+Retained for backward compatibility with workspaces that have no precomputed
+channel fields (i.e., constructed via the LiouvConfig constructor).
 """
 function apply_delta_channel!(
     ws::KrylovWorkspace{T},
@@ -171,6 +224,153 @@ function apply_delta_channel!(
     # E(rho) = rho + delta * L(rho) -> ws.rho_out
     @. ws.rho_out = rho + delta * ws.rho_out
     return ws.rho_out
+end
+
+# ---------------------------------------------------------------------------
+# _accumulate_jump_sandwich!: domain-dispatched physics-convention sandwiches
+# ---------------------------------------------------------------------------
+
+"""
+    _accumulate_jump_sandwich!(out, ws, rho, delta, config, hamiltonian) -> nothing
+
+Accumulate `delta * sum rate^2 * L * rho * L'` (physics convention sandwich)
+into `out`. Domain-dispatched for EnergyDomain.
+
+Matches the rho_jump accumulation in `_jump_contribution!` for EnergyDomain
+(jump_workers.jl) but operating on pre-rotated rho_eff.
+"""
+function _accumulate_jump_sandwich!(
+    out::Matrix{T},
+    ws::KrylovWorkspace{T},
+    rho::Matrix{T},
+    delta::Real,
+    config::AbstractLiouvConfig{EnergyDomain},
+    hamiltonian::HamHam,
+) where {T<:Complex}
+    (; transition, gamma_norm_factor, energy_labels) = ws.precomputed_data
+    bohr_freqs = hamiltonian.bohr_freqs
+    inv_4sigma2 = 1.0 / (4 * config.sigma^2)
+    prefactor = (config.w0 / (config.sigma * sqrt(2 * pi))) * gamma_norm_factor
+
+    for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
+        is_herm = ws.jump_hermitian[k]
+        if is_herm
+            for w_raw in energy_labels
+                w_raw > 1e-12 && continue
+                w = abs(w_raw)
+                _krylov_oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+                rate2 = prefactor * transition(w)
+                # Physics convention sandwich: delta * rate2 * L * rho * L'
+                mul!(ws.tmp1, rho, ws.jump_oft')          # tmp1 = rho * L'
+                mul!(out, ws.jump_oft, ws.tmp1, delta * rate2, 1.0)  # out += d*r2 * L * rho * L'
+                if w > 1e-12
+                    rate2_neg = prefactor * transition(-w)
+                    # Neg freq: L_neg = L', sandwich = L' * rho * L
+                    mul!(ws.tmp1, rho, ws.jump_oft)        # tmp1 = rho * L
+                    mul!(out, ws.jump_oft', ws.tmp1, delta * rate2_neg, 1.0)
+                end
+            end
+        else
+            for w in energy_labels
+                _krylov_oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+                rate2 = prefactor * transition(w)
+                mul!(ws.tmp1, rho, ws.jump_oft')
+                mul!(out, ws.jump_oft, ws.tmp1, delta * rate2, 1.0)
+            end
+        end
+    end
+    return nothing
+end
+
+"""
+    _accumulate_jump_sandwich!(out, ws, rho, delta, config, hamiltonian) -> nothing
+
+TimeDomain / TrotterDomain version: same structure but uses NUFFT prefactor OFT.
+"""
+function _accumulate_jump_sandwich!(
+    out::Matrix{T},
+    ws::KrylovWorkspace{T},
+    rho::Matrix{T},
+    delta::Real,
+    config::AbstractLiouvConfig{D},
+    hamiltonian::HamHam,
+) where {T<:Complex, D<:Union{TimeDomain, TrotterDomain}}
+    (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = ws.precomputed_data
+    prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
+
+    for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
+        is_herm = ws.jump_hermitian[k]
+        if is_herm
+            for w_raw in energy_labels
+                w_raw > 1e-12 && continue
+                w = abs(w_raw)
+                nufft_pf = _prefactor_view(oft_nufft_prefactors, w)
+                @. ws.jump_oft = eigenbasis * nufft_pf
+                rate2 = prefactor * transition(w)
+                mul!(ws.tmp1, rho, ws.jump_oft')
+                mul!(out, ws.jump_oft, ws.tmp1, delta * rate2, 1.0)
+                if w > 1e-12
+                    rate2_neg = prefactor * transition(-w)
+                    mul!(ws.tmp1, rho, ws.jump_oft)
+                    mul!(out, ws.jump_oft', ws.tmp1, delta * rate2_neg, 1.0)
+                end
+            end
+        else
+            for w in energy_labels
+                nufft_pf = _prefactor_view(oft_nufft_prefactors, w)
+                @. ws.jump_oft = eigenbasis * nufft_pf
+                rate2 = prefactor * transition(w)
+                mul!(ws.tmp1, rho, ws.jump_oft')
+                mul!(out, ws.jump_oft, ws.tmp1, delta * rate2, 1.0)
+            end
+        end
+    end
+    return nothing
+end
+
+"""
+    _accumulate_jump_sandwich!(out, ws, rho, delta, config, hamiltonian) -> nothing
+
+BohrDomain version: iterates over Bohr frequency buckets.
+
+The physics-convention sandwich for BohrDomain is:
+    rho_jump += delta * gamma_norm_factor * alpha_A * rho * A_nu2_dag
+Matching jump_workers.jl:276-277.
+"""
+function _accumulate_jump_sandwich!(
+    out::Matrix{T},
+    ws::KrylovWorkspace{T},
+    rho::Matrix{T},
+    delta::Real,
+    config::AbstractLiouvConfig{BohrDomain},
+    hamiltonian::HamHam,
+) where {T<:Complex}
+    (; alpha, gamma_norm_factor) = ws.precomputed_data
+    dim = size(rho, 1)
+    # Allocate A_nu2_dag buffer (one per call, acceptable for Bohr)
+    A_nu2_dag = zeros(T, dim, dim)
+
+    for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
+        for nu_2 in keys(hamiltonian.bohr_dict)
+            # alpha_A = B_nu2
+            @. ws.jump_oft = alpha(hamiltonian.bohr_freqs, nu_2) * eigenbasis
+
+            # Build A_nu2_dag: entrywise rho*A_nu2_dag via scatter (matches thermalization code)
+            fill!(ws.tmp1, 0)
+            indices = hamiltonian.bohr_dict[nu_2]
+            @inbounds for idx in indices
+                i = idx[1]; j = idx[2]
+                v = conj(eigenbasis[i, j])
+                @inbounds for p in 1:dim
+                    ws.tmp1[p, i] += rho[p, j] * v  # tmp1 = rho * A_nu2_dag
+                end
+            end
+
+            # out += delta * gamma_norm_factor * alpha_A * (rho * A_nu2_dag)
+            mul!(out, ws.jump_oft, ws.tmp1, delta * gamma_norm_factor, 1.0)
+        end
+    end
+    return nothing
 end
 
 # ---------------------------------------------------------------------------
@@ -282,12 +482,15 @@ end
 """
     krylov_spectral_gap(config::AbstractThermalizeConfig, hamiltonian, jumps; kwargs...) -> KrylovGapResult
 
-Compute the Lindbladian spectral gap via the CPTP channel E(rho) = rho + delta * L(rho),
+Compute the Lindbladian spectral gap via the faithful Chen CPTP channel (Eq. 3.2),
 using KrylovKit Arnoldi with `:LM` targeting.
 
 The channel eigenvalues mu are related to Lindbladian eigenvalues by the exact linear
 formula: `lambda_L = (mu - 1) / delta`. The steady state has mu ~ 1 (largest magnitude),
 and the gap is recovered from the second eigenvalue after conversion.
+
+The channel is CPTP and O(delta^2) accurate, matching what `run_thermalization`
+actually implements via `_finalize_kraus_step!`.
 
 # Arguments
 - `config::AbstractThermalizeConfig`: Thermalization configuration (provides delta)
@@ -314,25 +517,24 @@ function krylov_spectral_gap(
 )
     # Guards
     krylovdim > howmany || error("krylovdim ($krylovdim) must be > howmany ($howmany)")
-
-    # Convert ThermalizeConfig -> LiouvConfig for apply_lindbladian! dispatch
-    config_liouv = _thermalize_to_liouv_config(config)
-
     _check_krylov_memory(config.num_qubits, krylovdim)
 
     # Get delta from config
     delta = config.delta
 
-    # Allocate workspace using the LiouvConfig
-    ws = KrylovWorkspace(config_liouv, hamiltonian, jumps; trotter=trotter)
+    # Convert ThermalizeConfig -> LiouvConfig for sandwich dispatch
+    config_liouv = _thermalize_to_liouv_config(config)
+
+    # Allocate workspace using ThermalizeConfig constructor (precomputes channel matrices)
+    ws = KrylovWorkspace(config, hamiltonian, jumps; trotter=trotter)
 
     # Dimensions
     dim = size(hamiltonian.data, 1)
 
-    # Build channel matvec closure
+    # Build channel matvec closure using faithful Chen channel
     function channel_matvec(v::AbstractVector)
         rho = reshape(v, dim, dim)
-        apply_delta_channel!(ws, rho, delta, config_liouv, hamiltonian)
+        apply_delta_channel!(ws, rho, config_liouv, hamiltonian)
         return copy(vec(ws.rho_out))  # CRITICAL: copy to avoid aliasing
     end
 
