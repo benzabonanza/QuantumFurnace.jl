@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-02-20)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.5 Krylov Gap Estimation -- Phase 30 (Cross-validation)
+**Current focus:** v1.5 Krylov Gap Estimation -- Phase 31 (Scaling Benchmarks)
 
 ## Current Position
 
-Phase: 30 of 31 (Cross-validation)
-Plan: 2 of 2 complete
-Status: Phase Complete
-Last activity: 2026-02-24 -- Completed 30-02: n=6 env-gated KMS cross-validation (all 4 domains, atol=1e-6)
+Phase: 31 of 31 (Scaling Benchmarks)
+Plan: 0 of ? complete
+Status: Ready
+Last activity: 2026-02-24 -- Phase 30 verified (4/4 must-haves passed)
 
 Progress: [████████░░] 80% (v1.5 phases 27-31, phases 27-30 complete, 31 pending)
 
@@ -30,7 +30,7 @@ Progress: [████████░░] 80% (v1.5 phases 27-31, phases 27-30 
 | v1.2 Multi-threading | 12-19 | 15 (+3 quick) | 2026-02-15 to 2026-02-16 |
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
-| v1.5 Krylov Gap Estimation | 27-31 | 7 | 2026-02-20 to -- |
+| v1.5 Krylov Gap Estimation | 27-31 | 8 | 2026-02-20 to -- |
 
 ## Accumulated Context
 
@@ -103,5 +103,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Completed 30-02-PLAN.md (n=6 env-gated KMS cross-validation, Phase 30 complete)
+Stopped at: Phase 30 complete and verified -- Ready for Phase 31
 Resume file: None

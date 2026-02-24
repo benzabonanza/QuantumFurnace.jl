@@ -86,7 +86,7 @@ Full details: [milestones/v1.4-ROADMAP.md](milestones/v1.4-ROADMAP.md)
 - [x] **Phase 27: Core Matvec Infrastructure** - KrylovWorkspace, EnergyDomain matvec, coherent term, adjoint, round-trip correctness gate
 - [x] **Phase 28: Domain Extension** - Matrix-free Lindbladian action for TimeDomain, TrotterDomain, and BohrDomain
 - [x] **Phase 29: Eigensolver Integration** - KrylovKit eigsolve wrapper, CPTP channel path, result struct, memory guard, convergence handling
-- [ ] **Phase 30: Cross-Validation** - Krylov gap vs dense eigen() at n=4,6; L-vs-E consistency; KMS-vs-GNS comparison
+- [x] **Phase 30: Cross-Validation** - Krylov gap vs dense eigen() at n=4,6; L-vs-E consistency; KMS-vs-GNS comparison
 - [ ] **Phase 31: Scaling Benchmarks** - Timing and memory at n=3-7, 4^n scaling fit, per-matvec breakdown, extrapolation to n=10,12
 
 ## Phase Details
@@ -144,11 +144,11 @@ Plans:
   2. Krylov gap matches dense eigen() gap to < 1e-6 at n=6 for all 4 domains with KMS balance
   3. Krylov Lindbladian gap and Krylov channel gap are consistent: gap_L approximately equals -log(|lambda_2(E)|)/delta, within O(delta^2) tolerance
   4. Krylov KMS vs GNS gap comparison at n=4 produces results consistent with existing dense-method gap values
-**Plans:** 2 plans
+**Plans:** 2 plans -- completed 2026-02-24
 
 Plans:
-- [ ] 30-01-PLAN.md -- n=4 cross-validation (KMS + GNS all domains), L-vs-E convergence, helper functions, runtests.jl include
-- [ ] 30-02-PLAN.md -- n=6 env-gated cross-validation (KMS all domains), n=6 test system factories
+- [x] 30-01-PLAN.md -- n=4 cross-validation (KMS + GNS all domains), L-vs-E convergence, helper functions, runtests.jl include
+- [x] 30-02-PLAN.md -- n=6 env-gated cross-validation (KMS all domains), n=6 test system factories
 
 ### Phase 31: Scaling Benchmarks
 **Goal**: Empirical timing and memory data at n=3-7 establishes the 4^n scaling law and produces resource estimates for n=10,12 production runs
@@ -200,5 +200,5 @@ Phases execute in numeric order: 27 -> 28 -> 29 -> 30 -> 31
 | 27. Core Matvec Infrastructure | v1.5 | 2/2 | Complete | 2026-02-20 |
 | 28. Domain Extension | v1.5 | 2/2 | Complete | 2026-02-20 |
 | 29. Eigensolver Integration | v1.5 | 2/2 | Complete | 2026-02-24 |
-| 30. Cross-Validation | v1.5 | 0/TBD | Not started | - |
+| 30. Cross-Validation | v1.5 | 2/2 | Complete | 2026-02-24 |
 | 31. Scaling Benchmarks | v1.5 | 0/TBD | Not started | - |
