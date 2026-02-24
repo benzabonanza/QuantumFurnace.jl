@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 ## Current Position
 
 Phase: 31 of 31 (Scaling Benchmarks)
-Plan: 0 of ? complete
-Status: Ready
-Last activity: 2026-02-24 -- Phase 30 verified (4/4 must-haves passed)
+Plan: 1 of 2 complete
+Status: In Progress
+Last activity: 2026-02-24 -- Plan 31-01 complete (benchmark script + smoke test)
 
-Progress: [████████░░] 80% (v1.5 phases 27-31, phases 27-30 complete, 31 pending)
+Progress: [█████████░] 90% (v1.5 phases 27-31, phases 27-30 complete, 31: 1/2 plans done)
 
 ## Performance Metrics
 
@@ -69,6 +69,9 @@ Recent decisions affecting current work:
 - atol=1e-6 for n=6 cross-validation (looser than n=4 due to larger Krylov subspace approximation error at dim^2=4096) (v1.5, 30-02)
 - No GNS at n=6 per locked decision (n=4 sufficient for balance-type correctness) (v1.5, 30-02)
 - Dedicated n6_trotter and n6_trotter_sys for TrotterDomain (separate eigenbasis from Hamiltonian) (v1.5, 30-02)
+- krylovdim=50 sufficient at n=6 EnergyDomain (1e-15 error vs dense), used for n=6 and n=7 (v1.5, 31-01)
+- @elapsed for timing, separate @allocated call for allocation measurement (not BenchmarkTools) (v1.5, 31-01)
+- BenchmarkRow struct for clean data pipeline from measurement to report generation (v1.5, 31-01)
 
 ### Deferred from v1.4
 
@@ -103,5 +106,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Phase 30 complete and verified -- Ready for Phase 31
+Stopped at: Completed 31-01-PLAN.md (benchmark script written + smoke tested)
 Resume file: None
