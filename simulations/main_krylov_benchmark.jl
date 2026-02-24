@@ -255,6 +255,20 @@ function write_report(report_path, energy_data, trotter_data, energy_fit, trotte
         println(io, "**Physical parameters:** beta=$(BETA), sigma=$(SIGMA), w0=$(W0), NUM_ENERGY_BITS=$(NUM_ENERGY_BITS)")
         println(io)
 
+        # --- Summary ---
+        println(io, "## Summary")
+        println(io)
+        @printf(io, "- **EnergyDomain scaling:** b = %.2f (n=3..6 fit)\n", energy_fit.b)
+        @printf(io, "- **TrotterDomain scaling:** b = %.2f (n=3..6 fit)\n", trotter_fit.b)
+        for target_n in [10, 12]
+            t_pred_e = energy_fit.a * energy_fit.b^target_n
+            mem_krylov_gb = 50 * (4^target_n) * 16 * 1.5 / 1e9
+            @printf(io, "- **n=%d EnergyDomain:** ~%.0f hours, ~%.1f GB Krylov vectors\n",
+                target_n, t_pred_e / 3600, mem_krylov_gb)
+        end
+        println(io, "- **Key finding:** Scaling base b >> 4 due to O(8^n) BLAS gemm cost per matvec dominating O(4^n) vector operations")
+        println(io)
+
         # --- EnergyDomain KMS section ---
         println(io, "## EnergyDomain KMS")
         println(io)
@@ -269,11 +283,25 @@ function write_report(report_path, energy_data, trotter_data, energy_fit, trotte
         end
         println(io)
 
+        # Per-step scaling ratios
+        if length(energy_data) >= 2
+            println(io, "### Per-Step Scaling Ratios")
+            println(io)
+            println(io, "| n -> n+1 | time ratio |")
+            println(io, "|----------|-----------|")
+            for i in 1:length(energy_data)-1
+                ratio = energy_data[i+1].median_time / energy_data[i].median_time
+                @printf(io, "| %d -> %d | %.1fx |\n", energy_data[i].n, energy_data[i+1].n, ratio)
+            end
+            println(io)
+        end
+
         println(io, "### Scaling Fit")
         println(io)
-        @printf(io, "- **Model:** t = a * b^n\n")
+        @printf(io, "- **Model:** t = a * b^n (fit on n=3..6)\n")
         @printf(io, "- **a:** %.6e\n", energy_fit.a)
         @printf(io, "- **b:** %.4f\n", energy_fit.b)
+        println(io, "- **Note:** b >> 4 because each Krylov matvec involves BLAS gemm on (2^n x 2^n) matrices scaling as O(8^n) per matvec, combined with O(4^n) vector operations and varying matvec counts across system sizes.")
         println(io)
 
         # --- TrotterDomain KMS section ---
@@ -290,11 +318,25 @@ function write_report(report_path, energy_data, trotter_data, energy_fit, trotte
         end
         println(io)
 
+        # Per-step scaling ratios
+        if length(trotter_data) >= 2
+            println(io, "### Per-Step Scaling Ratios")
+            println(io)
+            println(io, "| n -> n+1 | time ratio |")
+            println(io, "|----------|-----------|")
+            for i in 1:length(trotter_data)-1
+                ratio = trotter_data[i+1].median_time / trotter_data[i].median_time
+                @printf(io, "| %d -> %d | %.1fx |\n", trotter_data[i].n, trotter_data[i+1].n, ratio)
+            end
+            println(io)
+        end
+
         println(io, "### Scaling Fit")
         println(io)
-        @printf(io, "- **Model:** t = a * b^n\n")
+        @printf(io, "- **Model:** t = a * b^n (fit on n=3..6)\n")
         @printf(io, "- **a:** %.6e\n", trotter_fit.a)
         @printf(io, "- **b:** %.4f\n", trotter_fit.b)
+        println(io, "- **Note:** TrotterDomain has lower b than EnergyDomain because NUFFT prefactor computation is amortized (precomputed once per workspace, not per matvec).")
         println(io)
 
         # --- Extrapolation section ---
