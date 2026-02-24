@@ -154,6 +154,99 @@ function run_le_convergence(domain, hamiltonian, jumps;
     return (; gap_L, rows, orders)
 end
 
+# ---------------------------------------------------------------------------
+# n=6 config and system factories (for XVAL-02 env-gated tests)
+# ---------------------------------------------------------------------------
+
+"""
+    make_n6_liouv_config(domain; with_coherent=true) -> LiouvConfig
+
+Create a LiouvConfig with num_qubits=6, using the same physical parameters as n=4.
+"""
+function make_n6_liouv_config(domain; with_coherent::Bool=true)
+    LiouvConfig(
+        num_qubits = 6,
+        with_coherent = with_coherent,
+        with_linear_combination = true,
+        domain = domain,
+        beta = BETA,
+        sigma = SIGMA,
+        a = BETA / 30.0,
+        b = 0.4,
+        num_energy_bits = NUM_ENERGY_BITS,
+        w0 = W0,
+        t0 = T0,
+        num_trotter_steps_per_t0 = NUM_TROTTER_STEPS_PER_T0,
+    )
+end
+
+"""
+    make_n6_test_system(; trotter=nothing) -> NamedTuple
+
+Load the 6-qubit disordered Heisenberg Hamiltonian at inverse temperature BETA
+and create 18 single-site Pauli jump operators (X, Y, Z on each of 6 sites),
+normalized by sqrt(18).
+
+Returns `(; hamiltonian, jumps, gibbs, n_qubits=6)`.
+"""
+function make_n6_test_system(; trotter::Union{Nothing, TrottTrott}=nothing)
+    n_qubits = 6
+    source_root = dirname(@__DIR__)
+    ham_path = joinpath(source_root, "hamiltonians", "heis_disordered_periodic_n$(n_qubits).bson")
+    hamiltonian = _load_test_hamiltonian(ham_path, BETA)
+
+    # Create jump operators: single-site Paulis (X, Y, Z) on each site
+    jump_paulis = [[X], [Y], [Z]]
+    jump_sites = 1:n_qubits
+    num_of_jumps = length(jump_paulis) * length(jump_sites)
+    jump_normalization = sqrt(num_of_jumps)
+
+    # Select basis: trotter.eigvecs for TrotterDomain, hamiltonian.eigvecs otherwise
+    basis_unitary = trotter !== nothing ? trotter.eigvecs : hamiltonian.eigvecs
+
+    jumps = JumpOp[]
+    for pauli in jump_paulis
+        for site in jump_sites
+            jump_op = Matrix(pad_term(pauli, n_qubits, site)) ./ jump_normalization
+            jump_in_eigen = basis_unitary' * jump_op * basis_unitary
+            orthogonal = (jump_op == transpose(jump_op))
+            herm = (jump_op == jump_op')
+            push!(jumps, JumpOp(jump_op, jump_in_eigen, orthogonal, herm))
+        end
+    end
+
+    gibbs = hamiltonian.gibbs
+    return (; hamiltonian, jumps, gibbs, n_qubits)
+end
+
+"""
+    make_n6_thermalize_config(domain; with_coherent=true, delta=TEST_DELTA) -> ThermalizeConfig
+
+Create a ThermalizeConfig with num_qubits=6, using the same physical parameters as n=4.
+"""
+function make_n6_thermalize_config(domain;
+    with_coherent::Bool=true,
+    delta::Float64=TEST_DELTA,
+    mixing_time::Float64=1.0,
+)
+    ThermalizeConfig(
+        num_qubits = 6,
+        with_coherent = with_coherent,
+        with_linear_combination = true,
+        domain = domain,
+        beta = BETA,
+        sigma = SIGMA,
+        a = BETA / 30.0,
+        b = 0.4,
+        num_energy_bits = NUM_ENERGY_BITS,
+        w0 = W0,
+        t0 = T0,
+        num_trotter_steps_per_t0 = NUM_TROTTER_STEPS_PER_T0,
+        mixing_time = mixing_time,
+        delta = delta,
+    )
+end
+
 # ============================================================================
 # Test suites
 # ============================================================================
@@ -330,6 +423,79 @@ end
 
     end  # L-vs-E convergence
 
-    # n=6 block will be added by Plan 30-02
+    # ========================================================================
+    # XVAL-02: n=6 KMS cross-validation across all 4 domains
+    # Gated behind QUANTUMFURNACE_FULL_TESTS=true (dense 4096x4096 eigen)
+    # Tolerance: atol=1e-6 (looser than n=4's 1e-8 due to larger Krylov
+    # subspace approximation error at dim^2=4096)
+    # ========================================================================
+    if get(ENV, "QUANTUMFURNACE_FULL_TESTS", "false") == "true"
+        @testset "n=6 KMS (all domains)" begin
+
+            # Construct n=6 test system once for non-Trotter domains
+            n6_sys = make_n6_test_system()
+            n6_ham = n6_sys.hamiltonian
+
+            # Construct n=6 Trotter system (separate eigenbasis for TrotterDomain)
+            n6_trotter = TrottTrott(n6_ham, T0, NUM_TROTTER_STEPS_PER_T0)
+            n6_trotter_sys = make_n6_test_system(; trotter=n6_trotter)
+
+            @testset "EnergyDomain" begin
+                config = make_n6_liouv_config(EnergyDomain(); with_coherent=true)
+                comp = compare_krylov_dense(config, n6_ham, n6_sys.jumps)
+                print_gap_summary("EnergyDomain", "KMS",
+                    comp.krylov_result.spectral_gap, comp.dense_result.spectral_gap)
+                gap_match = isapprox(comp.krylov_result.spectral_gap,
+                    comp.dense_result.spectral_gap; atol=1e-6)
+                if !gap_match
+                    on_failure_diagnostics(comp.krylov_result, comp.dense_result)
+                end
+                @test gap_match
+            end
+
+            @testset "TimeDomain" begin
+                config = make_n6_liouv_config(TimeDomain(); with_coherent=true)
+                comp = compare_krylov_dense(config, n6_ham, n6_sys.jumps)
+                print_gap_summary("TimeDomain", "KMS",
+                    comp.krylov_result.spectral_gap, comp.dense_result.spectral_gap)
+                gap_match = isapprox(comp.krylov_result.spectral_gap,
+                    comp.dense_result.spectral_gap; atol=1e-6)
+                if !gap_match
+                    on_failure_diagnostics(comp.krylov_result, comp.dense_result)
+                end
+                @test gap_match
+            end
+
+            @testset "TrotterDomain" begin
+                config = make_n6_liouv_config(TrotterDomain(); with_coherent=true)
+                comp = compare_krylov_dense(config, n6_ham, n6_trotter_sys.jumps;
+                    trotter=n6_trotter)
+                print_gap_summary("TrotterDomain", "KMS",
+                    comp.krylov_result.spectral_gap, comp.dense_result.spectral_gap)
+                gap_match = isapprox(comp.krylov_result.spectral_gap,
+                    comp.dense_result.spectral_gap; atol=1e-6)
+                if !gap_match
+                    on_failure_diagnostics(comp.krylov_result, comp.dense_result)
+                end
+                @test gap_match
+            end
+
+            @testset "BohrDomain" begin
+                config = make_n6_liouv_config(BohrDomain(); with_coherent=true)
+                comp = compare_krylov_dense(config, n6_ham, n6_sys.jumps)
+                print_gap_summary("BohrDomain", "KMS",
+                    comp.krylov_result.spectral_gap, comp.dense_result.spectral_gap)
+                gap_match = isapprox(comp.krylov_result.spectral_gap,
+                    comp.dense_result.spectral_gap; atol=1e-6)
+                if !gap_match
+                    on_failure_diagnostics(comp.krylov_result, comp.dense_result)
+                end
+                @test gap_match
+            end
+
+        end  # n=6 KMS
+    else
+        @info "Skipping n=6 cross-validation (set QUANTUMFURNACE_FULL_TESTS=true to run)"
+    end
 
 end  # @testset "Krylov Cross-Validation"
