@@ -144,11 +144,11 @@ Plans:
   2. Krylov gap matches dense eigen() gap to < 1e-6 at n=6 for all 4 domains with KMS balance
   3. Krylov Lindbladian gap and Krylov channel gap are consistent: gap_L approximately equals -log(|lambda_2(E)|)/delta, within O(delta^2) tolerance
   4. Krylov KMS vs GNS gap comparison at n=4 produces results consistent with existing dense-method gap values
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 30-01: TBD
-- [ ] 30-02: TBD
+- [ ] 30-01-PLAN.md -- n=4 cross-validation (KMS + GNS all domains), L-vs-E convergence, helper functions, runtests.jl include
+- [ ] 30-02-PLAN.md -- n=6 env-gated cross-validation (KMS all domains), n=6 test system factories
 
 ### Phase 31: Scaling Benchmarks
 **Goal**: Empirical timing and memory data at n=3-7 establishes the 4^n scaling law and produces resource estimates for n=10,12 production runs
