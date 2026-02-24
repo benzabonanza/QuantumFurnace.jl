@@ -133,61 +133,9 @@ function _eigsolve_with_retry(f, x0, howmany::Int, which::Symbol;
 end
 
 # ---------------------------------------------------------------------------
-# ThermalizeConfig -> LiouvConfig conversion
+# ThermalizeConfig -> LiouvConfig conversion: moved to krylov_workspace.jl
+# (included before this file, avoids circular dependency)
 # ---------------------------------------------------------------------------
-
-"""
-    _thermalize_to_liouv_config(tc::ThermalizeConfig) -> LiouvConfig
-
-Build a `LiouvConfig` from a `ThermalizeConfig` by copying all shared Lindbladian
-parameters and stripping `mixing_time` and `delta`.
-
-Required because `apply_lindbladian!` dispatches on `AbstractLiouvConfig`, not
-`AbstractThermalizeConfig`.
-"""
-function _thermalize_to_liouv_config(tc::ThermalizeConfig)
-    LiouvConfig(
-        num_qubits = tc.num_qubits,
-        with_coherent = tc.with_coherent,
-        with_linear_combination = tc.with_linear_combination,
-        domain = tc.domain,
-        beta = tc.beta,
-        sigma = tc.sigma,
-        gaussian_parameters = tc.gaussian_parameters,
-        a = tc.a,
-        b = tc.b,
-        num_energy_bits = tc.num_energy_bits,
-        t0 = tc.t0,
-        w0 = tc.w0,
-        eta = tc.eta,
-        num_trotter_steps_per_t0 = tc.num_trotter_steps_per_t0,
-    )
-end
-
-"""
-    _thermalize_to_liouv_config(tc::ThermalizeConfigGNS) -> LiouvConfigGNS
-
-Build a `LiouvConfigGNS` from a `ThermalizeConfigGNS`. GNS configs always have
-`with_coherent = false`.
-"""
-function _thermalize_to_liouv_config(tc::ThermalizeConfigGNS)
-    LiouvConfigGNS(
-        num_qubits = tc.num_qubits,
-        with_coherent = false,
-        with_linear_combination = tc.with_linear_combination,
-        domain = tc.domain,
-        beta = tc.beta,
-        sigma = tc.sigma,
-        gaussian_parameters = tc.gaussian_parameters,
-        a = tc.a,
-        b = tc.b,
-        num_energy_bits = tc.num_energy_bits,
-        t0 = tc.t0,
-        w0 = tc.w0,
-        eta = tc.eta,
-        num_trotter_steps_per_t0 = tc.num_trotter_steps_per_t0,
-    )
-end
 
 # ---------------------------------------------------------------------------
 # apply_delta_channel!
