@@ -20,6 +20,7 @@ using LinearMaps
 using SharedArrays
 using FINUFFT
 using LsqFit
+using KrylovKit
 using LibGit2
 using Dates
 
@@ -66,6 +67,9 @@ export run_lindbladian, run_thermalization, construct_lindbladian,
 
 # Krylov matvec (Phase 27)
 export KrylovWorkspace, apply_lindbladian!, apply_adjoint_lindbladian!
+
+# Krylov eigsolve (Phase 29)
+export KrylovGapResult, krylov_spectral_gap, apply_delta_channel!
 
 # QI Tools
 export trace_distance_h, trace_distance_nh, trace_norm_h, trace_norm_nh,
@@ -116,6 +120,7 @@ include("furnace_utensils.jl")
 include("furnace.jl")
 include("krylov_workspace.jl")
 include("krylov_matvec.jl")
+include("krylov_eigsolve.jl")
 include("log_sobolev.jl")
 include("log_sobolev_manopt.jl")
 include("linearmaps_liouv.jl")
