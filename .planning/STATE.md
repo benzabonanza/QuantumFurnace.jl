@@ -19,7 +19,7 @@ Progress: [██████░░░░] 60% (v1.5 phases 27-31, phases 27-29 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 78 (v1.0: 10, v1.1: 16, quick: 19, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 6)
+- Total plans completed: 79 (v1.0: 10, v1.1: 16, quick: 20, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 6)
 
 **By Milestone:**
 
@@ -59,6 +59,10 @@ Recent decisions affecting current work:
 - Dense extract_leading_eigendata as ground truth for Krylov eigsolve accuracy tests (v1.5, 29-02)
 - rtol=1e-6 for Lindbladian path, rtol=1e-3 for channel path O(delta^2) error (v1.5, 29-02)
 - Back-computation mu = 1 + delta*lambda_L for channel eigenvalue conversion verification (v1.5, 29-02)
+- Physics convention (L*rho*L') for channel sandwiches, kron convention for Lindbladian matvec (quick-36)
+- Precompute R_total, K0, U_residual, U_coherent at workspace construction for faithful Chen channel (quick-36)
+- alpha_chen = 1-sqrt(1-delta) naming to avoid shadowing BohrDomain alpha function (quick-36)
+- Relaxed channel eigsolve rtol to 2e-3 due to faithful channel O(delta^2) eigenvalue mapping error (quick-36)
 
 ### Deferred from v1.4
 
@@ -88,9 +92,10 @@ None
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 35 | Fix Krylov matvec dissipator convention to match dense kron-based convention for complex jump operators | 2026-02-20 | ca813c9 | [35-fix-krylov-matvec-dissipator-convention-](./quick/35-fix-krylov-matvec-dissipator-convention-/) |
+| 36 | Replace Euler apply_delta_channel! with faithful Chen CPTP channel (Eq. 3.2) | 2026-02-24 | f761e79 | [36-fix-apply-delta-channel-to-use-faithful-](./quick/36-fix-apply-delta-channel-to-use-faithful-/) |
 
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Completed 29-02-PLAN.md (Eigensolver Integration: krylov eigsolve tests) -- Phase 29 complete, ready for Phase 30
+Stopped at: Completed quick-36 (faithful Chen CPTP channel for apply_delta_channel!) -- Ready for Phase 30
 Resume file: None
