@@ -159,10 +159,11 @@ Plans:
   2. Peak memory usage is measured at each system size, confirming it stays within the pre-flight estimate
   3. A power-law fit to the timing data confirms approximately 4^n scaling, with extrapolated wall-clock estimates for n=10 and n=12
   4. Per-matvec timing breakdown separates BLAS matrix multiplication cost from precomputation lookup and Krylov iteration overhead
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 31-01: TBD
+- [ ] 31-01-PLAN.md -- Complete benchmark script: system factory, timing/memory measurement, krylovdim probe at n=6, scaling fit, report generation
+- [ ] 31-02-PLAN.md -- Execute benchmark, verify report output, validate scaling fits and extrapolation
 
 ## Progress
 
