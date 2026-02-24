@@ -10,16 +10,16 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 ## Current Position
 
 Phase: 30 of 31 (Cross-validation)
-Plan: 1 of 2 complete
-Status: In Progress
-Last activity: 2026-02-24 -- Completed 30-01: Krylov cross-validation test infrastructure (n=4 KMS/GNS/L-vs-E)
+Plan: 2 of 2 complete
+Status: Phase Complete
+Last activity: 2026-02-24 -- Completed 30-02: n=6 env-gated KMS cross-validation (all 4 domains, atol=1e-6)
 
-Progress: [███████░░░] 70% (v1.5 phases 27-31, phases 27-29 complete, 30 in progress)
+Progress: [████████░░] 80% (v1.5 phases 27-31, phases 27-30 complete, 31 pending)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 80 (v1.0: 10, v1.1: 16, quick: 20, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 7)
+- Total plans completed: 81 (v1.0: 10, v1.1: 16, quick: 20, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 8)
 
 **By Milestone:**
 
@@ -66,6 +66,9 @@ Recent decisions affecting current work:
 - atol=1e-8 for n=4 Krylov vs dense cross-validation (KrylovKit tol=1e-10 provides margin) (v1.5, 30-01)
 - L-vs-E convergence order >= 1.5 hard assertion with deltas [0.1, 0.01, 0.001] (v1.5, 30-01)
 - compare_krylov_dense shared helper pattern for all domain/balance cross-validation tests (v1.5, 30-01)
+- atol=1e-6 for n=6 cross-validation (looser than n=4 due to larger Krylov subspace approximation error at dim^2=4096) (v1.5, 30-02)
+- No GNS at n=6 per locked decision (n=4 sufficient for balance-type correctness) (v1.5, 30-02)
+- Dedicated n6_trotter and n6_trotter_sys for TrotterDomain (separate eigenbasis from Hamiltonian) (v1.5, 30-02)
 
 ### Deferred from v1.4
 
@@ -100,5 +103,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Completed 30-01-PLAN.md (Krylov cross-validation n=4 test infrastructure)
+Stopped at: Completed 30-02-PLAN.md (n=6 env-gated KMS cross-validation, Phase 30 complete)
 Resume file: None
