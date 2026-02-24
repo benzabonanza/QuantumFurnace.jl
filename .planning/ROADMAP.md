@@ -85,7 +85,7 @@ Full details: [milestones/v1.4-ROADMAP.md](milestones/v1.4-ROADMAP.md)
 
 - [x] **Phase 27: Core Matvec Infrastructure** - KrylovWorkspace, EnergyDomain matvec, coherent term, adjoint, round-trip correctness gate
 - [x] **Phase 28: Domain Extension** - Matrix-free Lindbladian action for TimeDomain, TrotterDomain, and BohrDomain
-- [ ] **Phase 29: Eigensolver Integration** - KrylovKit eigsolve wrapper, CPTP channel path, result struct, memory guard, convergence handling
+- [x] **Phase 29: Eigensolver Integration** - KrylovKit eigsolve wrapper, CPTP channel path, result struct, memory guard, convergence handling
 - [ ] **Phase 30: Cross-Validation** - Krylov gap vs dense eigen() at n=4,6; L-vs-E consistency; KMS-vs-GNS comparison
 - [ ] **Phase 31: Scaling Benchmarks** - Timing and memory at n=3-7, 4^n scaling fit, per-matvec breakdown, extrapolation to n=10,12
 
@@ -129,11 +129,11 @@ Plans:
   2. CPTP channel path `apply_delta_channel!(ws, rho, delta, config, ham)` computes E(rho) = (I + delta*L)(rho) correctly, and `krylov_spectral_gap` with `:LM` targeting finds channel eigenvalues
   3. Pre-flight memory estimation warns when `krylovdim * 4^n * 16 * 1.5` exceeds a configurable threshold, before any computation begins
   4. When KrylovKit reports `info.converged < howmany`, the solver retries with increased krylovdim and issues a warning; if still unconverged, an error is raised
-**Plans:** 2 plans
+**Plans:** 2 plans -- completed 2026-02-24
 
 Plans:
-- [ ] 29-01-PLAN.md -- KrylovKit dependency, KrylovGapResult struct, apply_delta_channel!, krylov_spectral_gap (Lindbladian + channel), retry logic, memory guard
-- [ ] 29-02-PLAN.md -- Tests: apply_delta_channel! round-trip, eigsolve accuracy, channel path, all-domain coverage, guard rails
+- [x] 29-01-PLAN.md -- KrylovKit dependency, KrylovGapResult struct, apply_delta_channel!, krylov_spectral_gap (Lindbladian + channel), retry logic, memory guard
+- [x] 29-02-PLAN.md -- Tests: apply_delta_channel! round-trip, eigsolve accuracy, channel path, all-domain coverage, guard rails
 
 ### Phase 30: Cross-Validation
 **Goal**: Krylov spectral gap results are validated against dense eigen() reference values across all domains and balance types, establishing trust for n>6 production use
@@ -199,6 +199,6 @@ Phases execute in numeric order: 27 -> 28 -> 29 -> 30 -> 31
 | 26. Exact Reference and Structural Diagnostics | v1.4 | 2/2 | Complete | 2026-02-19 |
 | 27. Core Matvec Infrastructure | v1.5 | 2/2 | Complete | 2026-02-20 |
 | 28. Domain Extension | v1.5 | 2/2 | Complete | 2026-02-20 |
-| 29. Eigensolver Integration | v1.5 | 0/TBD | Not started | - |
+| 29. Eigensolver Integration | v1.5 | 2/2 | Complete | 2026-02-24 |
 | 30. Cross-Validation | v1.5 | 0/TBD | Not started | - |
 | 31. Scaling Benchmarks | v1.5 | 0/TBD | Not started | - |
