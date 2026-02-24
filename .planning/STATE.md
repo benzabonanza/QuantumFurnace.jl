@@ -10,16 +10,16 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 ## Current Position
 
 Phase: 30 of 31 (Cross-validation)
-Plan: 0 of ? complete
-Status: Ready
-Last activity: 2026-02-24 -- Completed quick-36: Fix apply_delta_channel! to use faithful Chen channel
+Plan: 1 of 2 complete
+Status: In Progress
+Last activity: 2026-02-24 -- Completed 30-01: Krylov cross-validation test infrastructure (n=4 KMS/GNS/L-vs-E)
 
-Progress: [██████░░░░] 60% (v1.5 phases 27-31, phases 27-29 complete)
+Progress: [███████░░░] 70% (v1.5 phases 27-31, phases 27-29 complete, 30 in progress)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 79 (v1.0: 10, v1.1: 16, quick: 20, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 6)
+- Total plans completed: 80 (v1.0: 10, v1.1: 16, quick: 20, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 7)
 
 **By Milestone:**
 
@@ -30,7 +30,7 @@ Progress: [██████░░░░] 60% (v1.5 phases 27-31, phases 27-29 
 | v1.2 Multi-threading | 12-19 | 15 (+3 quick) | 2026-02-15 to 2026-02-16 |
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
-| v1.5 Krylov Gap Estimation | 27-31 | 6 | 2026-02-20 to -- |
+| v1.5 Krylov Gap Estimation | 27-31 | 7 | 2026-02-20 to -- |
 
 ## Accumulated Context
 
@@ -63,6 +63,9 @@ Recent decisions affecting current work:
 - Precompute R_total, K0, U_residual, U_coherent at workspace construction for faithful Chen channel (quick-36)
 - alpha_chen = 1-sqrt(1-delta) naming to avoid shadowing BohrDomain alpha function (quick-36)
 - Relaxed channel eigsolve rtol to 2e-3 due to faithful channel O(delta^2) eigenvalue mapping error (quick-36)
+- atol=1e-8 for n=4 Krylov vs dense cross-validation (KrylovKit tol=1e-10 provides margin) (v1.5, 30-01)
+- L-vs-E convergence order >= 1.5 hard assertion with deltas [0.1, 0.01, 0.001] (v1.5, 30-01)
+- compare_krylov_dense shared helper pattern for all domain/balance cross-validation tests (v1.5, 30-01)
 
 ### Deferred from v1.4
 
@@ -97,5 +100,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Completed quick-36 (faithful Chen CPTP channel for apply_delta_channel!) -- Ready for Phase 30
+Stopped at: Completed 30-01-PLAN.md (Krylov cross-validation n=4 test infrastructure)
 Resume file: None
