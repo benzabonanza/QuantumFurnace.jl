@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 Phase: 30 of 31 (Cross-validation)
 Plan: 0 of ? complete
 Status: Ready
-Last activity: 2026-02-24 -- Completed 29-02 (Eigensolver Integration: krylov eigsolve tests)
+Last activity: 2026-02-24 -- Completed quick-36: Fix apply_delta_channel! to use faithful Chen channel
 
 Progress: [██████░░░░] 60% (v1.5 phases 27-31, phases 27-29 complete)
 
