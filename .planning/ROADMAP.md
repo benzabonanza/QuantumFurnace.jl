@@ -129,11 +129,11 @@ Plans:
   2. CPTP channel path `apply_delta_channel!(ws, rho, delta, config, ham)` computes E(rho) = (I + delta*L)(rho) correctly, and `krylov_spectral_gap` with `:LM` targeting finds channel eigenvalues
   3. Pre-flight memory estimation warns when `krylovdim * 4^n * 16 * 1.5` exceeds a configurable threshold, before any computation begins
   4. When KrylovKit reports `info.converged < howmany`, the solver retries with increased krylovdim and issues a warning; if still unconverged, an error is raised
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 29-01: TBD
-- [ ] 29-02: TBD
+- [ ] 29-01-PLAN.md -- KrylovKit dependency, KrylovGapResult struct, apply_delta_channel!, krylov_spectral_gap (Lindbladian + channel), retry logic, memory guard
+- [ ] 29-02-PLAN.md -- Tests: apply_delta_channel! round-trip, eigsolve accuracy, channel path, all-domain coverage, guard rails
 
 ### Phase 30: Cross-Validation
 **Goal**: Krylov spectral gap results are validated against dense eigen() reference values across all domains and balance types, establishing trust for n>6 production use
