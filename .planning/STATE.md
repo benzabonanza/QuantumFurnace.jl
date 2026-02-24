@@ -10,16 +10,16 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 ## Current Position
 
 Phase: 29 of 31 (Eigensolver Integration)
-Plan: 0 of TBD complete
-Status: Ready
-Last activity: 2026-02-20 -- Completed Quick-35 (Krylov matvec dissipator convention fix)
+Plan: 1 of 2 complete
+Status: In Progress
+Last activity: 2026-02-24 -- Completed 29-01 (Eigensolver Integration: krylov_spectral_gap API)
 
-Progress: [████░░░░░░] 40% (v1.5 phases 27-31, phases 27-28 complete)
+Progress: [█████░░░░░] 50% (v1.5 phases 27-31, phases 27-28 complete, 29-01 done)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 76 (v1.0: 10, v1.1: 16, quick: 19, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 4)
+- Total plans completed: 77 (v1.0: 10, v1.1: 16, quick: 19, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 5)
 
 **By Milestone:**
 
@@ -30,7 +30,7 @@ Progress: [████░░░░░░] 40% (v1.5 phases 27-31, phases 27-28 
 | v1.2 Multi-threading | 12-19 | 15 (+3 quick) | 2026-02-15 to 2026-02-16 |
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
-| v1.5 Krylov Gap Estimation | 27-31 | 4 | 2026-02-20 to -- |
+| v1.5 Krylov Gap Estimation | 27-31 | 5 | 2026-02-20 to -- |
 
 ## Accumulated Context
 
@@ -52,6 +52,10 @@ Recent decisions affecting current work:
 - Dedicated _accumulate_adjoint_dissipator_2op! with all-N BLAS flags for real-valued BohrDomain (v1.5, 28-02)
 - kron(A,B)vec(X)=vec(B*X*A^T) convention consistently applied to all matvec terms (quick-35)
 - Anticommutator uses (L'L)^T, coherent uses i[B^T, rho] -- matches dense vectorization exactly (quick-35)
+- KrylovKit Arnoldi (not Lanczos) for non-Hermitian Lindbladian eigsolve (v1.5, 29-01)
+- copy(vec(ws.rho_out)) in KrylovKit closure to prevent aliasing of Krylov basis vectors (v1.5, 29-01)
+- Exact linear lambda_L = (mu-1)/delta for channel-to-Lindbladian eigenvalue conversion (v1.5, 29-01)
+- 50% krylovdim increase per retry (30->45->68->102) for convergence recovery (v1.5, 29-01)
 
 ### Deferred from v1.4
 
@@ -84,6 +88,6 @@ None
 
 ## Session Continuity
 
-Last session: 2026-02-20
-Stopped at: Completed Quick-35 (Krylov matvec convention fix) -- ready for Phase 29 (Eigensolver Integration)
+Last session: 2026-02-24
+Stopped at: Completed 29-01-PLAN.md (Eigensolver Integration: krylov_spectral_gap API) -- ready for 29-02 (testing)
 Resume file: None
