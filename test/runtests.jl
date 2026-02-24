@@ -25,4 +25,5 @@ include("test_helpers.jl")
     include("test_diagnostics.jl")
     include("test_krylov_matvec.jl")
     include("test_krylov_eigsolve.jl")
+    include("test_krylov_crossvalidation.jl")
 end
