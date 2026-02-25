@@ -204,28 +204,6 @@ function apply_delta_channel!(
     return ws.rho_out
 end
 
-"""
-    apply_delta_channel!(ws, rho, delta, config_liouv, hamiltonian) -> ws.rho_out
-
-Legacy Euler approximation: E(rho) = rho + delta * L(rho).
-
-Retained for backward compatibility with workspaces that have no precomputed
-channel fields (i.e., constructed via the LiouvConfig constructor).
-"""
-function apply_delta_channel!(
-    ws::KrylovWorkspace{T},
-    rho::Matrix{T},
-    delta::Real,
-    config_liouv::AbstractLiouvConfig,
-    hamiltonian::HamHam,
-) where {T<:Complex}
-    # L(rho) -> ws.rho_out
-    apply_lindbladian!(ws, rho, config_liouv, hamiltonian)
-    # E(rho) = rho + delta * L(rho) -> ws.rho_out
-    @. ws.rho_out = rho + delta * ws.rho_out
-    return ws.rho_out
-end
-
 # ---------------------------------------------------------------------------
 # _accumulate_jump_sandwich!: domain-dispatched physics-convention sandwiches
 # ---------------------------------------------------------------------------

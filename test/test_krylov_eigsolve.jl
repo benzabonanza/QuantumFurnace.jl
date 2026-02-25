@@ -48,26 +48,6 @@ using QuantumFurnace
     end
 
     # ========================================================================
-    # Testset 1b: Legacy Euler apply_delta_channel! still works
-    # ========================================================================
-    @testset "apply_delta_channel! legacy Euler" begin
-        config = make_liouv_config(EnergyDomain(); with_coherent=true)
-        L_dense = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
-        ws = KrylovWorkspace(config, TEST_HAM, TEST_JUMPS)
-        delta = 0.01
-        I_d2 = Matrix{ComplexF64}(LinearAlgebra.I(DIM^2))
-
-        for _ in 1:5
-            rho = Matrix(random_density_matrix(NUM_QUBITS))
-            # Dense: (I + delta * L) * vec(rho)
-            v_dense = (I_d2 + delta * L_dense) * vec(rho)
-            # Krylov: apply_delta_channel! (legacy 5-arg Euler form)
-            apply_delta_channel!(ws, rho, delta, config, TEST_HAM)
-            @test isapprox(vec(ws.rho_out), v_dense; atol=1e-12)
-        end
-    end
-
-    # ========================================================================
     # Testset 2: KrylovGapResult struct fields
     # ========================================================================
     @testset "KrylovGapResult struct fields" begin
