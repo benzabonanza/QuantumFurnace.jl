@@ -19,7 +19,7 @@ Progress: [██████████] 100% (Phase 32: plan 2 of 2 done)
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 84 (v1.0: 10, v1.1: 16, quick: 20, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 11)
+- Total plans completed: 85 (v1.0: 10, v1.1: 16, quick: 21, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 11)
 
 **By Milestone:**
 
@@ -54,7 +54,7 @@ Recent decisions affecting current work:
 - Anticommutator uses (L'L)^T, coherent uses i[B^T, rho] -- matches dense vectorization exactly (quick-35)
 - KrylovKit Arnoldi (not Lanczos) for non-Hermitian Lindbladian eigsolve (v1.5, 29-01)
 - copy(vec(ws.rho_out)) in KrylovKit closure to prevent aliasing of Krylov basis vectors (v1.5, 29-01)
-- Exact linear lambda_L = (mu-1)/delta for channel-to-Lindbladian eigenvalue conversion (v1.5, 29-01)
+- First-order approximation lambda_L = (mu-1)/delta for channel-to-Lindbladian eigenvalue conversion with O(delta) error (v1.5, 29-01; corrected quick-37)
 - 50% krylovdim increase per retry (30->45->68->102) for convergence recovery (v1.5, 29-01)
 - Dense extract_leading_eigendata as ground truth for Krylov eigsolve accuracy tests (v1.5, 29-02)
 - rtol=1e-6 for Lindbladian path, rtol=1e-3 for channel path O(delta^2) error (v1.5, 29-02)
@@ -113,9 +113,10 @@ None
 |---|-------------|------|--------|-----------|
 | 35 | Fix Krylov matvec dissipator convention to match dense kron-based convention for complex jump operators | 2026-02-20 | ca813c9 | [35-fix-krylov-matvec-dissipator-convention-](./quick/35-fix-krylov-matvec-dissipator-convention-/) |
 | 36 | Replace Euler apply_delta_channel! with faithful Chen CPTP channel (Eq. 3.2) | 2026-02-24 | f761e79 | [36-fix-apply-delta-channel-to-use-faithful-](./quick/36-fix-apply-delta-channel-to-use-faithful-/) |
+| 37 | Fix failing XVAL-03 Krylov cross-validation tests (convergence order threshold 1.5->0.9) | 2026-02-25 | 1036b35 | [37-fix-failing-krylov-cross-validation-test](./quick/37-fix-failing-krylov-cross-validation-test/) |
 
 ## Session Continuity
 
 Last session: 2026-02-25
-Stopped at: Completed 32-02-PLAN.md -- dead code removal (Phase 32 complete)
+Stopped at: Completed quick task 37 -- fix failing XVAL-03 convergence tests
 Resume file: None
