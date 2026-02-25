@@ -5,7 +5,7 @@
 See: .planning/PROJECT.md (updated 2026-02-20)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** Phase 32 (Krylov Simulator Speedup) -- Plan 01 complete
+**Current focus:** Phase 32 (Krylov Simulator Speedup) COMPLETE
 
 ## Current Position
 
@@ -19,7 +19,7 @@ Progress: [██████████] 100% (Phase 32: plan 2 of 2 done)
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 83 (v1.0: 10, v1.1: 16, quick: 20, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 9, v1.6: 1)
+- Total plans completed: 84 (v1.0: 10, v1.1: 16, quick: 20, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 11)
 
 **By Milestone:**
 

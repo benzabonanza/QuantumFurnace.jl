@@ -87,7 +87,7 @@ Full details: [milestones/v1.4-ROADMAP.md](milestones/v1.4-ROADMAP.md)
 - [x] **Phase 28: Domain Extension** - Matrix-free Lindbladian action for TimeDomain, TrotterDomain, and BohrDomain
 - [x] **Phase 29: Eigensolver Integration** - KrylovKit eigsolve wrapper, CPTP channel path, result struct, memory guard, convergence handling
 - [x] **Phase 30: Cross-Validation** - Krylov gap vs dense eigen() at n=4,6; L-vs-E consistency; KMS-vs-GNS comparison
-- [ ] **Phase 31: Scaling Benchmarks** - Timing and memory at n=3-7, 4^n scaling fit, per-matvec breakdown, extrapolation to n=10,12
+- [x] **Phase 31: Scaling Benchmarks** - Timing and memory at n=3-7, 4^n scaling fit, per-matvec breakdown, extrapolation to n=10,12
 
 ## Phase Details
 
@@ -162,8 +162,8 @@ Plans:
 **Plans:** 2 plans
 
 Plans:
-- [ ] 31-01-PLAN.md -- Complete benchmark script: system factory, timing/memory measurement, krylovdim probe at n=6, scaling fit, report generation
-- [ ] 31-02-PLAN.md -- Execute benchmark, verify report output, validate scaling fits and extrapolation
+- [x] 31-01-PLAN.md -- Complete benchmark script: system factory, timing/memory measurement, krylovdim probe at n=6, scaling fit, report generation
+- [x] 31-02-PLAN.md -- Execute benchmark, verify report output, validate scaling fits and extrapolation
 
 ## Progress
 
@@ -202,7 +202,8 @@ Phases execute in numeric order: 27 -> 28 -> 29 -> 30 -> 31
 | 28. Domain Extension | v1.5 | 2/2 | Complete | 2026-02-20 |
 | 29. Eigensolver Integration | v1.5 | 2/2 | Complete | 2026-02-24 |
 | 30. Cross-Validation | v1.5 | 2/2 | Complete | 2026-02-24 |
-| 31. Scaling Benchmarks | v1.5 | 0/TBD | Not started | - |
+| 31. Scaling Benchmarks | v1.5 | 2/2 | Complete | 2026-02-24 |
+| 32. Krylov Simulator Speedup | v1.5 | 2/2 | Complete | 2026-02-25 |
 
 ### Phase 32: Krylov Simulator Speedup
 
@@ -214,8 +215,8 @@ Phases execute in numeric order: 27 -> 28 -> 29 -> 30 -> 31
   2. All existing round-trip correctness tests pass (matvec results identical to before within floating-point tolerance)
   3. Legacy 5-argument `apply_delta_channel!(ws, rho, delta, config, ham)` Euler approximation is removed along with its tests
   4. Adjoint Lindbladian `apply_adjoint_lindbladian!` uses the same precomputed matrices (G_left_adj = G_right, G_right_adj = G_left)
-**Plans:** 2 plans
+**Plans:** 2 plans -- completed 2026-02-25
 
 Plans:
-- [ ] 32-01-PLAN.md -- Core matvec optimization: G_left/G_right precomputation, sandwich-only helpers, all apply_lindbladian!/apply_adjoint_lindbladian! refactored
-- [ ] 32-02-PLAN.md -- Dead code cleanup: delete legacy Euler apply_delta_channel!, delete old _accumulate_dissipator! family (6 functions)
+- [x] 32-01-PLAN.md -- Core matvec optimization: G_left/G_right precomputation, sandwich-only helpers, all apply_lindbladian!/apply_adjoint_lindbladian! refactored
+- [x] 32-02-PLAN.md -- Dead code cleanup: delete legacy Euler apply_delta_channel!, delete old _accumulate_dissipator! family (6 functions)
