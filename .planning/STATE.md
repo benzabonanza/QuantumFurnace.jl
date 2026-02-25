@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-20)
 Phase: 32 of 32 (Some speedup for the Krylov simulator)
 Plan: 2 of 2 complete
 Status: Phase Complete
-Last activity: 2026-02-25 -- Plan 32-02 complete (dead code removal of legacy Euler + dissipator functions)
+Last activity: 2026-02-25 - Completed quick task 37: Fix failing Krylov cross-validation tests
 
 Progress: [██████████] 100% (Phase 32: plan 2 of 2 done)
 
