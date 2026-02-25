@@ -85,16 +85,17 @@ end
 # Config factory
 # ---------------------------------------------------------------------------
 """
-    make_bench_liouv_config(n_qubits, domain; with_coherent=true) -> LiouvConfig
+    make_bench_liouv_config(n_qubits, domain; construction=KMS()) -> Config{Lindbladian}
 
-Create a LiouvConfig with locked benchmark parameters for the given system size.
+Create a Config{Lindbladian} with locked benchmark parameters for the given system size.
 """
-function make_bench_liouv_config(n_qubits::Int, domain; with_coherent::Bool=true)
-    LiouvConfig(
-        num_qubits = n_qubits,
-        with_coherent = with_coherent,
-        with_linear_combination = true,
+function make_bench_liouv_config(n_qubits::Int, domain; construction=KMS())
+    Config(
+        sim = Lindbladian(),
         domain = domain,
+        construction = construction,
+        num_qubits = n_qubits,
+        with_linear_combination = true,
         beta = BETA,
         sigma = SIGMA,
         a = BENCH_A,

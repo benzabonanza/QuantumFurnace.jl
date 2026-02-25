@@ -37,7 +37,7 @@ function main()
         # b = 0.0
         # eta = 0.002
 
-        with_coherent = true
+        construction = KMS()
         with_linear_combination = true
         domain = TimeDomain()
         num_energy_bits = 12 # 11
@@ -46,11 +46,12 @@ function main()
         t0 = 2pi / (2^num_energy_bits * w0)  # Max time evolution pi / w0
         num_trotter_steps_per_t0 = 10
 
-        config = LiouvConfig(
-                num_qubits = num_qubits, 
-                with_coherent = with_coherent,
-                with_linear_combination = with_linear_combination, 
+        config = Config(
+                sim = Lindbladian(),
                 domain = domain,
+                construction = construction,
+                num_qubits = num_qubits,
+                with_linear_combination = with_linear_combination,
                 beta = beta,
                 sigma = sigma,
                 gaussian_parameters = (w_gamma, sigma_gamma),
@@ -65,10 +66,12 @@ function main()
 
         #* Approx GNS Config
         # sigma_gamma = sqrt(2 * w_gamma / beta)
-        # config = LiouvConfigGNS(
+        # config = Config(
+        #         sim = Lindbladian(),
+        #         domain = domain,
+        #         construction = GNS(),
         #         num_qubits = num_qubits,
         #         with_linear_combination = with_linear_combination,
-        #         domain = domain,
         #         beta = beta,
         #         sigma = sigma,
         #         gaussian_parameters = (w_gamma, sigma_gamma),

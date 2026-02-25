@@ -20,7 +20,7 @@
 #
 # Parameters (matching Quick-30/31):
 #   - System: n=4 disordered periodic Heisenberg, beta=10.0
-#   - Domain: TimeDomain, with_coherent=false
+#   - Domain: TimeDomain, construction=GNS()
 #   - Initial state: psi0 = ones(ComplexF64, dim) / sqrt(dim) (uniform)
 #   - T_total = 20.0 (matching Quick-31 mixing_time)
 #   - Deltas: [0.1, 0.01, 0.001]
@@ -88,11 +88,12 @@ end
 # Helper: create configs
 # ---------------------------------------------------------------------------
 function make_liouv_config(n)
-    LiouvConfig(;
-        num_qubits = n,
-        with_coherent = false,
-        with_linear_combination = true,
+    Config(;
+        sim = Lindbladian(),
         domain = TimeDomain(),
+        construction = GNS(),
+        num_qubits = n,
+        with_linear_combination = true,
         beta = BETA,
         sigma = SIGMA,
         a = BETA / 30.0,
@@ -105,11 +106,12 @@ function make_liouv_config(n)
 end
 
 function make_thermalize_config(n; mixing_time=50.0, delta=0.01)
-    ThermalizeConfig(;
-        num_qubits = n,
-        with_coherent = false,
-        with_linear_combination = true,
+    Config(;
+        sim = Thermalize(),
         domain = TimeDomain(),
+        construction = GNS(),
+        num_qubits = n,
+        with_linear_combination = true,
         beta = BETA,
         sigma = SIGMA,
         a = BETA / 30.0,

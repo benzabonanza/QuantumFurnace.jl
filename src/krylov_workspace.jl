@@ -32,7 +32,7 @@ Channel fields (populated only for Config{Thermalize}, nothing for Config{Lindbl
 - `channel_U_residual::Union{Nothing, Matrix{T}}`: sqrt_psd(S) residual TP fix
 - `channel_U_coherent::Union{Nothing, Matrix{T}}`: exp(-i*delta*B_total) coherent unitary
 - `channel_rho_jump::Union{Nothing, Matrix{T}}`: scratch for jump sandwich accumulation
-- `channel_delta::Union{Nothing, Float64}`: delta from ThermalizeConfig
+- `channel_delta::Union{Nothing, Float64}`: delta from Config{Thermalize}
 
 Precomputed effective Hamiltonian for optimized Lindbladian matvec (Phase 32):
 - `G_left::Union{Nothing, Matrix{T}}`: i*B^T - 0.5*R_total^T (left action in L(rho) = G_left*rho + rho*G_right + sandwiches)
@@ -314,7 +314,7 @@ function _accumulate_R_total!(
 end
 
 # ---------------------------------------------------------------------------
-# ThermalizeConfig workspace constructor
+# Config{Thermalize} workspace constructor
 # ---------------------------------------------------------------------------
 
 """

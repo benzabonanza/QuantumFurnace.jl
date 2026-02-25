@@ -35,7 +35,7 @@ density matrix (steady state), and the gap mode operator.  For the channel path
 - `num_restarts`: Number of Krylov subspace rebuilds (info.numiter).
 - `normres`: Residual norms for each eigenvalue.
 - `channel_eigenvalues`: Raw channel eigenvalues before conversion (nothing for Lindbladian path).
-- `delta_used`: Delta from ThermalizeConfig (nothing for Lindbladian path).
+- `delta_used`: Delta from Config{Thermalize} (nothing for Lindbladian path).
 """
 struct KrylovGapResult{T<:AbstractFloat}
     eigenvalues::Vector{Complex{T}}

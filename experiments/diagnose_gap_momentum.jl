@@ -62,11 +62,12 @@ function make_system(n, beta)
 end
 
 function make_liouv_config(n)
-    LiouvConfig(;
-        num_qubits = n,
-        with_coherent = false,
-        with_linear_combination = true,
+    Config(;
+        sim = Lindbladian(),
         domain = TimeDomain(),
+        construction = GNS(),
+        num_qubits = n,
+        with_linear_combination = true,
         beta = BETA,
         sigma = SIGMA,
         a = BETA / 30.0,

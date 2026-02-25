@@ -32,7 +32,7 @@ t0 = 2pi / (2^num_energy_bits * w0)  # Time estimating precision
 
 domain = TimeDomain()
 
-with_coherent = true                  # For exact detailed balance
+construction = KMS()                  # For exact detailed balance
 with_linear_combination = false       # Gaussian transitions
 a = 0.0
 b = 0.0
@@ -41,11 +41,12 @@ eta = 0.0
 mixing_time_bound = 10.0
 delta = 0.1
 
-config = ThermalizeConfig(
-    num_qubits = num_qubits, 
-    with_coherent = with_coherent,
-    with_linear_combination = with_linear_combination, 
+config = Config(
+    sim = Thermalize(),
     domain = domain,
+    construction = construction,
+    num_qubits = num_qubits,
+    with_linear_combination = with_linear_combination,
     beta = beta,
     a = a,
     b = b,
@@ -65,7 +66,7 @@ config = ThermalizeConfig(
 #
 # **Coherent term** $\quad$ It has been proven (see [Theory](theory_detailed_balance.md)) that by adding a specific coherent term
 # to the Lindbladian, we can have the Gibbs state as the unique fixed point of the generator. But even if we omit it
-# by setting `with_coherent = false`, we would find an approximately good (or bad) result.
+# by setting `construction = GNS()`, we would find an approximately good (or bad) result.
 #
 # **Linear combinations** $\quad$ A simpler version of the theory is when we don't take a convex combination of 
 # Lindbladians. We can think of this as singling out a thin Gaussian region for which we allow transitions for certain

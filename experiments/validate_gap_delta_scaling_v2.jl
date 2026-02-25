@@ -33,7 +33,7 @@
 #   - System size: n = 4 only
 #   - Trajectories: 20,000
 #   - Delta values: [0.1, 0.01, 0.001]
-#   - Domain: TimeDomain with with_coherent=false
+#   - Domain: TimeDomain with construction=GNS()
 #   - Initial state: psi0 = ones(ComplexF64, dim) / sqrt(dim) (uniform superposition)
 #   - mixing_time = 20 (fixed)
 #   - skip_initial = 0.3
@@ -104,14 +104,15 @@ function make_system(n, beta)
 end
 
 # ---------------------------------------------------------------------------
-# Helper: create LiouvConfig for TimeDomain
+# Helper: create Config{Lindbladian} for TimeDomain
 # ---------------------------------------------------------------------------
 function make_liouv_config(n)
-    LiouvConfig(;
-        num_qubits = n,
-        with_coherent = false,
-        with_linear_combination = true,
+    Config(;
+        sim = Lindbladian(),
         domain = TimeDomain(),
+        construction = GNS(),
+        num_qubits = n,
+        with_linear_combination = true,
         beta = BETA,
         sigma = SIGMA,
         a = BETA / 30.0,
@@ -124,14 +125,15 @@ function make_liouv_config(n)
 end
 
 # ---------------------------------------------------------------------------
-# Helper: create ThermalizeConfig for TimeDomain
+# Helper: create Config{Thermalize} for TimeDomain
 # ---------------------------------------------------------------------------
 function make_thermalize_config(n; mixing_time=50.0, delta=0.01)
-    ThermalizeConfig(;
-        num_qubits = n,
-        with_coherent = false,
-        with_linear_combination = true,
+    Config(;
+        sim = Thermalize(),
         domain = TimeDomain(),
+        construction = GNS(),
+        num_qubits = n,
+        with_linear_combination = true,
         beta = BETA,
         sigma = SIGMA,
         a = BETA / 30.0,

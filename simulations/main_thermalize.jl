@@ -32,7 +32,7 @@ function main()
     # b = 0.0
     # eta = 0.002
 
-    with_coherent = true
+    construction = KMS()
     with_linear_combination = true
     domain = EnergyDomain()
     num_energy_bits = 12 # 11
@@ -45,11 +45,12 @@ function main()
     mixing_time = 100.0 * 3 * num_qubits
     delta = 0.005
 
-    config = ThermalizeConfig(
-        num_qubits = num_qubits, 
-        with_coherent = with_coherent,
-        with_linear_combination = with_linear_combination, 
+    config = Config(
+        sim = Thermalize(),
         domain = domain,
+        construction = construction,
+        num_qubits = num_qubits,
+        with_linear_combination = with_linear_combination,
         beta = beta,
         sigma = sigma,
         gaussian_parameters = (w_gamma, sigma_gamma),
@@ -59,17 +60,19 @@ function main()
         w0 = w0,
         t0 = t0,
         eta = eta,
-        num_trotter_steps_per_t0 = num_trotter_steps_per_t0, 
+        num_trotter_steps_per_t0 = num_trotter_steps_per_t0,
         mixing_time = mixing_time,
         delta = delta,
     )
 
     #* Approx GNS Config
     # sigma_gamma = sqrt(2 * w_gamma / beta)
-    # config = ThermalizeConfigGNS(
+    # config = Config(
+    #     sim = Thermalize(),
+    #     domain = domain,
+    #     construction = GNS(),
     #     num_qubits = num_qubits,
     #     with_linear_combination = with_linear_combination,
-    #     domain = domain,
     #     beta = beta,
     #     sigma = sigma,
     #     gaussian_parameters = (w_gamma, sigma_gamma),
