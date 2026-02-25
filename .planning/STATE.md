@@ -10,16 +10,16 @@ See: .planning/PROJECT.md (updated 2026-02-25)
 ## Current Position
 
 Phase: 33 of 38 (Type Foundation)
-Plan: 3 of 4 in current phase
-Status: Executing
-Last activity: 2026-02-25 -- Completed 33-03 (pipeline migration, 8 source files)
+Plan: 4 of 4 in current phase (PHASE COMPLETE)
+Status: Phase 33 Complete
+Last activity: 2026-02-25 -- Completed 33-04 (consumer migration, 37 files, full test validation)
 
-Progress: [####░░░░░░] ~12% (v2.0, 3/~24 plans)
+Progress: [#####░░░░░] ~17% (v2.0, 4/~24 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 88 (v1.0: 10, v1.1: 16, quick: 24, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12)
+- Total plans completed: 92 (v1.0: 10, v1.1: 16, quick: 24, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 4)
 
 **By Milestone:**
 
@@ -31,7 +31,7 @@ Progress: [####░░░░░░] ~12% (v2.0, 3/~24 plans)
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
 | v1.5 Krylov Gap Estimation | 27-32 | 12 (+3 quick) | 2026-02-20 to 2026-02-25 |
-| v2.0 Restructure | 33-38 | 3/~24 | 2026-02-25 to ... |
+| v2.0 Restructure | 33-38 | 4/~24 | 2026-02-25 to ... |
 
 ## Accumulated Context
 
@@ -48,6 +48,8 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [33-03] construct_lindbladian constrained to Config{Lindbladian} (only caller is run_lindbladian)
 - [33-03] _accumulate_R_total! and _accumulate_jump_sandwich! use Config{<:Any,D} for both sim types
 - [33-03] _thermalize_to_liouv_config deleted -- unified Config eliminates conversion need
+- [33-04] Gitignored playground files migrated on disk but not committed
+- [33-04] Pre-existing test_diagnostics.jl failures (7) accepted -- numerical threshold, not migration-related
 
 ### Key Constraints for v2.0
 
@@ -71,5 +73,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-25
-Stopped at: Completed 33-03-PLAN.md (pipeline migration, 8 source files to Config)
+Stopped at: Completed 33-04-PLAN.md (Phase 33 complete -- all 4 plans done, type foundation operational)
 Resume file: None
