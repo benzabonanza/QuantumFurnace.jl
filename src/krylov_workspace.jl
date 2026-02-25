@@ -33,6 +33,12 @@ Channel fields (populated only for ThermalizeConfig, nothing for LiouvConfig):
 - `channel_U_coherent::Union{Nothing, Matrix{T}}`: exp(-i*delta*B_total) coherent unitary
 - `channel_rho_jump::Union{Nothing, Matrix{T}}`: scratch for jump sandwich accumulation
 - `channel_delta::Union{Nothing, Float64}`: delta from ThermalizeConfig
+
+Precomputed effective Hamiltonian for optimized Lindbladian matvec (Phase 32):
+- `G_left::Union{Nothing, Matrix{T}}`: i*B^T - 0.5*R_total^T (left action in L(rho) = G_left*rho + rho*G_right + sandwiches)
+- `G_right::Union{Nothing, Matrix{T}}`: -i*B^T - 0.5*R_total^T (right action)
+- `G_left_adj::Union{Nothing, Matrix{T}}`: adjoint left action (= G_right for Hermitian R_total, differs for BohrDomain)
+- `G_right_adj::Union{Nothing, Matrix{T}}`: adjoint right action (= G_left for Hermitian R_total, differs for BohrDomain)
 """
 struct KrylovWorkspace{T<:Complex, PD<:NamedTuple}
     # Precomputed data (immutable after construction)
@@ -58,6 +64,14 @@ struct KrylovWorkspace{T<:Complex, PD<:NamedTuple}
     channel_U_coherent::Union{Nothing, Matrix{T}}
     channel_rho_jump::Union{Nothing, Matrix{T}}
     channel_delta::Union{Nothing, Float64}
+
+    # Precomputed effective Hamiltonian for optimized Lindbladian matvec (Phase 32)
+    # G_left = i*B^T - 0.5*R_total^T, G_right = -i*B^T - 0.5*R_total^T
+    # Stored pre-transposed so matvec uses gemm!('N','N',...) for zero-allocation.
+    G_left::Union{Nothing, Matrix{T}}
+    G_right::Union{Nothing, Matrix{T}}
+    G_left_adj::Union{Nothing, Matrix{T}}
+    G_right_adj::Union{Nothing, Matrix{T}}
 end
 
 """
@@ -109,11 +123,54 @@ function KrylovWorkspace(
     LdagL    = zeros(CT, dim, dim)
     rho_out  = zeros(CT, dim, dim)
 
+    # Precompute G_left/G_right for optimized Lindbladian matvec (Phase 32)
+    # R_total = sum_i scalar_i * L_i'L_i (physics convention, reuse existing helper)
+    R_total = zeros(CT, dim, dim)
+    _accumulate_R_total!(R_total, jump_eigenbases, jump_hermitian,
+                         precomputed_data, config, ham_or_trott)
+    hermitianize!(R_total)
+
+    # Build G_left/G_right (stored as the actual matrices used in gemm!('N','N',...))
+    # Convention: L(rho) = G_left*rho + rho*G_right + sandwiches
+    # G_left = i*B^T - 0.5*R_total^T, G_right = -i*B^T - 0.5*R_total^T
+    R_total_T = Matrix{CT}(transpose(R_total))
+    if B_total !== nothing
+        B_T = Matrix{CT}(transpose(B_total))
+        G_left  = 1im .* B_T .- 0.5 .* R_total_T
+        G_right = -1im .* B_T .- 0.5 .* R_total_T
+    else
+        G_left  = -0.5 .* R_total_T
+        G_right = -0.5 .* R_total_T
+    end
+    G_left  = Matrix{CT}(G_left)
+    G_right = Matrix{CT}(G_right)
+
+    # Adjoint: for Hermitian R_total (Energy/Time/Trotter), adjoint just swaps G_left/G_right.
+    # For BohrDomain where R_total is not Hermitian: G_left_adj = -i*B^T - 0.5*conj(R_total),
+    # G_right_adj = i*B^T - 0.5*conj(R_total).
+    if config.domain isa BohrDomain
+        R_total_conj = Matrix{CT}(conj.(R_total))
+        if B_total !== nothing
+            B_T = Matrix{CT}(transpose(B_total))
+            G_left_adj  = -1im .* B_T .- 0.5 .* R_total_conj
+            G_right_adj = 1im .* B_T .- 0.5 .* R_total_conj
+        else
+            G_left_adj  = -0.5 .* R_total_conj
+            G_right_adj = -0.5 .* R_total_conj
+        end
+        G_left_adj  = Matrix{CT}(G_left_adj)
+        G_right_adj = Matrix{CT}(G_right_adj)
+    else
+        G_left_adj  = G_right
+        G_right_adj = G_left
+    end
+
     return KrylovWorkspace{CT, typeof(precomputed_data)}(
         precomputed_data, B_total, jumps,
         jump_eigenbases, jump_hermitian,
         jump_oft, tmp1, tmp2, LdagL, rho_out,
         nothing, nothing, nothing, nothing, nothing,  # channel fields
+        G_left, G_right, G_left_adj, G_right_adj,     # Phase 32 precomputed effective Hamiltonian
     )
 end
 
@@ -379,6 +436,34 @@ function KrylovWorkspace(
                          precomputed_data, config_liouv, ham_or_trott)
     hermitianize!(R_total)
 
+    # Precompute G_left/G_right for optimized Lindbladian matvec (Phase 32)
+    R_total_T = Matrix{CT}(transpose(R_total))
+    if B_total !== nothing
+        B_T = Matrix{CT}(transpose(B_total))
+        G_left  = 1im .* B_T .- 0.5 .* R_total_T
+        G_right = -1im .* B_T .- 0.5 .* R_total_T
+    else
+        G_left  = -0.5 .* R_total_T
+        G_right = -0.5 .* R_total_T
+    end
+    G_left  = Matrix{CT}(G_left)
+    G_right = Matrix{CT}(G_right)
+
+    # Adjoint G matrices (same domain logic as LiouvConfig constructor)
+    if config_liouv.domain isa BohrDomain
+        R_total_conj = Matrix{CT}(conj.(R_total))
+        if B_total !== nothing
+            G_left_adj  = Matrix{CT}(-1im .* B_T .- 0.5 .* R_total_conj)
+            G_right_adj = Matrix{CT}(1im .* B_T .- 0.5 .* R_total_conj)
+        else
+            G_left_adj  = Matrix{CT}(-0.5 .* R_total_conj)
+            G_right_adj = Matrix{CT}(-0.5 .* R_total_conj)
+        end
+    else
+        G_left_adj  = G_right
+        G_right_adj = G_left
+    end
+
     # 2. Compute K0, S, U_residual (Chen Eq. 3.2)
     alpha_chen = 1 - sqrt(1 - delta)
     K0 = Matrix{CT}(I, dim, dim) .- alpha_chen .* R_total
@@ -408,5 +493,6 @@ function KrylovWorkspace(
         jump_eigenbases, jump_hermitian,
         jump_oft, tmp1, tmp2, LdagL, rho_out,
         K0, U_residual, U_coherent, channel_rho_jump, Float64(delta),
+        G_left, G_right, G_left_adj, G_right_adj,
     )
 end
