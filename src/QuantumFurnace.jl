@@ -26,8 +26,10 @@ using Dates
 # --- Public API ---
 
 # Types: Simulation
-export AbstractConfig, AbstractLiouvConfig, AbstractThermalizeConfig,
-       LiouvConfig, LiouvConfigGNS, ThermalizeConfig, ThermalizeConfigGNS,
+export Config,
+       AbstractSimulation, Lindbladian, Thermalize, KrylovSpectrum, Trajectory,
+       AbstractConstruction, KMS, GNS, DLL,
+       with_coherent,
        HamHam, TrottTrott,
        LindbladianResult, DMSimulationResult,
        JumpOp
