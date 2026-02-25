@@ -15,7 +15,7 @@ Tied to a specific (config, hamiltonian) pair at construction time.
 
 # Fields
 - `precomputed_data::PD`: from `_precompute_data(config, ham_or_trott)`
-- `B_total::Union{Nothing, Matrix{T}}`: precomputed coherent B (nothing for GNS / with_coherent=false)
+- `B_total::Union{Nothing, Matrix{T}}`: precomputed coherent B (nothing for GNS / with_coherent(construction)=false)
 - `jumps::Vector{JumpOp}`: reference to jump operators (kept for external access)
 - `jump_eigenbases::Vector{Matrix{T}}`: concrete-typed eigenbasis matrices (avoids JumpOp abstract field boxing)
 - `jump_hermitian::Vector{Bool}`: hermitian flags for each jump operator
@@ -27,7 +27,7 @@ Scratch matrices (all dim x dim, zeroed or overwritten each matvec call):
 - `LdagL::Matrix{T}`: scratch for L'*L product
 - `rho_out::Matrix{T}`: output accumulator (zeroed at start of each matvec)
 
-Channel fields (populated only for ThermalizeConfig, nothing for LiouvConfig):
+Channel fields (populated only for Config{Thermalize}, nothing for Config{Lindbladian}):
 - `channel_K0::Union{Nothing, Matrix{T}}`: I - alpha * R_total (Chen Eq. 3.2)
 - `channel_U_residual::Union{Nothing, Matrix{T}}`: sqrt_psd(S) residual TP fix
 - `channel_U_coherent::Union{Nothing, Matrix{T}}`: exp(-i*delta*B_total) coherent unitary
@@ -58,7 +58,7 @@ struct KrylovWorkspace{T<:Complex, PD<:NamedTuple}
     LdagL::Matrix{T}
     rho_out::Matrix{T}
 
-    # Channel fields (populated only for ThermalizeConfig constructor)
+    # Channel fields (populated only for Config{Thermalize} constructor)
     channel_K0::Union{Nothing, Matrix{T}}
     channel_U_residual::Union{Nothing, Matrix{T}}
     channel_U_coherent::Union{Nothing, Matrix{T}}
@@ -75,19 +75,19 @@ struct KrylovWorkspace{T<:Complex, PD<:NamedTuple}
 end
 
 """
-    KrylovWorkspace(config, hamiltonian, jumps; trotter=nothing)
+    KrylovWorkspace(config::Config{Lindbladian}, hamiltonian, jumps; trotter=nothing)
 
 Construct a `KrylovWorkspace` pre-allocating all scratch matrices for the given
 (config, hamiltonian) pair. Mirrors `construct_lindbladian` setup in `furnace.jl`.
 
 # Arguments
-- `config::AbstractLiouvConfig`: Lindbladian configuration (EnergyDomain, TimeDomain, etc.)
+- `config::Config{Lindbladian}`: Lindbladian configuration (EnergyDomain, TimeDomain, etc.)
 - `hamiltonian::HamHam`: Hamiltonian with eigenbasis data
 - `jumps::Vector{JumpOp}`: Jump operators (stored by reference)
 - `trotter::Union{TrottTrott, Nothing}=nothing`: Trotter object (required for TrotterDomain)
 """
 function KrylovWorkspace(
-    config::AbstractLiouvConfig,
+    config::Config{Lindbladian},
     hamiltonian::HamHam,
     jumps::Vector{JumpOp};
     trotter::Union{TrottTrott, Nothing}=nothing,
@@ -175,63 +175,6 @@ function KrylovWorkspace(
 end
 
 # ---------------------------------------------------------------------------
-# ThermalizeConfig -> LiouvConfig conversion (moved from krylov_eigsolve.jl)
-# ---------------------------------------------------------------------------
-
-"""
-    _thermalize_to_liouv_config(tc::ThermalizeConfig) -> LiouvConfig
-
-Build a `LiouvConfig` from a `ThermalizeConfig` by copying all shared Lindbladian
-parameters and stripping `mixing_time` and `delta`.
-
-Required because `apply_lindbladian!` dispatches on `AbstractLiouvConfig`, not
-`AbstractThermalizeConfig`.
-"""
-function _thermalize_to_liouv_config(tc::ThermalizeConfig)
-    LiouvConfig(
-        num_qubits = tc.num_qubits,
-        with_coherent = tc.with_coherent,
-        with_linear_combination = tc.with_linear_combination,
-        domain = tc.domain,
-        beta = tc.beta,
-        sigma = tc.sigma,
-        gaussian_parameters = tc.gaussian_parameters,
-        a = tc.a,
-        b = tc.b,
-        num_energy_bits = tc.num_energy_bits,
-        t0 = tc.t0,
-        w0 = tc.w0,
-        eta = tc.eta,
-        num_trotter_steps_per_t0 = tc.num_trotter_steps_per_t0,
-    )
-end
-
-"""
-    _thermalize_to_liouv_config(tc::ThermalizeConfigGNS) -> LiouvConfigGNS
-
-Build a `LiouvConfigGNS` from a `ThermalizeConfigGNS`. GNS configs always have
-`with_coherent = false`.
-"""
-function _thermalize_to_liouv_config(tc::ThermalizeConfigGNS)
-    LiouvConfigGNS(
-        num_qubits = tc.num_qubits,
-        with_coherent = false,
-        with_linear_combination = tc.with_linear_combination,
-        domain = tc.domain,
-        beta = tc.beta,
-        sigma = tc.sigma,
-        gaussian_parameters = tc.gaussian_parameters,
-        a = tc.a,
-        b = tc.b,
-        num_energy_bits = tc.num_energy_bits,
-        t0 = tc.t0,
-        w0 = tc.w0,
-        eta = tc.eta,
-        num_trotter_steps_per_t0 = tc.num_trotter_steps_per_t0,
-    )
-end
-
-# ---------------------------------------------------------------------------
 # R_total accumulation helpers (physics convention: R = sum rate^2 * L' * L)
 # ---------------------------------------------------------------------------
 
@@ -249,7 +192,7 @@ function _accumulate_R_total!(
     ws_eigenbases::Vector{Matrix{T}},
     ws_hermitian::Vector{Bool},
     precomputed_data,
-    config::AbstractLiouvConfig{EnergyDomain},
+    config::Config{<:Any, EnergyDomain},
     hamiltonian::HamHam,
 ) where {T<:Complex}
     (; transition, gamma_norm_factor, energy_labels) = precomputed_data
@@ -296,7 +239,7 @@ function _accumulate_R_total!(
     ws_eigenbases::Vector{Matrix{T}},
     ws_hermitian::Vector{Bool},
     precomputed_data,
-    config::AbstractLiouvConfig{D},
+    config::Config{<:Any, D},
     ham_or_trott::Union{HamHam, TrottTrott},
 ) where {T<:Complex, D<:Union{TimeDomain, TrotterDomain}}
     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = precomputed_data
@@ -341,7 +284,7 @@ function _accumulate_R_total!(
     ws_eigenbases::Vector{Matrix{T}},
     ws_hermitian::Vector{Bool},
     precomputed_data,
-    config::AbstractLiouvConfig{BohrDomain},
+    config::Config{<:Any, BohrDomain},
     hamiltonian::HamHam,
 ) where {T<:Complex}
     (; alpha, gamma_norm_factor) = precomputed_data
@@ -375,7 +318,7 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    KrylovWorkspace(config::AbstractThermalizeConfig, hamiltonian, jumps; trotter=nothing)
+    KrylovWorkspace(config::Config{Thermalize}, hamiltonian, jumps; trotter=nothing)
 
 Construct a `KrylovWorkspace` with precomputed CPTP channel matrices for
 the faithful Chen channel (Eq. 3.2).
@@ -384,20 +327,17 @@ Precomputes R_total, K0, U_residual, U_coherent at construction time so the
 per-matvec cost is only the rho-dependent sandwich terms.
 
 # Arguments
-- `config::AbstractThermalizeConfig`: Thermalization configuration (provides delta)
+- `config::Config{Thermalize}`: Thermalization configuration (provides delta)
 - `hamiltonian::HamHam`: Hamiltonian with eigenbasis data
 - `jumps::Vector{JumpOp}`: Jump operators (stored by reference)
 - `trotter::Union{TrottTrott, Nothing}=nothing`: Trotter object (required for TrotterDomain)
 """
 function KrylovWorkspace(
-    config::AbstractThermalizeConfig,
+    config::Config{Thermalize},
     hamiltonian::HamHam,
     jumps::Vector{JumpOp};
     trotter::Union{TrottTrott, Nothing}=nothing,
 )
-    # Convert to LiouvConfig for precomputation dispatch
-    config_liouv = _thermalize_to_liouv_config(config)
-
     # Determine ham_or_trott
     ham_or_trott = if config.domain isa TrotterDomain
         trotter === nothing && error("A Trotter object must be provided for the TrotterDomain")
@@ -406,11 +346,11 @@ function KrylovWorkspace(
         hamiltonian
     end
 
-    # Precompute domain-specific data (uses LiouvConfig for dispatch)
-    precomputed_data = _precompute_data(config_liouv, ham_or_trott)
+    # Precompute domain-specific data (Config accepts both Lindbladian and Thermalize)
+    precomputed_data = _precompute_data(config, ham_or_trott)
 
     # Precompute coherent B_total (returns nothing for GNS / with_coherent=false)
-    B_total = _precompute_coherent_total_B(jumps, ham_or_trott, config_liouv, precomputed_data)
+    B_total = _precompute_coherent_total_B(jumps, ham_or_trott, config, precomputed_data)
 
     # Determine dimensions and element type
     dim = size(hamiltonian.data, 1)
@@ -433,7 +373,7 @@ function KrylovWorkspace(
     # 1. Compute R_total (physics convention)
     R_total = zeros(CT, dim, dim)
     _accumulate_R_total!(R_total, jump_eigenbases, jump_hermitian,
-                         precomputed_data, config_liouv, ham_or_trott)
+                         precomputed_data, config, ham_or_trott)
     hermitianize!(R_total)
 
     # Precompute G_left/G_right for optimized Lindbladian matvec (Phase 32)
@@ -449,8 +389,8 @@ function KrylovWorkspace(
     G_left  = Matrix{CT}(G_left)
     G_right = Matrix{CT}(G_right)
 
-    # Adjoint G matrices (same domain logic as LiouvConfig constructor)
-    if config_liouv.domain isa BohrDomain
+    # Adjoint G matrices (same domain logic as Lindbladian constructor)
+    if config.domain isa BohrDomain
         R_total_conj = Matrix{CT}(conj.(R_total))
         if B_total !== nothing
             G_left_adj  = Matrix{CT}(-1im .* B_T .- 0.5 .* R_total_conj)

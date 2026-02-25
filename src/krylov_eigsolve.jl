@@ -7,8 +7,8 @@
 # constructing the full dense Liouvillian.
 #
 # Two dispatch paths via config type:
-#   - AbstractLiouvConfig     -> Lindbladian eigsolve with :LR targeting
-#   - AbstractThermalizeConfig -> CPTP channel eigsolve with :LM targeting
+#   - Config{Lindbladian}  -> Lindbladian eigsolve with :LR targeting
+#   - Config{Thermalize}   -> CPTP channel eigsolve with :LM targeting
 #
 # Covers: MATVEC-06, KRYLOV-01 through KRYLOV-05
 
@@ -23,7 +23,7 @@ Result of a matrix-free Krylov spectral gap computation.
 
 Stores the leading Lindbladian eigenvalues, the spectral gap, the fixed-point
 density matrix (steady state), and the gap mode operator.  For the channel path
-(`AbstractThermalizeConfig`), the raw channel eigenvalues and delta are also stored.
+(`Config{Thermalize}`), the raw channel eigenvalues and delta are also stored.
 
 # Fields
 - `eigenvalues`: Leading Lindbladian eigenvalues sorted by |Re(lambda)| ascending.
@@ -133,8 +133,8 @@ function _eigsolve_with_retry(f, x0, howmany::Int, which::Symbol;
 end
 
 # ---------------------------------------------------------------------------
-# ThermalizeConfig -> LiouvConfig conversion: moved to krylov_workspace.jl
-# (included before this file, avoids circular dependency)
+# Note: _thermalize_to_liouv_config has been deleted. With unified Config{S,D,C,T},
+# the Thermalize path passes Config directly (no conversion needed).
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
@@ -142,12 +142,12 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    apply_delta_channel!(ws, rho, config_liouv, hamiltonian) -> ws.rho_out
+    apply_delta_channel!(ws, rho, config, hamiltonian) -> ws.rho_out
 
 Apply the faithful Chen CPTP channel (Eq. 3.2) to a density matrix.
 
 Uses precomputed channel matrices (K0, U_residual, U_coherent) from the workspace
-(populated by the ThermalizeConfig constructor). The per-matvec computation is:
+(populated by the Config{Thermalize} constructor). The per-matvec computation is:
 
     1. Coherent rotation: rho_eff = U_coherent * rho * U_coherent' (if coherent enabled)
     2. Jump sandwich: rho_jump = delta * sum rate^2 * L * rho_eff * L'
@@ -156,7 +156,7 @@ Uses precomputed channel matrices (K0, U_residual, U_coherent) from the workspac
 # Arguments
 - `ws::KrylovWorkspace{T}`: Pre-allocated workspace with channel fields populated
 - `rho::Matrix{T}`: Input density matrix (dim x dim)
-- `config_liouv::AbstractLiouvConfig`: Lindbladian configuration (for sandwich dispatch)
+- `config::Config`: Configuration (for sandwich dispatch)
 - `hamiltonian::HamHam`: Hamiltonian
 
 # Returns
@@ -165,7 +165,7 @@ Uses precomputed channel matrices (K0, U_residual, U_coherent) from the workspac
 function apply_delta_channel!(
     ws::KrylovWorkspace{T},
     rho::Matrix{T},
-    config_liouv::AbstractLiouvConfig,
+    config::Config,
     hamiltonian::HamHam,
 ) where {T<:Complex}
     K0 = ws.channel_K0
@@ -185,7 +185,7 @@ function apply_delta_channel!(
 
     # 2. Accumulate jump sandwich: rho_jump = delta * sum rate^2 * L * rho_eff * L'
     fill!(ws.channel_rho_jump, 0)
-    _accumulate_jump_sandwich!(ws.channel_rho_jump, ws, rho_eff, delta, config_liouv, hamiltonian)
+    _accumulate_jump_sandwich!(ws.channel_rho_jump, ws, rho_eff, delta, config, hamiltonian)
 
     # 3. Need a safe copy of rho_eff before overwriting rho_out
     #    If U_coh !== nothing, rho_eff = ws.LdagL (not aliased with rho_out) -- safe
@@ -222,7 +222,7 @@ function _accumulate_jump_sandwich!(
     ws::KrylovWorkspace{T},
     rho::Matrix{T},
     delta::Real,
-    config::AbstractLiouvConfig{EnergyDomain},
+    config::Config{<:Any, EnergyDomain},
     hamiltonian::HamHam,
 ) where {T<:Complex}
     (; transition, gamma_norm_factor, energy_labels) = ws.precomputed_data
@@ -270,7 +270,7 @@ function _accumulate_jump_sandwich!(
     ws::KrylovWorkspace{T},
     rho::Matrix{T},
     delta::Real,
-    config::AbstractLiouvConfig{D},
+    config::Config{<:Any, D},
     hamiltonian::HamHam,
 ) where {T<:Complex, D<:Union{TimeDomain, TrotterDomain}}
     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = ws.precomputed_data
@@ -320,7 +320,7 @@ function _accumulate_jump_sandwich!(
     ws::KrylovWorkspace{T},
     rho::Matrix{T},
     delta::Real,
-    config::AbstractLiouvConfig{BohrDomain},
+    config::Config{<:Any, BohrDomain},
     hamiltonian::HamHam,
 ) where {T<:Complex}
     (; alpha, gamma_norm_factor) = ws.precomputed_data
@@ -352,11 +352,11 @@ function _accumulate_jump_sandwich!(
 end
 
 # ---------------------------------------------------------------------------
-# krylov_spectral_gap: Lindbladian path (AbstractLiouvConfig)
+# krylov_spectral_gap: Lindbladian path (Config{Lindbladian})
 # ---------------------------------------------------------------------------
 
 """
-    krylov_spectral_gap(config::AbstractLiouvConfig, hamiltonian, jumps; kwargs...) -> KrylovGapResult
+    krylov_spectral_gap(config::Config{Lindbladian}, hamiltonian, jumps; kwargs...) -> KrylovGapResult
 
 Compute the Lindbladian spectral gap matrix-free using KrylovKit Arnoldi with `:LR` targeting.
 
@@ -367,7 +367,7 @@ The steady-state eigenvalue is near Re(lambda) ~ 0 (largest real part). The spec
 is `abs(real(lambda_2))` where lambda_2 is the second eigenvalue sorted by |Re(lambda)|.
 
 # Arguments
-- `config::AbstractLiouvConfig`: Lindbladian configuration (EnergyDomain, TimeDomain, etc.)
+- `config::Config{Lindbladian}`: Lindbladian configuration (EnergyDomain, TimeDomain, etc.)
 - `hamiltonian::HamHam`: Hamiltonian with eigenbasis data
 - `jumps::Vector{JumpOp}`: Jump operators
 
@@ -383,7 +383,7 @@ is `abs(real(lambda_2))` where lambda_2 is the second eigenvalue sorted by |Re(l
 `KrylovGapResult` with Lindbladian eigenvalues, spectral gap, fixed point, and gap mode.
 """
 function krylov_spectral_gap(
-    config::AbstractLiouvConfig,
+    config::Config{Lindbladian},
     hamiltonian::HamHam,
     jumps::Vector{JumpOp};
     trotter::Union{TrottTrott, Nothing}=nothing,
@@ -454,11 +454,11 @@ function krylov_spectral_gap(
 end
 
 # ---------------------------------------------------------------------------
-# krylov_spectral_gap: Channel path (AbstractThermalizeConfig)
+# krylov_spectral_gap: Channel path (Config{Thermalize})
 # ---------------------------------------------------------------------------
 
 """
-    krylov_spectral_gap(config::AbstractThermalizeConfig, hamiltonian, jumps; kwargs...) -> KrylovGapResult
+    krylov_spectral_gap(config::Config{Thermalize}, hamiltonian, jumps; kwargs...) -> KrylovGapResult
 
 Compute the Lindbladian spectral gap via the faithful Chen CPTP channel (Eq. 3.2),
 using KrylovKit Arnoldi with `:LM` targeting.
@@ -472,19 +472,19 @@ The channel is CPTP and O(delta^2) accurate, matching what `run_thermalization`
 actually implements via `_finalize_kraus_step!`.
 
 # Arguments
-- `config::AbstractThermalizeConfig`: Thermalization configuration (provides delta)
+- `config::Config{Thermalize}`: Thermalization configuration (provides delta)
 - `hamiltonian::HamHam`: Hamiltonian with eigenbasis data
 - `jumps::Vector{JumpOp}`: Jump operators
 
 # Keyword Arguments
-Same as the `AbstractLiouvConfig` method.
+Same as the `Config{Lindbladian}` method.
 
 # Returns
 `KrylovGapResult` with converted Lindbladian eigenvalues, spectral gap, fixed point,
 gap mode, and the raw channel eigenvalues stored in `channel_eigenvalues`.
 """
 function krylov_spectral_gap(
-    config::AbstractThermalizeConfig,
+    config::Config{Thermalize},
     hamiltonian::HamHam,
     jumps::Vector{JumpOp};
     trotter::Union{TrottTrott, Nothing}=nothing,
@@ -501,10 +501,7 @@ function krylov_spectral_gap(
     # Get delta from config
     delta = config.delta
 
-    # Convert ThermalizeConfig -> LiouvConfig for sandwich dispatch
-    config_liouv = _thermalize_to_liouv_config(config)
-
-    # Allocate workspace using ThermalizeConfig constructor (precomputes channel matrices)
+    # Allocate workspace using Config{Thermalize} constructor (precomputes channel matrices)
     ws = KrylovWorkspace(config, hamiltonian, jumps; trotter=trotter)
 
     # Dimensions
@@ -513,7 +510,7 @@ function krylov_spectral_gap(
     # Build channel matvec closure using faithful Chen channel
     function channel_matvec(v::AbstractVector)
         rho = reshape(v, dim, dim)
-        apply_delta_channel!(ws, rho, config_liouv, hamiltonian)
+        apply_delta_channel!(ws, rho, config, hamiltonian)
         return copy(vec(ws.rho_out))  # CRITICAL: copy to avoid aliasing
     end
 

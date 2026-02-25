@@ -143,7 +143,7 @@ boxing allocations from `JumpOp`'s abstract `in_eigenbasis::Matrix{<:Complex}` f
 # Arguments
 - `ws::KrylovWorkspace`: pre-allocated workspace (scratch matrices + precomputed data)
 - `rho::Matrix{<:Complex}`: input density matrix (dim x dim)
-- `config::AbstractLiouvConfig{EnergyDomain}`: Lindbladian configuration
+- `config::Config{Lindbladian, EnergyDomain}`: Lindbladian configuration
 - `hamiltonian::HamHam`: Hamiltonian with eigenbasis data
 
 # Returns
@@ -152,7 +152,7 @@ boxing allocations from `JumpOp`'s abstract `in_eigenbasis::Matrix{<:Complex}` f
 function apply_lindbladian!(
     ws::KrylovWorkspace{T},
     rho::Matrix{T},
-    config::AbstractLiouvConfig{EnergyDomain},
+    config::Config{Lindbladian, EnergyDomain},
     hamiltonian::HamHam,
 ) where {T<:Complex}
     (; transition, gamma_norm_factor, energy_labels) = ws.precomputed_data
@@ -220,7 +220,7 @@ Same as `apply_lindbladian!`.
 function apply_adjoint_lindbladian!(
     ws::KrylovWorkspace{T},
     rho::Matrix{T},
-    config::AbstractLiouvConfig{EnergyDomain},
+    config::Config{Lindbladian, EnergyDomain},
     hamiltonian::HamHam,
 ) where {T<:Complex}
     (; transition, gamma_norm_factor, energy_labels) = ws.precomputed_data
@@ -335,7 +335,7 @@ allocated per matvec call for A_nu2_dag (acceptable for Bohr).
 # Arguments
 - `ws::KrylovWorkspace`: pre-allocated workspace (scratch matrices + precomputed data)
 - `rho::Matrix{<:Complex}`: input density matrix (dim x dim)
-- `config::AbstractLiouvConfig{BohrDomain}`: Lindbladian configuration
+- `config::Config{Lindbladian, BohrDomain}`: Lindbladian configuration
 - `hamiltonian::HamHam`: Hamiltonian with bohr_dict and bohr_freqs
 
 # Returns
@@ -344,7 +344,7 @@ allocated per matvec call for A_nu2_dag (acceptable for Bohr).
 function apply_lindbladian!(
     ws::KrylovWorkspace{T},
     rho::Matrix{T},
-    config::AbstractLiouvConfig{BohrDomain},
+    config::Config{Lindbladian, BohrDomain},
     hamiltonian::HamHam,
 ) where {T<:Complex}
     (; alpha, gamma_norm_factor) = ws.precomputed_data
@@ -401,7 +401,7 @@ Same as `apply_lindbladian!` for `BohrDomain`.
 function apply_adjoint_lindbladian!(
     ws::KrylovWorkspace{T},
     rho::Matrix{T},
-    config::AbstractLiouvConfig{BohrDomain},
+    config::Config{Lindbladian, BohrDomain},
     hamiltonian::HamHam,
 ) where {T<:Complex}
     (; alpha, gamma_norm_factor) = ws.precomputed_data
@@ -457,7 +457,7 @@ boxing allocations from `JumpOp`'s abstract `in_eigenbasis::Matrix{<:Complex}` f
 # Arguments
 - `ws::KrylovWorkspace`: pre-allocated workspace (scratch matrices + precomputed data)
 - `rho::Matrix{<:Complex}`: input density matrix (dim x dim)
-- `config::AbstractLiouvConfig{D}`: Lindbladian configuration (TimeDomain or TrotterDomain)
+- `config::Config{Lindbladian, D}`: Lindbladian configuration (TimeDomain or TrotterDomain)
 - `hamiltonian::HamHam`: Hamiltonian with eigenbasis data
 
 # Returns
@@ -466,7 +466,7 @@ boxing allocations from `JumpOp`'s abstract `in_eigenbasis::Matrix{<:Complex}` f
 function apply_lindbladian!(
     ws::KrylovWorkspace{T},
     rho::Matrix{T},
-    config::AbstractLiouvConfig{D},
+    config::Config{Lindbladian, D},
     hamiltonian::HamHam,
 ) where {T<:Complex, D<:Union{TimeDomain, TrotterDomain}}
     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = ws.precomputed_data
@@ -536,7 +536,7 @@ Same as `apply_lindbladian!` for `Union{TimeDomain, TrotterDomain}`.
 function apply_adjoint_lindbladian!(
     ws::KrylovWorkspace{T},
     rho::Matrix{T},
-    config::AbstractLiouvConfig{D},
+    config::Config{Lindbladian, D},
     hamiltonian::HamHam,
 ) where {T<:Complex, D<:Union{TimeDomain, TrotterDomain}}
     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = ws.precomputed_data
