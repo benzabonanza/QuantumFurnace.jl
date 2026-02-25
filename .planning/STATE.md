@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-25)
 ## Current Position
 
 Phase: 33 of 38 (Type Foundation)
-Plan: 2 of 4 in current phase
+Plan: 3 of 4 in current phase
 Status: Executing
-Last activity: 2026-02-25 -- Completed 33-02 (dispatch migration, 6 source files)
+Last activity: 2026-02-25 -- Completed 33-03 (pipeline migration, 8 source files)
 
-Progress: [###░░░░░░░] ~8% (v2.0, 2/~24 plans)
+Progress: [####░░░░░░] ~12% (v2.0, 3/~24 plans)
 
 ## Performance Metrics
 
@@ -31,7 +31,7 @@ Progress: [###░░░░░░░] ~8% (v2.0, 2/~24 plans)
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
 | v1.5 Krylov Gap Estimation | 27-32 | 12 (+3 quick) | 2026-02-20 to 2026-02-25 |
-| v2.0 Restructure | 33-38 | 2/~24 | 2026-02-25 to ... |
+| v2.0 Restructure | 33-38 | 3/~24 | 2026-02-25 to ... |
 
 ## Accumulated Context
 
@@ -45,6 +45,9 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [33-02] GNS coherent validation removed from validate_config! -- type system enforces via trait
 - [33-02] with_coherent kept in serialized Dict for backward compat, computed via trait on write
 - [33-02] _reconstruct_config builds Config with explicit sim/construction singletons
+- [33-03] construct_lindbladian constrained to Config{Lindbladian} (only caller is run_lindbladian)
+- [33-03] _accumulate_R_total! and _accumulate_jump_sandwich! use Config{<:Any,D} for both sim types
+- [33-03] _thermalize_to_liouv_config deleted -- unified Config eliminates conversion need
 
 ### Key Constraints for v2.0
 
@@ -68,5 +71,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-25
-Stopped at: Completed 33-02-PLAN.md (dispatch migration, 6 source files to Config)
+Stopped at: Completed 33-03-PLAN.md (pipeline migration, 8 source files to Config)
 Resume file: None
