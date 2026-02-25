@@ -5,14 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-25)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v2.0 Restructure
+**Current focus:** v2.0 Restructure -- Phase 33: Type Foundation
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-02-25 — Milestone v2.0 started
+Phase: 33 of 38 (Type Foundation)
+Plan: 0 of TBD in current phase
+Status: Ready to plan
+Last activity: 2026-02-25 -- Roadmap created for v2.0 Restructure
+
+Progress: [░░░░░░░░░░] 0% (v2.0)
 
 ## Performance Metrics
 
@@ -29,6 +31,7 @@ Last activity: 2026-02-25 — Milestone v2.0 started
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
 | v1.5 Krylov Gap Estimation | 27-32 | 12 (+3 quick) | 2026-02-20 to 2026-02-25 |
+| v2.0 Restructure | 33-38 | TBD | 2026-02-25 to ... |
 
 ## Accumulated Context
 
@@ -36,20 +39,16 @@ Last activity: 2026-02-25 — Milestone v2.0 started
 
 All decisions logged in PROJECT.md Key Decisions table.
 
-### Deferred from v1.4
+### Key Constraints for v2.0
 
-- FIT-01/02/03: Two-exponential fitting with Prony initialization
-- RATE-01/02/03/04: Effective rate lambda_eff(t) and automatic window selection
-- BOOT-01/02/03: Batched bootstrap uncertainty quantification
-- RICH-01/02/03: Richardson extrapolation with monotonicity gate
-- VAL-01/02/03/04: Diagnostic dashboard and final validation
-
-### Deferred from v1.5
-
-- BIEIG-01: bieigsolve for left+right eigenvectors simultaneously
-- SECTOR-01: Sector-resolved gap computation
-- SCALE-01: n=10, n=12 production runs on cluster
-- ADAPT-01: Adaptive krylovdim auto-increase on partial convergence
+- Keep time_oft!/trotter_oft! as test utilities (don't delete)
+- Keep OFTCaches for testing reference
+- R/K0/U_residual: per-jump (R^a) for DM/Trajectory, summed (R_total) for Krylov -- don't mix
+- Config is `Config{S,D,C,T}` where C = Construction (KMS, GNS, DLL future)
+- Stay flat in src/ (no subdirectories) -- rename files for clarity
+- Diagnostics stays as separate module
+- SharedArrays stays, only @distributed code is dead
+- Bohr domain may resist full unification (different loop structure)
 
 ### Pending Todos
 
@@ -62,5 +61,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-25
-Stopped at: Completed v1.5 milestone archival
+Stopped at: Roadmap created for v2.0, ready to plan Phase 33
 Resume file: None

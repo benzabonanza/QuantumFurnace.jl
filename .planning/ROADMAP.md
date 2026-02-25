@@ -8,6 +8,7 @@
 - ✅ **v1.3 Mixing Time Estimation** -- Phases 20-25 (shipped 2026-02-19)
 - ✅ **v1.4 Spectral Gap Refinement** -- Phase 26 (partial, shipped 2026-02-20)
 - ✅ **v1.5 Krylov Gap Estimation** -- Phases 27-32 (shipped 2026-02-25)
+- 🚧 **v2.0 Restructure** -- Phases 33-38 (in progress)
 
 ## Phases
 
@@ -93,7 +94,115 @@ Full details: [milestones/v1.5-ROADMAP.md](milestones/v1.5-ROADMAP.md)
 
 </details>
 
+### 🚧 v2.0 Restructure (In Progress)
+
+**Milestone Goal:** Major codebase restructure -- redesign Config type hierarchy for extensibility (KMS/GNS/DLL), eliminate code duplication across simulation paths, consolidate workspaces, reorganize files, and slim down tests. Prepare architecture for DLL construction, error estimation, and gate complexity features.
+
+- [ ] **Phase 33: Type Foundation** - Define Config{S,D,C,T} hierarchy with simulation/construction singleton types and backward-compatible aliases
+- [ ] **Phase 34: Code Deduplication** - Extract domain_prefactor(), foreach_frequency(), and unified oft!() replacing 16+ copy-pasted patterns
+- [ ] **Phase 35: Workspace and Channel Consolidation** - Merge KrylovWorkspace + KrausScratch + LindbladianWorkspace; unify R/K0/U_residual computation paths
+- [ ] **Phase 36: API and Results** - Define 4 clean run_* entry points with matching Result structs and save capability
+- [ ] **Phase 37: File Organization and Dead Code** - Rename src/ files to PRE/MID/POST grouping, move staging code, remove @distributed, update exports
+- [ ] **Phase 38: Test Cleanup** - Consolidate test helpers, add @info printouts, review dubious thresholds
+
+## Phase Details
+
+### Phase 33: Type Foundation
+**Goal**: All simulation code dispatches on a single `Config{S,D,C,T}` struct, eliminating 4 duplicate config types and enabling future DLL construction via a new singleton type
+**Depends on**: Nothing (first phase of v2.0)
+**Requirements**: TYPE-01, TYPE-02, TYPE-03, TYPE-04, TYPE-05, TYPE-06
+**Success Criteria** (what must be TRUE):
+  1. `Config{Lindbladian,EnergyDomain,KMS,Float64}` can be constructed and used in place of `LiouvConfig{EnergyDomain,Float64}` for all 4 domain types
+  2. `Config{Thermalize,TimeDomain,GNS,Float64}` can be constructed and used in place of `ThermalizeConfigGNS{TimeDomain,Float64}` for all 4 domain types
+  3. `with_coherent` is derived from construction type (KMS -> true, GNS -> false) at compile time, not stored as a field
+  4. All existing tests pass using either the new `Config{S,D,C,T}` type or backward-compatible aliases (`LiouvConfig`, `ThermalizeConfig`, `LiouvConfigGNS`, `ThermalizeConfigGNS`)
+  5. Adding a `DLL` construction type requires only `struct DLL <: AbstractConstruction end` plus dispatch methods, with zero changes to existing code
+**Plans**: TBD
+
+Plans:
+- [ ] 33-01: TBD
+- [ ] 33-02: TBD
+
+### Phase 34: Code Deduplication
+**Goal**: The 16+ copy-pasted prefactor formulas, hermitian half-grid branching patterns, and OFT variants are each single-source functions dispatched on domain type
+**Depends on**: Phase 33 (new Config type needed for dispatch signatures)
+**Requirements**: DEDUP-01, DEDUP-02, DEDUP-03
+**Success Criteria** (what must be TRUE):
+  1. `domain_prefactor(config, gamma_norm_factor)` is called from all 5 files (jump_workers, krylov_workspace, krylov_matvec, krylov_eigsolve, trajectories) instead of inline formula computation
+  2. `foreach_frequency()` iterator replaces the 16 hermitian half-grid branching patterns with zero allocation overhead verified by existing allocation tests
+  3. A single `oft!()` function (with domain dispatch) replaces both `oft!` and `_krylov_oft!`; `time_oft!`/`trotter_oft!` remain as clearly-marked test/debug utilities
+  4. All regression, allocation, and Krylov cross-validation tests pass with identical numerical results
+**Plans**: TBD
+
+Plans:
+- [ ] 34-01: TBD
+- [ ] 34-02: TBD
+
+### Phase 35: Workspace and Channel Consolidation
+**Goal**: Workspace types are consolidated with unified naming, and R/K0/U_residual CPTP channel computation uses shared helper functions with correct per-jump vs summed semantics
+**Depends on**: Phase 34 (deduplication helpers used by workspace constructors)
+**Requirements**: WORK-01, WORK-02
+**Success Criteria** (what must be TRUE):
+  1. `KrylovWorkspace`, `KrausScratch`, and `LindbladianWorkspace` are consolidated into a unified workspace struct (TrajectoryWorkspace stays separate)
+  2. Shared CPTP channel helper functions compute R, K0, U_residual correctly: per-jump (R^a, K0^a, U_residual^a) for DM/Trajectory paths, summed (R_total, K0_total, U_residual_total) for Krylov path
+  3. Zero-allocation hot-path invariants are preserved: existing allocation tests pass with 0 bytes in all domains
+  4. Workspace independence test passes (no shared mutable state between workspaces)
+**Plans**: TBD
+
+Plans:
+- [ ] 35-01: TBD
+- [ ] 35-02: TBD
+
+### Phase 36: API and Results
+**Goal**: Four clean public entry points (`run_lindblad`, `run_thermalize`, `run_krylov_spectrum`, `run_trajectory`) each return a typed Result struct with optional BSON save capability
+**Depends on**: Phase 35 (consolidated workspaces used by run_* functions)
+**Requirements**: WORK-03, WORK-04, WORK-05
+**Success Criteria** (what must be TRUE):
+  1. `run_lindblad()`, `run_thermalize()`, `run_krylov_spectrum()`, `run_trajectory()` are the 4 public entry points, each dispatching on `Config{S,D,C,T}`
+  2. Each entry point returns a typed Result struct (`LindbladResults`, `ThermalizeResults`, `KrylovSpectrumResults`, `TrajectoryResults`) containing the config and metadata (git hash, timestamp)
+  3. Passing `save_path="path.bson"` to any `run_*` function serializes the result to BSON with companion .txt, and the result round-trips correctly via `load_result`
+  4. Simulation scripts in `simulations/` demonstrate all 4 entry points with working examples
+**Plans**: TBD
+
+Plans:
+- [ ] 36-01: TBD
+- [ ] 36-02: TBD
+
+### Phase 37: File Organization and Dead Code
+**Goal**: Source files are renamed for clarity with PRE/MID/POST logical grouping, dead code is removed, staging code is separated, and the module export list matches the new structure
+**Depends on**: Phase 36 (API must be stable before renaming files)
+**Requirements**: ORG-01, ORG-02, ORG-03, ORG-07, ORG-08, ORG-09
+**Success Criteria** (what must be TRUE):
+  1. All src/ files are renamed with clear names reflecting their role in the PRE (types, physics)/MID (simulation runners)/POST (results, analysis) architecture -- flat directory, no subdirectories
+  2. Gap estimation/fitting/convergence code is moved to a staging area separated from active source
+  3. `@distributed` dead code and `using Distributed` import are removed from furnace.jl; SharedArrays import stays
+  4. Diagnostics remains as a separate analysis module, not folded into the Lindblad simulation path
+  5. Module export list is reorganized by simulation type (Lindblad, Thermalize, Krylov, Trajectory) with clean groupings
+**Plans**: TBD
+
+Plans:
+- [ ] 37-01: TBD
+- [ ] 37-02: TBD
+
+### Phase 38: Test Cleanup
+**Goal**: Test infrastructure is consolidated with parametrized helpers, informative output, and validated thresholds so that tests are maintainable and trustworthy
+**Depends on**: Phase 37 (tests cleaned after code is finalized)
+**Requirements**: ORG-04, ORG-05, ORG-06
+**Success Criteria** (what must be TRUE):
+  1. Config factory functions in test_helpers.jl are parametrized by system size and construction type, eliminating duplicate setup patterns across test files
+  2. Every `@testset` block prints `@info` showing what is being tested and key numerical results (trace distances, gaps, allocation counts)
+  3. Previously dubious test thresholds are reviewed and either tightened with documented rationale or relaxed with explanation of why the original threshold was wrong
+  4. All tests pass and the full test suite runs without regressions from the restructure
+**Plans**: TBD
+
+Plans:
+- [ ] 38-01: TBD
+- [ ] 38-02: TBD
+
 ## Progress
+
+**Execution Order:**
+Phases execute in numeric order: 33 -> 34 -> 35 -> 36 -> 37 -> 38
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -129,3 +238,9 @@ Full details: [milestones/v1.5-ROADMAP.md](milestones/v1.5-ROADMAP.md)
 | 30. Cross-Validation | v1.5 | 2/2 | Complete | 2026-02-24 |
 | 31. Scaling Benchmarks | v1.5 | 2/2 | Complete | 2026-02-24 |
 | 32. Krylov Simulator Speedup | v1.5 | 2/2 | Complete | 2026-02-25 |
+| 33. Type Foundation | v2.0 | 0/TBD | Not started | - |
+| 34. Code Deduplication | v2.0 | 0/TBD | Not started | - |
+| 35. Workspace and Channel Consolidation | v2.0 | 0/TBD | Not started | - |
+| 36. API and Results | v2.0 | 0/TBD | Not started | - |
+| 37. File Organization and Dead Code | v2.0 | 0/TBD | Not started | - |
+| 38. Test Cleanup | v2.0 | 0/TBD | Not started | - |

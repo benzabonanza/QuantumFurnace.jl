@@ -85,35 +85,35 @@ Requirements for the v2.0 Restructure milestone. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| TYPE-01 | — | Pending |
-| TYPE-02 | — | Pending |
-| TYPE-03 | — | Pending |
-| TYPE-04 | — | Pending |
-| TYPE-05 | — | Pending |
-| TYPE-06 | — | Pending |
-| DEDUP-01 | — | Pending |
-| DEDUP-02 | — | Pending |
-| DEDUP-03 | — | Pending |
-| WORK-01 | — | Pending |
-| WORK-02 | — | Pending |
-| WORK-03 | — | Pending |
-| WORK-04 | — | Pending |
-| WORK-05 | — | Pending |
-| ORG-01 | — | Pending |
-| ORG-02 | — | Pending |
-| ORG-03 | — | Pending |
-| ORG-04 | — | Pending |
-| ORG-05 | — | Pending |
-| ORG-06 | — | Pending |
-| ORG-07 | — | Pending |
-| ORG-08 | — | Pending |
-| ORG-09 | — | Pending |
+| TYPE-01 | Phase 33 | Pending |
+| TYPE-02 | Phase 33 | Pending |
+| TYPE-03 | Phase 33 | Pending |
+| TYPE-04 | Phase 33 | Pending |
+| TYPE-05 | Phase 33 | Pending |
+| TYPE-06 | Phase 33 | Pending |
+| DEDUP-01 | Phase 34 | Pending |
+| DEDUP-02 | Phase 34 | Pending |
+| DEDUP-03 | Phase 34 | Pending |
+| WORK-01 | Phase 35 | Pending |
+| WORK-02 | Phase 35 | Pending |
+| WORK-03 | Phase 36 | Pending |
+| WORK-04 | Phase 36 | Pending |
+| WORK-05 | Phase 36 | Pending |
+| ORG-01 | Phase 37 | Pending |
+| ORG-02 | Phase 37 | Pending |
+| ORG-03 | Phase 37 | Pending |
+| ORG-04 | Phase 38 | Pending |
+| ORG-05 | Phase 38 | Pending |
+| ORG-06 | Phase 38 | Pending |
+| ORG-07 | Phase 37 | Pending |
+| ORG-08 | Phase 37 | Pending |
+| ORG-09 | Phase 37 | Pending |
 
 **Coverage:**
 - v2.0 requirements: 23 total
-- Mapped to phases: 0
-- Unmapped: 23
+- Mapped to phases: 23
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-25*
-*Last updated: 2026-02-25 after initial definition*
+*Last updated: 2026-02-25 after roadmap creation*
