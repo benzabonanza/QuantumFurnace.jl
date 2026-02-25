@@ -73,28 +73,28 @@ function _load_hamiltonian_bson(path::String, beta::Float64)
     return HamHam(raw_nt, beta)
 end
 
-function _generate_filename(config::AbstractLiouvConfig)
+function _generate_filename(config::Config{Lindbladian})
     pic_str = string(typeof(config.domain))
-    db_str = (config isa LiouvConfigGNS) ? "GNS" : "KMS"
-    
+    db_str = config.construction isa GNS ? "GNS" : "KMS"
+
     beta_str = "beta=$(config.beta)"
     a_str = "a=$(config.a)"
     b_str = "b=$(config.b)"
     nqb_str = "n=$(config.num_qubits)"
-    B = config.with_coherent ? "B" : "noB"
+    B = with_coherent(config.construction) ? "B" : "noB"
 
     return join(["liouv", db_str, pic_str, nqb_str, beta_str, B, a_str, b_str], "_") * ".bson"
 end
 
-function _generate_filename(config::AbstractThermalizeConfig)
+function _generate_filename(config::Config{Thermalize})
     pic_str = string(typeof(config.domain))
-    db_str = (config isa ThermalizeConfigGNS) ? "GNS" : "KMS"
+    db_str = config.construction isa GNS ? "GNS" : "KMS"
 
     beta_str = "beta=$(config.beta)"
     a_str = "a=$(config.a)"
     b_str = "b=$(config.b)"
     nqb_str = "n=$(config.num_qubits)"
-    B = config.with_coherent ? "B" : "noB"
+    B = with_coherent(config.construction) ? "B" : "noB"
     mix = "mix=$(config.mixing_time)"
 
     return join(["alg", db_str, pic_str, nqb_str, beta_str, B, a_str, b_str, mix], "_") * ".bson"
@@ -114,17 +114,14 @@ function _riemann_sum(fvals::Vector{ComplexF64}, d0::Float64)
     return d0 * sum(fvals)
 end
 
-function validate_config!(config::AbstractConfig)
+function validate_config!(config::Config)
     errors = String[]
 
     # --- Domain-Specific Validation ---
     _collect_config_errors!(errors, config)
 
     # --- Common Validation Logic ---
-    # GNS configs are defined without the coherent correction term B.
-    if (config isa Union{LiouvConfigGNS, ThermalizeConfigGNS}) && config.with_coherent
-        push!(errors, "GNS configs must have with_coherent=false (no coherent B term in this line).")
-    end
+    # GNS coherent check removed: type system enforces with_coherent(::GNS) = false via trait.
 
     if !(config.with_linear_combination) && config.gaussian_parameters == (nothing, nothing)
         push!(errors, "If with_linear_combination is false, gaussian_parameters must be set.")
@@ -135,14 +132,14 @@ function validate_config!(config::AbstractConfig)
         if w_gamma === nothing || sigma_gamma === nothing
             push!(errors, "For Gaussian transitions gaussian_parameters=(ω_γ, σ_γ) must be set.")
         else
-            rhs = if config isa Union{LiouvConfigGNS, ThermalizeConfigGNS}
+            rhs = if config.construction isa GNS
                 2 * w_gamma / (sigma_gamma^2)
             else
                 2 * w_gamma / (config.sigma^2 + sigma_gamma^2)
             end
             parameter_relation_holds = isapprox(config.beta, rhs)
             if !(parameter_relation_holds)
-                if config isa Union{LiouvConfigGNS, ThermalizeConfigGNS}
+                if config.construction isa GNS
                     push!(errors, "For Gaussian transitions (GNS line) require beta ≈ 2*ω_γ/σ_γ^2")
                 else
                     push!(errors, "For Gaussian transitions (KMS line) require beta ≈ 2*ω_γ/(σ^2+σ_γ^2)")
@@ -155,7 +152,7 @@ function validate_config!(config::AbstractConfig)
         if config.b != 0.0
             push!(errors, "For linear combinations with b != 0, a must also be non-zero.")
         end
-        if config.domain isa Union{TimeDomain, TrotterDomain} && config.with_coherent && (isnothing(config.eta) || config.eta <= 0.0)
+        if config.domain isa Union{TimeDomain, TrotterDomain} && with_coherent(config.construction) && (isnothing(config.eta) || config.eta <= 0.0)
             push!(errors, "For linear combinations in the KMS DB case with a=0 in TIME or TROTTER domain, eta must be > 0.")
         end
     end
@@ -169,11 +166,11 @@ function validate_config!(config::AbstractConfig)
     return nothing
 end
 
-function _collect_config_errors!(errors::Vector{String}, config::AbstractConfig{BohrDomain})
+function _collect_config_errors!(errors::Vector{String}, config::Config{<:Any, BohrDomain})
     return # No specific checks
 end
 
-function _collect_config_errors!(errors::Vector{String}, config::AbstractConfig{EnergyDomain})
+function _collect_config_errors!(errors::Vector{String}, config::Config{<:Any, EnergyDomain})
     if isnothing(config.num_energy_bits) || config.num_energy_bits <= 0
         push!(errors, "For EnergyDomain, num_energy_bits must be > 0.")
     end
@@ -182,7 +179,7 @@ function _collect_config_errors!(errors::Vector{String}, config::AbstractConfig{
     end
 end
 
-function _collect_config_errors!(errors::Vector{String}, config::AbstractConfig{TimeDomain})
+function _collect_config_errors!(errors::Vector{String}, config::Config{<:Any, TimeDomain})
     if isnothing(config.num_energy_bits) || config.num_energy_bits <= 0
         push!(errors, "For TimeDomain, num_energy_bits must be > 0.")
     end
@@ -198,7 +195,7 @@ function _collect_config_errors!(errors::Vector{String}, config::AbstractConfig{
     end
 end
 
-function _collect_config_errors!(errors::Vector{String}, config::AbstractConfig{TrotterDomain})
+function _collect_config_errors!(errors::Vector{String}, config::Config{<:Any, TrotterDomain})
     if isnothing(config.num_energy_bits) || config.num_energy_bits <= 0
         push!(errors, "For TrotterDomain, num_energy_bits must be > 0.")
     end
@@ -218,9 +215,9 @@ function _collect_config_errors!(errors::Vector{String}, config::AbstractConfig{
 end
 
 
-function _print_press(config::AbstractLiouvConfig)
+function _print_press(config::Config{Lindbladian})
     params = [
-        ("db", (config isa LiouvConfigGNS) ? :GNS : :KMS),
+        ("db", config.construction isa GNS ? :GNS : :KMS),
         ("domain", config.domain),
         ("num_qubits", config.num_qubits),
         ("num_energy_bits", config.num_energy_bits),
@@ -232,7 +229,7 @@ function _print_press(config::AbstractLiouvConfig)
         ("eta", config.eta),
         ("t0", config.t0),
         ("w0", config.w0),
-        ("with_coherent", config.with_coherent),
+        ("with_coherent", with_coherent(config.construction)),
         ("with_linear_combination", config.with_linear_combination),
         ("num_trotter_steps_per_t0", config.num_trotter_steps_per_t0)
     ]
@@ -248,9 +245,9 @@ function _print_press(config::AbstractLiouvConfig)
     println("-----------------")
 end
 
-function _print_press(config::AbstractThermalizeConfig)
+function _print_press(config::Config{Thermalize})
     params = [
-        ("db", (config isa ThermalizeConfigGNS) ? :GNS : :KMS),
+        ("db", config.construction isa GNS ? :GNS : :KMS),
         ("domain", config.domain),
         ("num_qubits", config.num_qubits),
         ("num_energy_bits", config.num_energy_bits),
@@ -262,7 +259,7 @@ function _print_press(config::AbstractThermalizeConfig)
         ("eta", config.eta),
         ("t0", config.t0),
         ("w0", config.w0),
-        ("with_coherent", config.with_coherent),
+        ("with_coherent", with_coherent(config.construction)),
         ("with_linear_combination", config.with_linear_combination),
         ("num_trotter_steps_per_t0", config.num_trotter_steps_per_t0),
         ("mixing time", config.mixing_time),

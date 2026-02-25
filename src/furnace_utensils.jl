@@ -1,10 +1,10 @@
-function _precompute_labels(config::AbstractConfig{D}) where {D<:Union{BohrDomain, EnergyDomain}}
+function _precompute_labels(config::Config{<:Any, D}) where {D<:Union{BohrDomain, EnergyDomain}}
     energy_labels = _create_energy_labels(config.num_energy_bits, config.w0)
     truncated_energy_labels = _truncate_energy_labels(energy_labels, config)
     return (truncated_energy_labels,)  # Energy labels
 end
 
-function _precompute_labels(config::AbstractConfig{D}) where {D<:Union{TimeDomain, TrotterDomain}}
+function _precompute_labels(config::Config{<:Any, D}) where {D<:Union{TimeDomain, TrotterDomain}}
     energy_labels = _create_energy_labels(config.num_energy_bits, config.w0)
     truncated_energy_labels = _truncate_energy_labels(energy_labels, config)
     time_labels = energy_labels .* (config.t0 / config.w0)
@@ -12,7 +12,7 @@ function _precompute_labels(config::AbstractConfig{D}) where {D<:Union{TimeDomai
 end  
 
 function _precompute_data(
-    config::AbstractLiouvConfig{BohrDomain},
+    config::Config{Lindbladian, BohrDomain},
     ham_or_trott::Union{HamHam, TrottTrott}
 )
 
@@ -28,7 +28,7 @@ function _precompute_data(
 end
 
 function _precompute_data(
-    config::AbstractThermalizeConfig{BohrDomain},
+    config::Config{Thermalize, BohrDomain},
     hamiltonian::HamHam
 )
     alpha = _pick_alpha(config)
@@ -65,7 +65,7 @@ function _precompute_data(
 end
 
 function _precompute_data(
-    config::AbstractConfig{EnergyDomain},
+    config::Config{<:Any, EnergyDomain},
     ham_or_trott::Union{HamHam, TrottTrott}
 )
     energy_labels, = _precompute_labels(config)
@@ -80,7 +80,7 @@ function _precompute_data(
 end
 
 function _precompute_data(
-    config::AbstractConfig{D},
+    config::Config{<:Any, D},
     ham_or_trott::Union{HamHam, TrottTrott}
 ) where {D<:Union{TimeDomain, TrotterDomain}}
     energy_labels, time_labels = _precompute_labels(config)
@@ -90,7 +90,7 @@ function _precompute_data(
     gamma_norm_factor =  1.0 / maximum(transition.(energy_labels))
 
     # Coherent term B
-    b_minus, b_plus = if config.with_coherent
+    b_minus, b_plus = if with_coherent(config.construction)
         _b_minus = _compute_truncated_func(_compute_b_minus, time_labels, config.beta, config.sigma)
         chosen_b_plus, b_plus_args = _select_b_plus_calculator(config)
         _b_plus = _compute_truncated_func(chosen_b_plus, time_labels, b_plus_args...)
@@ -120,7 +120,7 @@ function _precompute_data(
     )
 end
 
-function _select_b_plus_calculator(config::Union{LiouvConfig, ThermalizeConfig})
+function _select_b_plus_calculator(config::Config{<:Any, <:Any, KMS})
     if !config.with_linear_combination
         # Gaussian
         return (_compute_b_plus, (config.beta, config.gaussian_parameters[1], config.gaussian_parameters[2]))

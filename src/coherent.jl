@@ -9,16 +9,16 @@
     ) -> Union{Nothing, Matrix{<:Complex}}
 
     Returns the total coherent operator B = sum_k B_k, already scaled by gamma_norm_factor.
-    Returns nothing if config.with_coherent == false.
+    Returns nothing if with_coherent(config.construction) == false.
 """
 function _precompute_coherent_total_B(
     jumps::AbstractVector{<:JumpOp},
     ham_or_trott::Union{HamHam, TrottTrott},
-    config::AbstractConfig,
+    config::Config,
     precomputed_data;
     )
 
-    config.with_coherent || return nothing
+    with_coherent(config.construction) || return nothing
 
     if config.domain isa TimeDomain
         (; b_minus, b_plus, gamma_norm_factor) = precomputed_data
@@ -43,7 +43,7 @@ end
     _precompute_coherent_unitary_terms(
         jumps::AbstractVector{<:JumpOp},
         hamiltonian::HamHam,
-        config::AbstractThermalizeConfig,
+        config::Config{Thermalize},
         precomputed_data;
         trotter::Union{Nothing, TrottTrott}=nothing,
     ) -> Union{Nothing, Vector{Matrix{<:Complex}}}
@@ -53,18 +53,18 @@ end
 
     Each B_k is constructed exactly as in the coherent-term definitions (domain-dependent),
     scaled by `gamma_norm_factor` (same convention as Liouvillian construction).
-    Returns `nothing` if `config.with_coherent == false`.
+    Returns `nothing` if `with_coherent(config.construction) == false`.
 """
 function _precompute_coherent_unitary_terms(
     jumps::AbstractVector{<:JumpOp},
     hamiltonian::HamHam,
-    config::AbstractThermalizeConfig,
+    config::Config{Thermalize},
     precomputed_data;
     trotter::Union{Nothing, TrottTrott}=nothing,
     delta_scale::Real = 1.0  # for randomized channels
     )
 
-    config.with_coherent || return nothing
+    with_coherent(config.construction) || return nothing
 
     delta = delta_scale * config.delta
     CT = Complex{eltype(hamiltonian.eigvals)}
@@ -104,23 +104,23 @@ end
     precompute_coherent_terms(
         jumps::AbstractVector{<:JumpOp},
         hamiltonian::HamHam,
-        config::AbstractConfig,
+        config::Config,
         precomputed_data;
         trotter::Union{Nothing, TrottTrott}=nothing,
     ) -> Union{Nothing, Vector{Matrix{<:Complex}}}
 
     Precompute and cache the coherent B term for each `JumpOp`, already scaled by `gamma_norm_factor`.
-    Returns `nothing` if `config.with_coherent == false`.
+    Returns `nothing` if `with_coherent(config.construction) == false`.
 """
 function _precompute_coherent_terms(
     jumps::AbstractVector{<:JumpOp},
     hamiltonian::HamHam,
-    config::AbstractConfig,
+    config::Config,
     precomputed_data;
     trotter::Union{Nothing, TrottTrott}=nothing,
     )
 
-    config.with_coherent || return nothing
+    with_coherent(config.construction) || return nothing
 
     CT = Complex{eltype(hamiltonian.eigvals)}
     coherent_terms = Vector{Matrix{CT}}(undef, length(jumps))

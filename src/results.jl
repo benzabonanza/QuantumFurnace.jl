@@ -3,10 +3,10 @@
 # ============================================================================
 
 """
-    ExperimentResult{C<:AbstractConfig, T<:AbstractFloat}
+    ExperimentResult{C<:Config, T<:AbstractFloat}
 
 Complete experiment result with config, trajectory data, and metadata.
-Parameterized on config type `C` (preserves KMS/GNS distinction) and
+Parameterized on config type `C` (preserves KMS/GNS distinction via type parameter) and
 element type `T` (typically Float64).
 
 # Fields
@@ -15,7 +15,7 @@ element type `T` (typically Float64).
 - `hamiltonian_params::Dict{Symbol, Any}`: Hamiltonian provenance (base_terms, base_coeffs, etc.).
 - `metadata::Dict{Symbol, Any}`: Run metadata (timestamp, git hash, Julia version, wall time, etc.).
 """
-struct ExperimentResult{C<:AbstractConfig, T<:AbstractFloat}
+struct ExperimentResult{C<:Config, T<:AbstractFloat}
     config::C
     trajectory_result::TrajectoryResult{Complex{T}}
     hamiltonian_params::Dict{Symbol, Any}
@@ -55,21 +55,21 @@ function _experiment_to_dict(result::ExperimentResult)
 end
 
 """
-    _config_to_dict(config::AbstractConfig) -> Dict{Symbol, Any}
+    _config_to_dict(config::Config) -> Dict{Symbol, Any}
 
 Serialize a config struct to a Dict with string-tagged type info.
 """
-function _config_to_dict(config::AbstractConfig)
+function _config_to_dict(config::Config)
     d = Dict{Symbol, Any}()
 
     # Type tags
-    d[:config_type] = (config isa Union{LiouvConfigGNS, ThermalizeConfigGNS}) ? "GNS" : "KMS"
-    d[:config_kind] = (config isa AbstractThermalizeConfig) ? "thermalize" : "liouv"
+    d[:config_type] = config.construction isa GNS ? "GNS" : config.construction isa KMS ? "KMS" : "DLL"
+    d[:config_kind] = config.sim isa Thermalize ? "thermalize" : "liouv"
     d[:domain] = string(typeof(config.domain))
 
     # Shared fields (all config types have these)
     d[:num_qubits]              = config.num_qubits
-    d[:with_coherent]           = config.with_coherent
+    d[:with_coherent]           = with_coherent(config.construction)
     d[:with_linear_combination] = config.with_linear_combination
     d[:beta]                    = config.beta
     d[:sigma]                   = config.sigma
@@ -83,7 +83,7 @@ function _config_to_dict(config::AbstractConfig)
     d[:num_trotter_steps_per_t0] = config.num_trotter_steps_per_t0
 
     # Thermalize-specific fields
-    if config isa AbstractThermalizeConfig
+    if config.sim isa Thermalize
         d[:mixing_time] = config.mixing_time
         d[:delta]       = config.delta
     end
@@ -152,14 +152,14 @@ function _dict_to_experiment(d::Dict)
 end
 
 """
-    _reconstruct_config(d::Dict) -> AbstractConfig
+    _reconstruct_config(d::Dict) -> Config
 
-Reconstruct the correct config struct from a serialized Dict.
-Uses config_type ("KMS"/"GNS") and config_kind ("liouv"/"thermalize") to pick the constructor.
+Reconstruct the correct Config struct from a serialized Dict.
+Uses config_type ("KMS"/"GNS"/"DLL") and config_kind ("liouv"/"thermalize") to pick the singletons.
 """
 function _reconstruct_config(d::Dict)
     domain = _string_to_domain(d[:domain])
-    config_type = d[:config_type]   # "KMS" or "GNS"
+    config_type = d[:config_type]   # "KMS", "GNS", or "DLL"
 
     # Determine liouv vs thermalize: prefer config_kind tag, fall back to presence of mixing_time
     config_kind = get(d, :config_kind, nothing)
@@ -171,15 +171,10 @@ function _reconstruct_config(d::Dict)
 
     kwargs = _dict_to_config_kwargs(d, domain)
 
-    if config_type == "GNS" && is_thermalize
-        ThermalizeConfigGNS(; kwargs...)
-    elseif config_type == "GNS"
-        LiouvConfigGNS(; kwargs...)
-    elseif is_thermalize
-        ThermalizeConfig(; kwargs...)
-    else
-        LiouvConfig(; kwargs...)
-    end
+    construction = config_type == "GNS" ? GNS() : config_type == "DLL" ? DLL() : KMS()
+    sim = is_thermalize ? Thermalize() : Lindbladian()
+
+    Config(; sim=sim, domain=domain, construction=construction, kwargs...)
 end
 
 """
@@ -191,11 +186,9 @@ Filters out nothing values for optional fields to let defaults apply.
 function _dict_to_config_kwargs(d::Dict, domain)
     kwargs = Dict{Symbol, Any}()
 
-    # Required fields
+    # Required fields (with_coherent derived from construction type, not stored)
     kwargs[:num_qubits]              = d[:num_qubits]
-    kwargs[:with_coherent]           = d[:with_coherent]
     kwargs[:with_linear_combination] = d[:with_linear_combination]
-    kwargs[:domain]                  = domain
     kwargs[:beta]                    = d[:beta]
     kwargs[:sigma]                   = d[:sigma]
 
@@ -403,13 +396,13 @@ function _write_companion_txt(result::ExperimentResult, path::String)
         println(io, "Julia:      ", get(meta, :julia_version, "unknown"))
         println(io)
         println(io, "--- Config ---")
-        println(io, "Type:       ", (cfg isa Union{LiouvConfigGNS, ThermalizeConfigGNS}) ? "GNS" : "KMS")
-        println(io, "Kind:       ", (cfg isa AbstractThermalizeConfig) ? "thermalize" : "liouv")
+        println(io, "Type:       ", cfg.construction isa GNS ? "GNS" : cfg.construction isa KMS ? "KMS" : "DLL")
+        println(io, "Kind:       ", cfg.sim isa Thermalize ? "thermalize" : "liouv")
         println(io, "Domain:     ", typeof(cfg.domain))
         println(io, "n_qubits:   ", cfg.num_qubits)
         println(io, "beta:       ", cfg.beta)
         println(io, "sigma:      ", cfg.sigma)
-        if cfg isa AbstractThermalizeConfig
+        if cfg.sim isa Thermalize
             println(io, "mix_time:   ", cfg.mixing_time)
             println(io, "delta:      ", cfg.delta)
         end
@@ -429,12 +422,12 @@ end
 # ============================================================================
 
 """
-    _generate_experiment_filename(config::AbstractConfig) -> String
+    _generate_experiment_filename(config::Config) -> String
 
 Generate a descriptive filename: `{db}_{n}_{beta}_{domain}_{date}.bson`.
 """
-function _generate_experiment_filename(config::AbstractConfig)
-    db_str     = (config isa Union{LiouvConfigGNS, ThermalizeConfigGNS}) ? "gns" : "kms"
+function _generate_experiment_filename(config::Config)
+    db_str     = config.construction isa GNS ? "gns" : "kms"
     domain_str = lowercase(replace(string(typeof(config.domain)), "Domain" => ""))
     n_str      = "n$(config.num_qubits)"
     beta_str   = "beta$(round(Int, config.beta))"
@@ -443,11 +436,11 @@ function _generate_experiment_filename(config::AbstractConfig)
 end
 
 """
-    _default_results_dir(config::AbstractConfig) -> String
+    _default_results_dir(config::Config) -> String
 
 Return the default results subdirectory for the given config type.
 """
-function _default_results_dir(config::AbstractConfig)
-    subdir = (config isa Union{LiouvConfigGNS, ThermalizeConfigGNS}) ? "approx_gns" : "kms"
+function _default_results_dir(config::Config)
+    subdir = config.construction isa GNS ? "approx_gns" : "kms"
     return joinpath(dirname(Pkg.project().path), "results", subdir)
 end
