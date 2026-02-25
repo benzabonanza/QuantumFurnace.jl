@@ -35,175 +35,113 @@ struct LindbladianWorkspace{T<:AbstractFloat}
         new{T}(Id, jump_tmp, jump_conj, jump_dag_jump, jump2_jump1)
     end
 end
-abstract type AbstractConfig{D<:AbstractDomain, T<:AbstractFloat} end
-abstract type AbstractLiouvConfig{D<:AbstractDomain, T<:AbstractFloat} <: AbstractConfig{D,T} end
-abstract type AbstractThermalizeConfig{D<:AbstractDomain, T<:AbstractFloat} <: AbstractConfig{D,T} end
+# Simulation types
+abstract type AbstractSimulation end
+struct Lindbladian    <: AbstractSimulation end
+struct Thermalize     <: AbstractSimulation end
+struct KrylovSpectrum <: AbstractSimulation end
+struct Trajectory     <: AbstractSimulation end
 
-# Let's keep this structure, and have the "give w0 for desired energy integral error" type of config optimization
-# before the construct_liouvillian function
+# Construction types (detailed balance)
+abstract type AbstractConstruction end
+struct KMS <: AbstractConstruction end
+struct GNS <: AbstractConstruction end
+struct DLL <: AbstractConstruction end
+
+# Trait: coherent term presence (derived from construction type)
+with_coherent(::KMS) = true
+with_coherent(::GNS) = false
+with_coherent(::DLL) = true  # placeholder for Ding et al.
+
 """
-    LiouvConfig
+    Config{S, D, C, T}
 
-    A configuration object that holds all the parameters for the core function: `run_liouvillian`, which constructs the Lindbladian of the thermalizing system.
+A unified configuration object holding all parameters for quantum Gibbs sampler simulations.
 
-    # Fields
-    - `num_qubits`: The number of system qubits.
-    - `with_coherent`: The option to add (=true) or omit (=false) the coherent term in the Lindbladian.\nIf added, the target state of the evolution will be the exactly the Gibbs state, otherwise only approximately.
-    - `with_linear_combination`: The option to choose if we want to apply a convex combination of Lindbladians for a faster mixing. Could add extra complexities if the resulting transition function is not smooth. (See more in `Theory`).
-    - `a` and `b`: The parameters that specify the type of linear combination.
-    - `eta`: in the case of the Metropolis linear combination, η is an additional coefficient that determines the accuracy of the time domain approximation.
-    - `domain`: The domain the simulation runs in (`BOHR`, `ENERGY`, `TIME`, `TROTTER`). The choice of the domain represents the levels of approximations we need to get form theory down to quantum circuitry.
-    - `num_energy_bits`: Determines the how coarse the energy and time grid is and thus how accurate the approximations between each domain are.
-    - `t0` and `w0`: are the time and energy units we are working with in the Riemann summed integrals. Of course, the smaller the better but also the costlier, and the two are intertwined due to Fourier: ω₀t₀ = 2π / N.
-    - `num_trotter_steps_per_t0`: The number of Trotter steps used for a unit of time t₀.
+Type parameters encode the three dispatch axes:
+- `S <: AbstractSimulation`: simulation kind (`Lindbladian`, `Thermalize`, `KrylovSpectrum`, `Trajectory`)
+- `D <: AbstractDomain`: domain level (`BohrDomain`, `EnergyDomain`, `TimeDomain`, `TrotterDomain`)
+- `C <: AbstractConstruction`: detailed-balance construction (`KMS`, `GNS`, `DLL`)
+- `T <: AbstractFloat`: numeric precision
 
-    ## Currently possible linear combinations:
-    (a, b) =
-    - (0, 0) - no linear combination, simple Gaussian
-    - (>0, 0) - linear combination that results in Metropolis-like transition
-    - (>0, >0) - linear combination that results in Glauber transition (smoother)
+Whether the coherent correction term is included is derived from the construction type
+via the trait function `with_coherent(construction)`, not stored as a field.
 
-    ## Available domains:
-    The `domain` field can be set to one of the following options:
-    - **`BohrDomain()`**: The highest level domain where the jump operators and thus the Lindbladian are written in a decomposition of Bohr frequencies.
-    - **`EnergyDomain()`**: A level lower, in which the operators are approximated by energy integrals.
-    - **`TimeDomain()`**: Another level lower, in which the energy approximates are written up as Fourier's of the temporal equals.
-    - **`TrotterDomain()`**: The lowest level, thus also the only one implementable on a quantum computer, in which all time evolutions are replaced via their Trotter series.
+# Fields
+## Type-encoding singletons
+- `sim`: The simulation singleton (e.g. `Lindbladian()`).
+- `domain`: The domain singleton (e.g. `EnergyDomain()`).
+- `construction`: The construction singleton (e.g. `KMS()`).
+
+## System parameters
+- `num_qubits`: The number of system qubits.
+- `with_linear_combination`: Whether to apply a convex combination of Lindbladians for faster mixing.
+
+## Physics parameters
+- `beta`: Inverse temperature.
+- `sigma`: Gaussian width parameter.
+- `gaussian_parameters`: Optional `(omega_gamma, sigma_gamma)` tuple for secondary Gaussian.
+- `a` and `b`: Parameters for the linear combination type.
+
+## Grid parameters
+- `num_energy_bits`: Coarseness of energy/time grid.
+- `t0` and `w0`: Time and energy units for Riemann-summed integrals (related by Fourier: w0*t0 = 2pi/N).
+- `eta`: Accuracy coefficient for Metropolis linear combination in time domain.
+- `num_trotter_steps_per_t0`: Trotter steps per unit time t0.
+
+## Thermalize-specific
+- `mixing_time`: Total duration of time evolution (only for `Thermalize` simulations).
+- `delta`: Time step size for weak-measurement emulation (only for `Thermalize` simulations).
+
+## Currently possible linear combinations:
+(a, b) =
+- (0, 0) - no linear combination, simple Gaussian
+- (>0, 0) - linear combination that results in Metropolis-like transition
+- (>0, >0) - linear combination that results in Glauber transition (smoother)
+
+## Available domains:
+- **`BohrDomain()`**: Highest level -- Lindbladian in Bohr frequency decomposition.
+- **`EnergyDomain()`**: Operators approximated by energy integrals.
+- **`TimeDomain()`**: Energy approximations as Fourier transforms of temporal equivalents.
+- **`TrotterDomain()`**: Lowest level -- all time evolutions replaced by Trotter series.
 """
-@kwdef struct LiouvConfig{D <: AbstractDomain, T <: AbstractFloat} <: AbstractLiouvConfig{D,T}
-    num_qubits::Int64
-    with_coherent::Bool
-    with_linear_combination::Bool
+@kwdef struct Config{S <: AbstractSimulation, D <: AbstractDomain, C <: AbstractConstruction, T <: AbstractFloat}
+    # Type-encoding singletons
+    sim::S
     domain::D
-    beta::T
-    sigma::T
-    gaussian_parameters::Union{Tuple{T, T}, Tuple{Nothing, Nothing}} = (nothing, nothing)  # (ω_γ, σ_γ)
-    a::Union{T, Nothing} = nothing
-    b::Union{T, Nothing} = nothing
-    num_energy_bits::Union{Int, Nothing} = nothing
-    t0::Union{T, Nothing} = nothing
-    w0::Union{T, Nothing} = nothing
-    eta::Union{T, Nothing} = nothing
-    num_trotter_steps_per_t0::Union{Int, Nothing} = nothing
-end
-"""
-    LiouvConfigGNS
+    construction::C
 
-    Configuration for Liouvillian construction for Chen's **approx. GNS-detailed-balance** Lindbladian.
-
-    This is the "GNS-DB" line: it uses the **unshifted** transition weight \tilde{γ}(ω) (KMS-conditioned),
-    and (by design) **omits** the coherent correction term `B`.
-
-    Fields are shared with `LiouvConfig`.
-"""
-@kwdef struct LiouvConfigGNS{D <: AbstractDomain, T <: AbstractFloat} <: AbstractLiouvConfig{D,T}
-    num_qubits::Int64
-    with_coherent::Bool = false
+    # System parameters
+    num_qubits::Int
     with_linear_combination::Bool
-    domain::D
-    beta::T
-    sigma::T
-    gaussian_parameters::Union{Tuple{T, T}, Tuple{Nothing, Nothing}} = (nothing, nothing)
-    a::Union{T, Nothing} = nothing
-    b::Union{T, Nothing} = nothing
-    num_energy_bits::Union{Int, Nothing} = nothing
-    t0::Union{T, Nothing} = nothing
-    w0::Union{T, Nothing} = nothing
-    eta::Union{T, Nothing} = nothing
-    num_trotter_steps_per_t0::Union{Int, Nothing} = nothing
-end
 
-# Outer constructor: infer D from domain, T from beta, and forward to inner constructor.
-# Required because @kwdef's auto-generated outer constructor calls LiouvConfigGNS(args...)
-# positionally, but only the typed inner constructor LiouvConfigGNS{D,T}(args...) exists.
-function LiouvConfigGNS(
-    num_qubits, with_coherent, with_linear_combination, domain::D,
-    beta::T, sigma, gaussian_parameters, a, b,
-    num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0
-) where {D <: AbstractDomain, T <: AbstractFloat}
-    with_coherent && error("GNS configs must have with_coherent=false")
-    LiouvConfigGNS{D,T}(
-        num_qubits, with_coherent, with_linear_combination, domain,
-        beta, sigma, gaussian_parameters, a, b,
-        num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0)
-end
-
-"""
-    ThermalizeConfig
-
-    Configuration for the thermalization process, that emulates the quantum algorithm step-by-step.
-
-    Inherits core physical parameters from the logic in [`LiouvConfig`](@ref), but includes
-    simulation-specific settings, e.g. `mixing_time` and `delta`
-
-    # Specific Fields
-    - `mixing_time`: Total duration of the time evolution.
-    - `delta`: Time step size for the weak-measurement emulation.
-    """
-@kwdef struct ThermalizeConfig{D <: AbstractDomain, T <: AbstractFloat}  <: AbstractThermalizeConfig{D,T}
-    num_qubits::Int64
-    with_coherent::Bool
-    with_linear_combination::Bool
-    domain::D
-    beta::T
-    sigma::T
-    gaussian_parameters::Union{Tuple{T, T}, Tuple{Nothing, Nothing}} = (nothing, nothing)  # (ω_γ, σ_γ)
-    a::Union{T, Nothing} = nothing
-    b::Union{T, Nothing} = nothing
-    num_energy_bits::Union{Int, Nothing} = nothing
-    t0::Union{T, Nothing} = nothing
-    w0::Union{T, Nothing} = nothing
-    eta::Union{T, Nothing} = nothing
-    num_trotter_steps_per_t0::Union{Int, Nothing} = nothing
-
-    # For thermalization the configs:
-    mixing_time::T
-    delta::T
-end
-
-"""
-    ThermalizeConfigGNS
-
-    Configuration for the step-by-step weak-measurement thermalization emulation for
-    Chen's **approx. GNS-detailed-balance** Lindbladian.
-
-    This line uses the unshifted transition weight and (by design) omits the coherent term `B`.
-
-    Fields are shared with `ThermalizeConfig`.
-"""
-@kwdef struct ThermalizeConfigGNS{D <: AbstractDomain, T <: AbstractFloat} <: AbstractThermalizeConfig{D,T}
-    num_qubits::Int64
-    with_coherent::Bool = false
-    with_linear_combination::Bool
-    domain::D
+    # Physics parameters
     beta::T
     sigma::T
     gaussian_parameters::Union{Tuple{T, T}, Tuple{Nothing, Nothing}} = (nothing, nothing)
     a::Union{T, Nothing} = nothing
     b::Union{T, Nothing} = nothing
+
+    # Grid parameters
     num_energy_bits::Union{Int, Nothing} = nothing
     t0::Union{T, Nothing} = nothing
     w0::Union{T, Nothing} = nothing
     eta::Union{T, Nothing} = nothing
     num_trotter_steps_per_t0::Union{Int, Nothing} = nothing
 
-    mixing_time::T
-    delta::T
+    # Thermalize-specific
+    mixing_time::Union{T, Nothing} = nothing
+    delta::Union{T, Nothing} = nothing
 end
 
-# Outer constructor: infer D from domain, T from beta, and forward to inner constructor.
-function ThermalizeConfigGNS(
-    num_qubits, with_coherent, with_linear_combination, domain::D,
-    beta::T, sigma, gaussian_parameters, a, b,
-    num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0,
-    mixing_time, delta
-) where {D <: AbstractDomain, T <: AbstractFloat}
-    with_coherent && error("GNS configs must have with_coherent=false")
-    ThermalizeConfigGNS{D,T}(
-        num_qubits, with_coherent, with_linear_combination, domain,
-        beta, sigma, gaussian_parameters, a, b,
-        num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0,
-        mixing_time, delta)
+# Outer constructor: infer S, D, C from singletons and T from beta.
+# Required because @kwdef with 4 type parameters needs help with type inference.
+function Config(;
+    sim::S, domain::D, construction::C,
+    beta::T,
+    kwargs...
+) where {S <: AbstractSimulation, D <: AbstractDomain, C <: AbstractConstruction, T <: AbstractFloat}
+    Config{S, D, C, T}(; sim=sim, domain=domain, construction=construction, beta=beta, kwargs...)
 end
 
 """
