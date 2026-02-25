@@ -214,7 +214,8 @@ Phases execute in numeric order: 27 -> 28 -> 29 -> 30 -> 31
   2. All existing round-trip correctness tests pass (matvec results identical to before within floating-point tolerance)
   3. Legacy 5-argument `apply_delta_channel!(ws, rho, delta, config, ham)` Euler approximation is removed along with its tests
   4. Adjoint Lindbladian `apply_adjoint_lindbladian!` uses the same precomputed matrices (G_left_adj = G_right, G_right_adj = G_left)
-**Plans:** 0/TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 32 to break down)
+- [ ] 32-01-PLAN.md -- Core matvec optimization: G_left/G_right precomputation, sandwich-only helpers, all apply_lindbladian!/apply_adjoint_lindbladian! refactored
+- [ ] 32-02-PLAN.md -- Dead code cleanup: delete legacy Euler apply_delta_channel!, delete old _accumulate_dissipator! family (6 functions)
