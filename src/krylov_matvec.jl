@@ -302,9 +302,9 @@ end
 
 Compute L(rho) for `EnergyDomain` configs, storing the result in `ws.rho_out`.
 
-Mirrors `_jump_contribution!` for `AbstractLiouvConfig{EnergyDomain}` in
-`jump_workers.jl` line-by-line, replacing vectorized superoperator accumulation
-with direct matrix-on-matrix operations via `_accumulate_dissipator!`.
+Uses precomputed G_left/G_right (Phase 32) to absorb the coherent term and
+anticommutator into 2 GEMMs, then iterates sandwich-only terms (2 GEMMs each).
+Total: 2 + 2N GEMMs (down from 2 + 5N before Phase 32).
 
 Uses concrete-typed `ws.jump_eigenbases` and `ws.jump_hermitian` to avoid
 boxing allocations from `JumpOp`'s abstract `in_eigenbasis::Matrix{<:Complex}` field.
@@ -328,22 +328,14 @@ function apply_lindbladian!(
     bohr_freqs = hamiltonian.bohr_freqs
     inv_4sigma2 = 1.0 / (4 * config.sigma^2)
 
-    # Zero output accumulator (CRITICAL: must be zeroed each call)
-    fill!(ws.rho_out, 0)
+    CT = one(T)
+    ZT = zero(T)
 
-    # Coherent term: i[B^T, rho] = i*B^T*rho - i*rho*B^T
-    # Dense convention: kron(B, I) -> rho*B^T and kron(I, B^T) -> B^T*rho
-    B = ws.B_total
-    if B !== nothing
-        CT = one(T)
-        ZT = zero(T)
-        BLAS.gemm!('T', 'N', CT, B, rho, ZT, ws.tmp1)   # tmp1 = B^T * rho
-        @. ws.rho_out += 1im * ws.tmp1
-        BLAS.gemm!('N', 'T', CT, rho, B, ZT, ws.tmp1)    # tmp1 = rho * B^T
-        @. ws.rho_out -= 1im * ws.tmp1
-    end
+    # Effective Hamiltonian: rho_out = G_left * rho + rho * G_right
+    BLAS.gemm!('N', 'N', CT, ws.G_left, rho, ZT, ws.rho_out)     # G_left * rho -> rho_out
+    BLAS.gemm!('N', 'N', CT, rho, ws.G_right, CT, ws.rho_out)     # + rho * G_right
 
-    # Dissipator: sum over jumps, sum over energy labels
+    # Sandwich-only loop: sum_i scalar_i * conj(L_i) * rho * L_i^T
     prefactor = (config.w0 / (config.sigma * sqrt(2 * pi))) * gamma_norm_factor
 
     for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
@@ -357,19 +349,19 @@ function apply_lindbladian!(
                 _krylov_oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
 
                 scalar_w = prefactor * transition(w)
-                _accumulate_dissipator!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
+                _accumulate_sandwich!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
 
                 if w > 1e-12
                     # Negative-frequency partner: L = A(omega)'
                     scalar_neg = prefactor * transition(-w)
-                    _accumulate_dissipator_adj_L!(ws.rho_out, ws.jump_oft, rho, scalar_neg, ws)
+                    _accumulate_sandwich_adj_L!(ws.rho_out, ws.jump_oft, rho, scalar_neg, ws)
                 end
             end
         else
             for w in energy_labels
                 _krylov_oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
                 scalar_w = prefactor * transition(w)
-                _accumulate_dissipator!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
+                _accumulate_sandwich!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
             end
         end
     end
@@ -382,12 +374,9 @@ end
 
 Compute L*(rho) (Hilbert-Schmidt adjoint) for `EnergyDomain` configs.
 
-Differences from forward `apply_lindbladian!`:
-1. Coherent term sign flip: `+i[B, rho]` instead of `-i[B, rho]`
-2. Dissipator sandwich swap: `conj(L) rho L^T` becomes `L^T rho conj(L)` (anticommutator unchanged)
-
-Uses `_accumulate_adjoint_dissipator!` which correctly preserves the `{L'L, rho}`
-anticommutator while computing the HS-adjoint sandwich term.
+Uses precomputed G_left_adj/G_right_adj (Phase 32) to absorb the adjoint coherent
+term and anticommutator into 2 GEMMs, then iterates adjoint sandwich-only terms.
+Total: 2 + 2N GEMMs (down from 2 + 5N before Phase 32).
 
 Shares the same `KrylovWorkspace` as the forward function.
 
@@ -407,23 +396,14 @@ function apply_adjoint_lindbladian!(
     bohr_freqs = hamiltonian.bohr_freqs
     inv_4sigma2 = 1.0 / (4 * config.sigma^2)
 
-    # Zero output accumulator
-    fill!(ws.rho_out, 0)
+    CT = one(T)
+    ZT = zero(T)
 
-    # Adjoint coherent term: -i[B^T, rho] = -i*B^T*rho + i*rho*B^T (sign flip vs forward)
-    B = ws.B_total
-    if B !== nothing
-        CT = one(T)
-        ZT = zero(T)
-        BLAS.gemm!('T', 'N', CT, B, rho, ZT, ws.tmp1)   # tmp1 = B^T * rho
-        @. ws.rho_out -= 1im * ws.tmp1                    # -i instead of +i
-        BLAS.gemm!('N', 'T', CT, rho, B, ZT, ws.tmp1)    # tmp1 = rho * B^T
-        @. ws.rho_out += 1im * ws.tmp1                    # +i instead of -i
-    end
+    # Adjoint effective Hamiltonian: uses G_left_adj/G_right_adj (swapped G for adjoint)
+    BLAS.gemm!('N', 'N', CT, ws.G_left_adj, rho, ZT, ws.rho_out)
+    BLAS.gemm!('N', 'N', CT, rho, ws.G_right_adj, CT, ws.rho_out)
 
-    # Adjoint dissipator: D_L*(rho) = L^T rho conj(L) - 0.5 {L'L, rho}
-    # Same L_op as forward, but uses _accumulate_adjoint_dissipator! which
-    # computes the HS-adjoint sandwich while keeping anticommutator {L'L, rho}.
+    # Adjoint sandwich-only loop: sum_i scalar_i * L_i^T * rho * conj(L_i)
     prefactor = (config.w0 / (config.sigma * sqrt(2 * pi))) * gamma_norm_factor
 
     for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
@@ -436,19 +416,19 @@ function apply_adjoint_lindbladian!(
                 _krylov_oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
 
                 scalar_w = prefactor * transition(w)
-                _accumulate_adjoint_dissipator!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
+                _accumulate_adjoint_sandwich!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
 
                 if w > 1e-12
                     scalar_neg = prefactor * transition(-w)
                     # Negative-frequency partner: original L = A(omega)'
-                    _accumulate_adjoint_dissipator_adj_L!(ws.rho_out, ws.jump_oft, rho, scalar_neg, ws)
+                    _accumulate_adjoint_sandwich_adj_L!(ws.rho_out, ws.jump_oft, rho, scalar_neg, ws)
                 end
             end
         else
             for w in energy_labels
                 _krylov_oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
                 scalar_w = prefactor * transition(w)
-                _accumulate_adjoint_dissipator!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
+                _accumulate_adjoint_sandwich!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
             end
         end
     end
@@ -611,16 +591,13 @@ end
 
 Compute L(rho) for `BohrDomain` configs, storing the result in `ws.rho_out`.
 
-BohrDomain is fundamentally different from Energy/Time/Trotter:
-- Iterates over Bohr frequency buckets (`hamiltonian.bohr_dict` keys) instead of energy labels
-- Uses a generalized two-operator dissipator D(A, B_dag) where A and B_dag differ
-- Entrywise alpha computation: `alpha(bohr_freqs, nu_2) * eigenbasis` per bucket
-- No Hermitian half-grid optimization (no energy_labels loop, no transition function)
-- Scalar is just `gamma_norm_factor` (no w0/sigma prefactor formula)
+Uses precomputed G_left/G_right (Phase 32) to absorb the coherent term and
+anticommutator into 2 GEMMs, then iterates sandwich-only 2op terms (2 GEMMs each).
+Total: 2 + 2N GEMMs (down from 2 + 5N before Phase 32).
 
-A_nu2_dag is built by scattering `conj(eigenbasis[i,j])` to position `[j,i]`
-(the dagger operation: swap indices and conjugate). One dense buffer is allocated
-per matvec call and reused across bucket iterations (zeroed + scattered each iteration).
+BohrDomain iterates over Bohr frequency buckets (`hamiltonian.bohr_dict` keys)
+using a two-operator sandwich where A and B_dag differ. One dense buffer is
+allocated per matvec call for A_nu2_dag (acceptable for Bohr).
 
 # Arguments
 - `ws::KrylovWorkspace`: pre-allocated workspace (scratch matrices + precomputed data)
@@ -639,19 +616,13 @@ function apply_lindbladian!(
 ) where {T<:Complex}
     (; alpha, gamma_norm_factor) = ws.precomputed_data
     dim = size(rho, 1)
-    fill!(ws.rho_out, 0)
 
-    # Coherent term: i[B^T, rho] = i*B^T*rho - i*rho*B^T (identical to other domains)
-    # Dense convention: kron(B, I) -> rho*B^T and kron(I, B^T) -> B^T*rho
-    B = ws.B_total
-    if B !== nothing
-        CT = one(T)
-        ZT = zero(T)
-        BLAS.gemm!('T', 'N', CT, B, rho, ZT, ws.tmp1)   # tmp1 = B^T * rho
-        @. ws.rho_out += 1im * ws.tmp1
-        BLAS.gemm!('N', 'T', CT, rho, B, ZT, ws.tmp1)    # tmp1 = rho * B^T
-        @. ws.rho_out -= 1im * ws.tmp1
-    end
+    CT = one(T)
+    ZT = zero(T)
+
+    # Effective Hamiltonian: rho_out = G_left * rho + rho * G_right
+    BLAS.gemm!('N', 'N', CT, ws.G_left, rho, ZT, ws.rho_out)
+    BLAS.gemm!('N', 'N', CT, rho, ws.G_right, CT, ws.rho_out)
 
     # Allocate A_nu2_dag buffer (one allocation per matvec -- acceptable for Bohr)
     A_nu2_dag = zeros(T, dim, dim)
@@ -669,7 +640,7 @@ function apply_lindbladian!(
                 A_nu2_dag[j, i] = conj(eigenbasis[i, j])
             end
 
-            _accumulate_dissipator_2op!(ws.rho_out, ws.jump_oft, A_nu2_dag, rho, gamma_norm_factor, ws)
+            _accumulate_sandwich_2op!(ws.rho_out, ws.jump_oft, A_nu2_dag, rho, gamma_norm_factor, ws)
         end
     end
 
@@ -681,13 +652,12 @@ end
 
 Compute L*(rho) (Hilbert-Schmidt adjoint) for `BohrDomain` configs.
 
-Same bucket iteration structure as the forward method but with:
-1. Coherent term sign flip: `+i[B, rho]` instead of `-i[B, rho]`
-2. Dissipator: uses `_accumulate_adjoint_dissipator_2op!` (dedicated adjoint helper,
-   NOT a simple argument swap -- see RESEARCH.md Pitfall 5)
+Uses precomputed G_left_adj/G_right_adj (Phase 32) to absorb the adjoint coherent
+term and anticommutator into 2 GEMMs, then iterates adjoint sandwich-only 2op terms.
+Total: 2 + 2N GEMMs (down from 2 + 5N before Phase 32).
 
-The adjoint two-operator dissipator computes:
-    D*(A, B_dag)(rho) = A' * rho * B_dag - 0.5*(A' * B_dag * rho + rho * A' * B_dag)
+For BohrDomain, G_left_adj/G_right_adj differ from G_right/G_left because
+R_total is not Hermitian (adjoint anticommutator uses conj(R_total), not R_total^T).
 
 # Arguments
 Same as `apply_lindbladian!` for `BohrDomain`.
@@ -703,18 +673,13 @@ function apply_adjoint_lindbladian!(
 ) where {T<:Complex}
     (; alpha, gamma_norm_factor) = ws.precomputed_data
     dim = size(rho, 1)
-    fill!(ws.rho_out, 0)
 
-    # Adjoint coherent term: -i[B^T, rho] = -i*B^T*rho + i*rho*B^T (sign flip vs forward)
-    B = ws.B_total
-    if B !== nothing
-        CT = one(T)
-        ZT = zero(T)
-        BLAS.gemm!('T', 'N', CT, B, rho, ZT, ws.tmp1)   # tmp1 = B^T * rho
-        @. ws.rho_out -= 1im * ws.tmp1                    # -i instead of +i
-        BLAS.gemm!('N', 'T', CT, rho, B, ZT, ws.tmp1)    # tmp1 = rho * B^T
-        @. ws.rho_out += 1im * ws.tmp1                    # +i instead of -i
-    end
+    CT = one(T)
+    ZT = zero(T)
+
+    # Adjoint effective Hamiltonian: uses G_left_adj/G_right_adj
+    BLAS.gemm!('N', 'N', CT, ws.G_left_adj, rho, ZT, ws.rho_out)
+    BLAS.gemm!('N', 'N', CT, rho, ws.G_right_adj, CT, ws.rho_out)
 
     # Allocate A_nu2_dag buffer (one allocation per matvec -- acceptable for Bohr)
     A_nu2_dag = zeros(T, dim, dim)
@@ -732,8 +697,8 @@ function apply_adjoint_lindbladian!(
                 A_nu2_dag[j, i] = conj(eigenbasis[i, j])
             end
 
-            # Use dedicated adjoint 2op helper (NOT simple argument swap)
-            _accumulate_adjoint_dissipator_2op!(ws.rho_out, ws.jump_oft, A_nu2_dag, rho, gamma_norm_factor, ws)
+            # Use dedicated adjoint 2op sandwich helper
+            _accumulate_adjoint_sandwich_2op!(ws.rho_out, ws.jump_oft, A_nu2_dag, rho, gamma_norm_factor, ws)
         end
     end
 
@@ -745,14 +710,13 @@ end
 
 Compute L(rho) for `TimeDomain` and `TrotterDomain` configs, storing the result in `ws.rho_out`.
 
-Mirrors `_jump_contribution!` for `AbstractLiouvConfig{Union{TimeDomain, TrotterDomain}}` in
-`jump_workers.jl`, replacing vectorized superoperator accumulation with direct matrix-on-matrix
-operations via `_accumulate_dissipator!`.
+Uses precomputed G_left/G_right (Phase 32) to absorb the coherent term and
+anticommutator into 2 GEMMs, then iterates sandwich-only terms (2 GEMMs each).
+Total: 2 + 2N GEMMs (down from 2 + 5N before Phase 32).
 
 Key differences from `EnergyDomain`:
 - OFT computation uses NUFFT prefactors (`_prefactor_view`) instead of Gaussian filter (`_krylov_oft!`)
 - Scalar prefactor: `w0 * t0^2 * sigma * sqrt(2/pi) / (2pi) * gamma_norm_factor`
-  (from `jump_workers.jl:109`)
 
 Uses concrete-typed `ws.jump_eigenbases` and `ws.jump_hermitian` to avoid
 boxing allocations from `JumpOp`'s abstract `in_eigenbasis::Matrix{<:Complex}` field.
@@ -774,22 +738,14 @@ function apply_lindbladian!(
 ) where {T<:Complex, D<:Union{TimeDomain, TrotterDomain}}
     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = ws.precomputed_data
 
-    # Zero output accumulator (CRITICAL: must be zeroed each call)
-    fill!(ws.rho_out, 0)
+    CT = one(T)
+    ZT = zero(T)
 
-    # Coherent term: i[B^T, rho] = i*B^T*rho - i*rho*B^T (identical to EnergyDomain)
-    # Dense convention: kron(B, I) -> rho*B^T and kron(I, B^T) -> B^T*rho
-    B = ws.B_total
-    if B !== nothing
-        CT = one(T)
-        ZT = zero(T)
-        BLAS.gemm!('T', 'N', CT, B, rho, ZT, ws.tmp1)   # tmp1 = B^T * rho
-        @. ws.rho_out += 1im * ws.tmp1
-        BLAS.gemm!('N', 'T', CT, rho, B, ZT, ws.tmp1)    # tmp1 = rho * B^T
-        @. ws.rho_out -= 1im * ws.tmp1
-    end
+    # Effective Hamiltonian: rho_out = G_left * rho + rho * G_right
+    BLAS.gemm!('N', 'N', CT, ws.G_left, rho, ZT, ws.rho_out)
+    BLAS.gemm!('N', 'N', CT, rho, ws.G_right, CT, ws.rho_out)
 
-    # Dissipator: sum over jumps, sum over energy labels
+    # Sandwich-only loop: sum_i scalar_i * conj(L_i) * rho * L_i^T
     # Time/Trotter prefactor from jump_workers.jl:109
     prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
 
@@ -806,12 +762,12 @@ function apply_lindbladian!(
                 @. ws.jump_oft = eigenbasis * nufft_prefactor_matrix
 
                 scalar_w = prefactor * transition(w)
-                _accumulate_dissipator!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
+                _accumulate_sandwich!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
 
                 if w > 1e-12
                     # Negative-frequency partner: L = A(omega)'
                     scalar_neg = prefactor * transition(-w)
-                    _accumulate_dissipator_adj_L!(ws.rho_out, ws.jump_oft, rho, scalar_neg, ws)
+                    _accumulate_sandwich_adj_L!(ws.rho_out, ws.jump_oft, rho, scalar_neg, ws)
                 end
             end
         else
@@ -819,7 +775,7 @@ function apply_lindbladian!(
                 nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
                 @. ws.jump_oft = eigenbasis * nufft_prefactor_matrix
                 scalar_w = prefactor * transition(w)
-                _accumulate_dissipator!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
+                _accumulate_sandwich!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
             end
         end
     end
@@ -832,13 +788,11 @@ end
 
 Compute L*(rho) (Hilbert-Schmidt adjoint) for `TimeDomain` and `TrotterDomain` configs.
 
-Mirrors `_jump_contribution!` for `AbstractLiouvConfig{Union{TimeDomain, TrotterDomain}}`
-with the adjoint modifications:
-1. Coherent term sign flip: `+i[B, rho]` instead of `-i[B, rho]`
-2. Dissipator sandwich swap: `conj(L) rho L^T` becomes `L^T rho conj(L)` (anticommutator unchanged)
+Uses precomputed G_left_adj/G_right_adj (Phase 32) to absorb the adjoint coherent
+term and anticommutator into 2 GEMMs, then iterates adjoint sandwich-only terms.
+Total: 2 + 2N GEMMs (down from 2 + 5N before Phase 32).
 
-Same NUFFT prefactor computation and scalar prefactor as the forward method
-(no prefactor changes for adjoint, per CONTEXT.md).
+Same NUFFT prefactor computation and scalar prefactor as the forward method.
 
 # Arguments
 Same as `apply_lindbladian!` for `Union{TimeDomain, TrotterDomain}`.
@@ -854,21 +808,14 @@ function apply_adjoint_lindbladian!(
 ) where {T<:Complex, D<:Union{TimeDomain, TrotterDomain}}
     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = ws.precomputed_data
 
-    # Zero output accumulator
-    fill!(ws.rho_out, 0)
+    CT = one(T)
+    ZT = zero(T)
 
-    # Adjoint coherent term: -i[B^T, rho] = -i*B^T*rho + i*rho*B^T (sign flip vs forward)
-    B = ws.B_total
-    if B !== nothing
-        CT = one(T)
-        ZT = zero(T)
-        BLAS.gemm!('T', 'N', CT, B, rho, ZT, ws.tmp1)   # tmp1 = B^T * rho
-        @. ws.rho_out -= 1im * ws.tmp1                    # -i instead of +i
-        BLAS.gemm!('N', 'T', CT, rho, B, ZT, ws.tmp1)    # tmp1 = rho * B^T
-        @. ws.rho_out += 1im * ws.tmp1                    # +i instead of -i
-    end
+    # Adjoint effective Hamiltonian: uses G_left_adj/G_right_adj
+    BLAS.gemm!('N', 'N', CT, ws.G_left_adj, rho, ZT, ws.rho_out)
+    BLAS.gemm!('N', 'N', CT, rho, ws.G_right_adj, CT, ws.rho_out)
 
-    # Adjoint dissipator: D_L*(rho) = L^T rho conj(L) - 0.5 {L'L, rho}
+    # Adjoint sandwich-only loop
     # Same prefactor as forward (no changes for adjoint)
     prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
 
@@ -884,12 +831,12 @@ function apply_adjoint_lindbladian!(
                 @. ws.jump_oft = eigenbasis * nufft_prefactor_matrix
 
                 scalar_w = prefactor * transition(w)
-                _accumulate_adjoint_dissipator!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
+                _accumulate_adjoint_sandwich!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
 
                 if w > 1e-12
                     scalar_neg = prefactor * transition(-w)
                     # Negative-frequency partner: original L = A(omega)'
-                    _accumulate_adjoint_dissipator_adj_L!(ws.rho_out, ws.jump_oft, rho, scalar_neg, ws)
+                    _accumulate_adjoint_sandwich_adj_L!(ws.rho_out, ws.jump_oft, rho, scalar_neg, ws)
                 end
             end
         else
@@ -897,7 +844,7 @@ function apply_adjoint_lindbladian!(
                 nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
                 @. ws.jump_oft = eigenbasis * nufft_prefactor_matrix
                 scalar_w = prefactor * transition(w)
-                _accumulate_adjoint_dissipator!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
+                _accumulate_adjoint_sandwich!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
             end
         end
     end
