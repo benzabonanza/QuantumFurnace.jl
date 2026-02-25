@@ -203,3 +203,18 @@ Phases execute in numeric order: 27 -> 28 -> 29 -> 30 -> 31
 | 29. Eigensolver Integration | v1.5 | 2/2 | Complete | 2026-02-24 |
 | 30. Cross-Validation | v1.5 | 2/2 | Complete | 2026-02-24 |
 | 31. Scaling Benchmarks | v1.5 | 0/TBD | Not started | - |
+
+### Phase 32: Krylov Simulator Speedup
+
+**Goal:** Precompute aggregate Lindbladian matrices (R_total, effective Hamiltonian G) at workspace construction to reduce per-matvec GEMM count from 5N to 2+2N. Delete legacy Euler channel approximation.
+**Depends on:** Phase 31
+**Requirements**: SPEED-01 (precomputed effective Hamiltonian), SPEED-02 (delete Euler channel), SPEED-03 (adjoint precomputation)
+**Success Criteria** (what must be TRUE):
+  1. `apply_lindbladian!` for all 4 domains uses precomputed G_left/G_right matrices instead of per-term L'L and anticommutator computation, reducing GEMM calls from 5N to 2+2N per matvec
+  2. All existing round-trip correctness tests pass (matvec results identical to before within floating-point tolerance)
+  3. Legacy 5-argument `apply_delta_channel!(ws, rho, delta, config, ham)` Euler approximation is removed along with its tests
+  4. Adjoint Lindbladian `apply_adjoint_lindbladian!` uses the same precomputed matrices (G_left_adj = G_right, G_right_adj = G_left)
+**Plans:** 0/TBD
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 32 to break down)
