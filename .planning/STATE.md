@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-25)
 ## Current Position
 
 Phase: 33 of 38 (Type Foundation)
-Plan: 1 of 4 in current phase
+Plan: 2 of 4 in current phase
 Status: Executing
-Last activity: 2026-02-25 -- Completed 33-01 (type hierarchies, Config struct, exports)
+Last activity: 2026-02-25 -- Completed 33-02 (dispatch migration, 6 source files)
 
-Progress: [##░░░░░░░░] ~4% (v2.0, 1/~24 plans)
+Progress: [###░░░░░░░] ~8% (v2.0, 2/~24 plans)
 
 ## Performance Metrics
 
@@ -31,7 +31,7 @@ Progress: [##░░░░░░░░] ~4% (v2.0, 1/~24 plans)
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
 | v1.5 Krylov Gap Estimation | 27-32 | 12 (+3 quick) | 2026-02-20 to 2026-02-25 |
-| v2.0 Restructure | 33-38 | 1/~24 | 2026-02-25 to ... |
+| v2.0 Restructure | 33-38 | 2/~24 | 2026-02-25 to ... |
 
 ## Accumulated Context
 
@@ -42,6 +42,9 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [33-01] Field ordering: singletons first, then system/physics/grid/thermalize-specific params
 - [33-01] with_coherent derived from construction type via trait, not stored as field
 - [33-01] Outer constructor infers S,D,C from singleton args and T from beta
+- [33-02] GNS coherent validation removed from validate_config! -- type system enforces via trait
+- [33-02] with_coherent kept in serialized Dict for backward compat, computed via trait on write
+- [33-02] _reconstruct_config builds Config with explicit sim/construction singletons
 
 ### Key Constraints for v2.0
 
@@ -65,5 +68,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-25
-Stopped at: Completed 33-01-PLAN.md (type hierarchies, Config struct, exports)
+Stopped at: Completed 33-02-PLAN.md (dispatch migration, 6 source files to Config)
 Resume file: None
