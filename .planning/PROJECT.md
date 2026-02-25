@@ -2,7 +2,7 @@
 
 ## What This Is
 
-A Julia package for simulating quantum Gibbs sampling via Lindbladian evolution. It implements multiple Lindbladian constructions (GNS and KMS detailed balance) across a hierarchy of approximation domains (Bohr, Energy, Time, Trotter), enabling both density matrix and trajectory-based simulation of quantum thermalization. The package features multi-threaded trajectory sampling with adaptive convergence-driven batching, spectral gap estimation from trajectory-based observable decay with eigenbasis overlap diagnostics, BSON experiment serialization, and validated KMS-vs-GNS comparison capabilities. Core structs are parameterized on element type `{T<:AbstractFloat}` for precision flexibility. The package targets researchers and students working on quantum Gibbs sampling, providing both fast numerical simulations and pedagogic documentation grounded in the theoretical literature.
+A Julia package for simulating quantum Gibbs sampling via Lindbladian evolution. It implements multiple Lindbladian constructions (GNS and KMS detailed balance) across a hierarchy of approximation domains (Bohr, Energy, Time, Trotter), enabling density matrix simulation, trajectory-based sampling, and matrix-free Krylov spectral gap estimation. The package features multi-threaded trajectory sampling with adaptive convergence-driven batching, spectral gap estimation from both trajectory-based observable decay and matrix-free KrylovKit eigsolve, exact Lindbladian diagnostics with biorthogonal eigenvector analysis, BSON experiment serialization, and validated KMS-vs-GNS comparison capabilities. Core structs are parameterized on element type `{T<:AbstractFloat}` for precision flexibility. The package targets researchers and students working on quantum Gibbs sampling, providing both fast numerical simulations and pedagogic documentation grounded in the theoretical literature.
 
 ## Core Value
 
@@ -64,20 +64,18 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 - ✓ Delta-Sz symmetry sector labeling with purity fractions and multiplet detection (DIAG-06) -- v1.4
 - ✓ Canonical 6-observable set: Z1, X1, Z1_Zhalf, H, Rand_traceless, Mz_stagg (replacing v1.3 8-obs set) -- v1.4
 - ✓ run_exact_diagnostics bundle with TrotterDomain support via basis_eigvecs keyword -- v1.4
+- ✓ Matrix-free `apply_lindbladian!` for all 4 domains (Energy, Time, Trotter, Bohr) with zero-allocation BLAS.gemm! hot path -- v1.5
+- ✓ KrylovWorkspace with precomputed G_left/G_right effective Hamiltonian matrices for optimized matvec -- v1.5
+- ✓ KrylovKit-based `krylov_spectral_gap()` API with Lindbladian (:LR) and CPTP channel (:LM) targeting -- v1.5
+- ✓ KrylovGapResult struct with eigenvalues, spectral gap, convergence info, matvec count, fixed point -- v1.5
+- ✓ Convergence retry with 50% krylovdim increase and pre-flight memory guard -- v1.5
+- ✓ Faithful Chen CPTP channel `apply_delta_channel!` with R_total, K0, U_residual precomputation -- v1.5
+- ✓ Krylov gap cross-validated vs dense eigen() at n=4 (atol=1e-8) and n=6 (atol=1e-6) for all domains -- v1.5
+- ✓ L-vs-E convergence order verification across 3 deltas for all domains -- v1.5
+- ✓ Scaling benchmarks at n=3-7 confirming ~4^10 (Energy) and ~4^7.5 (Trotter) power-law with n=10/12 extrapolation -- v1.5
+- ✓ G_left/G_right precomputation reducing per-matvec GEMM from 5N to 2+2N -- v1.5
 
 ### Active
-
-**Current Milestone: v1.5 Krylov Gap Estimation**
-
-**Goal:** Matrix-free spectral gap estimation via KrylovKit.jl, enabling gap computation for system sizes (up to ~12 qubits) where the full Lindbladian matrix cannot be stored.
-
-**Target features:**
-- Matrix-free `apply_lindbladian!()` and `apply_delta_channel!()` using existing precomputation infrastructure
-- KrylovKit-based eigensolve for ground state (steady state), gap mode, and spectral gap
-- Support for both GNS (approximate) and KMS (exact) detailed balance
-- Support for all domains (Bohr, Energy, Time, Trotter) with proper basis handling
-- Cross-validation against dense `eigen()` for n<=6
-- Resource benchmarks (memory + time) up to 8 qubits with extrapolation to 12 qubits
 
 **Future milestones:**
 - [ ] 1D Ising model Hamiltonian generation
@@ -102,31 +100,29 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 - Continuous-time MCWF (adaptive timestep) -- discrete-time CPTP maps per Chen's weak measurement scheme
 - Bohr domain trajectories -- diagonalizing Kossakowski matrix prohibitive for >3 qubits; validate Bohr via DM only
 - Float32 simulation testing -- type params enable it but testing F32 paths is future work
+- n>12 qubit support -- memory and time scale exponentially; 12 qubits is practical limit
+- Sparse Lindbladian storage -- full Lindbladian is dense for these constructions; sparsity not exploitable
 
 ## Context
 
-**Current State (v1.4 partial, Phase 26 shipped):**
-- 6,869 LOC src + 3,931 LOC test (Julia)
-- Tech stack: Julia, LinearAlgebra, FINUFFT, Arpack, LsqFit, BSON, StableRNGs, LibGit2, Dates
+**Current State (v1.5 shipped, Phase 32 complete):**
+- 8,312 LOC src + 5,071 LOC test (Julia)
+- Tech stack: Julia, LinearAlgebra, KrylovKit, FINUFFT, Arpack, LsqFit, BSON, StableRNGs, LibGit2, Dates
+- Three gap estimation methods: (1) trajectory-based observable decay fitting, (2) dense eigendecomposition, (3) matrix-free Krylov eigsolve
+- Matrix-free Krylov eigsolve for all 4 domains with zero-allocation BLAS hot path and G_left/G_right precomputation
+- Cross-validated at n=4 (<1e-8) and n=6 (<1e-6) against dense reference; scaling benchmarks at n=3-7
+- EnergyDomain n=10 feasible on cluster (~111h, ~1.3 GB); n=12 infeasible (~12000h); TrotterDomain n=10+ needs on-the-fly NUFFT
 - Both DM and trajectory simulation validated and cross-checked
 - Multi-threaded trajectory engine with per-thread workspace/RNG, BLAS control, deterministic seeding
-- GNS and KMS trajectory paths both functional and tested
-- Adaptive convergence-driven batching with configurable threshold, patience, and hard cap
-- Batch-level convergence tracking (trace distance, ZZ correlations, energy)
-- BSON experiment serialization with full metadata for reproducibility
-- Spectral gap estimation from trajectory-based observable decay with 6-observable canonical set
-- Eigenbasis overlap diagnostic with biorthogonal left+right eigenvector formula
-- Exact Lindbladian diagnostics: eigendata, fixed point, KMS defect, overlap coefficients, Sz sectors, multiplets
-- run_exact_diagnostics bundle with TrotterDomain support via basis_eigvecs keyword
-- n=4 gap estimation achieves <1% accuracy; n=6 gap mode symmetry-protected (diagnosed via DIAG-06)
-- Simplified result structs (LindbladianResult, DMSimulationResult, SpectralGapResult, OverlapAnalysisResult, ExactDiagnosticsResult) and 3-level call chain
+- Exact Lindbladian diagnostics: eigendata, fixed point, KMS defect, overlap coefficients, Sz sectors
 - Core structs parameterized on `{T<:AbstractFloat}` (Float64 default, Float32-ready)
 - API organized: physics building blocks exported, implementation details `_`-prefixed
 
 **Known Limitations:**
-- n=6 periodic Heisenberg chain: gap mode has translational + discrete symmetry protection. Diagnosed via Sz sector labeling (DIAG-06). Disorder (random field) breaks symmetry but introduces bias.
-- Single-exponential fitting produces non-monotonic error at small delta due to multi-mode contamination (Quick-32 confirmed as fitting artifact, not simulation error)
-- Richardson extrapolation ineffective for single-exponential gap estimation error
+- n=6 periodic Heisenberg chain: gap mode has translational + discrete symmetry protection (diagnosed via Sz sector labeling)
+- Single-exponential fitting produces non-monotonic error at small delta due to multi-mode contamination
+- BENCH-04 partial: total time and matvec count recorded but no isolated per-component timing breakdown
+- Memory guard pre-flight estimate underestimates by 28-298x (calibration data available but formula not updated)
 - Two-exponential fitting, bootstrap uncertainty, and Richardson extrapolation deferred from v1.4
 
 **Theoretical Foundation:**
@@ -137,19 +133,20 @@ The package implements quantum Gibbs samplers from three key papers:
 
 **Target System Sizes:**
 - Primary: up to ~12 qubits (density matrix 4096x4096, Liouvillian 16M entries)
+- Krylov eigsolve extends practical range: n=10 feasible for EnergyDomain (~111h on cluster)
 - Memory driver: precomputed Kraus/NUFFT prefactor matrices, not the density matrix itself
 - Trajectories need thousands of samples for statistics -- parallelism over samples is key
 - Single-node execution on cluster (up to 512 GB RAM), multi-core parallelism
 
 **Paper Goals:**
-Results needed for publication: convergence curves (trace distance vs. steps), mixing time scaling with system size and temperature, comparison across approximation domains (Bohr vs Energy vs Time vs Trotter), trajectory vs density matrix agreement, KMS-vs-GNS comparison data, spectral gap estimation validation.
+Results needed for publication: convergence curves (trace distance vs. steps), mixing time scaling with system size and temperature, comparison across approximation domains (Bohr vs Energy vs Time vs Trotter), trajectory vs density matrix agreement, KMS-vs-GNS comparison data, spectral gap estimation validation, Krylov scaling benchmarks.
 
 ## Constraints
 
 - **Language**: Julia -- non-negotiable, leverages Julia's multiple dispatch for domain hierarchy and performance
 - **Correctness**: All Lindbladian constructions must be mathematically faithful to the source papers; detailed balance properties must hold to machine precision (for exact KMS) or documented approximation bounds (for GNS and for implemented KMS due to Trotterization or quadrature errors.)
 - **System size**: Practical limit ~12-14 qubits due to exponential Hilbert space scaling (density matrix 2^n x 2^n)
-- **Dependencies**: Minimize external dependencies; rely on Julia stdlib + established numerical packages (Arpack, FINUFFT, LsqFit)
+- **Dependencies**: Minimize external dependencies; rely on Julia stdlib + established numerical packages (Arpack, FINUFFT, KrylovKit, LsqFit)
 - **Dual purpose**: Code must be both performant (for research results) and readable (for community pedagogy) -- well-documented functions with mathematical cross-references to papers
 
 ## Key Decisions
@@ -184,10 +181,18 @@ Results needed for publication: convergence curves (trace distance vs. steps), m
 | abs(real(spectral_gap)) for exact gap (v1.3) | Complex eigenvalues: real part gives decay rate; imaginary part gives oscillation frequency | ✓ Good -- locked decision, enforced throughout |
 | Dense eigen() for exact diagnostics (v1.4) | Arpack cannot compute left eigenvectors needed for biorthogonal overlap formula | ✓ Good -- handles n<=6 (4096x4096) in seconds |
 | Biorthogonal overlap formula c_k = Tr[O R_k] * Tr[L_k^dagger(rho_0 - rho_beta)] (v1.4) | Proper steady-state subtraction using exact left+right eigenvectors | ✓ Good -- explains zero-overlap mystery at n=6 |
-| Canonical 6-observable set replacing 8-obs bundle (v1.4) | Z1, X1, Z1_Zhalf, H, Rand_traceless, Mz_stagg — physically motivated from supplementary info | ✓ Good -- cleaner set, random traceless adds coverage |
+| Canonical 6-observable set replacing 8-obs bundle (v1.4) | Z1, X1, Z1_Zhalf, H, Rand_traceless, Mz_stagg -- physically motivated from supplementary info | ✓ Good -- cleaner set, random traceless adds coverage |
 | Advisory-only defect warning at 0.1 threshold (v1.4) | Defect ratio is informational, does not gate computation | ✓ Good -- non-blocking diagnostics |
 | Left eigenvectors via transpose(inv(V_right)) (v1.4) | Transpose (not conjugate transpose) for proper biorthogonality Tr[L_k R_j] = delta_kj | ✓ Good -- validated against known systems |
+| KrylovWorkspace{T,PD} dual type params (v1.5) | PD captures NamedTuple type for zero-overhead access to precomputed data | ✓ Good -- eliminates abstract field boxing |
+| BLAS.gemm!/axpy! for zero-allocation matvec (v1.5) | mul! and broadcast allocate; raw BLAS calls do not | ✓ Good -- verified 0 bytes in all domains |
+| kron(A,B)vec(X)=vec(B*X*A^T) convention (v1.5) | Consistent vectorization convention matching dense Lindbladian construction | ✓ Good -- resolved complex jump operator discrepancy (quick-35) |
+| KrylovKit Arnoldi for non-Hermitian Lindbladian (v1.5) | Lanczos only for Hermitian; Arnoldi handles general matrices | ✓ Good -- converges reliably for all domains |
+| Faithful Chen CPTP channel (v1.5) | Euler approximation E=I+delta*L had O(delta^2) error; faithful channel matches run_thermalization | ✓ Good -- channel eigsolve accuracy improved (quick-36) |
+| G_left/G_right precomputation (v1.5) | Reduces per-matvec GEMM count from 5N to 2+2N by precomputing aggregate effective Hamiltonian | ✓ Good -- all correctness tests pass, 309 LOC dead code removed |
+| 4 separate G matrices for BohrDomain adjoint (v1.5) | R_total is non-Hermitian for Bohr, so G_left_adj != G_right^T | ✓ Good -- correct adjoint verified via duality test |
+| EnergyDomain scaling ~4^10, TrotterDomain ~4^7.5 (v1.5) | Empirical power-law fit at n=3-7; n=10 feasible for Energy, not for Trotter | ✓ Good -- calibrated extrapolation |
 | Qiskit for circuit generation (Python interop) | Qiskit is the standard for quantum circuit representation; Julia quantum circuit ecosystem less mature | -- Pending |
 
 ---
-*Last updated: 2026-02-20 after v1.5 milestone start*
+*Last updated: 2026-02-25 after v1.5 milestone*

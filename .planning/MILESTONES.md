@@ -112,3 +112,30 @@
 
 ---
 
+
+## v1.5 Krylov Gap Estimation (Shipped: 2026-02-25)
+
+**Started:** 2026-02-20 | **Shipped:** 2026-02-25
+**Phases:** 27-32 (12 plans + 3 quick tasks) | **Commits:** ~72
+**Julia LOC:** 8,312 src + 5,071 test | **Files changed:** 13 (+2,920 / -423)
+**Git range:** feat(27-01)..docs(quick-37)
+
+**Delivered:** Matrix-free spectral gap estimation via KrylovKit.jl, enabling gap computation for system sizes (up to ~12 qubits) where the full Lindbladian matrix cannot be stored. Zero-allocation matvec for all 4 domains, cross-validated against dense eigen() at n=4 and n=6, with empirical scaling benchmarks at n=3-7.
+
+**Key accomplishments:**
+1. Matrix-free `apply_lindbladian!` for all 4 domains (Energy, Time, Trotter, Bohr) with zero-allocation BLAS.gemm! hot path, validated to <1e-12 against dense construction
+2. KrylovKit-based `krylov_spectral_gap()` API with Lindbladian (:LR) and CPTP channel (:LM) targeting, convergence retry logic, and pre-flight memory guard
+3. Cross-validated Krylov gap vs dense eigen() at n=4 (atol=1e-8) and n=6 (atol=1e-6) for all domains; L-vs-E consistency verified
+4. Empirical scaling benchmarks at n=3-7 confirming ~4^10 (Energy) and ~4^7.5 (Trotter) power-law scaling with n=10/12 extrapolation
+5. G_left/G_right precomputation reducing per-matvec GEMM count from 5N to 2+2N; 309 lines of dead code removed
+
+**Tech debt (from audit):**
+- BENCH-04 partial: per-matvec timing recorded but no isolated BLAS/precompute/Krylov overhead split
+- Memory guard pre-flight estimate underestimates by 28-298x (calibration data available)
+- Stale BohrDomain adjoint docstring (documentation only)
+- Julia runtime tests not executed in sandbox (structural verification only)
+
+**Archives:** [v1.5-ROADMAP.md](milestones/v1.5-ROADMAP.md) | [v1.5-REQUIREMENTS.md](milestones/v1.5-REQUIREMENTS.md)
+
+---
+

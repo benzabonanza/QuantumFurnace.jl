@@ -16,7 +16,6 @@ using SpecialFunctions: erfc
 using QuadGK
 using Optim
 using Base.Threads
-using LinearMaps
 using SharedArrays
 using FINUFFT
 using LsqFit
@@ -37,7 +36,7 @@ export AbstractConfig, AbstractLiouvConfig, AbstractThermalizeConfig,
 export BohrDomain, EnergyDomain, TimeDomain, TrotterDomain
 
 # Types: Log-Sobolev
-export LSIFramework, compute_LSI_alpha2
+# export LSIFramework, compute_LSI_alpha2
 
 # Trajectory
 export TrajectoryFramework, TrajectoryResult, ObservableTrajectoryResult, build_trajectoryframework, step_along_trajectory!, run_observable_trajectories
@@ -122,8 +121,6 @@ include("krylov_workspace.jl")
 include("krylov_matvec.jl")
 include("krylov_eigsolve.jl")
 include("log_sobolev.jl")
-include("log_sobolev_manopt.jl")
-include("linearmaps_liouv.jl")
 include("convergence.jl")
 include("fitting.jl")
 include("gap_estimation.jl")
