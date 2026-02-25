@@ -1,5 +1,5 @@
 #! Changed it slightly for speed without debugging
-function B_bohr(hamiltonian::HamHam{T}, jump::JumpOp, config::Union{LiouvConfig, ThermalizeConfig}) where {T<:AbstractFloat}
+function B_bohr(hamiltonian::HamHam{T}, jump::JumpOp, config::Config{<:Any, <:Any, KMS}) where {T<:AbstractFloat}
 
     dim = size(hamiltonian.data, 1)
     CT = Complex{T}
@@ -25,7 +25,7 @@ function B_bohr(hamiltonian::HamHam{T}, jump::JumpOp, config::Union{LiouvConfig,
     return B
 end
 
-function B_bohr(hamiltonian::HamHam{T}, jumps::Vector{JumpOp}, config::Union{LiouvConfig, ThermalizeConfig}) where {T<:AbstractFloat}
+function B_bohr(hamiltonian::HamHam{T}, jumps::Vector{JumpOp}, config::Config{<:Any, <:Any, KMS}) where {T<:AbstractFloat}
 
     dim = size(hamiltonian.data, 1)
     CT = Complex{T}
@@ -53,7 +53,7 @@ function B_bohr(hamiltonian::HamHam{T}, jumps::Vector{JumpOp}, config::Union{Lio
     return B
 end
 
-function _pick_f(config::Union{LiouvConfig, ThermalizeConfig})
+function _pick_f(config::Config{<:Any, <:Any, KMS})
 
     beta = config.beta
     sigma = config.sigma
@@ -79,12 +79,10 @@ function create_f_gauss(nu_1::Real, nu_2::Real, beta::Real, sigma::Real,
     return tanh(-beta * (nu_1 - nu_2) / 4) * alpha_nu1_nu2 / (2im)
 end
 
-_pick_alpha(config::LiouvConfig) = _pick_alpha_kms(config)
-_pick_alpha(config::ThermalizeConfig) = _pick_alpha_kms(config)
-_pick_alpha(config::LiouvConfigGNS) = _pick_alpha_gns(config)
-_pick_alpha(config::ThermalizeConfigGNS) = _pick_alpha_gns(config)
+_pick_alpha(config::Config{<:Any, <:Any, KMS}) = _pick_alpha_kms(config)
+_pick_alpha(config::Config{<:Any, <:Any, GNS}) = _pick_alpha_gns(config)
 
-function _pick_alpha_kms(config::Union{LiouvConfig, ThermalizeConfig})
+function _pick_alpha_kms(config::Config{<:Any, <:Any, KMS})
 
     sigma = config.sigma
     if config.with_linear_combination
@@ -114,7 +112,7 @@ function create_alpha(nu_1::Real, nu_2::Real, beta::Real, sigma::Real, a::Real, 
     return alpha_nu_1
 end
 
-function _pick_alpha_gns(config::Union{LiouvConfigGNS, ThermalizeConfigGNS})
+function _pick_alpha_gns(config::Config{<:Any, <:Any, GNS})
 
     sigma = config.sigma
     if config.with_linear_combination

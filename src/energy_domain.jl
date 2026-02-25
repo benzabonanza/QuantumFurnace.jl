@@ -1,12 +1,10 @@
 #* TOOLS --------------------------------------------------------------------------------------------------------------------
 
-pick_transition(config::LiouvConfig) = _pick_transition_kms(config)
-pick_transition(config::ThermalizeConfig) = _pick_transition_kms(config)
-pick_transition(config::LiouvConfigGNS) = _pick_transition_gns(config)
-pick_transition(config::ThermalizeConfigGNS) = _pick_transition_gns(config)
+pick_transition(config::Config{<:Any, <:Any, KMS}) = _pick_transition_kms(config)
+pick_transition(config::Config{<:Any, <:Any, GNS}) = _pick_transition_gns(config)
 
 
-function _pick_transition_kms(config::Union{LiouvConfig, ThermalizeConfig})
+function _pick_transition_kms(config::Config{<:Any, <:Any, KMS})
 
     if !(config.with_linear_combination)  # Gaussian case
         # @printf("Gaussian\n")
@@ -61,7 +59,7 @@ end
 
     This helper returns the unshifted (\tilde{γ}) (i.e., the version that itself satisfies KMS condition).
 """
-function _pick_transition_gns(config::Union{LiouvConfigGNS, ThermalizeConfigGNS})
+function _pick_transition_gns(config::Config{<:Any, <:Any, GNS})
 
     # Gaussian case
     # KMS condition satisfied at inverse temperature β requires β = 2\omega_\gamma/\sigma_\gamma^2.
@@ -115,7 +113,7 @@ end
 
 function _truncate_energy_labels(
     energy_labels::AbstractVector{<:Real},
-    config::AbstractConfig;
+    config::Config;
     cutoff::Real=1e-12
     )
 
