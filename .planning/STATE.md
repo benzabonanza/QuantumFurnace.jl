@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-25)
 ## Current Position
 
 Phase: 33 of 38 (Type Foundation)
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-02-25 -- Roadmap created for v2.0 Restructure
+Plan: 1 of 4 in current phase
+Status: Executing
+Last activity: 2026-02-25 -- Completed 33-01 (type hierarchies, Config struct, exports)
 
-Progress: [░░░░░░░░░░] 0% (v2.0)
+Progress: [##░░░░░░░░] ~4% (v2.0, 1/~24 plans)
 
 ## Performance Metrics
 
@@ -31,13 +31,17 @@ Progress: [░░░░░░░░░░] 0% (v2.0)
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
 | v1.5 Krylov Gap Estimation | 27-32 | 12 (+3 quick) | 2026-02-20 to 2026-02-25 |
-| v2.0 Restructure | 33-38 | TBD | 2026-02-25 to ... |
+| v2.0 Restructure | 33-38 | 1/~24 | 2026-02-25 to ... |
 
 ## Accumulated Context
 
 ### Decisions
 
 All decisions logged in PROJECT.md Key Decisions table.
+
+- [33-01] Field ordering: singletons first, then system/physics/grid/thermalize-specific params
+- [33-01] with_coherent derived from construction type via trait, not stored as field
+- [33-01] Outer constructor infers S,D,C from singleton args and T from beta
 
 ### Key Constraints for v2.0
 
@@ -61,5 +65,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-25
-Stopped at: Roadmap created for v2.0, ready to plan Phase 33
+Stopped at: Completed 33-01-PLAN.md (type hierarchies, Config struct, exports)
 Resume file: None
