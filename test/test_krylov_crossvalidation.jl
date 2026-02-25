@@ -103,8 +103,9 @@ end
 Compute L-vs-E convergence: compare Lindbladian spectral gap (delta-independent)
 against channel-derived gap at multiple delta values.
 
-The channel eigenvalue mapping error is O(delta^2), so the convergence order
-should be >= 1.5 (with margin for sub-leading terms).
+The faithful Chen channel has mu = exp(delta*lambda_L) + O(delta^2), so the
+first-order conversion (mu-1)/delta introduces O(delta) error. Expected
+convergence order is ~1.0; threshold is >= 0.9 with margin for sub-leading terms.
 
 Returns `(; gap_L, rows, orders)` where rows is a vector of
 `(; delta, gap_from_E, error)` named tuples and orders is a vector of
@@ -386,23 +387,24 @@ end
 
     # ========================================================================
     # XVAL-03: L-vs-E convergence (KMS only, per locked decision)
-    # Tests that channel-to-Lindbladian gap mapping converges with O(delta^2)
-    # Deltas: [0.1, 0.01, 0.001]
-    # Hard assertion: convergence order >= 1.5 for each consecutive pair
+    # Tests that channel-to-Lindbladian gap mapping converges with O(delta)
+    # The faithful Chen channel gives mu = exp(delta*lambda_L) + O(delta^2),
+    # so (mu-1)/delta has first-order error. Deltas: [0.1, 0.01, 0.001]
+    # Hard assertion: convergence order >= 0.9 for each consecutive pair
     # ========================================================================
     @testset "L-vs-E convergence (KMS)" begin
 
         @testset "EnergyDomain" begin
             result = run_le_convergence(EnergyDomain(), TEST_HAM, TEST_JUMPS)
             for (i, order) in enumerate(result.orders)
-                @test order >= 1.5
+                @test order >= 0.9
             end
         end
 
         @testset "TimeDomain" begin
             result = run_le_convergence(TimeDomain(), TEST_HAM, TEST_JUMPS)
             for (i, order) in enumerate(result.orders)
-                @test order >= 1.5
+                @test order >= 0.9
             end
         end
 
@@ -410,14 +412,14 @@ end
             result = run_le_convergence(TrotterDomain(), TEST_HAM, TEST_TROTTER_JUMPS;
                 trotter=TEST_TROTTER)
             for (i, order) in enumerate(result.orders)
-                @test order >= 1.5
+                @test order >= 0.9
             end
         end
 
         @testset "BohrDomain" begin
             result = run_le_convergence(BohrDomain(), TEST_HAM, TEST_JUMPS)
             for (i, order) in enumerate(result.orders)
-                @test order >= 1.5
+                @test order >= 0.9
             end
         end
 
