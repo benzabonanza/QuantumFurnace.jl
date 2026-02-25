@@ -1,563 +1,835 @@
-# Feature Landscape: Krylov-Based Lindbladian Spectral Gap Estimation
+# Feature Landscape: QuantumFurnace.jl Codebase Restructure
 
-**Domain:** Matrix-free Krylov eigensolving for Lindbladian spectral analysis
-**Researched:** 2026-02-20
-**Confidence:** HIGH (core algorithms well-understood, codebase deeply analyzed, KrylovKit.jl API verified via official docs)
-
-## Scope
-
-This research covers features for a new milestone adding **matrix-free Krylov-based spectral gap estimation** to QuantumFurnace.jl. The goal is to compute leading Lindbladian eigenvalues (steady state at lambda=0, gap mode at lambda_1) for systems up to 12 qubits without constructing the dense d^2 x d^2 superoperator matrix.
-
-**Key constraint:** The Lindbladian superoperator at n=12 qubits would be a 16,777,216 x 16,777,216 matrix (~2 petabytes dense). Matrix-free Krylov methods reduce this to storing ~k vectors of size d^2 = 16,777,216, where k is the Krylov dimension (typically 30-100).
+**Domain:** Refactoring a Julia quantum Gibbs sampling simulation package
+**Researched:** 2026-02-25
+**Confidence:** HIGH (based on exhaustive reading of all 28 source files, all structs, all duplication sites)
 
 ---
 
-## Existing Features (Already Built)
+## Scope
 
-These are NOT part of this milestone but form the foundation:
+This document defines the **concrete architectural features** for restructuring QuantumFurnace.jl. Every recommendation below is grounded in exact field names, function signatures, and line counts from the current codebase. The restructure touches:
 
-| Feature | Location | Status | Relevance |
-|---------|----------|--------|-----------|
-| `construct_lindbladian()` dense | `furnace.jl` | Shipped | Returns dense d^2 x d^2 matrix; n<=6 only |
-| `run_lindbladian()` with Arpack | `furnace.jl` | Shipped | Shift-invert via `eigs(L, sigma=eps)` for 2 eigenvalues |
-| `extract_leading_eigendata()` | `diagnostics.jl` | Shipped | Dense `eigen(L)` for n_modes=20 with left+right eigenvectors |
-| `run_exact_diagnostics()` bundle | `diagnostics.jl` | Shipped | Full diagnostic suite: eigendata, fixed point, defect, overlap, Sz |
-| `estimate_spectral_gap()` trajectory | `gap_estimation.jl` | Shipped | Exponential fitting from observable time series |
-| `_jump_contribution!()` Kraus step | `jump_workers.jl` | Shipped | Per-jump CPTP channel application to density matrix |
-| `_vectorize_liouv_diss_and_add!()` | `qi_tools.jl` | Shipped | Vectorized Lindbladian accumulation (dense target) |
-| Commented-out `LinearMap` approach | `linearmaps_liouv.jl` | Abandoned | Early attempt; marked "slow" due to calling time_oft repeatedly |
-| `TrajectoryFramework` with `PerOperatorKraus` | `trajectories.jl` | Shipped | Precomputed per-jump Kraus data for fast channel application |
-| `LinearMaps` package | `Project.toml` | Available | Already a dependency; provides `LinearMap{ComplexF64}` type |
+1. **Config type hierarchy** -- 4 structs to 1 parametric struct
+2. **Workspace consolidation** -- 5 workspace types to 2-3
+3. **Prefactor/OFT/channel deduplication** -- 16+ copy-pasted code blocks to single-source functions
+4. **Result struct cleanup** -- 4+ result types with uniform save capability
+5. **File renaming** -- PRE/MID/POST logical grouping in flat `src/`
+6. **Test deduplication** -- factory patterns replacing ad-hoc setup code
+
+---
+
+## Current State: What Exists
+
+### Config Structs (4 structs, 90% identical fields)
+
+| Struct | Lines | Unique Fields | Purpose |
+|--------|-------|---------------|---------|
+| `LiouvConfig{D,T}` | 73-88 | none (base) | Lindbladian spectral analysis |
+| `LiouvConfigGNS{D,T}` | 99-114 | `with_coherent=false` enforced | GNS variant of above |
+| `ThermalizeConfig{D,T}` | 143-162 | `mixing_time`, `delta` | DM thermalization simulation |
+| `ThermalizeConfigGNS{D,T}` | 174-192 | `with_coherent=false` + `mixing_time`, `delta` | GNS variant of above |
+
+All 4 share these 14 fields verbatim: `num_qubits`, `with_coherent`, `with_linear_combination`, `domain`, `beta`, `sigma`, `gaussian_parameters`, `a`, `b`, `num_energy_bits`, `t0`, `w0`, `eta`, `num_trotter_steps_per_t0`.
+
+The abstract hierarchy is: `AbstractConfig{D,T}` > `AbstractLiouvConfig{D,T}` / `AbstractThermalizeConfig{D,T}`.
+
+### Workspace Types (5 types)
+
+| Workspace | Location | Fields | Used By |
+|-----------|----------|--------|---------|
+| `LindbladianWorkspace{T}` | structs.jl:21 | Id, jump_tmp, jump_conj, jump_dag_jump, jump2_jump1 (5 matrices) | `construct_lindbladian` vectorized Liouvillian |
+| `KrausScratch{T}` | kraus.jl:1 | jump_oft, LdagL, R, rho_jump, K0, tmp1, tmp2, rho_next (8 matrices) | `_jump_contribution!` for DM thermalization |
+| `KrylovWorkspace{T,PD}` | krylov_workspace.jl:43 | precomputed_data, B_total, jumps, jump_eigenbases, jump_hermitian, jump_oft, tmp1, tmp2, LdagL, rho_out + 9 channel/G fields (23 fields) | `apply_lindbladian!`, `apply_delta_channel!` |
+| `TrajectoryWorkspace{T}` | trajectories.jl:4 | jump_oft, psi_tmp, Rpsi, rho_acc (3 matrices + 1 vector) | `step_along_trajectory!` |
+| `OFTCaches{T}` | structs.jl:347 | prefactors, U, temp_op (deprecated) | Legacy OFT functions only |
+
+### Result Types (5+ types)
+
+| Result | Location | Fields | Serializable |
+|--------|----------|--------|-------------|
+| `LindbladianResult{T}` | structs.jl:259 | liouvillian, fixed_point, gap_mode, spectral_gap | No (manual) |
+| `DMSimulationResult{T}` | structs.jl:239 | final_dm, trace_distances, time_steps | No (manual) |
+| `KrylovGapResult{T}` | krylov_eigsolve.jl:40 | eigenvalues, spectral_gap, fixed_point, gap_mode, converged, matvec_count, num_restarts, normres, channel_eigenvalues, delta_used | No |
+| `TrajectoryResult{T}` | trajectories.jl:23 | rho_mean, n_trajectories, seed, times, measurements_mean, convergence | Via ExperimentResult |
+| `ObservableTrajectoryResult{T}` | trajectories.jl:37 | times, measurements_mean, n_trajectories, seed, rho_mean | No |
+| `ExperimentResult{C,T}` | results.jl:18 | config, trajectory_result, hamiltonian_params, metadata | Yes (BSON) |
+| `SpectralGapResult` | gap_estimation.jl:37 | gap, gap_ci, gap_se, best_observable, per_observable, ... | No |
+
+### Duplication Sites (measured)
+
+| Pattern | Occurrences | Files |
+|---------|-------------|-------|
+| EnergyDomain prefactor formula | 8 | jump_workers, krylov_workspace, krylov_matvec, krylov_eigsolve, trajectories |
+| Time/TrotterDomain prefactor formula | 8 | same 5 files |
+| Hermitian half-grid branch (`w_raw > 1e-12 && continue`) | 16 | 5 files |
+| `hermitianize!(scratch.R)` after R accumulation | 5 | jump_workers, trajectories |
+| R accumulation loop (Energy) | 3 | jump_workers (2x), krylov_workspace |
+| R accumulation loop (Time/Trotter) | 3 | jump_workers (2x), krylov_workspace |
+| `_thermalize_to_liouv_config` field-by-field copy | 2 | krylov_workspace.jl |
+| Sandwich function variants | 6 | krylov_matvec.jl (4 are just transposes of 2) |
+| `_precompute_coherent_*` near-identical domain branches | 3 functions | coherent.jl |
+| `_select_b_plus_calculator` (KMS-only, no GNS guard) | 1 | furnace_utensils.jl |
 
 ---
 
 ## Table Stakes
 
-Features that ARE the milestone. Without these, no Krylov-based spectral gap computation is possible.
+Features that MUST be in this restructure. Without these, the refactor is incomplete and the codebase remains duplicated.
 
-| Feature | Why Expected | Complexity | Dependencies |
-|---------|--------------|------------|--------------|
-| **Matrix-free `apply_lindbladian!(out, rho)` function** | The core linear map that KrylovKit needs. Computes L(rho) without forming the d^2 x d^2 matrix. Must reuse existing `_jump_contribution!` and `_vectorize_liouv_diss_and_add!` infrastructure but operating on a single vectorized rho input. | HIGH | Existing jump infrastructure, precomputed data, coherent terms |
-| **KrylovKit.jl `eigsolve` integration** | The actual eigenvalue computation. Must target eigenvalues near zero (the spectral gap) for a non-Hermitian operator. | MEDIUM | Matrix-free linear map, eigenvalue targeting strategy |
-| **Eigenvalue targeting strategy for gap** | Krylov methods find extremal eigenvalues, not interior ones. For the Lindbladian, eigenvalues near zero (gap) are NOT extremal -- they are interior. Requires either (a) spectral transformation or (b) the Arnoldi-Lindblad time-evolution approach. | HIGH | Deep understanding of Lindbladian spectrum structure |
-| **Cross-validation against dense `eigen()` for n<=6** | Must agree with `extract_leading_eigendata()` results to machine precision (or known tolerance). This is the correctness gate. | MEDIUM | Both dense and Krylov paths working |
-| **Memory-bounded operation for n<=12** | At n=12, d^2 = 16M complex entries per vector = 256 MB per Krylov vector. With k=50 Krylov vectors: ~12.8 GB. Must stay within ~32 GB RAM. | MEDIUM | Careful Krylov dimension tuning, pre-allocated buffers |
+### TS-01: Unified Config Struct -- `SimConfig{S,D,DB,T}`
 
----
+| Aspect | Detail |
+|--------|--------|
+| **Why Expected** | 4 structs with 14 identical fields is the #1 maintenance burden. Adding DLL variant would require 2 more structs (6 total). |
+| **Complexity** | HIGH -- touches every function signature, all dispatch, serialization, tests |
+| **Notes** | This is the keystone feature; everything else depends on it |
 
-## Feature Details
-
-### 1. Matrix-Free `apply_lindbladian!` (LINEAR MAP)
-
-**What it computes:**
-Given a vectorized density matrix `v = vec(rho)`, compute `w = vec(L(rho))` where:
-```
-L(rho) = sum_k (A_k rho A_k^dagger - 1/2 {A_k^dagger A_k, rho}) + coherent_term
-```
-
-**Two formulation variants needed:**
-
-**(a) Continuous-time Lindbladian `L(rho)`:**
-Computes the Lindbladian action. Eigenvalues of L have Re(lambda) <= 0. The spectral gap is `|Re(lambda_2)|` where lambda_2 is the eigenvalue with second-smallest `|Re(lambda)|`.
-
-**(b) Discrete-time CPTP channel `E(rho) = (I + delta*L)(rho)`:**
-The channel that the trajectory simulation actually uses. Eigenvalues mu of E satisfy |mu| <= 1, with mu=1 for the fixed point. The gap is `1 - |mu_2|`. This is the formulation faithful to Chen's algorithm.
-
-**Why both matter:** The continuous-time Lindbladian is the theoretical object; the discrete-time channel is what the trajectory simulation implements. Cross-checking both against dense diagonalization validates the full pipeline.
-
-**Implementation approach:**
-The existing `_jump_contribution!` for Liouvillian construction (lines ~1-135 of `jump_workers.jl`) accumulates into a dense `L_target` matrix using `_vectorize_liouv_diss_and_add!()` which does kronecker products. For matrix-free operation, we need to instead compute `L(rho)` directly as operator-level multiplications:
+**Concrete design:**
 
 ```julia
-# For each jump operator A_k with rate gamma_k:
-# L_k(rho) = gamma_k * (A_k * rho * A_k' - 0.5 * (A_k' * A_k * rho + rho * A_k' * A_k))
-# Plus coherent: L_coh(rho) = -i * [B_total, rho]
-```
+# --- Simulation type tags ---
+abstract type AbstractSimType end
+struct Lindblad <: AbstractSimType end    # was "Liouv"
+struct Thermalize <: AbstractSimType end
+struct KrylovSpectrum <: AbstractSimType end
+struct Trajectory <: AbstractSimType end
 
-This uses dim x dim matrix multiplications (cost O(d^3)) per jump per energy label, compared to the d^2 x d^2 dense matrix (cost O(d^4) to build, O(d^4) per matvec). The matrix-free approach is O(d^3 * n_jumps * n_energies) per application.
+# --- Detailed balance type tags ---
+abstract type AbstractDBType end
+struct KMS <: AbstractDBType end
+struct GNS <: AbstractDBType end
+# future: struct DLL <: AbstractDBType end
 
-**Critical subtlety:** The existing `_jump_contribution!` for Liouvillian construction operates differently from the Kraus step `_jump_contribution!` for thermalization. The Liouvillian version vectorizes into a superoperator matrix. The matrix-free version must implement the same physics as the Liouvillian version but without vectorization -- directly computing `L(rho)` as a dim x dim matrix.
+# --- Single config struct ---
+@kwdef struct SimConfig{S<:AbstractSimType, D<:AbstractDomain, DB<:AbstractDBType, T<:AbstractFloat}
+    # === Physics (shared by ALL configs) ===
+    num_qubits::Int
+    beta::T
+    sigma::T
+    domain::D
 
-**For the CPTP channel variant:** Reuse the existing `_jump_contribution!` for `AbstractThermalizeConfig` which already applies E(rho) to a density matrix in-place (via `_finalize_kraus_step!`). The Krylov interface just wraps this: `f(v) = vec(E(reshape(v, dim, dim)))`.
+    # === Linear combination parameters ===
+    with_linear_combination::Bool
+    gaussian_parameters::Tuple{Union{T,Nothing}, Union{T,Nothing}} = (nothing, nothing)
+    a::Union{T, Nothing} = nothing
+    b::Union{T, Nothing} = nothing
 
-**Complexity:** HIGH. Not because any single computation is hard, but because:
-1. Must handle all four domains (Bohr, Energy, Time, Trotter) and both KMS/GNS balance types
-2. Must precompute per-jump data (OFT, NUFFT prefactors, coherent unitaries) once, not per Krylov iteration
-3. Must manage workspace allocation carefully -- KrylovKit will call the linear map O(k * maxiter) times
-4. The existing `linearmaps_liouv.jl` was abandoned as "slow" -- the new implementation must be faster by precomputing everything upfront
+    # === Discretization (required for Energy/Time/Trotter, nothing for Bohr) ===
+    num_energy_bits::Union{Int, Nothing} = nothing
+    t0::Union{T, Nothing} = nothing
+    w0::Union{T, Nothing} = nothing
+    eta::Union{T, Nothing} = nothing
+    num_trotter_steps_per_t0::Union{Int, Nothing} = nothing
 
-**Dependencies:** All existing jump worker infrastructure, precomputed data framework, coherent term computation.
-
----
-
-### 2. Eigenvalue Targeting Strategy (SPECTRAL TRANSFORM)
-
-This is the hardest algorithmic decision in the milestone.
-
-**The problem:** KrylovKit.jl's `eigsolve` with Arnoldi targets extremal eigenvalues -- eigenvalues on the periphery of the spectrum. For a Lindbladian:
-- The spectrum spans from Re(lambda) = 0 (steady state) down to Re(lambda) ~ -||L|| (fastest-decaying modes)
-- The spectral gap eigenvalue lambda_2 is near zero: Re(lambda_2) ~ -0.01 to -0.1 for typical systems
-- The most negative eigenvalue could be Re(lambda_min) ~ -100 or worse
-- So the gap eigenvalue is INTERIOR, not extremal
-
-**Three viable strategies, in order of preference:**
-
-**(a) Use `:LR` (largest real part) targeting -- RECOMMENDED**
-All Lindbladian eigenvalues have Re(lambda) <= 0. The steady state has Re(lambda_1) = 0. The gap mode has the next-largest real part. So `:LR` (largest real part) targets exactly the right part of the spectrum: the eigenvalues closest to zero from below.
-
-Request `howmany=5` to get the steady state + a few gap candidates. The steady state is identified by Re(lambda) closest to zero; the gap mode is the next one.
-
-**Why this works:** The steady state is guaranteed to be the rightmost eigenvalue (Re=0), and the gap mode is next. This makes it an EXTREMAL eigenvalue problem in the real-part sense. KrylovKit's Arnoldi handles this natively.
-
-**Confidence:** HIGH. This is the standard approach for Lindbladian spectral gap computation. The Lindbladian spectrum structure (all Re(lambda) <= 0 with lambda=0 at the boundary) makes the gap eigenvalue extremal when sorted by real part.
-
-**(b) Arnoldi-Lindblad time-evolution approach (alternative)**
-Instead of applying L directly, apply the dynamical map E_dt = exp(L*dt) for a chosen timestep dt. The eigenvalues of E_dt are mu_k = exp(lambda_k * dt). The largest-magnitude eigenvalue is mu=1 (steady state), and the gap mode has |mu_2| close to 1.
-
-Use `eigsolve(E_dt_map, x0, howmany, :LM)` to find largest-magnitude eigenvalues, then recover lambda_k = log(mu_k)/dt.
-
-**Advantages:** Naturally targets long-lived modes. The time-evolution map is the physical operation.
-**Disadvantages:** Requires choosing dt (too small: all mu_k near 1, hard to distinguish; too large: gap mode has decayed to noise). More expensive per iteration (time evolution rather than single L application).
-
-**Confidence:** MEDIUM. The Arnoldi-Lindblad paper (Huybrechts & Roscilde, Quantum 2022) demonstrates this works, but the implementation complexity is higher and the dt selection is system-dependent.
-
-**(c) Manual shift-invert via GMRES (fallback only)**
-Define the shifted operator (L - sigma*I)^{-1} and find its largest eigenvalues (which correspond to eigenvalues of L closest to sigma). Apply the inverse via iterative GMRES solve inside each Krylov iteration.
-
-**Disadvantages:** Nested iteration (GMRES inside Arnoldi). Expensive. Convergence of the outer iteration depends on GMRES accuracy. Much more complex to implement.
-**When needed:** Only if strategy (a) fails to converge, which is unlikely given the Lindbladian spectrum structure.
-
-**Recommendation:** Start with strategy (a) `:LR` targeting. Fall back to (b) Arnoldi-Lindblad if convergence is poor for larger systems. Do not implement (c) unless (a) and (b) both fail.
-
-**Complexity:** LOW for strategy (a), HIGH for strategy (b), VERY HIGH for strategy (c).
-
-**Dependencies:** Matrix-free linear map.
-
----
-
-### 3. KrylovKit.jl eigsolve Integration (KRYLOV INTERFACE)
-
-**Core API call:**
-```julia
-using KrylovKit
-
-vals, vecs, info = eigsolve(
-    apply_L,            # function: Vector{ComplexF64} -> Vector{ComplexF64}
-    x0,                 # starting vector: vec(rho_0), size d^2
-    howmany,            # number of eigenvalues (5 for gap analysis)
-    :LR;                # largest real part
-    issymmetric=false,  # Lindbladian is NOT Hermitian
-    krylovdim=50,       # Krylov subspace dimension
-    maxiter=200,        # maximum restarts
-    tol=1e-10,          # convergence tolerance
-    verbosity=1,        # print convergence info
-)
-```
-
-**Starting vector choice:**
-Use `x0 = vec(rho_gibbs) + eps * vec(random_perturbation)` where rho_gibbs is the Gibbs state. This seeds the Krylov subspace with a vector rich in both the steady-state component (lambda=0) and the gap mode.
-
-Alternative: `x0 = vec(I/d)` (maximally mixed state). Has equal weight in all symmetry sectors, so can find the gap mode even if it lives in a symmetry sector that rho_gibbs does not overlap with.
-
-**Return value processing:**
-1. Sort returned eigenvalues by `|Re(lambda)|`
-2. Identify steady state: the eigenvalue with smallest `|Re(lambda)|`
-3. Identify gap mode: next eigenvalue
-4. Extract spectral gap: `|Re(lambda_gap)|`
-5. Check convergence: `info.converged >= howmany`
-
-**Eigenvector extraction (n<=6 only):**
-Reshape each eigenvector `vecs[k]` to a dim x dim matrix. For n<=6, also compute left eigenvectors via `bieigsolve` for biorthogonal overlap analysis. For n>6, eigenvectors may be too expensive to store/analyze.
-
-**Krylov dimension tuning:**
-- n=4 (d^2=256): krylovdim=30, maxiter=100 (fast, for testing)
-- n=6 (d^2=4096): krylovdim=50, maxiter=200 (moderate)
-- n=8 (d^2=65536): krylovdim=60, maxiter=300 (main target)
-- n=10 (d^2=1M): krylovdim=80, maxiter=500 (aggressive)
-- n=12 (d^2=16M): krylovdim=100, maxiter=1000 (memory-limited)
-
-**Tolerance management:**
-- For cross-validation against dense eigen(): tol=1e-10 (tight)
-- For production gap estimation at n>6: tol=1e-6 (relaxed, faster convergence)
-- User-configurable with sensible defaults
-
-**Complexity:** MEDIUM. The integration itself is straightforward once the linear map exists. The complexity is in parameter tuning and convergence verification.
-
-**Dependencies:** Matrix-free linear map, KrylovKit.jl (new dependency).
-
----
-
-### 4. Cross-Validation Against Dense eigen() (VALIDATION)
-
-**What to validate:**
-At n=4 and n=6, compare Krylov results against existing `extract_leading_eigendata()`:
-1. Spectral gap: `|gap_krylov - gap_dense| / gap_dense < tol`
-2. Steady-state eigenvalue: `|Re(lambda_0_krylov)| < tol`
-3. Gap mode eigenvector overlap: `|<v_krylov | v_dense>| > 1 - tol`
-4. Fixed point trace distance: `trace_distance(rho_krylov, rho_dense) < tol`
-
-**Test matrix:**
-
-| n | Domain | Balance | Expected gap | Validation target |
-|---|--------|---------|--------------|-------------------|
-| 4 | Bohr | KMS | ~0.011 | 1e-8 agreement |
-| 4 | Trotter | KMS | ~0.010 | 1e-6 agreement (Trotter error) |
-| 6 | Bohr | KMS | ~0.003 | 1e-8 agreement |
-| 6 | Trotter | KMS | ~0.003 | 1e-6 agreement |
-| 4 | Bohr | GNS | varies | 1e-8 agreement |
-
-**Cross-validation against trajectory estimate:**
-Also compare Krylov gap vs trajectory-based `estimate_spectral_gap()` at n=4. The trajectory estimate has ~1% accuracy (from v1.3 validation), so agreement within ~5% confirms consistency.
-
-**Complexity:** MEDIUM. The tests themselves are straightforward. The setup (constructing Lindbladian both ways, running both solvers) takes development time.
-
-**Dependencies:** Both dense diagnostics and Krylov solver working.
-
----
-
-### 5. Memory-Bounded Operation (RESOURCE MANAGEMENT)
-
-**Memory scaling formula:**
-
-| n | dim | d^2 | Per-vector (ComplexF64) | k=50 vectors | k=100 vectors |
-|---|-----|-----|------------------------|--------------|---------------|
-| 4 | 16 | 256 | 4 KB | 200 KB | 400 KB |
-| 6 | 64 | 4,096 | 64 KB | 3.2 MB | 6.4 MB |
-| 8 | 256 | 65,536 | 1 MB | 50 MB | 100 MB |
-| 10 | 1,024 | 1,048,576 | 16 MB | 800 MB | 1.6 GB |
-| 12 | 4,096 | 16,777,216 | 256 MB | 12.8 GB | 25.6 GB |
-
-**Additional memory per linear map application:**
-- Per-jump workspace: ~3 dim x dim matrices = 3 * dim^2 * 16 bytes
-- At n=12: 3 * 4096^2 * 16 = ~768 MB per jump (but reused across iterations)
-- Coherent term: 1 dim x dim matrix
-- Total workspace overhead at n=12: ~1 GB
-
-**Total memory budget at n=12:** ~14 GB (Krylov vectors) + ~1 GB (workspace) = ~15 GB
-
-**Pre-allocation strategy:**
-All workspace matrices must be allocated once before the Krylov iteration begins. KrylovKit calls the linear map function hundreds of times -- any allocation inside the function multiplied by iteration count would be catastrophic.
-
-**Memory profiling feature:**
-Before running eigsolve, compute and report estimated memory:
-```julia
-function estimate_krylov_memory(n_qubits, krylov_dim, n_jumps)
-    d = 2^n_qubits
-    d2 = d^2
-    krylov_bytes = krylov_dim * d2 * sizeof(ComplexF64)
-    workspace_bytes = (3 * n_jumps + 2) * d^2 * sizeof(ComplexF64)
-    total = krylov_bytes + workspace_bytes
-    return (krylov_gb=total/1e9, krylov_vectors_gb=krylov_bytes/1e9, workspace_gb=workspace_bytes/1e9)
+    # === Thermalization-specific (only for S <: Union{Thermalize, Trajectory}) ===
+    mixing_time::Union{T, Nothing} = nothing
+    delta::Union{T, Nothing} = nothing
 end
 ```
 
-**Complexity:** LOW for estimation, MEDIUM for pre-allocation. The main effort is ensuring zero allocations in the hot path.
+**Key decisions:**
+- `with_coherent` is **removed as a field**. It is derived: `has_coherent(::SimConfig{S,D,KMS}) = true`, `has_coherent(::SimConfig{S,D,GNS}) = false`. This eliminates the "GNS configs must have with_coherent=false" runtime guard entirely.
+- `mixing_time` and `delta` become optional fields (Union with Nothing). They are required for `Thermalize`/`Trajectory` simulation types and validated at construction via an inner constructor or `validate_config!`.
+- Four type parameters because: `S` selects simulation runner, `D` selects domain dispatch, `DB` selects detailed balance physics (alpha, transition, coherent), `T` is numeric precision.
 
-**Dependencies:** Matrix-free linear map with pre-allocated workspace.
+**Dispatch implications:**
+- `run_lindblad(config::SimConfig{Lindblad})` replaces `run_lindbladian(config::AbstractLiouvConfig)`
+- `run_thermalize(config::SimConfig{Thermalize})` replaces `run_thermalization(config::AbstractThermalizeConfig)`
+- `pick_transition(config::SimConfig{S,D,KMS})` replaces `pick_transition(config::LiouvConfig)` and `pick_transition(config::ThermalizeConfig)`
+- `pick_transition(config::SimConfig{S,D,GNS})` replaces `pick_transition(config::LiouvConfigGNS)` and `pick_transition(config::ThermalizeConfigGNS)`
+- `_precompute_data(config::SimConfig{S,EnergyDomain})` unifies all energy domain precomputation regardless of sim type
+- `has_coherent(::SimConfig{S,D,KMS}) where {S,D}` = true, eliminates the `with_coherent` flag
+
+**DLL extensibility:** Adding DLL requires only `struct DLL <: AbstractDBType end` plus new `pick_transition(::SimConfig{S,D,DLL})` and `_pick_alpha(::SimConfig{S,D,DLL})` methods. Zero changes to existing code.
+
+**Backward compatibility for serialization:** The `_config_to_dict` / `_reconstruct_config` in results.jl already uses string tags `"KMS"/"GNS"` and `"liouv"/"thermalize"`. Extend with `"lindblad"/"krylov_spectrum"/"trajectory"` for `S`, add `"DLL"` for `DB`.
+
+---
+
+### TS-02: Prefactor Deduplication -- `domain_prefactor(config, gamma_norm_factor)`
+
+| Aspect | Detail |
+|--------|--------|
+| **Why Expected** | 16 occurrences of 2 formulas across 5 files. Bug in one = silent divergence. |
+| **Complexity** | LOW -- pure extraction, no logic changes |
+| **Notes** | Must be done BEFORE any other inner-loop refactoring |
+
+**Concrete design:**
+
+```julia
+# In a new file: src/prefactors.jl (PRE layer)
+
+"""
+    domain_prefactor(config::SimConfig{S,EnergyDomain}, gamma_norm_factor) -> Float64
+
+Energy domain: w0 / (sigma * sqrt(2pi)) * gamma_norm_factor
+"""
+@inline function domain_prefactor(
+    config::SimConfig{S,EnergyDomain}, gamma_norm_factor::Real
+) where {S}
+    return config.w0 / (config.sigma * sqrt(2 * pi)) * gamma_norm_factor
+end
+
+"""
+    domain_prefactor(config::SimConfig{S,D}, gamma_norm_factor) -> Float64
+
+Time/Trotter domain: w0 * t0^2 * sigma * sqrt(2/pi) / (2pi) * gamma_norm_factor
+"""
+@inline function domain_prefactor(
+    config::SimConfig{S,D}, gamma_norm_factor::Real
+) where {S, D<:Union{TimeDomain, TrotterDomain}}
+    return config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
+end
+```
+
+Every site that currently computes the prefactor inline becomes a call to `domain_prefactor(config, gamma_norm_factor)`. For trajectory framework hot paths where config access is avoided, the value is precomputed once at framework construction and stored as `scaled_prefactor::Float64` (already the pattern in `TrajectoryFramework`).
+
+---
+
+### TS-03: Hermitian Half-Grid Iterator -- `foreach_energy_pair`
+
+| Aspect | Detail |
+|--------|--------|
+| **Why Expected** | 16 copies of the hermitian branching pattern with half-grid iteration |
+| **Complexity** | MEDIUM -- needs careful closure design for zero allocations |
+| **Notes** | The biggest single source of code duplication |
+
+**Concrete design:**
+
+```julia
+"""
+    foreach_energy_pair(f_pos, f_neg, energy_labels, is_hermitian)
+
+Iterate energy labels with hermitian half-grid optimization.
+- If is_hermitian: iterate w <= 0 only, call f_pos(w) and f_neg(w) for w > 0.
+- If !is_hermitian: iterate all w, call f_pos(w) only.
+
+Replaces 16 copies of the `if jump.hermitian ... for w_raw ... w_raw > 1e-12 && continue` pattern.
+"""
+@inline function foreach_energy_pair(
+    f_pos, f_neg, energy_labels::AbstractVector{<:Real}, is_hermitian::Bool
+)
+    if is_hermitian
+        @inbounds for w_raw in energy_labels
+            w_raw > 1e-12 && continue
+            w = abs(w_raw)
+            f_pos(w)
+            if w > 1e-12
+                f_neg(w)
+            end
+        end
+    else
+        @inbounds for w in energy_labels
+            f_pos(w)
+        end
+    end
+    return nothing
+end
+```
+
+This is a **do-block pattern** -- callers pass closures that capture their local variables. The closures must be typed (not `Any`) for zero-allocation. Julia's compiler specializes on closure types, so this is allocation-free when the closures are non-boxing.
+
+**Example migration (from krylov_matvec.jl EnergyDomain `apply_lindbladian!`):**
+
+```julia
+# BEFORE (17 lines per jump):
+for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
+    is_herm = ws.jump_hermitian[k]
+    if is_herm
+        for w_raw in energy_labels
+            w_raw > 1e-12 && continue
+            w = abs(w_raw)
+            _krylov_oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+            scalar_w = prefactor * transition(w)
+            _accumulate_sandwich!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
+            if w > 1e-12
+                scalar_neg = prefactor * transition(-w)
+                _accumulate_sandwich_adj_L!(ws.rho_out, ws.jump_oft, rho, scalar_neg, ws)
+            end
+        end
+    else
+        for w in energy_labels
+            _krylov_oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+            scalar_w = prefactor * transition(w)
+            _accumulate_sandwich!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
+        end
+    end
+end
+
+# AFTER (8 lines per jump):
+for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
+    foreach_energy_pair(energy_labels, ws.jump_hermitian[k]) do w
+        compute_jump_oft!(ws.jump_oft, eigenbasis, oft_source, w)
+        scalar_w = prefactor * transition(w)
+        _accumulate_sandwich!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
+    end do w
+        scalar_neg = prefactor * transition(-w)
+        _accumulate_sandwich_adj_L!(ws.rho_out, ws.jump_oft, rho, scalar_neg, ws)
+    end
+end
+```
+
+Actually, Julia's do-block syntax only supports one closure. A better pattern is:
+
+```julia
+for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
+    foreach_energy_pair(energy_labels, ws.jump_hermitian[k],
+        w -> begin  # positive frequency action
+            compute_jump_oft!(ws.jump_oft, eigenbasis, oft_source, w)
+            _accumulate_sandwich!(ws.rho_out, ws.jump_oft, rho, prefactor * transition(w), ws)
+        end,
+        w -> begin  # negative frequency action (only for hermitian mirrors)
+            _accumulate_sandwich_adj_L!(ws.rho_out, ws.jump_oft, rho, prefactor * transition(-w), ws)
+        end
+    )
+end
+```
+
+The key constraint is that `ws.jump_oft` must already be computed by `f_pos` before `f_neg` reads it. The current code relies on this sequential ordering, and `foreach_energy_pair` preserves it by calling `f_pos(w)` then `f_neg(w)` in that order.
+
+---
+
+### TS-04: Unified OFT Computation -- `compute_jump_oft!`
+
+| Aspect | Detail |
+|--------|--------|
+| **Why Expected** | `oft!`, `_krylov_oft!`, and inline NUFFT prefactor multiply are 3 ways to do the same thing |
+| **Complexity** | LOW -- merge to single dispatched function |
+| **Notes** | `_krylov_oft!` is slightly more efficient than `oft!` (uses `inv_4sigma2` precomputed) |
+
+**Concrete design:**
+
+```julia
+"""
+    compute_jump_oft!(out, eigenbasis, bohr_freqs, w, inv_4sigma2)
+
+EnergyDomain OFT: Gaussian filter in eigenbasis.
+    out[i,j] = eigenbasis[i,j] * exp(-(w - bohr_freqs[i,j])^2 * inv_4sigma2)
+"""
+@inline function compute_jump_oft!(
+    out::Matrix{T}, eigenbasis::Matrix{T},
+    bohr_freqs::Matrix{<:Real}, w::Real, inv_4sigma2::Real
+) where {T<:Complex}
+    @. out = eigenbasis * exp(-(w - bohr_freqs)^2 * inv_4sigma2)
+    return nothing
+end
+
+"""
+    compute_jump_oft!(out, eigenbasis, nufft_prefactors, w)
+
+Time/TrotterDomain OFT: NUFFT prefactor multiply.
+    out[i,j] = eigenbasis[i,j] * prefactor_view(nufft_prefactors, w)[i,j]
+"""
+@inline function compute_jump_oft!(
+    out::Matrix{T}, eigenbasis::Matrix{T},
+    nufft_prefactors::NUFFTPrefactors, w::Real
+) where {T<:Complex}
+    pf = _prefactor_view(nufft_prefactors, w)
+    @. out = eigenbasis * pf
+    return nothing
+end
+```
+
+The old `oft!(out, jump::JumpOp, ...)` is replaced because it accesses `jump.in_eigenbasis` (an abstractly-typed field causing boxing). The new version takes the concrete-typed `eigenbasis` matrix directly.
+
+The old `time_oft!` and `trotter_oft!` using `OFTCaches` are deprecated (marked so in code already). Remove them entirely; they exist only in `ofts.jl` for legacy test support. The tests can use `compute_jump_oft!` with the NUFFT path.
+
+---
+
+### TS-05: Workspace Consolidation
+
+| Aspect | Detail |
+|--------|--------|
+| **Why Expected** | 5 workspace types with overlapping buffer names is confusing and wastes memory |
+| **Complexity** | HIGH -- touches every simulation path |
+| **Notes** | Must preserve zero-allocation hot paths |
+
+**Concrete target: 3 workspace types**
+
+**1. `SimWorkspace{T}` (replaces `KrausScratch` + `LindbladianWorkspace`)**
+
+The DM-level workspace for `run_lindblad` and `run_thermalize`. Both need dim x dim scratch matrices.
+
+```julia
+struct SimWorkspace{T<:Complex}
+    # Scratch matrices (dim x dim)
+    jump_oft::Matrix{T}      # A(omega) buffer
+    tmp1::Matrix{T}           # general scratch
+    tmp2::Matrix{T}           # general scratch
+    LdagL::Matrix{T}          # L'L product
+    R::Matrix{T}              # R accumulator (Thermalize only, zeroed per step)
+    rho_jump::Matrix{T}       # jump sandwich accumulator (Thermalize only)
+    K0::Matrix{T}             # I - alpha*R (Thermalize only)
+    rho_next::Matrix{T}       # output buffer
+
+    # Vectorized Liouvillian extras (Lindblad only)
+    Id::Matrix{T}             # identity
+    jump_conj::Matrix{T}      # conj(jump) for vectorization
+end
+```
+
+`LindbladianWorkspace` currently has 5 fields (Id, jump_tmp, jump_conj, jump_dag_jump, jump2_jump1). `KrausScratch` has 8 fields. The overlap is: `jump_tmp` = `jump_oft`, `jump_dag_jump` = `LdagL`. Combined: ~10 unique buffers. The `Lindblad`-specific ones (`Id`, `jump_conj`) are only used in vectorized Liouvillian construction, not in the hot path, so the small overhead of carrying them is acceptable.
+
+Constructor:
+```julia
+function SimWorkspace(::Type{T}, dim::Int; vectorized::Bool=false) where {T<:Complex}
+    # ... allocate all, skip Id/jump_conj if !vectorized
+end
+```
+
+**2. `KrylovWorkspace{T,PD}` (keep as-is, just remove channel duplication)**
+
+The Krylov workspace is already well-designed for its purpose. The only change is that `_accumulate_R_total!` and `_accumulate_jump_sandwich!` should call the unified `compute_jump_oft!` and `foreach_energy_pair` from the shared PRE layer instead of inlining them.
+
+The workspace should also drop the `jumps::Vector{JumpOp}` field (only used for external inspection) and keep only `jump_eigenbases`/`jump_hermitian` which are the concrete-typed hot-path fields.
+
+**3. `TrajectoryWorkspace{T}` (keep as-is)**
+
+Already minimal: `jump_oft`, `psi_tmp`, `Rpsi`, `rho_acc`. No changes needed. The trajectory hot path operates on state vectors, not density matrices, so it correctly has different buffer shapes.
+
+**Remove: `OFTCaches{T}`** -- deprecated, used only by `time_oft!` and `trotter_oft!` which are being removed.
+
+---
+
+### TS-06: Unified R Accumulation -- `accumulate_R!`
+
+| Aspect | Detail |
+|--------|--------|
+| **Why Expected** | R computation appears in 3 places: `_precompute_R` (trajectories.jl x2 domains), `_accumulate_R_total!` (krylov_workspace.jl x3 domains). Same physics. |
+| **Complexity** | MEDIUM -- domain dispatch needed |
+| **Notes** | Uses `compute_jump_oft!` and `foreach_energy_pair` from TS-03/TS-04 |
+
+**Concrete design:**
+
+```julia
+"""
+    accumulate_R!(R, jump_eigenbases, jump_hermitian, precomputed_data, config, ham_or_trott)
+
+Accumulate R_total = sum_k sum_w rate^2(w) * L_kw' * L_kw into R.
+Dispatches on domain via config type parameter.
+"""
+function accumulate_R!(
+    R::Matrix{T},
+    eigenbases::Vector{Matrix{T}},
+    hermitian_flags::Vector{Bool},
+    precomputed_data,
+    config::SimConfig{S,EnergyDomain},
+    hamiltonian::HamHam,
+) where {T<:Complex, S}
+    (; transition, gamma_norm_factor, energy_labels) = precomputed_data
+    prefactor = domain_prefactor(config, gamma_norm_factor)
+    bohr_freqs = hamiltonian.bohr_freqs
+    inv_4sigma2 = 1.0 / (4 * config.sigma^2)
+
+    jump_oft = zeros(T, size(R)...)
+    LdagL = zeros(T, size(R)...)
+
+    for (k, eigenbasis) in enumerate(eigenbases)
+        foreach_energy_pair(energy_labels, hermitian_flags[k],
+            w -> begin
+                compute_jump_oft!(jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+                mul!(LdagL, jump_oft', jump_oft)
+                @. R += prefactor * transition(w) * LdagL
+            end,
+            w -> begin
+                mul!(LdagL, jump_oft, jump_oft')
+                @. R += prefactor * transition(-w) * LdagL
+            end
+        )
+    end
+    hermitianize!(R)
+    return R
+end
+```
+
+The `_precompute_R` in trajectories.jl (which takes a `KrausScratch`) wraps this by pointing `eigenbases = [j.in_eigenbasis for j in jumps]`. The Krylov version already has `ws.jump_eigenbases`. Both call the same inner `accumulate_R!`.
+
+---
+
+### TS-07: Sandwich Function Consolidation
+
+| Aspect | Detail |
+|--------|--------|
+| **Why Expected** | 6 sandwich functions in krylov_matvec.jl, but only 2 unique computations |
+| **Complexity** | LOW -- algebraic identity elimination |
+| **Notes** | The adjoint functions are literally identical to their non-adjoint counterparts |
+
+**Current situation:**
+- `_accumulate_sandwich!(out, L, rho, s, ws)` = `s * conj(L) * rho * L^T`
+- `_accumulate_sandwich_adj_L!(out, L, rho, s, ws)` = `s * L^T * rho * conj(L)`
+- `_accumulate_adjoint_sandwich!(out, L, rho, s, ws)` = `s * L^T * rho * conj(L)` -- **identical to `_adj_L`**
+- `_accumulate_adjoint_sandwich_adj_L!(out, L, rho, s, ws)` = `s * conj(L) * rho * L^T` -- **identical to base `_sandwich`**
+
+**Consolidation:** Keep exactly 2 functions:
+
+```julia
+"""Accumulate s * conj(L) * rho * L^T (forward sandwich / adjoint neg-freq)"""
+@inline function sandwich_forward!(out, L, rho, s, ws)
+
+"""Accumulate s * L^T * rho * conj(L) (forward neg-freq / adjoint sandwich)"""
+@inline function sandwich_adjoint!(out, L, rho, s, ws)
+```
+
+The 2-operator Bohr domain variant `_accumulate_sandwich_2op!` stays separate since it takes two different operators A and B_dag.
+
+---
+
+### TS-08: Result Struct Pattern with Save
+
+| Aspect | Detail |
+|--------|--------|
+| **Why Expected** | User explicitly requested 4 result types with optional save capability |
+| **Complexity** | MEDIUM -- new save infrastructure, backward-compatible BSON |
+| **Notes** | Replaces the current `ExperimentResult` which only wraps trajectory results |
+
+**Concrete design -- 4 result types:**
+
+```julia
+# Each result type has a `save` kwarg that triggers BSON serialization.
+# Common metadata is captured uniformly.
+
+struct LindbladResult{T<:AbstractFloat}
+    liouvillian::Matrix{Complex{T}}
+    fixed_point::Matrix{Complex{T}}
+    gap_mode::Matrix{Complex{T}}
+    spectral_gap::Complex{T}
+    config::SimConfig
+    metadata::Dict{Symbol, Any}
+end
+
+struct ThermalizeResult{T<:AbstractFloat}
+    final_dm::Matrix{Complex{T}}
+    trace_distances::Vector{T}
+    time_steps::Vector{T}
+    config::SimConfig
+    metadata::Dict{Symbol, Any}
+end
+
+struct KrylovSpectrumResult{T<:AbstractFloat}
+    eigenvalues::Vector{Complex{T}}
+    spectral_gap::T
+    fixed_point::Matrix{Complex{T}}
+    gap_mode::Matrix{Complex{T}}
+    converged::Int
+    matvec_count::Int
+    num_restarts::Int
+    normres::Vector{T}
+    channel_eigenvalues::Union{Nothing, Vector{Complex{T}}}
+    delta_used::Union{Nothing, T}
+    config::SimConfig
+    metadata::Dict{Symbol, Any}
+end
+
+struct TrajectoryResult{T<:AbstractFloat}
+    rho_mean::Matrix{Complex{T}}
+    n_trajectories::Int
+    seed::Int
+    times::Union{Nothing, Vector{Float64}}
+    measurements_mean::Union{Nothing, Matrix{Float64}}
+    convergence::Union{Nothing, ConvergenceData}
+    config::SimConfig
+    metadata::Dict{Symbol, Any}
+end
+```
+
+**Save protocol:** Each `run_*` function gets an optional `save_path::Union{Nothing,String}=nothing` kwarg. If non-nothing, the result is serialized via:
+
+```julia
+function save_result(result::Union{LindbladResult, ThermalizeResult, KrylovSpectrumResult, TrajectoryResult}, path::String)
+    d = _result_to_dict(result)
+    mkpath(dirname(path))
+    BSON.bson(path, d)
+    _write_companion_txt(result, replace(path, ".bson" => ".txt"))
+    return path
+end
+```
+
+The `ExperimentResult` wrapper becomes unnecessary -- each result type carries its own config and metadata.
+
+---
+
+### TS-09: File Renaming -- PRE/MID/POST Grouping
+
+| Aspect | Detail |
+|--------|--------|
+| **Why Expected** | Flat `src/` with 28 files needs a logical naming scheme |
+| **Complexity** | LOW -- pure renames, no logic changes |
+| **Notes** | Keep flat directory, use numeric prefix for include order |
+
+**File rename mapping:**
+
+```
+# PRE: Physics building blocks (included first)
+constants.jl           -> 01_constants.jl          (unchanged content)
+structs.jl             -> 02_types.jl              (SimConfig, domains, JumpOp, workspaces)
+hamiltonian.jl         -> 03_hamiltonian.jl         (HamHam, TrottTrott, Pauli, Trotter)
+qi_tools.jl            -> 04_qi_tools.jl            (trace_distance, fidelity, hermitianize!)
+misc_tools.jl          -> 05_misc_tools.jl          (load_hamiltonian, config validation, labels)
+nufft.jl               -> 06_nufft.jl               (NUFFTPrefactors)
+NEW                    -> 07_prefactors.jl          (domain_prefactor, compute_jump_oft!, foreach_energy_pair)
+energy_domain.jl       -> 08_transitions.jl         (pick_transition, create_alpha -- merge energy/bohr domain tools)
+bohr_domain.jl         -> 08_transitions.jl         (merged into above)
+time_domain.jl         -> 08_transitions.jl         (merged into above)
+trotter_domain.jl      -> 09_trotter.jl             (trotterize, TrottTrott constructor)
+coherent.jl            -> 10_coherent.jl            (B operators, coherent precomputation)
+
+# MID: Simulation runners (the 4 run_* functions + their inner helpers)
+ofts.jl                -> REMOVE (deprecated, logic absorbed into 07_prefactors.jl)
+kraus.jl               -> ABSORB into 02_types.jl (just a struct definition)
+jump_workers.jl        -> 20_jump_workers.jl        (vectorized Liouvillian _jump_contribution!)
+furnace_utensils.jl    -> 21_precompute.jl          (_precompute_data, _precompute_labels)
+furnace.jl             -> 22_run_lindblad.jl         (run_lindblad, construct_lindbladian)
+                       -> 23_run_thermalize.jl       (run_thermalize, split from furnace.jl)
+krylov_workspace.jl    -> 24_krylov_workspace.jl     (KrylovWorkspace constructor)
+krylov_matvec.jl       -> 25_krylov_matvec.jl        (apply_lindbladian!, apply_adjoint!)
+krylov_eigsolve.jl     -> 26_run_krylov_spectrum.jl  (krylov_spectral_gap -> run_krylov_spectrum)
+trajectories.jl        -> 27_run_trajectory.jl       (run_trajectory, TrajectoryFramework, step!)
+
+# POST: Results and analysis
+results.jl             -> 40_results.jl              (result types, save/load, BSON serialization)
+convergence.jl         -> 41_convergence.jl          (ConvergenceData, adaptive trajectory runs)
+fitting.jl             -> 42_fitting.jl              (exponential decay fitting)
+gap_estimation.jl      -> 43_gap_estimation.jl       (trajectory-based gap estimation)
+diagnostics.jl         -> 44_diagnostics.jl          (exact diagnostics suite)
+log_sobolev.jl         -> 45_log_sobolev.jl          (LSI framework)
+errors.jl              -> 50_errors.jl               (custom error types)
+```
+
+**Include order in `QuantumFurnace.jl`:** The numeric prefix guarantees correct include order. Files in the same prefix group (e.g., 08_*) can be included in any order since they are in the same dependency tier.
+
+**Unfinished trajectory-gap code:** The `SpectralGapResult` and `estimate_spectral_gap` in gap_estimation.jl, along with `ObservableTrajectoryResult`, move to a `staging/` directory outside `src/`. They are not part of the 4-runner architecture.
+
+---
+
+### TS-10: `_thermalize_to_liouv_config` Elimination
+
+| Aspect | Detail |
+|--------|--------|
+| **Why Expected** | With unified config, there is no "conversion" needed |
+| **Complexity** | FREE -- falls out of TS-01 |
+| **Notes** | Currently 2 functions x 14 field-by-field copies |
+
+With `SimConfig{S,D,DB,T}`, the Krylov workspace constructor for a thermalize config simply reads the Lindbladian-relevant fields directly from the same struct. No conversion needed. The dispatch on `AbstractLiouvConfig` vs `AbstractThermalizeConfig` becomes dispatch on `SimConfig{Lindblad}` vs `SimConfig{Thermalize}`, and the shared physics parameters are accessed identically.
 
 ---
 
 ## Differentiators
 
-Features that strengthen the milestone beyond the minimum viable Krylov solver.
+Features that make the restructure excellent rather than merely adequate.
 
-| Feature | Value Proposition | Complexity | Dependencies |
-|---------|-------------------|------------|--------------|
-| **Both L and E formulations** | Cross-check continuous vs discrete: gap from L should equal `-log(lambda_2(E))/delta` up to O(delta^2). Validates the Trotter discretization. | MEDIUM | Matrix-free map for both L and E |
-| **Adaptive Krylov dimension** | Auto-increase krylovdim if convergence stalls. Start at 30, double if `info.converged < howmany` after maxiter. Prevents user from having to guess. | LOW | KrylovKit integration |
-| **Timing benchmarks with scaling extrapolation** | Time per matvec at n=4,6,8, fit scaling law t(n) = a * 4^n + b, extrapolate to n=10,12. Report estimated wall-clock time before starting large runs. | LOW | Working solver at multiple sizes |
-| **Per-domain apply_lindbladian! specialization** | BohrDomain can exploit the Bohr dictionary for sparse accumulation. EnergyDomain uses OFT. TrotterDomain uses NUFFT prefactors. Each has different cost per application. Specializing maximizes performance. | HIGH | All four domain worker implementations |
-| **bieigsolve for left+right eigenvectors** | KrylovKit's `bieigsolve` with `BiArnoldi` returns both left and right eigenvectors simultaneously. Enables biorthogonal overlap analysis without dense eigen(). Would extend existing `compute_overlap_coefficients()` to n>6. | MEDIUM | KrylovKit bieigsolve API |
-| **Sector-resolved gap computation** | Apply `apply_lindbladian!` restricted to a symmetry sector (e.g., Delta_Sz=0 subspace). The sector-restricted Lindbladian is smaller, so Krylov converges faster and the gap within that sector is directly obtained. | HIGH | Symmetry sector projection infrastructure |
-| **Resource estimation report** | Before running: memory estimate, time estimate, expected number of matvecs. User decides go/no-go. | LOW | Memory formula + timing benchmarks |
+### DIFF-01: Unified Dissipator Loop
+
+| Feature | Value Proposition | Complexity | Notes |
+|---------|-------------------|------------|-------|
+| Single `dissipator_loop!` function with callback | Replaces 6 domain-specific loops across jump_workers, krylov_matvec, krylov_eigsolve | HIGH | The "holy grail" deduplication |
+
+**Concept:** A single inner loop that iterates over jumps and energies, computing the OFT for each, and calls back with the Lindblad operator L_w and scalar rate for each (w, jump) pair. The callback implements what to do with L_w:
+- Vectorized Liouvillian: `_vectorize_liouv_diss_and_add!(L_target, L_w, scalar, ws)`
+- Krylov sandwich: `_accumulate_sandwich!(rho_out, L_w, rho, scalar, ws)`
+- DM thermalization: accumulate into `R` and `rho_jump`
+- Trajectory step: compute jump probability and sample
+
+**Risk:** The DM thermalization and trajectory paths have fundamentally different per-iteration logic (DM accumulates R+rho_jump, trajectory samples). Forcing them into a single callback may be awkward. Better to have `dissipator_loop!` handle the "iterate jumps x energies, compute L_w" part, and let callers handle per-L_w actions. This still eliminates the 16x hermitian branching duplication.
+
+---
+
+### DIFF-02: Config Factory Functions for Tests
+
+| Feature | Value Proposition | Complexity | Notes |
+|---------|-------------------|------------|-------|
+| `make_test_config(; sim=Lindblad(), domain=EnergyDomain(), db=KMS(), ...)` | Eliminates 20+ ad-hoc config constructions across test files | LOW | Pure convenience |
+
+```julia
+# In test/test_helpers.jl:
+function make_test_config(;
+    sim::AbstractSimType = Lindblad(),
+    domain::AbstractDomain = EnergyDomain(),
+    db::AbstractDBType = KMS(),
+    num_qubits = NUM_QUBITS,
+    beta = BETA,
+    sigma = SIGMA,
+    kwargs...
+)
+    SimConfig(
+        sim_type = sim, domain = domain, db_type = db,
+        num_qubits = num_qubits, beta = beta, sigma = sigma,
+        with_linear_combination = false,
+        num_energy_bits = 6, t0 = ..., w0 = ...,
+        kwargs...
+    )
+end
+```
+
+---
+
+### DIFF-03: Precomputed Data as Typed Struct
+
+| Feature | Value Proposition | Complexity | Notes |
+|---------|-------------------|------------|-------|
+| Replace NamedTuple precomputed_data with typed structs | Eliminates `hasproperty` checks, enables dispatch | MEDIUM | Optional but clean |
+
+Currently `_precompute_data` returns ad-hoc NamedTuples with different fields per domain. The `TrajectoryFramework` constructor checks `hasproperty(precomputed_data, :oft_nufft_prefactors)`. With typed structs:
+
+```julia
+struct EnergyPrecomputed{T,F}
+    transition::F
+    gamma_norm_factor::T
+    energy_labels::Vector{T}
+end
+
+struct TimePrecomputed{T,F,P}
+    transition::F
+    gamma_norm_factor::T
+    energy_labels::Vector{T}
+    oft_nufft_prefactors::P
+    b_minus::Union{Nothing, Dict}
+    b_plus::Union{Nothing, Dict}
+end
+```
+
+This makes `_precompute_data` return type-stable and enables dispatch on precomputed data type in the dissipator loop.
 
 ---
 
 ## Anti-Features
 
-Features to explicitly NOT build in this milestone.
+Features to explicitly NOT build during this restructure.
 
 | Anti-Feature | Why Avoid | What to Do Instead |
 |--------------|-----------|-------------------|
-| **Sparse Lindbladian matrix construction** | Building a sparse d^2 x d^2 matrix defeats the purpose of matrix-free. At n=12, even sparse storage with ~100 nonzeros per row would be ~26 GB. The matrix-free approach is specifically chosen to avoid this. | Matrix-free `apply_lindbladian!` function. |
-| **Full spectrum computation (all d^2 eigenvalues)** | At n=8, d^2=65536 eigenvalues. Dense diag is O(d^6). Even Krylov with howmany=1000 is wasteful. We need only the ~5-20 leading eigenvalues. | Krylov with `howmany=5` for gap, `howmany=20` for extended diagnostics. |
-| **GPU-accelerated Krylov** | CUDA adds massive complexity (GPU memory management, kernel launches, PCIe transfer overhead). The bottleneck is dim x dim matrix multiplications which BLAS already handles well on CPU. At n=12, dim=4096, so BLAS gemm at 4096x4096 is fast. | CPU BLAS with appropriate thread count. |
-| **Custom Krylov implementation** | KrylovKit.jl is mature, well-tested, and handles the Arnoldi restart logic correctly. Reimplementing Arnoldi would be error-prone and slower. | Use KrylovKit.jl eigsolve directly. |
-| **Shift-invert with explicit LU factorization** | LU of a d^2 x d^2 matrix at n=12 is impossible (petabytes). Shift-invert requires solving (L-sigma*I)x=b, which for matrix-free L requires an iterative inner solve. Too complex for this milestone. | Use `:LR` targeting which avoids the need for shift-invert entirely. |
-| **Floquet (periodically driven) Lindbladian support** | The Arnoldi-Lindblad paper extends to Floquet systems but QuantumFurnace.jl has no periodic driving. Pure overhead. | Stick with time-independent Lindbladian. |
-| **Distributed (multi-node) Krylov** | At n=12, ~15 GB fits in a single workstation. Distributed computing adds communication overhead and code complexity without benefit until n>14. | Single-node, multi-threaded BLAS. |
-| **Left eigenvectors for n>6** | At n>6, storing left eigenvectors doubles memory. The gap estimate only needs eigenvalues. Overlap analysis (which needs left eigenvectors) is only scientifically needed at n<=6 for cross-validation. | `eigsolve` (right only) for n>6, `bieigsolve` for n<=6. |
-| **Trajectory-Krylov hybrid (Arnoldi-Lindblad with trajectory simulator)** | Using the trajectory simulator to approximate exp(L*dt) inside a Krylov iteration would couple stochastic noise into the eigenvalue estimate. The matrix-free L application is deterministic and exact. | Deterministic `apply_lindbladian!` for Krylov; trajectory-based estimation remains a separate, complementary approach. |
+| Module/subdirectory splitting of `src/` | Julia's module system adds compilation overhead for internal modules; flat `src/` with numeric prefixes is idiomatic for packages of this size | Use numeric file prefixes for logical grouping |
+| Generic abstract result type with parametric fields | Each simulation produces fundamentally different output (Liouvillian matrix vs trace distances vs eigenvalues vs trajectories); forcing them into one type is Procrustean | Keep 4 concrete result types, share metadata capture and save protocol via functions |
+| Automatic config validation via inner constructor | Inner constructors with validation make testing painful (cannot construct partial/invalid configs for edge case tests) | Keep `validate_config!` as explicit pre-flight check in each `run_*` function |
+| Trait-based dispatch instead of type parameters | Julia traits (Holy traits) add complexity without benefit here; `SimConfig{S,D,DB,T}` with 4 type params already gives precise dispatch | Use parametric dispatch directly |
+| Observable/convergence tracking in `run_thermalize` | The DM thermalization is for small-scale validation; observable tracking belongs in trajectory simulations | Keep `run_thermalize` minimal; trajectory code handles observables |
+| Moving `TrajectoryFramework` construction into workspace | The framework pre-computes per-operator Kraus data (eigendecompositions) which is expensive and should be explicit | Keep `build_trajectoryframework` as explicit construction step |
 
 ---
 
 ## Feature Dependencies
 
 ```
-[Precomputed Jump Data]  ------>  [Matrix-Free apply_lindbladian!]
-  (existing infrastructure)              |
-                                         |
-                              +----------+----------+
-                              |                     |
-                     [Continuous L(rho)]    [Discrete E(rho)]
-                              |                     |
-                              +----------+----------+
-                                         |
-                              [KrylovKit eigsolve Integration]
-                                         |
-                              +----------+----------+
-                              |                     |
-                   [Eigenvalue Targeting]    [Memory Estimation]
-                   (use :LR for gap)        (pre-flight check)
-                              |
-                              v
-                   [Cross-Validation n<=6]
-                   (dense eigen vs Krylov)
-                              |
-                     +--------+--------+
-                     |                 |
-              [Timing Benchmarks]  [bieigsolve for
-               (n=4,6,8 scaling)    left+right eigvecs]
-                     |                 |
-                     v                 v
-              [Resource Estimate   [Overlap Analysis
-               for n=10,12]         at n>6 (optional)]
-                     |
-                     v
-              [Production Runs n=8,10,12]
+TS-01 (Config)
+  |
+  +---> TS-02 (Prefactors) -- needs new config type for dispatch
+  |       |
+  |       +---> TS-03 (Half-grid iterator) -- no config dependency, but logically grouped
+  |       |
+  |       +---> TS-04 (OFT unification) -- no config dependency, but logically grouped
+  |       |
+  |       +---> TS-06 (R accumulation) -- uses TS-02, TS-03, TS-04
+  |
+  +---> TS-05 (Workspace) -- needs new config type
+  |
+  +---> TS-07 (Sandwich) -- independent, can parallelize
+  |
+  +---> TS-08 (Results) -- needs new config type for embedding
+  |
+  +---> TS-09 (File rename) -- do LAST, after all logic changes
+  |
+  +---> TS-10 (Config conversion elimination) -- FREE with TS-01
+
+TS-03 + TS-04 can be done BEFORE TS-01 as pure extractions.
+TS-07 can be done BEFORE TS-01 (pure algebraic simplification).
 ```
 
-### Dependency Notes
+**Critical path:** TS-01 -> TS-05 -> TS-06 -> TS-08 -> TS-09
 
-- **Matrix-free `apply_lindbladian!` is the keystone:** Everything depends on it. Build first, validate thoroughly.
-- **Continuous L and discrete E are independent formulations:** Can be built in parallel. Both wrap the same jump infrastructure differently.
-- **`:LR` targeting removes the need for shift-invert:** This is the critical insight. Lindbladian spectrum structure (all Re(lambda) <= 0) means the gap eigenvalue IS the second-largest real part. No spectral transformation needed.
-- **Cross-validation must precede production runs:** Any gap estimate at n>6 is only trustworthy if the Krylov solver is validated against dense results at n<=6.
-- **bieigsolve is optional:** Only needed for overlap analysis. The gap estimate itself only needs right eigenvectors.
-- **Timing benchmarks enable resource estimation:** Without timing data at n=4,6,8, the extrapolation to n=10,12 is pure guesswork.
+**Parallelizable early wins:** TS-02, TS-03, TS-04, TS-07 (can be done before TS-01 using current types)
 
 ---
 
-## MVP Definition
+## MVP Recommendation
 
-### Launch With (Core Krylov Gap Estimation)
+### Phase 1 (Foundation -- do first, unblocks everything):
 
-- [ ] **Matrix-free `apply_lindbladian!(out, rho)` for BohrDomain** -- the simplest domain, cleanest implementation
-- [ ] **KrylovKit `eigsolve` with `:LR` targeting** -- find steady state + gap mode
-- [ ] **KrylovResult struct** -- eigenvalues, gap, convergence info, timing
-- [ ] **Cross-validation at n=4 BohrDomain** -- Krylov gap matches dense gap to 1e-8
-- [ ] **Memory estimation function** -- pre-flight check before large runs
+1. **TS-02: Prefactor extraction** -- 30 min, zero risk, immediate deduplication
+2. **TS-03: Half-grid iterator** -- 1 hr, eliminates 16 code blocks
+3. **TS-04: OFT unification** -- 30 min, kills 3 OFT variants
+4. **TS-07: Sandwich consolidation** -- 30 min, kills 4 functions
 
-### Add After Core Validation
+These 4 can be done on the CURRENT type system. They reduce code volume by ~400 lines before touching any struct definitions. This is the safest starting point.
 
-- [ ] **TrotterDomain support** -- extend to the domain used in actual quantum algorithm simulations
-- [ ] **EnergyDomain and TimeDomain support** -- complete domain coverage
-- [ ] **Discrete CPTP channel formulation** -- E(rho) = (I + delta*L)(rho) as alternative linear map
-- [ ] **Cross-validation at n=6** -- confirm at the boundary of dense feasibility
-- [ ] **n=8 production run** -- first result beyond dense regime
-- [ ] **Timing benchmarks and scaling extrapolation** -- predictive resource estimation
+### Phase 2 (Type system -- the big change):
 
-### Future Consideration (Subsequent Milestones)
+5. **TS-01: Unified Config** -- the hardest single change. Do it in one focused session. Write the struct, update all dispatch sites, update serialization, update tests. The config change touches every file.
+6. **TS-10: Config conversion elimination** -- free with TS-01.
 
-- [ ] **n=10, n=12 production runs** -- may need memory optimization or reduced krylovdim
-- [ ] **bieigsolve for biorthogonal overlap analysis at n>6** -- extends diagnostic power
-- [ ] **Sector-resolved gap computation** -- leverages symmetry for faster convergence
-- [ ] **Adaptive Krylov dimension** -- auto-tuning for unknown spectrum structure
-- [ ] **Integration with deferred v1.4 features** -- combine Krylov gap with effective rate plots, bootstrap, Richardson
+### Phase 3 (Workspace and results):
 
----
+7. **TS-05: Workspace consolidation** -- after config is stable
+8. **TS-06: R accumulation unification** -- uses new workspaces
+9. **TS-08: Result struct pattern** -- after config and workspace are stable
 
-## Feature Prioritization Matrix
+### Phase 4 (Cleanup):
 
-| Feature | Scientific Value | Implementation Cost | Priority |
-|---------|-----------------|---------------------|----------|
-| Matrix-free `apply_lindbladian!` (BohrDomain) | CRITICAL | HIGH | P0 |
-| KrylovKit `eigsolve` with `:LR` | CRITICAL | MEDIUM | P0 |
-| Cross-validation n=4 BohrDomain | CRITICAL | MEDIUM | P0 |
-| Memory estimation function | HIGH | LOW | P0 |
-| KrylovResult struct with convergence info | HIGH | LOW | P0 |
-| Matrix-free `apply_lindbladian!` (TrotterDomain) | HIGH | MEDIUM | P1 |
-| Cross-validation n=6 (both domains) | HIGH | MEDIUM | P1 |
-| Discrete CPTP channel formulation | HIGH | MEDIUM | P1 |
-| n=8 production run | HIGH | LOW (if P0/P1 done) | P1 |
-| EnergyDomain / TimeDomain support | MEDIUM | MEDIUM | P1 |
-| Timing benchmarks + scaling extrapolation | MEDIUM | LOW | P2 |
-| Resource estimation report | MEDIUM | LOW | P2 |
-| bieigsolve for left+right eigenvectors | MEDIUM | MEDIUM | P2 |
-| Sector-resolved gap computation | LOW (this milestone) | HIGH | P3 |
-| Adaptive Krylov dimension | LOW | LOW | P3 |
+10. **TS-09: File rename** -- absolutely last. Git blame preservation via `git mv`.
 
-**Priority key:**
-- P0: Foundation without which nothing works; build first
-- P1: Core milestone deliverables; production capability
-- P2: Polish and diagnostics; improves confidence and usability
-- P3: Only if needed based on results
+### Defer:
+
+- **DIFF-01: Unified dissipator loop** -- too risky for this milestone. The 4 simulation paths have enough structural differences that a single callback-based loop would be fragile. The prefactor + half-grid + OFT deduplication (TS-02/03/04) captures 80% of the benefit at 20% of the risk.
+- **DIFF-03: Typed precomputed data** -- nice-to-have, defer to a follow-up milestone.
+- **Trajectory-gap code staging** -- move `estimate_spectral_gap`, `SpectralGapResult`, `ObservableTrajectoryResult`, and the `trajectory_validation/` test directory to `staging/` at the end.
 
 ---
 
-## Phase Structure Implications
-
-Based on feature dependencies, the natural phase ordering is:
-
-**Phase A (Matrix-Free Foundation):**
-- `apply_lindbladian!` for BohrDomain (simplest)
-- Precomputed workspace allocation
-- Unit test: L(rho_gibbs) = 0 (steady state property)
-- Unit test: Tr[L(rho)] = 0 (trace preservation)
-
-**Phase B (Krylov Integration):**
-- KrylovKit `eigsolve` wrapper with `:LR` targeting
-- KrylovResult struct
-- Memory estimation
-- Cross-validation at n=4 BohrDomain
-
-**Phase C (Domain Extension):**
-- TrotterDomain apply_lindbladian!
-- EnergyDomain and TimeDomain apply_lindbladian!
-- Discrete CPTP channel formulation
-- Cross-validation at n=6 all domains
-
-**Phase D (Production):**
-- n=8 Krylov runs with timing
-- Scaling benchmarks
-- Resource estimation for n=10,12
-- GNS balance type support
-
-**Phase ordering rationale:**
-- A before B: the linear map must exist before the eigensolver can use it
-- B before C: validate the eigensolver on the simplest domain before adding complexity
-- C before D: ensure all domains work before running expensive production computations
-- Each phase has clear deliverables and can be cross-validated independently
-
----
-
-## Technical Notes for Implementation
-
-### KrylovKit.jl API Details (Verified from Official Docs)
+## Runner Function Signatures (Target API)
 
 ```julia
-# Install
-using Pkg; Pkg.add("KrylovKit")
+# The 4 public runner functions after restructure:
 
-# Basic eigsolve
-vals, vecs, info = eigsolve(f, x0, howmany, :LR;
-    issymmetric=false,
-    krylovdim=50,
-    maxiter=200,
-    tol=1e-10,
-    verbosity=1
-)
+function run_lindblad(
+    jumps::Vector{JumpOp},
+    config::SimConfig{Lindblad, D, DB, T},
+    hamiltonian::HamHam;
+    trotter::Union{TrottTrott, Nothing} = nothing,
+    save_path::Union{Nothing, String} = nothing,
+) -> LindbladResult{T}
 
-# Check convergence (CRITICAL: no automatic warning on failure)
-@assert info.converged >= howmany "Only $(info.converged) of $howmany eigenvalues converged"
+function run_thermalize(
+    jumps::Vector{JumpOp},
+    config::SimConfig{Thermalize, D, DB, T},
+    evolving_dm::Matrix{Complex{T}},
+    hamiltonian::HamHam;
+    trotter::Union{TrottTrott, Nothing} = nothing,
+    rng::AbstractRNG = Random.default_rng(),
+    save_path::Union{Nothing, String} = nothing,
+) -> ThermalizeResult{T}
 
-# bieigsolve for left+right eigenvectors
-vals, (vecs_right, vecs_left), (info_right, info_left) = bieigsolve(
-    f, x0, howmany, :LR;
-    krylovdim=50,
-    maxiter=200,
-    tol=1e-10
-)
+function run_krylov_spectrum(
+    config::SimConfig{KrylovSpectrum, D, DB, T},
+    hamiltonian::HamHam,
+    jumps::Vector{JumpOp};
+    trotter::Union{TrottTrott, Nothing} = nothing,
+    krylovdim::Int = 30,
+    howmany::Int = 4,
+    tol::Real = 1e-10,
+    save_path::Union{Nothing, String} = nothing,
+) -> KrylovSpectrumResult{T}
+
+function run_trajectory(
+    jumps::Vector{JumpOp},
+    config::SimConfig{Trajectory, D, DB, T},
+    psi0::Vector{Complex{T}},
+    hamiltonian::HamHam;
+    trotter::Union{TrottTrott, Nothing} = nothing,
+    ntraj::Int = 1,
+    observables::Union{Nothing, Vector{<:Matrix}} = nothing,
+    save_every::Int = 1,
+    seed::Union{Int, Nothing} = nothing,
+    save_path::Union{Nothing, String} = nothing,
+) -> TrajectoryResult{T}
 ```
 
-**Key KrylovKit facts:**
-- Accepts ANY callable `f(x) -> y` as the linear map -- perfect for matrix-free
-- Returns eigenvalues as `Vector{ComplexF64}`, eigenvectors as `Vector{Vector{ComplexF64}}`
-- `info.converged` gives number of converged eigenvalues -- MUST check this
-- `info.normres` gives residual norms for each eigenvalue
-- Default `krylovdim=30` and `tol=1e-12` -- may need adjustment
-- `:LR` sorts by largest real part -- exactly what we need for Lindbladian gap
-
-### Matrix-Free Linear Map Signature
-
-```julia
-struct KrylovLindbladianMap{T, D<:AbstractDomain}
-    jumps::Vector{JumpOp{Matrix{Complex{T}}}}
-    ham_or_trott::Union{HamHam{T}, TrottTrott}
-    config::AbstractLiouvConfig{D,T}
-    precomputed_data::Any
-    workspace::KrylovWorkspace{T}  # NEW: pre-allocated buffers
-end
-
-# Make it callable (KrylovKit interface)
-function (map::KrylovLindbladianMap)(v::AbstractVector{ComplexF64})
-    rho = reshape(v, map.workspace.dim, map.workspace.dim)
-    out = map.workspace.output  # pre-allocated
-    fill!(out, 0)
-    # ... apply L(rho) into out ...
-    return vec(out)
-end
-```
-
-### Lindbladian Application Without Vectorization
-
-The core computation for each jump operator A_w at frequency w:
-```julia
-# L_w(rho) = gamma_w * (A_w * rho * A_w' - 0.5 * (A_w' * A_w * rho + rho * A_w' * A_w))
-# Cost: 3 matrix multiplications of size dim x dim = O(dim^3) per frequency per jump
-mul!(tmp1, A_w, rho)         # A_w * rho
-mul!(out, tmp1, A_w', gamma_w, 1.0)  # += gamma_w * A_w * rho * A_w'
-
-mul!(tmp1, A_w', A_w)        # A_w' * A_w (can precompute!)
-mul!(out, tmp1, rho, -0.5*gamma_w, 1.0)  # -= 0.5 * gamma_w * (A_w'A_w) * rho
-mul!(out, rho, tmp1, -0.5*gamma_w, 1.0)  # -= 0.5 * gamma_w * rho * (A_w'A_w)
-```
-
-**Optimization: precompute `A_w' * A_w` for all w.** This is a dim x dim matrix per frequency per jump. At n=8 with 3 jump paulis * 8 sites * ~2048 energy labels: potentially thousands of precomputed matrices. Must evaluate memory vs recomputation tradeoff per system size.
-
-### Starting Vector Selection
-
-```julia
-# Option 1: Gibbs state + perturbation (biases toward gap mode in population sector)
-x0 = vec(Matrix(gibbs)) + 1e-6 * randn(ComplexF64, d^2)
-
-# Option 2: Maximally mixed + perturbation (all symmetry sectors equally)
-x0 = vec(Matrix{ComplexF64}(I(d)/d)) + 1e-6 * randn(ComplexF64, d^2)
-
-# Option 3: Random positive-definite (no bias)
-A = randn(ComplexF64, d, d)
-rho0 = A * A'; rho0 /= tr(rho0)
-x0 = vec(rho0)
-```
-
-Recommendation: Option 2 (maximally mixed + perturbation) for robustness. It has nonzero projection onto all symmetry sectors, avoiding the n=6 zero-overlap problem diagnosed in v1.3.
-
----
-
-## Comparison with Existing Approaches
-
-| Approach | n range | Accuracy | Wall time (n=8) | Memory (n=8) | Status |
-|----------|---------|----------|-----------------|--------------|--------|
-| Dense `eigen(L)` | n<=6 | Machine precision | N/A (impossible) | N/A | Existing |
-| Arpack shift-invert `eigs(L, sigma)` | n<=6 (dense L) | 1e-12 | ~1 min | ~34 GB (dense L) | Existing |
-| Trajectory exponential fitting | any n | ~1% | ~5 min (20k traj) | ~100 MB | Existing |
-| **Krylov `eigsolve` (this milestone)** | n<=12 | ~1e-8 | ~10 min (est.) | ~50 MB | Planned |
-
-The Krylov approach fills the gap: trajectory fitting is inaccurate but scales well; dense methods are precise but limited to n<=6. Krylov gives near-machine-precision eigenvalues at n=8-12 where dense methods fail.
+Note: `run_krylov_spectrum` accepts both `SimConfig{KrylovSpectrum,D,DB}` (Lindbladian path) and can be called with a thermalize-like config by constructing `SimConfig{KrylovSpectrum,...}` with `delta` populated. The dispatch between Lindbladian eigsolve and channel eigsolve is determined by whether `config.delta` is nothing.
 
 ---
 
 ## Sources
 
-### HIGH Confidence (verified via official docs and codebase)
-- [KrylovKit.jl eigenvalue problems documentation](https://jutho.github.io/KrylovKit.jl/stable/man/eig/) -- eigsolve API, `:LR` targeting, convergence info
-- [KrylovKit.jl available algorithms](https://jutho.github.io/KrylovKit.jl/stable/man/algorithms/) -- Arnoldi, BiArnoldi, Lanczos parameters
-- [KrylovKit.jl GitHub repository](https://github.com/Jutho/KrylovKit.jl) -- source code, release history
-- QuantumFurnace.jl codebase: `jump_workers.jl`, `furnace.jl`, `diagnostics.jl`, `qi_tools.jl`, `linearmaps_liouv.jl`, `trajectories.jl`
-
-### MEDIUM Confidence (established methods, multiple sources agree)
-- [Arnoldi-Lindblad time evolution paper (Huybrechts & Roscilde, Quantum 2022)](https://quantum-journal.org/papers/q-2022-02-10-649/) -- Arnoldi on dynamical map for Lindbladian spectrum
-- [Arnoldi-Lindblad GitHub implementation](https://github.com/DHuybrechts/Arnoldi-Lindblad-time-evolution) -- Python/QuTiP reference implementation
-- [Tensor Network Framework for Lindbladian Spectra (arXiv:2509.07709)](https://arxiv.org/abs/2509.07709) -- complex-time Krylov methods for Lindbladian eigenvalues
-- [Bi-Lanczos for Lindbladian Krylov complexity (JHEP 2023)](https://link.springer.com/article/10.1007/JHEP12(2023)066) -- bi-Lanczos algorithm for non-Hermitian Lindbladian
-- [Lindbladian Wikipedia](https://en.wikipedia.org/wiki/Lindbladian) -- spectrum structure: Re(lambda) <= 0, complex conjugate pairs
-- [BifurcationKit.jl matrix-free eigensolver discussion](https://discourse.julialang.org/t/matrix-free-eigensolver-in-bifurcationkit-jl/92780) -- shift-invert via GMRES for KrylovKit
-
-### LOW Confidence (need validation during implementation)
-- Time-per-matvec estimates for n=8,10,12 -- based on O(d^3) scaling extrapolation, not measured
-- Krylov dimension requirements at n>8 -- system-dependent, needs empirical tuning
-- Memory estimates at n=12 -- formulaic, not accounting for Julia GC overhead or BLAS workspace
-
----
-*Feature research for: Krylov-Based Lindbladian Spectral Gap Estimation*
-*Researched: 2026-02-20*
+- Exhaustive reading of all 28 source files in `/Users/bence/code/QuantumFurnace.jl/src/`
+- User's architecture notes in `supplementary-informations/quantumfurnace-structure.md`
+- Current test infrastructure in `test/test_helpers.jl` and `test/runtests.jl`
+- Julia language documentation on parametric types, multiple dispatch, and `@kwdef`
+- Existing research files in `.planning/research/` from the Krylov milestone
