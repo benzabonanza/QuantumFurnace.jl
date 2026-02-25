@@ -111,7 +111,7 @@ simulation, exponential fitting, and best-observable selection.
 
 # Arguments
 - `jumps::Vector{JumpOp}`: Jump operators.
-- `config::AbstractThermalizeConfig`: Thermalization configuration.
+- `config::Config{Thermalize}`: Thermalization configuration.
 - `psi0::Vector{<:Complex}`: Initial state vector.
 - `hamiltonian::HamHam`: Hamiltonian data.
 
@@ -140,7 +140,7 @@ println("gap = \$(result.gap), best observable = \$(result.best_observable)")
 """
 function estimate_spectral_gap(
     jumps::Vector{JumpOp},
-    config::AbstractThermalizeConfig,
+    config::Config{Thermalize},
     psi0::Vector{<:Complex},
     hamiltonian::HamHam;
     observables::Union{Nothing, Vector{<:Matrix{<:Complex}}} = nothing,

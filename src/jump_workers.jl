@@ -5,14 +5,14 @@
     This avoids allocating a full `dim^2 × dim^2` matrix per jump. Call with a
     preallocated `L_target` (dense) and a `LindbladianWorkspace`.
 
-    If `config.with_coherent==true`, pass `coherent_term` already scaled by
+    If `with_coherent(config.construction)==true`, pass `coherent_term` already scaled by
     `gamma_norm_factor` to avoid modifying cached matrices.
 """
 function _jump_contribution!(
     L_target::AbstractMatrix{<:Complex},
     jump::JumpOp,
     hamiltonian::HamHam,
-    config::AbstractLiouvConfig{BohrDomain},
+    config::Config{Lindbladian, BohrDomain},
     precomputed_data,
     ws::LindbladianWorkspace;
     coherent_term::Union{Nothing, AbstractMatrix{<:Complex}} = nothing,
@@ -48,7 +48,7 @@ function _jump_contribution!(
     L_target::AbstractMatrix{<:Complex},
     jump::JumpOp,
     hamiltonian::HamHam,
-    config::AbstractLiouvConfig{EnergyDomain},
+    config::Config{Lindbladian, EnergyDomain},
     precomputed_data,
     ws::LindbladianWorkspace;
     coherent_term::Union{Nothing, AbstractMatrix{<:Complex}} = nothing,
@@ -92,7 +92,7 @@ function _jump_contribution!(
     L_target::AbstractMatrix{<:Complex},
     jump::JumpOp,
     ham_or_trott::Union{HamHam, TrottTrott},
-    config::AbstractLiouvConfig{D},
+    config::Config{Lindbladian, D},
     precomputed_data,
     ws::LindbladianWorkspace;
     coherent_term::Union{Nothing, AbstractMatrix{<:Complex}} = nothing,
@@ -215,7 +215,7 @@ function _jump_contribution!(
     evolving_dm::Matrix{<:Complex},
     jump::JumpOp,
     hamiltonian::HamHam,
-    config::AbstractThermalizeConfig{BohrDomain},
+    config::Config{Thermalize, BohrDomain},
     precomputed_data,
     scratch::KrausScratch{<:Complex};
     coherent_unitary_cache::Union{Nothing,Matrix{<:Complex}} = nothing,
@@ -313,7 +313,7 @@ function _jump_contribution!(
     evolving_dm::Matrix{<:Complex},
     jump::JumpOp,
     hamiltonian::HamHam,
-    config::AbstractThermalizeConfig{EnergyDomain},
+    config::Config{Thermalize, EnergyDomain},
     precomputed_data,
     scratch::KrausScratch{<:Complex};
     coherent_unitary_cache::Union{Nothing,Matrix{<:Complex}} = nothing,
@@ -392,7 +392,7 @@ function _jump_contribution!(
     evolving_dm::Matrix{<:Complex},
     jump::JumpOp,
     ham_or_trott,              # HamHam or TrottTrott depending on domain
-    config::AbstractThermalizeConfig{D},
+    config::Config{Thermalize, D},
     precomputed_data,
     scratch::KrausScratch{<:Complex};
     coherent_unitary_cache::Union{Nothing,Matrix{<:Complex}} = nothing,

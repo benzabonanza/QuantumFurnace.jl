@@ -80,7 +80,7 @@ struct TrajectoryFramework{T,D<:AbstractDomain,F,P}
     domain::D
     jumps::Vector{JumpOp{Matrix{T}}}
     ham_or_trott::Union{HamHam, TrottTrott}
-    config::AbstractThermalizeConfig{D}
+    config::Config{Thermalize, D}
     precomputed_data::Any  # NamedTuple from precompute_data, varies by domain
 
     # Per-operator Kraus data (Lie-Trotter splitting)
@@ -108,7 +108,7 @@ end
 function build_trajectoryframework(
     jumps::AbstractVector{<:JumpOp},
     ham_or_trott::Union{HamHam, TrottTrott},
-    config::AbstractThermalizeConfig,
+    config::Config{Thermalize},
     precomputed_data,
     scratch::KrausScratch{<:Complex},
     delta::Real)
@@ -135,7 +135,7 @@ function build_trajectoryframework(
     # Jumps are already in the correct basis (trotter.eigvecs for TrotterDomain,
     # hamiltonian.eigvecs for other domains), so pass them directly.
     per_op_U_B = Vector{Union{Nothing, Matrix{CT}}}(undef, n_jumps)
-    if config.with_coherent
+    if with_coherent(config.construction)
         @inbounds for a in 1:n_jumps
             single_jump = JumpOp[jumps[a]]  # Force Vector{JumpOp} for dispatch compatibility
             B_a = _precompute_coherent_total_B(single_jump, ham_or_trott, config, precomputed_data)
@@ -225,7 +225,7 @@ end
         R = ∑_{k>0} L_k† L_k
     in the same basis as `jump.in_eigenbasis` (Hamiltonian eigenbasis for `HamHam`, Trotter basis for `TrottTrott`).
 
-    Conventions are matched to `jump_contribution!(domain, ::AbstractThermalizeConfig, ...)`:
+    Conventions are matched to `jump_contribution!(domain, ::Config{Thermalize}, ...)`:
     - the weights are `rate2(ω) = base_prefactor * transition(ω)` (no extra `δ` factor),
     - for Hermitian jumps we iterate half-grid and add the mirrored negative-frequency partner explicitly.
 
@@ -234,7 +234,7 @@ end
 function _precompute_R(
     jumps::AbstractVector{<:JumpOp},
     hamiltonian::HamHam,
-    config::AbstractThermalizeConfig{EnergyDomain},
+    config::Config{Thermalize, EnergyDomain},
     precomputed_data,
     scratch::KrausScratch{<:Complex},
     )
@@ -290,7 +290,7 @@ end
 function _precompute_R(
     jumps::AbstractVector{<:JumpOp},
     ham_or_trott::Union{HamHam, TrottTrott},
-    config::AbstractThermalizeConfig{D},
+    config::Config{Thermalize, D},
     precomputed_data,
     scratch::KrausScratch{<:Complex},
     ) where {D<:Union{TimeDomain, TrotterDomain}}
@@ -577,7 +577,7 @@ and reuse it across batches.
 """
 function _build_framework_and_seed(
     jumps::Vector{JumpOp},
-    config::AbstractThermalizeConfig,
+    config::Config{Thermalize},
     psi0::Vector{<:Complex},
     hamiltonian::HamHam;
     trotter::Union{TrottTrott,Nothing}=nothing,
@@ -624,7 +624,7 @@ end
 """
 function run_trajectories(
     jumps::Vector{JumpOp},
-    config::AbstractThermalizeConfig,
+    config::Config{Thermalize},
     psi0::Vector{<:Complex},
     hamiltonian::HamHam;
     trotter::Union{TrottTrott,Nothing}=nothing,
@@ -739,7 +739,7 @@ Returns an `ObservableTrajectoryResult` with `rho_mean=nothing` when `reconstruc
 """
 function run_observable_trajectories(
     jumps::Vector{JumpOp},
-    config::AbstractThermalizeConfig,
+    config::Config{Thermalize},
     psi0::Vector{<:Complex},
     hamiltonian::HamHam;
     trotter::Union{TrottTrott,Nothing}=nothing,

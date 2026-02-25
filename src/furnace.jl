@@ -1,5 +1,5 @@
-function run_lindbladian(jumps::Vector{JumpOp}, config::AbstractLiouvConfig{D,Tc}, hamiltonian::HamHam{Th};
-    trotter::Union{TrottTrott, Nothing}=nothing) where {D, Tc<:AbstractFloat, Th<:AbstractFloat}
+function run_lindbladian(jumps::Vector{JumpOp}, config::Config{Lindbladian,D,C,Tc}, hamiltonian::HamHam{Th};
+    trotter::Union{TrottTrott, Nothing}=nothing) where {D, C, Tc<:AbstractFloat, Th<:AbstractFloat}
 
     if Tc !== Th
         error("Type mismatch: HamHam uses $Th but config uses $Tc. All structs must share the same precision.")
@@ -39,7 +39,7 @@ function run_lindbladian(jumps::Vector{JumpOp}, config::AbstractLiouvConfig{D,Tc
     return result
 end
 
-function construct_lindbladian(jumps::Vector{JumpOp}, config::AbstractLiouvConfig, hamiltonian::HamHam;
+function construct_lindbladian(jumps::Vector{JumpOp}, config::Config{Lindbladian}, hamiltonian::HamHam;
     trotter::Union{TrottTrott, Nothing}=nothing)
     
     domain_name = replace(string(typeof(config.domain)), "Domain" => "")
@@ -85,13 +85,13 @@ end
 
 function run_thermalization(
     jumps::Vector{JumpOp},
-    config::AbstractThermalizeConfig{D,Tc},
+    config::Config{Thermalize,D,C,Tc},
     evolving_dm::Matrix{<:Complex},
     hamiltonian::HamHam{Th};
     trotter::Union{TrottTrott, Nothing}=nothing,
     rng::AbstractRNG = Random.default_rng(),
     rescale_by_inv_prob::Bool = true,  # to retain the physical meaning of the input mixing time the same
-    ) where {D, Tc<:AbstractFloat, Th<:AbstractFloat}
+    ) where {D, C, Tc<:AbstractFloat, Th<:AbstractFloat}
 
     if Tc !== Th
         error("Type mismatch: HamHam uses $Th but config uses $Tc. All structs must share the same precision.")

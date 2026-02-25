@@ -161,7 +161,7 @@ Returns a `TrajectoryResult` with the `convergence` field populated.
 """
 function run_trajectories_convergence(
     jumps::Vector{JumpOp},
-    config::AbstractThermalizeConfig,
+    config::Config{Thermalize},
     psi0::Vector{<:Complex},
     hamiltonian::HamHam;
     gibbs::Hermitian,
@@ -288,7 +288,7 @@ the stopping decision.
 """
 function run_trajectories_adaptive(
     jumps::Vector{JumpOp},
-    config::AbstractThermalizeConfig,
+    config::Config{Thermalize},
     psi0::Vector{<:Complex},
     hamiltonian::HamHam;
     gibbs::Hermitian,
