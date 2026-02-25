@@ -98,7 +98,7 @@ Full details: [milestones/v1.5-ROADMAP.md](milestones/v1.5-ROADMAP.md)
 
 **Milestone Goal:** Major codebase restructure -- redesign Config type hierarchy for extensibility (KMS/GNS/DLL), eliminate code duplication across simulation paths, consolidate workspaces, reorganize files, and slim down tests. Prepare architecture for DLL construction, error estimation, and gate complexity features.
 
-- [ ] **Phase 33: Type Foundation** - Define Config{S,D,C,T} hierarchy with simulation/construction singleton types and backward-compatible aliases
+- [ ] **Phase 33: Type Foundation** - Define Config{S,D,C,T} hierarchy with simulation/construction singleton types, hard swap all call sites
 - [ ] **Phase 34: Code Deduplication** - Extract domain_prefactor(), foreach_frequency(), and unified oft!() replacing 16+ copy-pasted patterns
 - [ ] **Phase 35: Workspace and Channel Consolidation** - Merge KrylovWorkspace + KrausScratch + LindbladianWorkspace; unify R/K0/U_residual computation paths
 - [ ] **Phase 36: API and Results** - Define 4 clean run_* entry points with matching Result structs and save capability
@@ -117,11 +117,13 @@ Full details: [milestones/v1.5-ROADMAP.md](milestones/v1.5-ROADMAP.md)
   3. `with_coherent` is derived from construction type (KMS -> true, GNS -> false) at compile time, not stored as a field
   4. All existing tests pass using either the new `Config{S,D,C,T}` type or backward-compatible aliases (`LiouvConfig`, `ThermalizeConfig`, `LiouvConfigGNS`, `ThermalizeConfigGNS`)
   5. Adding a `DLL` construction type requires only `struct DLL <: AbstractConstruction end` plus dispatch methods, with zero changes to existing code
-**Plans**: TBD
+**Plans**: 4 plans
 
 Plans:
-- [ ] 33-01: TBD
-- [ ] 33-02: TBD
+- [ ] 33-01-PLAN.md -- Define type hierarchies, Config struct, with_coherent trait, update exports
+- [ ] 33-02-PLAN.md -- Migrate core dispatch (energy_domain, bohr_domain, furnace_utensils, coherent, misc_tools, results)
+- [ ] 33-03-PLAN.md -- Migrate simulation pipeline (furnace, jump_workers, krylov, trajectories, convergence, gap_estimation)
+- [ ] 33-04-PLAN.md -- Migrate tests, simulations, experiments, playground; run full test suite
 
 ### Phase 34: Code Deduplication
 **Goal**: The 16+ copy-pasted prefactor formulas, hermitian half-grid branching patterns, and OFT variants are each single-source functions dispatched on domain type
