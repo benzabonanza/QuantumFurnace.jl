@@ -98,7 +98,7 @@ Full details: [milestones/v1.5-ROADMAP.md](milestones/v1.5-ROADMAP.md)
 
 **Milestone Goal:** Major codebase restructure -- redesign Config type hierarchy for extensibility (KMS/GNS/DLL), eliminate code duplication across simulation paths, consolidate workspaces, reorganize files, and slim down tests. Prepare architecture for DLL construction, error estimation, and gate complexity features.
 
-- [ ] **Phase 33: Type Foundation** - Define Config{S,D,C,T} hierarchy with simulation/construction singleton types, hard swap all call sites
+- [x] **Phase 33: Type Foundation** - Define Config{S,D,C,T} hierarchy with simulation/construction singleton types, hard swap all call sites -- completed 2026-02-25
 - [ ] **Phase 34: Code Deduplication** - Extract domain_prefactor(), foreach_frequency(), and unified oft!() replacing 16+ copy-pasted patterns
 - [ ] **Phase 35: Workspace and Channel Consolidation** - Merge KrylovWorkspace + KrausScratch + LindbladianWorkspace; unify R/K0/U_residual computation paths
 - [ ] **Phase 36: API and Results** - Define 4 clean run_* entry points with matching Result structs and save capability
@@ -120,10 +120,10 @@ Full details: [milestones/v1.5-ROADMAP.md](milestones/v1.5-ROADMAP.md)
 **Plans**: 4 plans
 
 Plans:
-- [ ] 33-01-PLAN.md -- Define type hierarchies, Config struct, with_coherent trait, update exports
-- [ ] 33-02-PLAN.md -- Migrate core dispatch (energy_domain, bohr_domain, furnace_utensils, coherent, misc_tools, results)
-- [ ] 33-03-PLAN.md -- Migrate simulation pipeline (furnace, jump_workers, krylov, trajectories, convergence, gap_estimation)
-- [ ] 33-04-PLAN.md -- Migrate tests, simulations, experiments, playground; run full test suite
+- [x] 33-01-PLAN.md -- Define type hierarchies, Config struct, with_coherent trait, update exports
+- [x] 33-02-PLAN.md -- Migrate core dispatch (energy_domain, bohr_domain, furnace_utensils, coherent, misc_tools, results)
+- [x] 33-03-PLAN.md -- Migrate simulation pipeline (furnace, jump_workers, krylov, trajectories, convergence, gap_estimation)
+- [x] 33-04-PLAN.md -- Migrate tests, simulations, experiments, playground; run full test suite
 
 ### Phase 34: Code Deduplication
 **Goal**: The 16+ copy-pasted prefactor formulas, hermitian half-grid branching patterns, and OFT variants are each single-source functions dispatched on domain type
@@ -240,7 +240,7 @@ Phases execute in numeric order: 33 -> 34 -> 35 -> 36 -> 37 -> 38
 | 30. Cross-Validation | v1.5 | 2/2 | Complete | 2026-02-24 |
 | 31. Scaling Benchmarks | v1.5 | 2/2 | Complete | 2026-02-24 |
 | 32. Krylov Simulator Speedup | v1.5 | 2/2 | Complete | 2026-02-25 |
-| 33. Type Foundation | v2.0 | 0/TBD | Not started | - |
+| 33. Type Foundation | v2.0 | 4/4 | Complete | 2026-02-25 |
 | 34. Code Deduplication | v2.0 | 0/TBD | Not started | - |
 | 35. Workspace and Channel Consolidation | v2.0 | 0/TBD | Not started | - |
 | 36. API and Results | v2.0 | 0/TBD | Not started | - |
