@@ -9,12 +9,13 @@ errors: dist(Bohr) <= dist(Energy) <= dist(Time) <= dist(Trotter).
 """
 
 @testset "DMTST-01: Bohr detailed balance (3-qubit)" begin
-    # Create LiouvConfig for 3-qubit system with BohrDomain and coherent term
-    config = LiouvConfig(
-        num_qubits = 3,
-        with_coherent = true,
-        with_linear_combination = true,
+    # Create Config{Lindbladian} for 3-qubit system with BohrDomain and KMS (coherent term)
+    config = Config(
+        sim = Lindbladian(),
         domain = BohrDomain(),
+        construction = KMS(),
+        num_qubits = 3,
+        with_linear_combination = true,
         beta = BETA,
         sigma = SIGMA,
         a = BETA / 30.0,

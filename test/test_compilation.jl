@@ -3,8 +3,8 @@
         @test true  # If we got here, `using QuantumFurnace` succeeded
     end
 
-    @testset "build_trajectoryframework with coherent" begin
-        config = make_thermalize_config(EnergyDomain(); with_coherent=true)
+    @testset "build_trajectoryframework with coherent (KMS)" begin
+        config = make_thermalize_config(EnergyDomain(); construction=KMS())
         precomputed = QuantumFurnace._precompute_data(config, TEST_HAM)
         scratch = QuantumFurnace.KrausScratch(ComplexF64, DIM)
         fw = build_trajectoryframework(
@@ -16,8 +16,8 @@
         @test all(per_op -> per_op.U_B !== nothing, fw.per_operator)
     end
 
-    @testset "build_trajectoryframework without coherent" begin
-        config = make_thermalize_config(EnergyDomain(); with_coherent=false)
+    @testset "build_trajectoryframework without coherent (GNS)" begin
+        config = make_thermalize_config(EnergyDomain(); construction=GNS())
         precomputed = QuantumFurnace._precompute_data(config, TEST_HAM)
         scratch = QuantumFurnace.KrausScratch(ComplexF64, DIM)
         fw = build_trajectoryframework(
@@ -44,13 +44,13 @@
 
     @testset "Config factories" begin
         lc = make_liouv_config(EnergyDomain())
-        @test lc isa LiouvConfig
-        @test lc.with_coherent == true
+        @test lc isa Config{Lindbladian}
+        @test with_coherent(lc.construction) == true
         @test lc.num_qubits == NUM_QUBITS
 
-        tc = make_thermalize_config(EnergyDomain(); with_coherent=false, delta=0.05)
-        @test tc isa ThermalizeConfig
-        @test tc.with_coherent == false
+        tc = make_thermalize_config(EnergyDomain(); construction=GNS(), delta=0.05)
+        @test tc isa Config{Thermalize}
+        @test with_coherent(tc.construction) == false
         @test tc.delta == 0.05
     end
 end

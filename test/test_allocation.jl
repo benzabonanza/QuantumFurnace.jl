@@ -134,7 +134,7 @@ using Random
         # Guards against GC pressure that would destroy parallel scaling.
         # Uses the 3-qubit SMALL system for fast execution.
         config = make_small_thermalize_config(TimeDomain();
-            delta=0.01, mixing_time=1.0, with_coherent=false)
+            delta=0.01, mixing_time=1.0, construction=GNS())
         precomputed = _precompute_data(config, SMALL_HAM)
         CT = ComplexF64
         dim = SMALL_DIM  # 8

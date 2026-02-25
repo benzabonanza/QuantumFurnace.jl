@@ -42,13 +42,13 @@ of consecutive mean errors reliably reflect the 1/sqrt(N) scaling.
 
 Expected: ratios close to 2.0 (since N increases by 4x, sqrt(4) = 2).
 """
-function convergence_ratio_test(domain; with_coherent::Bool, delta::Float64=0.1, n_batches::Int=10)
+function convergence_ratio_test(domain; with_coherent::Bool=false, delta::Float64=0.1, n_batches::Int=10)
     dim = SMALL_DIM  # 8
     psi0 = fill(ComplexF64(1.0), dim) / sqrt(dim)
 
     # 1. Build trajectory framework
     therm_config = make_small_thermalize_config(domain;
-        with_coherent=with_coherent, delta=delta, mixing_time=Float64(delta))
+        construction=with_coherent ? KMS() : GNS(), delta=delta, mixing_time=Float64(delta))
     ham_or_trott = domain isa TrotterDomain ? SMALL_TROTTER : SMALL_HAM
     jumps = domain isa TrotterDomain ? SMALL_TROTTER_JUMPS : SMALL_JUMPS
     precomputed = QuantumFurnace._precompute_data(therm_config, ham_or_trott)
@@ -110,7 +110,7 @@ end
 if get(ENV, "QUANTUMFURNACE_FULL_TESTS", "false") == "true"
 
     @testset "TVAL-05: EnergyDomain 1/sqrt(N) convergence" begin
-        result = convergence_ratio_test(EnergyDomain(); with_coherent=false)
+        result = convergence_ratio_test(EnergyDomain(); with_coherent=false)  # GNS construction
 
         # Print diagnostics
         println("  EnergyDomain convergence (delta=0.1, 10 batches):")
@@ -133,7 +133,7 @@ if get(ENV, "QUANTUMFURNACE_FULL_TESTS", "false") == "true"
     end
 
     @testset "TVAL-05: TrotterDomain 1/sqrt(N) convergence" begin
-        result = convergence_ratio_test(TrotterDomain(); with_coherent=true)
+        result = convergence_ratio_test(TrotterDomain(); with_coherent=true)  # KMS construction
 
         # Print diagnostics
         println("  TrotterDomain convergence (delta=0.1, with_coherent=true, 10 batches):")

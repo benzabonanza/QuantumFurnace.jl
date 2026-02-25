@@ -118,13 +118,13 @@ function run_le_convergence(domain, hamiltonian, jumps;
     tol=1e-10,
 )
     # Lindbladian reference gap (delta-independent)
-    config_liouv = make_liouv_config(domain; with_coherent=true)
+    config_liouv = make_liouv_config(domain; construction=KMS())
     gap_L = krylov_spectral_gap(config_liouv, hamiltonian, jumps;
         trotter=trotter, krylovdim=krylovdim, howmany=4, tol=tol).spectral_gap
 
     rows = NamedTuple{(:delta, :gap_from_E, :error), Tuple{Float64, Float64, Float64}}[]
     for delta in deltas
-        config_therm = make_thermalize_config(domain; with_coherent=true, delta=delta)
+        config_therm = make_thermalize_config(domain; construction=KMS(), delta=delta)
         gap_from_E = krylov_spectral_gap(config_therm, hamiltonian, jumps;
             trotter=trotter, krylovdim=krylovdim, howmany=4, tol=tol).spectral_gap
         error_val = abs(gap_L - gap_from_E)
@@ -160,16 +160,17 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    make_n6_liouv_config(domain; with_coherent=true) -> LiouvConfig
+    make_n6_liouv_config(domain; construction=KMS()) -> Config{Lindbladian}
 
-Create a LiouvConfig with num_qubits=6, using the same physical parameters as n=4.
+Create a Config{Lindbladian} with num_qubits=6, using the same physical parameters as n=4.
 """
-function make_n6_liouv_config(domain; with_coherent::Bool=true)
-    LiouvConfig(
-        num_qubits = 6,
-        with_coherent = with_coherent,
-        with_linear_combination = true,
+function make_n6_liouv_config(domain; construction=KMS())
+    Config(
+        sim = Lindbladian(),
         domain = domain,
+        construction = construction,
+        num_qubits = 6,
+        with_linear_combination = true,
         beta = BETA,
         sigma = SIGMA,
         a = BETA / 30.0,
@@ -221,20 +222,21 @@ function make_n6_test_system(; trotter::Union{Nothing, TrottTrott}=nothing)
 end
 
 """
-    make_n6_thermalize_config(domain; with_coherent=true, delta=TEST_DELTA) -> ThermalizeConfig
+    make_n6_thermalize_config(domain; construction=KMS(), delta=TEST_DELTA) -> Config{Thermalize}
 
-Create a ThermalizeConfig with num_qubits=6, using the same physical parameters as n=4.
+Create a Config{Thermalize} with num_qubits=6, using the same physical parameters as n=4.
 """
 function make_n6_thermalize_config(domain;
-    with_coherent::Bool=true,
+    construction=KMS(),
     delta::Float64=TEST_DELTA,
     mixing_time::Float64=1.0,
 )
-    ThermalizeConfig(
-        num_qubits = 6,
-        with_coherent = with_coherent,
-        with_linear_combination = true,
+    Config(
+        sim = Thermalize(),
         domain = domain,
+        construction = construction,
+        num_qubits = 6,
+        with_linear_combination = true,
         beta = BETA,
         sigma = SIGMA,
         a = BETA / 30.0,
@@ -262,7 +264,7 @@ end
 
         @testset "EnergyDomain" begin
             comp = compare_krylov_dense(
-                make_liouv_config(EnergyDomain(); with_coherent=true),
+                make_liouv_config(EnergyDomain(); construction=KMS()),
                 TEST_HAM, TEST_JUMPS)
             print_gap_summary("EnergyDomain", "KMS",
                 comp.krylov_result.spectral_gap, comp.dense_result.spectral_gap)
@@ -276,7 +278,7 @@ end
 
         @testset "TimeDomain" begin
             comp = compare_krylov_dense(
-                make_liouv_config(TimeDomain(); with_coherent=true),
+                make_liouv_config(TimeDomain(); construction=KMS()),
                 TEST_HAM, TEST_JUMPS)
             print_gap_summary("TimeDomain", "KMS",
                 comp.krylov_result.spectral_gap, comp.dense_result.spectral_gap)
@@ -290,7 +292,7 @@ end
 
         @testset "TrotterDomain" begin
             comp = compare_krylov_dense(
-                make_liouv_config(TrotterDomain(); with_coherent=true),
+                make_liouv_config(TrotterDomain(); construction=KMS()),
                 TEST_HAM, TEST_TROTTER_JUMPS;
                 trotter=TEST_TROTTER)
             print_gap_summary("TrotterDomain", "KMS",
@@ -305,7 +307,7 @@ end
 
         @testset "BohrDomain" begin
             comp = compare_krylov_dense(
-                make_liouv_config(BohrDomain(); with_coherent=true),
+                make_liouv_config(BohrDomain(); construction=KMS()),
                 TEST_HAM, TEST_JUMPS)
             print_gap_summary("BohrDomain", "KMS",
                 comp.krylov_result.spectral_gap, comp.dense_result.spectral_gap)
@@ -443,7 +445,7 @@ end
             n6_trotter_sys = make_n6_test_system(; trotter=n6_trotter)
 
             @testset "EnergyDomain" begin
-                config = make_n6_liouv_config(EnergyDomain(); with_coherent=true)
+                config = make_n6_liouv_config(EnergyDomain(); construction=KMS())
                 comp = compare_krylov_dense(config, n6_ham, n6_sys.jumps)
                 print_gap_summary("EnergyDomain", "KMS",
                     comp.krylov_result.spectral_gap, comp.dense_result.spectral_gap)
@@ -456,7 +458,7 @@ end
             end
 
             @testset "TimeDomain" begin
-                config = make_n6_liouv_config(TimeDomain(); with_coherent=true)
+                config = make_n6_liouv_config(TimeDomain(); construction=KMS())
                 comp = compare_krylov_dense(config, n6_ham, n6_sys.jumps)
                 print_gap_summary("TimeDomain", "KMS",
                     comp.krylov_result.spectral_gap, comp.dense_result.spectral_gap)
@@ -469,7 +471,7 @@ end
             end
 
             @testset "TrotterDomain" begin
-                config = make_n6_liouv_config(TrotterDomain(); with_coherent=true)
+                config = make_n6_liouv_config(TrotterDomain(); construction=KMS())
                 comp = compare_krylov_dense(config, n6_ham, n6_trotter_sys.jumps;
                     trotter=n6_trotter)
                 print_gap_summary("TrotterDomain", "KMS",
@@ -483,7 +485,7 @@ end
             end
 
             @testset "BohrDomain" begin
-                config = make_n6_liouv_config(BohrDomain(); with_coherent=true)
+                config = make_n6_liouv_config(BohrDomain(); construction=KMS())
                 comp = compare_krylov_dense(config, n6_ham, n6_sys.jumps)
                 print_gap_summary("BohrDomain", "KMS",
                     comp.krylov_result.spectral_gap, comp.dense_result.spectral_gap)

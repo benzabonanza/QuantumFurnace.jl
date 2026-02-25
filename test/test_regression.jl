@@ -97,7 +97,7 @@ ref_dir = joinpath(source_root, "test", "reference")
         rho_ref = ref_data[:rho]
         delta = ref_data[:delta]
 
-        liouv_config = make_small_liouv_config(TrotterDomain(); with_coherent=true)
+        liouv_config = make_small_liouv_config(TrotterDomain(); construction=KMS())
         L = construct_lindbladian(SMALL_TROTTER_JUMPS, liouv_config, SMALL_HAM; trotter=SMALL_TROTTER)
         rho_fresh = reshape(exp(delta * L) * vec(rho0), SMALL_DIM, SMALL_DIM)
         rho_fresh = (rho_fresh + rho_fresh') / 2
@@ -127,14 +127,14 @@ ref_dir = joinpath(source_root, "test", "reference")
         ntraj = 1000
 
         # Compute DM reference fresh (deterministic, platform-portable)
-        liouv_config = make_small_liouv_config(TrotterDomain(); with_coherent=true)
+        liouv_config = make_small_liouv_config(TrotterDomain(); construction=KMS())
         L = construct_lindbladian(SMALL_TROTTER_JUMPS, liouv_config, SMALL_HAM; trotter=SMALL_TROTTER)
         rho_dm = reshape(exp(delta * L) * vec(rho0), SMALL_DIM, SMALL_DIM)
         rho_dm = (rho_dm + rho_dm') / 2
 
         # Compute trajectory average
         therm_config = make_small_thermalize_config(TrotterDomain();
-            with_coherent=true, delta=delta, mixing_time=Float64(delta))
+            construction=KMS(), delta=delta, mixing_time=Float64(delta))
         precomputed = QuantumFurnace._precompute_data(therm_config, SMALL_TROTTER)
         scratch = QuantumFurnace.KrausScratch(ComplexF64, SMALL_DIM)
         fw = build_trajectoryframework(SMALL_TROTTER_JUMPS, SMALL_TROTTER, therm_config,

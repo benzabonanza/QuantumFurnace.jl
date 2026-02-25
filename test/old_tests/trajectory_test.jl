@@ -35,13 +35,14 @@ num_trotter_steps_per_t0 = 10
 
 delta = 0.1
 
-config = LiouvConfig(
-                num_qubits = num_qubits, 
-                with_coherent = with_coherent,
-                with_linear_combination = with_linear_combination, 
+config = Config(
+                sim = Lindbladian(),
                 domain = domain,
+                construction = with_coherent ? KMS() : GNS(),
+                num_qubits = num_qubits,
+                with_linear_combination = with_linear_combination,
                 beta = beta,
-                sigma = sigma, 
+                sigma = sigma,
                 a = a,
                 b = b,
                 num_energy_bits = num_energy_bits,

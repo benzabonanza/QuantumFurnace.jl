@@ -8,7 +8,7 @@ NOT included in Pkg.test() -- separate test group.
 Requirements validated:
   TVAL-02: EnergyDomain single-step cross-validation
   TVAL-03: TimeDomain single-step cross-validation
-  TVAL-04: TrotterDomain (with_coherent=true) single-step cross-validation
+  TVAL-04: TrotterDomain (construction=KMS()) single-step cross-validation
   TVAL-06: TrotterDomain coherent convergence to Gibbs state (multi-step)
 """
 
@@ -37,7 +37,7 @@ function single_step_crossval(domain, delta::Float64;
     dim = SMALL_DIM  # 8
 
     # 1. Build Liouvillian and compute exact DM reference
-    liouv_config = make_small_liouv_config(domain; with_coherent=with_coherent)
+    liouv_config = make_small_liouv_config(domain; construction=with_coherent ? KMS() : GNS())
     trotter_kw = domain isa TrotterDomain ? (; trotter=SMALL_TROTTER) : (;)
     jumps = domain isa TrotterDomain ? SMALL_TROTTER_JUMPS : SMALL_JUMPS
     L = construct_lindbladian(jumps, liouv_config, SMALL_HAM; trotter_kw...)
@@ -49,7 +49,7 @@ function single_step_crossval(domain, delta::Float64;
 
     # 2. Build trajectory framework
     therm_config = make_small_thermalize_config(domain;
-        with_coherent=with_coherent, delta=delta, mixing_time=Float64(delta))
+        construction=with_coherent ? KMS() : GNS(), delta=delta, mixing_time=Float64(delta))
     ham_or_trott = domain isa TrotterDomain ? SMALL_TROTTER : SMALL_HAM
     precomputed = QuantumFurnace._precompute_data(therm_config, ham_or_trott)
     scratch = QuantumFurnace.KrausScratch(ComplexF64, dim)
@@ -134,14 +134,14 @@ end
 end
 
 # ---------------------------------------------------------------------------
-# TVAL-04: TrotterDomain (with_coherent=true) single-step cross-validation
+# TVAL-04: TrotterDomain (construction=KMS()) single-step cross-validation
 # ---------------------------------------------------------------------------
 @testset "TVAL-04: TrotterDomain single-step cross-validation" begin
     deltas = [0.2, 0.1, 0.05]
     errors = Float64[]
 
     for delta in deltas
-        dist = single_step_crossval(TrotterDomain(), delta; with_coherent=true)
+        dist = single_step_crossval(TrotterDomain(), delta; construction=KMS())
         @test dist < 0.01
         push!(errors, dist)
         println("  delta=$delta  trace_dist=$(round(dist; sigdigits=4))")
@@ -171,7 +171,7 @@ end
     delta = 0.01     # Small enough for convergence, large enough for speed
 
     # Liouvillian for TrotterDomain + coherent
-    liouv_config = make_small_liouv_config(TrotterDomain(); with_coherent=true)
+    liouv_config = make_small_liouv_config(TrotterDomain(); construction=KMS())
     L = construct_lindbladian(SMALL_TROTTER_JUMPS, liouv_config, SMALL_HAM; trotter=SMALL_TROTTER)
     exp_L = exp(delta * L)  # Compute once, apply repeatedly
 
@@ -219,7 +219,7 @@ end
     # -- Trajectory evolution for the same total time --
     total_time = dm_converged_step * delta
     therm_config = make_small_thermalize_config(TrotterDomain();
-        with_coherent=true, delta=delta, mixing_time=total_time)
+        construction=KMS(), delta=delta, mixing_time=total_time)
 
     result = run_trajectories(SMALL_TROTTER_JUMPS, therm_config, psi0, SMALL_HAM;
         trotter=SMALL_TROTTER, total_time=total_time, delta=delta, ntraj=10_000, seed=42)

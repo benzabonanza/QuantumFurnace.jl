@@ -73,7 +73,7 @@ end
     gns_fp = (gns_fp + gns_fp') / 2
     gns_fp ./= tr(gns_fp)
 
-    # Run trajectories with ThermalizeConfigGNS
+    # Run trajectories with Config{Thermalize, <:Any, GNS}
     # mixing_time=100.0 accounts for the corrected (slower) trajectory evolution rate
     # (the per-step CPTP channel uses bare delta, not delta*n_jumps)
     config = make_small_thermalize_config_gns(TrotterDomain(); delta=0.01, mixing_time=100.0)

@@ -11,7 +11,7 @@ using LinearAlgebra
 
     # Build framework (shared, read-only)
     therm_config = make_small_thermalize_config(TimeDomain();
-        delta=0.01, mixing_time=1.0, with_coherent=false)
+        delta=0.01, mixing_time=1.0, construction=GNS())
     precomputed = QuantumFurnace._precompute_data(therm_config, SMALL_HAM)
     scratch = QuantumFurnace.KrausScratch(CT, dim)
     fw = build_trajectoryframework(SMALL_JUMPS, SMALL_HAM, therm_config, precomputed, scratch, 0.01)
@@ -66,7 +66,7 @@ end
     psi0[1] = 1.0
 
     therm_config = make_small_thermalize_config(TimeDomain();
-        delta=0.01, mixing_time=0.1, with_coherent=false)
+        delta=0.01, mixing_time=0.1, construction=GNS())
 
     # With explicit seed
     result1 = run_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;

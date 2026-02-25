@@ -7,7 +7,7 @@ using LinearAlgebra
     dim = SMALL_DIM  # 8
     CT = ComplexF64
     psi0 = zeros(CT, dim); psi0[1] = 1.0
-    therm_config = make_small_thermalize_config(TimeDomain(); delta=0.01, mixing_time=0.5, with_coherent=false)
+    therm_config = make_small_thermalize_config(TimeDomain(); delta=0.01, mixing_time=0.5, construction=GNS())
 
     # Z on first qubit in eigenbasis
     Z1_comp = kron(Z, Matrix{Float64}(I, div(dim, 2), div(dim, 2)))

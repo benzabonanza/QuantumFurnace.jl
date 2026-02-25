@@ -33,7 +33,7 @@ end
     # Testset 1: KrylovWorkspace construction
     # ========================================================================
     @testset "KrylovWorkspace construction" begin
-        config_kms = make_liouv_config(EnergyDomain(); with_coherent=true)
+        config_kms = make_liouv_config(EnergyDomain(); construction=KMS())
         ws = KrylovWorkspace(config_kms, TEST_HAM, TEST_JUMPS)
         @test ws.B_total !== nothing
         @test size(ws.tmp1) == (DIM, DIM)
@@ -51,7 +51,7 @@ end
     # Testset 2: Round-trip matvec vs dense (EnergyDomain KMS, no coherent)
     # ========================================================================
     @testset "Round-trip: matvec vs dense (EnergyDomain KMS, no coherent)" begin
-        config = make_liouv_config(EnergyDomain(); with_coherent=false)
+        config = make_liouv_config(EnergyDomain(); construction=GNS())
         L_dense = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
         ws = KrylovWorkspace(config, TEST_HAM, TEST_JUMPS)
 
@@ -67,7 +67,7 @@ end
     # Testset 3: Round-trip matvec vs dense (EnergyDomain KMS, with coherent)
     # ========================================================================
     @testset "Round-trip: matvec vs dense (EnergyDomain KMS, with coherent)" begin
-        config = make_liouv_config(EnergyDomain(); with_coherent=true)
+        config = make_liouv_config(EnergyDomain(); construction=KMS())
         L_dense = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
         ws = KrylovWorkspace(config, TEST_HAM, TEST_JUMPS)
 
@@ -99,7 +99,7 @@ end
     # Testset 5: Round-trip adjoint matvec vs dense adjoint (EnergyDomain KMS)
     # ========================================================================
     @testset "Round-trip: adjoint matvec vs dense adjoint (EnergyDomain KMS)" begin
-        config = make_liouv_config(EnergyDomain(); with_coherent=true)
+        config = make_liouv_config(EnergyDomain(); construction=KMS())
         L_dense = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
         ws = KrylovWorkspace(config, TEST_HAM, TEST_JUMPS)
 
@@ -115,7 +115,7 @@ end
     # Testset 6: Adjoint duality check: tr(X' * L(Y)) == tr(L*(X)' * Y)
     # ========================================================================
     @testset "Adjoint duality check: tr(X' * L(Y)) == tr(L*(X)' * Y)" begin
-        config = make_liouv_config(EnergyDomain(); with_coherent=true)
+        config = make_liouv_config(EnergyDomain(); construction=KMS())
         ws = KrylovWorkspace(config, TEST_HAM, TEST_JUMPS)
 
         for _ in 1:5
@@ -136,7 +136,7 @@ end
     # Testset 7: Zero allocations in matvec hot path
     # ========================================================================
     @testset "Zero allocations in matvec hot path" begin
-        config = make_liouv_config(EnergyDomain(); with_coherent=true)
+        config = make_liouv_config(EnergyDomain(); construction=KMS())
         ws = KrylovWorkspace(config, TEST_HAM, TEST_JUMPS)
         rho = Matrix(random_density_matrix(NUM_QUBITS))
 
@@ -159,7 +159,7 @@ end
 
     # Testset 8: Round-trip matvec vs dense (TimeDomain KMS, with coherent)
     @testset "Round-trip: matvec vs dense (TimeDomain KMS, with coherent)" begin
-        config = make_liouv_config(TimeDomain(); with_coherent=true)
+        config = make_liouv_config(TimeDomain(); construction=KMS())
         L_dense = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
         ws = KrylovWorkspace(config, TEST_HAM, TEST_JUMPS)
 
@@ -187,7 +187,7 @@ end
 
     # Testset 10: Round-trip adjoint matvec vs dense adjoint (TimeDomain KMS)
     @testset "Round-trip: adjoint matvec vs dense adjoint (TimeDomain KMS)" begin
-        config = make_liouv_config(TimeDomain(); with_coherent=true)
+        config = make_liouv_config(TimeDomain(); construction=KMS())
         L_dense = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
         ws = KrylovWorkspace(config, TEST_HAM, TEST_JUMPS)
 
@@ -201,7 +201,7 @@ end
 
     # Testset 11: Zero allocations in matvec hot path (TimeDomain)
     @testset "Zero allocations in matvec hot path (TimeDomain)" begin
-        config = make_liouv_config(TimeDomain(); with_coherent=true)
+        config = make_liouv_config(TimeDomain(); construction=KMS())
         ws = KrylovWorkspace(config, TEST_HAM, TEST_JUMPS)
         rho = Matrix(random_density_matrix(NUM_QUBITS))
         allocs, allocs_adj = _measure_matvec_allocs(ws, rho, config, TEST_HAM)
@@ -215,7 +215,7 @@ end
 
     # Testset 12: Round-trip matvec vs dense (TrotterDomain KMS, with coherent)
     @testset "Round-trip: matvec vs dense (TrotterDomain KMS, with coherent)" begin
-        config = make_liouv_config(TrotterDomain(); with_coherent=true)
+        config = make_liouv_config(TrotterDomain(); construction=KMS())
         L_dense = construct_lindbladian(TEST_TROTTER_JUMPS, config, TEST_HAM; trotter=TEST_TROTTER)
         ws = KrylovWorkspace(config, TEST_HAM, TEST_TROTTER_JUMPS; trotter=TEST_TROTTER)
 
@@ -243,7 +243,7 @@ end
 
     # Testset 14: Round-trip adjoint matvec vs dense adjoint (TrotterDomain KMS)
     @testset "Round-trip: adjoint matvec vs dense adjoint (TrotterDomain KMS)" begin
-        config = make_liouv_config(TrotterDomain(); with_coherent=true)
+        config = make_liouv_config(TrotterDomain(); construction=KMS())
         L_dense = construct_lindbladian(TEST_TROTTER_JUMPS, config, TEST_HAM; trotter=TEST_TROTTER)
         ws = KrylovWorkspace(config, TEST_HAM, TEST_TROTTER_JUMPS; trotter=TEST_TROTTER)
 
@@ -257,7 +257,7 @@ end
 
     # Testset 15: Zero allocations in matvec hot path (TrotterDomain)
     @testset "Zero allocations in matvec hot path (TrotterDomain)" begin
-        config = make_liouv_config(TrotterDomain(); with_coherent=true)
+        config = make_liouv_config(TrotterDomain(); construction=KMS())
         ws = KrylovWorkspace(config, TEST_HAM, TEST_TROTTER_JUMPS; trotter=TEST_TROTTER)
         rho = Matrix(random_density_matrix(NUM_QUBITS))
         allocs, allocs_adj = _measure_matvec_allocs(ws, rho, config, TEST_HAM)
@@ -271,7 +271,7 @@ end
 
     # Testset 16: Round-trip matvec vs dense (BohrDomain KMS, with coherent)
     @testset "Round-trip: matvec vs dense (BohrDomain KMS, with coherent)" begin
-        config = make_liouv_config(BohrDomain(); with_coherent=true)
+        config = make_liouv_config(BohrDomain(); construction=KMS())
         L_dense = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
         ws = KrylovWorkspace(config, TEST_HAM, TEST_JUMPS)
 
@@ -299,7 +299,7 @@ end
 
     # Testset 18: Round-trip adjoint matvec vs dense adjoint (BohrDomain KMS)
     @testset "Round-trip: adjoint matvec vs dense adjoint (BohrDomain KMS)" begin
-        config = make_liouv_config(BohrDomain(); with_coherent=true)
+        config = make_liouv_config(BohrDomain(); construction=KMS())
         L_dense = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
         ws = KrylovWorkspace(config, TEST_HAM, TEST_JUMPS)
 
@@ -313,7 +313,7 @@ end
 
     # Testset 19: Adjoint duality check (BohrDomain): tr(X' * L(Y)) == tr(L*(X)' * Y)
     @testset "Adjoint duality check (BohrDomain): tr(X' * L(Y)) == tr(L*(X)' * Y)" begin
-        config = make_liouv_config(BohrDomain(); with_coherent=true)
+        config = make_liouv_config(BohrDomain(); construction=KMS())
         ws = KrylovWorkspace(config, TEST_HAM, TEST_JUMPS)
 
         for _ in 1:5
@@ -346,7 +346,7 @@ end
 
         # Testset 20: Round-trip with complex jump (EnergyDomain forward)
         @testset "Round-trip: complex jump forward (EnergyDomain)" begin
-            config = make_liouv_config(EnergyDomain(); with_coherent=true)
+            config = make_liouv_config(EnergyDomain(); construction=KMS())
             L_dense = construct_lindbladian(complex_jumps, config, TEST_HAM)
             ws = KrylovWorkspace(config, TEST_HAM, complex_jumps)
             for _ in 1:10
@@ -359,7 +359,7 @@ end
 
         # Testset 21: Round-trip with complex jump (EnergyDomain adjoint)
         @testset "Round-trip: complex jump adjoint (EnergyDomain)" begin
-            config = make_liouv_config(EnergyDomain(); with_coherent=true)
+            config = make_liouv_config(EnergyDomain(); construction=KMS())
             L_dense = construct_lindbladian(complex_jumps, config, TEST_HAM)
             ws = KrylovWorkspace(config, TEST_HAM, complex_jumps)
             for _ in 1:10
@@ -372,7 +372,7 @@ end
 
         # Testset 22: Adjoint duality with complex jump (EnergyDomain)
         @testset "Adjoint duality: complex jump (EnergyDomain)" begin
-            config = make_liouv_config(EnergyDomain(); with_coherent=true)
+            config = make_liouv_config(EnergyDomain(); construction=KMS())
             ws = KrylovWorkspace(config, TEST_HAM, complex_jumps)
             for _ in 1:5
                 X = Matrix(random_density_matrix(NUM_QUBITS))
@@ -387,7 +387,7 @@ end
 
         # Testset 23: Round-trip with complex jump (TimeDomain forward + adjoint)
         @testset "Round-trip: complex jump (TimeDomain)" begin
-            config_td = make_liouv_config(TimeDomain(); with_coherent=true)
+            config_td = make_liouv_config(TimeDomain(); construction=KMS())
             L_dense_td = construct_lindbladian(complex_jumps, config_td, TEST_HAM)
             ws_td = KrylovWorkspace(config_td, TEST_HAM, complex_jumps)
             for _ in 1:10

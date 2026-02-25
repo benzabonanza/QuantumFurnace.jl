@@ -18,8 +18,8 @@ using QuantumFurnace
     # Testset 1: apply_delta_channel! faithful Chen channel
     # ========================================================================
     @testset "apply_delta_channel! faithful Chen channel" begin
-        config_therm = make_thermalize_config(EnergyDomain(); with_coherent=true, delta=0.01)
-        config_liouv = make_liouv_config(EnergyDomain(); with_coherent=true)
+        config_therm = make_thermalize_config(EnergyDomain(); construction=KMS(), delta=0.01)
+        config_liouv = make_liouv_config(EnergyDomain(); construction=KMS())
         ws = KrylovWorkspace(config_therm, TEST_HAM, TEST_JUMPS)
         delta = config_therm.delta
 
@@ -51,7 +51,7 @@ using QuantumFurnace
     # Testset 2: KrylovGapResult struct fields
     # ========================================================================
     @testset "KrylovGapResult struct fields" begin
-        config_kms = make_liouv_config(EnergyDomain(); with_coherent=true)
+        config_kms = make_liouv_config(EnergyDomain(); construction=KMS())
         result = krylov_spectral_gap(config_kms, TEST_HAM, TEST_JUMPS;
             krylovdim=30, howmany=4)
 
@@ -70,7 +70,7 @@ using QuantumFurnace
     # Testset 3: Lindbladian eigsolve accuracy (EnergyDomain KMS)
     # ========================================================================
     @testset "Lindbladian eigsolve accuracy (EnergyDomain KMS)" begin
-        config = make_liouv_config(EnergyDomain(); with_coherent=true)
+        config = make_liouv_config(EnergyDomain(); construction=KMS())
         L_dense = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
         dense_result = extract_leading_eigendata(L_dense; n_modes=4)
 
@@ -108,13 +108,13 @@ using QuantumFurnace
     end
 
     # ========================================================================
-    # Testset 5: Channel eigsolve accuracy (ThermalizeConfig)
+    # Testset 5: Channel eigsolve accuracy (Thermalize)
     # ========================================================================
-    @testset "Channel eigsolve accuracy (ThermalizeConfig)" begin
+    @testset "Channel eigsolve accuracy (Thermalize)" begin
         config_therm = make_thermalize_config(EnergyDomain();
-            with_coherent=true, delta=0.01)
+            construction=KMS(), delta=0.01)
         # Dense reference from Lindbladian path
-        config_liouv = make_liouv_config(EnergyDomain(); with_coherent=true)
+        config_liouv = make_liouv_config(EnergyDomain(); construction=KMS())
         L_dense = construct_lindbladian(TEST_JUMPS, config_liouv, TEST_HAM)
         dense_result = extract_leading_eigendata(L_dense; n_modes=4)
 
@@ -139,28 +139,28 @@ using QuantumFurnace
     # ========================================================================
     @testset "All domains work (Lindbladian path)" begin
         @testset "EnergyDomain" begin
-            config = make_liouv_config(EnergyDomain(); with_coherent=true)
+            config = make_liouv_config(EnergyDomain(); construction=KMS())
             result = krylov_spectral_gap(config, TEST_HAM, TEST_JUMPS;
                 krylovdim=30, howmany=2)
             @test result.spectral_gap > 0
         end
 
         @testset "TimeDomain" begin
-            config = make_liouv_config(TimeDomain(); with_coherent=true)
+            config = make_liouv_config(TimeDomain(); construction=KMS())
             result = krylov_spectral_gap(config, TEST_HAM, TEST_JUMPS;
                 krylovdim=30, howmany=2)
             @test result.spectral_gap > 0
         end
 
         @testset "TrotterDomain" begin
-            config = make_liouv_config(TrotterDomain(); with_coherent=true)
+            config = make_liouv_config(TrotterDomain(); construction=KMS())
             result = krylov_spectral_gap(config, TEST_HAM, TEST_TROTTER_JUMPS;
                 trotter=TEST_TROTTER, krylovdim=30, howmany=2)
             @test result.spectral_gap > 0
         end
 
         @testset "BohrDomain" begin
-            config = make_liouv_config(BohrDomain(); with_coherent=true)
+            config = make_liouv_config(BohrDomain(); construction=KMS())
             result = krylov_spectral_gap(config, TEST_HAM, TEST_JUMPS;
                 krylovdim=30, howmany=2)
             @test result.spectral_gap > 0
@@ -171,7 +171,7 @@ using QuantumFurnace
     # Testset 7: Guard rails
     # ========================================================================
     @testset "Guard rails" begin
-        config = make_liouv_config(EnergyDomain(); with_coherent=true)
+        config = make_liouv_config(EnergyDomain(); construction=KMS())
 
         # krylovdim <= howmany must error
         @test_throws ErrorException krylov_spectral_gap(config, TEST_HAM, TEST_JUMPS;
@@ -188,7 +188,7 @@ using QuantumFurnace
     # ========================================================================
     @testset "Eigenvalue sorting and conversion" begin
         # Lindbladian path: eigenvalues sorted by |Re(lambda)| ascending
-        config = make_liouv_config(EnergyDomain(); with_coherent=true)
+        config = make_liouv_config(EnergyDomain(); construction=KMS())
         result_liouv = krylov_spectral_gap(config, TEST_HAM, TEST_JUMPS;
             krylovdim=30, howmany=4)
 
@@ -196,7 +196,7 @@ using QuantumFurnace
 
         # Channel path: verify eigenvalue conversion formula
         config_therm = make_thermalize_config(EnergyDomain();
-            with_coherent=true, delta=0.01)
+            construction=KMS(), delta=0.01)
         result_chan = krylov_spectral_gap(config_therm, TEST_HAM, TEST_JUMPS;
             krylovdim=30, howmany=4)
 

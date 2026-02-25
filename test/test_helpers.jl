@@ -220,16 +220,17 @@ const TEST_TROTTER_JUMPS = make_test_system(; trotter=TEST_TROTTER).jumps
 # Factory functions for configs
 # ---------------------------------------------------------------------------
 """
-    make_liouv_config(domain; with_coherent=true) -> LiouvConfig
+    make_liouv_config(domain; construction=KMS()) -> Config{Lindbladian}
 
-Create a LiouvConfig with locked test parameters.
+Create a Config{Lindbladian} with locked test parameters.
 """
-function make_liouv_config(domain; with_coherent::Bool=true)
-    LiouvConfig(
-        num_qubits = NUM_QUBITS,
-        with_coherent = with_coherent,
-        with_linear_combination = true,
+function make_liouv_config(domain; construction=KMS())
+    Config(
+        sim = Lindbladian(),
         domain = domain,
+        construction = construction,
+        num_qubits = NUM_QUBITS,
+        with_linear_combination = true,
         beta = BETA,
         sigma = SIGMA,
         a = BETA / 30.0,
@@ -242,17 +243,18 @@ function make_liouv_config(domain; with_coherent::Bool=true)
 end
 
 """
-    make_liouv_config_gns(domain) -> LiouvConfigGNS
+    make_liouv_config_gns(domain) -> Config{Lindbladian, <:Any, GNS}
 
-Create a LiouvConfigGNS for the standard 4-qubit test system.
+Create a Config{Lindbladian} with GNS construction for the standard 4-qubit test system.
 Uses Smooth Metro transition matching KMS test parameter choices.
 """
 function make_liouv_config_gns(domain)
-    LiouvConfigGNS(
-        num_qubits = NUM_QUBITS,
-        with_coherent = false,
-        with_linear_combination = true,
+    Config(
+        sim = Lindbladian(),
         domain = domain,
+        construction = GNS(),
+        num_qubits = NUM_QUBITS,
+        with_linear_combination = true,
         beta = BETA,
         sigma = SIGMA,
         a = BETA / 30.0,
@@ -265,20 +267,21 @@ function make_liouv_config_gns(domain)
 end
 
 """
-    make_thermalize_config(domain; with_coherent=true, delta=TEST_DELTA, mixing_time=1.0) -> ThermalizeConfig
+    make_thermalize_config(domain; construction=KMS(), delta=TEST_DELTA, mixing_time=1.0) -> Config{Thermalize}
 
-Create a ThermalizeConfig with locked test parameters.
+Create a Config{Thermalize} with locked test parameters.
 """
 function make_thermalize_config(domain;
-    with_coherent::Bool=true,
+    construction=KMS(),
     delta::Float64=TEST_DELTA,
     mixing_time::Float64=1.0,
 )
-    ThermalizeConfig(
-        num_qubits = NUM_QUBITS,
-        with_coherent = with_coherent,
-        with_linear_combination = true,
+    Config(
+        sim = Thermalize(),
         domain = domain,
+        construction = construction,
+        num_qubits = NUM_QUBITS,
+        with_linear_combination = true,
         beta = BETA,
         sigma = SIGMA,
         a = BETA / 30.0,
@@ -306,20 +309,22 @@ const SMALL_TROTTER_JUMPS = make_small_test_system(; trotter=SMALL_TROTTER).jump
 # Small config factories (3-qubit)
 # ---------------------------------------------------------------------------
 """
-    make_small_thermalize_config(domain; with_coherent=false, delta=TEST_DELTA, mixing_time=1.0) -> ThermalizeConfig
+    make_small_thermalize_config(domain; construction=GNS(), delta=TEST_DELTA, mixing_time=1.0) -> Config{Thermalize}
 
-Create a ThermalizeConfig for the 3-qubit SMALL system.
+Create a Config{Thermalize} for the 3-qubit SMALL system.
+Default construction is GNS (matching the old default of with_coherent=false).
 """
 function make_small_thermalize_config(domain;
-    with_coherent::Bool=false,
+    construction=GNS(),
     delta::Float64=TEST_DELTA,
     mixing_time::Float64=1.0,
 )
-    ThermalizeConfig(
-        num_qubits = 3,
-        with_coherent = with_coherent,
-        with_linear_combination = true,
+    Config(
+        sim = Thermalize(),
         domain = domain,
+        construction = construction,
+        num_qubits = 3,
+        with_linear_combination = true,
         beta = BETA,
         sigma = SIGMA,
         a = BETA / 30.0,
@@ -334,16 +339,18 @@ function make_small_thermalize_config(domain;
 end
 
 """
-    make_small_liouv_config(domain; with_coherent=false) -> LiouvConfig
+    make_small_liouv_config(domain; construction=GNS()) -> Config{Lindbladian}
 
-Create a LiouvConfig for the 3-qubit SMALL system.
+Create a Config{Lindbladian} for the 3-qubit SMALL system.
+Default construction is GNS (matching the old default of with_coherent=false).
 """
-function make_small_liouv_config(domain; with_coherent::Bool=false)
-    LiouvConfig(
-        num_qubits = 3,
-        with_coherent = with_coherent,
-        with_linear_combination = true,
+function make_small_liouv_config(domain; construction=GNS())
+    Config(
+        sim = Lindbladian(),
         domain = domain,
+        construction = construction,
+        num_qubits = 3,
+        with_linear_combination = true,
         beta = BETA,
         sigma = SIGMA,
         a = BETA / 30.0,
@@ -359,18 +366,19 @@ end
 # Small GNS config factories (3-qubit, approximate detailed balance)
 # ---------------------------------------------------------------------------
 """
-    make_small_liouv_config_gns(domain; with_coherent=false) -> LiouvConfigGNS
+    make_small_liouv_config_gns(domain) -> Config{Lindbladian, <:Any, GNS}
 
-Create a LiouvConfigGNS for the 3-qubit SMALL system.
+Create a Config{Lindbladian} with GNS construction for the 3-qubit SMALL system.
 Uses Smooth Metro transition (with_linear_combination=true, a=beta/30, b=0.4)
 matching the KMS test parameter choices.
 """
-function make_small_liouv_config_gns(domain; with_coherent::Bool=false)
-    LiouvConfigGNS(
-        num_qubits = 3,
-        with_coherent = with_coherent,
-        with_linear_combination = true,
+function make_small_liouv_config_gns(domain)
+    Config(
+        sim = Lindbladian(),
         domain = domain,
+        construction = GNS(),
+        num_qubits = 3,
+        with_linear_combination = true,
         beta = BETA,
         sigma = SIGMA,
         a = BETA / 30.0,
@@ -383,19 +391,20 @@ function make_small_liouv_config_gns(domain; with_coherent::Bool=false)
 end
 
 """
-    make_small_thermalize_config_gns(domain; delta=TEST_DELTA, mixing_time=1.0) -> ThermalizeConfigGNS
+    make_small_thermalize_config_gns(domain; delta=TEST_DELTA, mixing_time=1.0) -> Config{Thermalize, <:Any, GNS}
 
-Create a ThermalizeConfigGNS for the 3-qubit SMALL system.
+Create a Config{Thermalize} with GNS construction for the 3-qubit SMALL system.
 """
 function make_small_thermalize_config_gns(domain;
     delta::Float64=TEST_DELTA,
     mixing_time::Float64=1.0,
 )
-    ThermalizeConfigGNS(
-        num_qubits = 3,
-        with_coherent = false,
-        with_linear_combination = true,
+    Config(
+        sim = Thermalize(),
         domain = domain,
+        construction = GNS(),
+        num_qubits = 3,
+        with_linear_combination = true,
         beta = BETA,
         sigma = SIGMA,
         a = BETA / 30.0,

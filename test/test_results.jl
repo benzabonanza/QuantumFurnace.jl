@@ -2,7 +2,7 @@
 ExperimentResult serialization round-trip tests (Phase 15, Plan 02).
 
 Tests cover:
-- Round-trip save/load for all 4 config types (LiouvConfig, LiouvConfigGNS, ThermalizeConfig, ThermalizeConfigGNS)
+- Round-trip save/load for all 4 config variants (Config{Thermalize,KMS}, Config{Thermalize,GNS}, Config{Lindbladian,KMS}, Config{Lindbladian,GNS})
 - TrajectoryResult with observables (times, measurements_mean)
 - Forward compatibility (missing fields in BSON)
 - Companion .txt file generation
@@ -25,9 +25,9 @@ using BSON
     end
 
     # -----------------------------------------------------------------------
-    # Test group 1: KMS ThermalizeConfig round-trip
+    # Test group 1: KMS Thermalize round-trip
     # -----------------------------------------------------------------------
-    @testset "KMS ThermalizeConfig round-trip" begin
+    @testset "KMS Thermalize round-trip" begin
         mktempdir() do tmpdir
             config = make_small_thermalize_config(EnergyDomain())
             traj = _make_fake_trajectory(SMALL_DIM; seed=42, n_trajectories=100)
@@ -51,9 +51,9 @@ using BSON
             @test loaded.config.num_qubits == config.num_qubits
             @test loaded.config.beta == config.beta
             @test loaded.config.sigma == config.sigma
-            @test loaded.config.with_coherent == config.with_coherent
+            @test with_coherent(loaded.config.construction) == with_coherent(config.construction)
             @test loaded.config.domain isa EnergyDomain
-            @test loaded.config isa ThermalizeConfig
+            @test loaded.config isa Config{Thermalize}
             @test loaded.config.mixing_time == config.mixing_time
             @test loaded.config.delta == config.delta
 
@@ -77,9 +77,9 @@ using BSON
     end
 
     # -----------------------------------------------------------------------
-    # Test group 2: GNS ThermalizeConfigGNS round-trip
+    # Test group 2: GNS Thermalize round-trip
     # -----------------------------------------------------------------------
-    @testset "GNS ThermalizeConfigGNS round-trip" begin
+    @testset "GNS Thermalize round-trip" begin
         mktempdir() do tmpdir
             config = make_small_thermalize_config_gns(EnergyDomain())
             traj = _make_fake_trajectory(SMALL_DIM)
@@ -93,8 +93,8 @@ using BSON
             loaded = load_experiment(path)
 
             # Key assertion: GNS type preserved
-            @test loaded.config isa ThermalizeConfigGNS
-            @test loaded.config.with_coherent == false
+            @test loaded.config isa Config{Thermalize, <:Any, GNS}
+            @test with_coherent(loaded.config.construction) == false
             @test loaded.config.domain isa EnergyDomain
             @test loaded.config.beta == config.beta
             @test loaded.config.mixing_time == config.mixing_time
@@ -105,9 +105,9 @@ using BSON
     end
 
     # -----------------------------------------------------------------------
-    # Test group 3: LiouvConfig round-trip
+    # Test group 3: Lindbladian round-trip
     # -----------------------------------------------------------------------
-    @testset "LiouvConfig round-trip" begin
+    @testset "Lindbladian round-trip" begin
         mktempdir() do tmpdir
             config = make_small_liouv_config(EnergyDomain())
             traj = _make_fake_trajectory(SMALL_DIM)
@@ -120,9 +120,9 @@ using BSON
 
             loaded = load_experiment(path)
 
-            # Key assertion: LiouvConfig (not thermalize)
-            @test loaded.config isa LiouvConfig
-            @test !(loaded.config isa AbstractThermalizeConfig)
+            # Key assertion: Lindbladian config (not thermalize)
+            @test loaded.config isa Config{Lindbladian}
+            @test !(loaded.config.sim isa Thermalize)
             @test loaded.config.num_qubits == config.num_qubits
             @test loaded.config.beta == config.beta
             @test loaded.config.domain isa EnergyDomain
@@ -133,9 +133,9 @@ using BSON
     end
 
     # -----------------------------------------------------------------------
-    # Test group 4: LiouvConfigGNS round-trip
+    # Test group 4: Lindbladian GNS round-trip
     # -----------------------------------------------------------------------
-    @testset "LiouvConfigGNS round-trip" begin
+    @testset "Lindbladian GNS round-trip" begin
         mktempdir() do tmpdir
             config = make_small_liouv_config_gns(EnergyDomain())
             traj = _make_fake_trajectory(SMALL_DIM)
@@ -148,9 +148,9 @@ using BSON
 
             loaded = load_experiment(path)
 
-            # Key assertion: GNS type preserved for Liouv config
-            @test loaded.config isa LiouvConfigGNS
-            @test loaded.config.with_coherent == false
+            # Key assertion: GNS type preserved for Lindbladian config
+            @test loaded.config isa Config{Lindbladian, <:Any, GNS}
+            @test with_coherent(loaded.config.construction) == false
             @test loaded.config.domain isa EnergyDomain
 
             # Trajectory round-trip
@@ -238,7 +238,7 @@ using BSON
             @test isempty(loaded.metadata)
             @test loaded.hamiltonian_params isa Dict
             @test isempty(loaded.hamiltonian_params)
-            @test loaded.config isa ThermalizeConfig
+            @test loaded.config isa Config{Thermalize}
             @test loaded.config.num_qubits == 3
         end
     end

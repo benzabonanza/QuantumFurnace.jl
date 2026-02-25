@@ -14,7 +14,7 @@ using LinearAlgebra
     psi0 = zeros(ComplexF64, SMALL_DIM)
     psi0[1] = 1.0
     config = make_small_thermalize_config(TimeDomain();
-        delta=0.01, mixing_time=10.0, with_coherent=false)
+        delta=0.01, mixing_time=10.0, construction=GNS())
 
     # -----------------------------------------------------------------
     @testset "Basic estimate_spectral_gap returns SpectralGapResult" begin
@@ -197,7 +197,7 @@ using LinearAlgebra
     @testset "Eigenbasis Overlap Analysis" begin
 
         # Shared setup: construct Liouvillian for the 3-qubit SMALL system
-        config_l = make_small_liouv_config(TimeDomain(); with_coherent=false)
+        config_l = make_small_liouv_config(TimeDomain(); construction=GNS())
         liouv_result = run_lindbladian(SMALL_JUMPS, config_l, SMALL_HAM)
         L = liouv_result.liouvillian
 

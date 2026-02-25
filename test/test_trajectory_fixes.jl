@@ -11,7 +11,7 @@ using Random
         # TimeDomain already had correct ordering but we test both to ensure consistency.
         for domain in [EnergyDomain(), TimeDomain()]
             @testset "$(typeof(domain))" begin
-                config = make_thermalize_config(domain; with_coherent=true, delta=TEST_DELTA)
+                config = make_thermalize_config(domain; construction=KMS(), delta=TEST_DELTA)
                 ham_or_trott = TEST_HAM
                 precomputed = QuantumFurnace._precompute_data(config, ham_or_trott)
                 scratch = QuantumFurnace.KrausScratch(ComplexF64, DIM)

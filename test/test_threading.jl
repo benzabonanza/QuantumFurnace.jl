@@ -10,7 +10,7 @@ using LinearAlgebra
         psi0[1] = 1.0
 
         therm_config = make_small_thermalize_config(TimeDomain();
-            delta=0.01, mixing_time=0.5, with_coherent=false)
+            delta=0.01, mixing_time=0.5, construction=GNS())
 
         # Run twice with same seed => bitwise identical
         result1 = run_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
@@ -39,7 +39,7 @@ end
     psi0[1] = 1.0
 
     therm_config = make_small_thermalize_config(TimeDomain();
-        delta=0.01, mixing_time=0.1, with_coherent=false)
+        delta=0.01, mixing_time=0.1, construction=GNS())
 
     old_blas = BLAS.get_num_threads()
     result = run_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
@@ -55,7 +55,7 @@ end
         psi0[1] = 1.0
 
         therm_config = make_small_thermalize_config(TimeDomain();
-            delta=0.01, mixing_time=0.5, with_coherent=false)
+            delta=0.01, mixing_time=0.5, construction=GNS())
 
         # Force serial: use julia -t 1 semantics by running ntraj=1
         # Instead, run with ntraj=20 and compare threaded vs explicit serial loop.
@@ -102,7 +102,7 @@ end
         psi0[1] = 1.0
 
         therm_config = make_small_thermalize_config(TimeDomain();
-            delta=0.01, mixing_time=0.1, with_coherent=false)
+            delta=0.01, mixing_time=0.1, construction=GNS())
 
         # Create a simple observable (Z on first qubit)
         obs = [Matrix{CT}(kron(Z, Matrix{Float64}(I, div(dim, 2), div(dim, 2))))]
@@ -131,7 +131,7 @@ end
         # Use longer mixing_time and more trajectories to amortize threading overhead.
         # At dim=8 each step is very fast, so we need enough total work to see speedup.
         therm_config = make_small_thermalize_config(TimeDomain();
-            delta=0.01, mixing_time=10.0, with_coherent=false)
+            delta=0.01, mixing_time=10.0, construction=GNS())
 
         ntraj = 2000
 

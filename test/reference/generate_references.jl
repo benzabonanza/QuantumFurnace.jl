@@ -34,7 +34,7 @@ const REF_DELTA = 0.1
 Compute a single-step density matrix evolution via exp(delta*L) and save as BSON.
 """
 function generate_dm_reference(domain; with_coherent::Bool, filename::String)
-    liouv_config = make_small_liouv_config(domain; with_coherent=with_coherent)
+    liouv_config = make_small_liouv_config(domain; construction=with_coherent ? KMS() : GNS())
     trotter_kw = domain isa TrotterDomain ? (; trotter=SMALL_TROTTER) : (;)
     jumps = domain isa TrotterDomain ? SMALL_TROTTER_JUMPS : SMALL_JUMPS
     L = construct_lindbladian(jumps, liouv_config, SMALL_HAM; trotter_kw...)

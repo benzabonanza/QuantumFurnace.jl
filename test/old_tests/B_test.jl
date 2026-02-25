@@ -37,11 +37,12 @@ max_E = w0 * 2^num_energy_bits / 2
 t0 = 2pi / (2^num_energy_bits * w0)  # Max time evolution pi / w0
 num_trotter_steps_per_t0 = 10
 
-config = LiouvConfig(
-                num_qubits = num_qubits, 
-                with_coherent = with_coherent,
-                with_linear_combination = with_linear_combination, 
+config = Config(
+                sim = Lindbladian(),
                 domain = domain,
+                construction = KMS(),
+                num_qubits = num_qubits,
+                with_linear_combination = with_linear_combination,
                 beta = beta,
                 sigma = sigma,
                 gaussian_parameters = (w_gamma, sigma_gamma),
