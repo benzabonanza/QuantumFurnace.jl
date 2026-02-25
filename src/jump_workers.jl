@@ -460,5 +460,3 @@ function _jump_contribution!(
     _finalize_kraus_step!(evolving_dm, config.delta, scratch)
     return evolving_dm
 end
-
-#TODO: test it; set BLAS threads to 1, let julia threads be more.

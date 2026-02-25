@@ -4,18 +4,6 @@
 
 ## Tech Debt
 
-**`linearmaps_liouv.jl` is entirely dead commented-out code:**
-- Issue: The entire file is a commented-out `create_liouvillian_map` function plus a large inline test script. The file carries a `#TODO: Finish this with precomputed kraus operators.` header comment that has never been acted on.
-- Files: `src/linearmaps_liouv.jl` (214 lines, all commented out)
-- Impact: The `LinearMaps` dependency in `Project.toml` may exist solely for this unfinished feature. The file adds noise during navigation and signals unfinished design work.
-- Fix approach: Either implement the `LinearMap` wrapper using the current `apply_lindbladian!` infrastructure, or delete the file and remove `LinearMaps` from `Project.toml` if no other code uses it.
-
-**`log_sobolev_manopt.jl` is an empty file:**
-- Issue: The file has 1 line (empty). It is included in `QuantumFurnace.jl` at line 125 and contributes nothing.
-- Files: `src/log_sobolev_manopt.jl`
-- Impact: Misleads readers into expecting a Manopt-based LSI implementation. Module include of an empty file is harmless but signals unfinished work.
-- Fix approach: Either implement the planned Manopt variant of `compute_LSI_alpha2`, or remove the file and the corresponding `include` in `src/QuantumFurnace.jl:125`.
-
 **`errors.jl` is a stub placeholder:**
 - Issue: Contains only a comment `# Error computation utilities (placeholder for Phase 10 API cleanup)` with no actual code. Still included in the module at `src/QuantumFurnace.jl:112`.
 - Files: `src/errors.jl`
@@ -27,12 +15,6 @@
 - Files: `src/log_sobolev.jl`
 - Impact: LSI computation is not usable for any system where building the full Liouvillian is infeasible. Coupling to the dense matrix path also means it lags behind performance improvements in the matvec layer.
 - Fix approach: Replace the `L_mat` multiply at `src/log_sobolev.jl:87` with `apply_lindbladian!` / `apply_adjoint_lindbladian!` calls using a `KrylovWorkspace`.
-
-**`#TODO: test it` in `jump_workers.jl`:**
-- Issue: A `#TODO: test it; set BLAS threads to 1, let julia threads be more.` comment at `src/jump_workers.jl:464` marks a section of threading interaction code that has never been validated with this specific BLAS threading configuration.
-- Files: `src/jump_workers.jl`
-- Impact: Potential silently incorrect behaviour when running multi-threaded. The parallel path in `run_thermalization` sets BLAS threads at `src/trajectories.jl:544`, but it is unclear if the jump_workers path respects this consistently.
-- Fix approach: Add a targeted threading test similar to `test/test_threading.jl` that exercises `run_thermalization` under multiple Julia threads with BLAS thread count explicitly verified.
 
 **Distributed computing is imported but barely used:**
 - Issue: `using Distributed` and `using SharedArrays` are in `src/QuantumFurnace.jl` at lines 12 and 20. The only active usage is in `src/nufft.jl:26,51-53` for `SharedArray` when `nprocs() > 1`. The `@distributed` accumulation loop in `src/furnace.jl:58-60` is commented out.
@@ -187,12 +169,6 @@
 - Files: `src/log_sobolev.jl`
 - Risk: Silent wrong output or memory corruption during optimization.
 - Priority: High
-
-**`linearmaps_liouv.jl` / LinearMap path:**
-- What's not tested: The entire file is commented out; no test verifies that a LinearMap-based Liouvillian produces the same spectrum as the dense or Krylov paths.
-- Files: `src/linearmaps_liouv.jl`
-- Risk: If this path is ever uncommented and shipped, it is completely untested.
-- Priority: Low (path is currently unreachable)
 
 **Distributed / SharedArray NUFFT path:**
 - What's not tested: The `use_shared_array=true` branch in `src/nufft.jl:51-53` is only active when `nprocs() > 1`, which is never true in the standard test suite.
