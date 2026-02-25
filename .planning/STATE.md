@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-20)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v1.5 Krylov Gap Estimation -- Phase 31 (Scaling Benchmarks) COMPLETE
+**Current focus:** Phase 32 (Krylov Simulator Speedup) -- Plan 01 complete
 
 ## Current Position
 
-Phase: 31 of 31 (Scaling Benchmarks)
-Plan: 2 of 2 complete
-Status: Complete
-Last activity: 2026-02-24 -- Plan 31-02 complete (full benchmark execution + report)
+Phase: 32 of 32 (Some speedup for the Krylov simulator)
+Plan: 1 of 2 complete
+Status: In Progress
+Last activity: 2026-02-25 -- Plan 32-01 complete (precomputed effective Hamiltonian optimization)
 
-Progress: [██████████] 100% (v1.5 phases 27-31 all complete)
+Progress: [█████████░] 50% (Phase 32: plan 1 of 2 done)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 82 (v1.0: 10, v1.1: 16, quick: 20, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 9)
+- Total plans completed: 83 (v1.0: 10, v1.1: 16, quick: 20, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 9, v1.6: 1)
 
 **By Milestone:**
 
@@ -76,6 +76,13 @@ Recent decisions affecting current work:
 - Log-space linear regression for power-law fit across 4+ orders of magnitude timing data (v1.5, 31-02)
 - EnergyDomain n=10 feasible on cluster (~111h, ~1.3 GB); n=12 infeasible (~12000h) (v1.5, 31-02)
 - TrotterDomain n=10+ infeasible due to ~34 GB NUFFT prefactors; needs on-the-fly NUFFT (v1.5, 31-02)
+- Store 4 separate G matrices (G_left, G_right, G_left_adj, G_right_adj) for correct BohrDomain adjoint (32-01)
+- BohrDomain adjoint uses conj(R_total) not R_total^T because R_total is non-Hermitian for Bohr (32-01)
+- Pre-transpose G matrices at construction so hot path uses gemm!('N','N',...) for zero-allocation (32-01)
+
+### Roadmap Evolution
+
+- Phase 32 added: Some speedup for the Krylov simulator
 
 ### Deferred from v1.4
 
@@ -109,6 +116,6 @@ None
 
 ## Session Continuity
 
-Last session: 2026-02-24
-Stopped at: Completed 31-02-PLAN.md -- Phase 31 complete, v1.5 milestone complete
+Last session: 2026-02-25
+Stopped at: Completed 32-01-PLAN.md -- precomputed effective Hamiltonian optimization
 Resume file: None
