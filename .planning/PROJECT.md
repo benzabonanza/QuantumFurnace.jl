@@ -77,7 +77,22 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 
 ### Active
 
+## Current Milestone: v2.0 Restructure
+
+**Goal:** Major codebase restructure — redesign Config type hierarchy for extensibility (KMS/GNS/DLL), eliminate code duplication across simulation paths, consolidate workspaces, reorganize files, and slim down tests. Prepare architecture for DLL construction, error estimation, and gate complexity features.
+
+**Target features:**
+- Config{S,D,DB} type hierarchy redesign (Simulation × Domain × DetailedBalance)
+- Code deduplication: prefactors, OFT, R/K0/U_residual, sandwich ops, hermitian branching
+- Workspace consolidation and naming homogenization
+- File renaming to match PRE/MID/POST architecture
+- 4 clean run_* entry points with matching Result structs and save capability
+- Test deduplication, @info printout, threshold review
+- Move unfinished gap-from-trajectory code to staging area
+- Dead code cleanup (@distributed, OFTCaches, deprecated OFT functions)
+
 **Future milestones:**
+- [ ] DLL config (Ding et al. 2024 construction)
 - [ ] 1D Ising model Hamiltonian generation
 - [ ] 2D Heisenberg Hamiltonian generation (lattice graph support)
 - [ ] General k-local Hamiltonian construction on arbitrary graphs
@@ -86,8 +101,12 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 - [ ] Qiskit circuit generation for resource estimation (gate count, circuit depth)
 - [ ] Documentation: API docs via Documenter.jl, theory tutorials via Literate.jl
 - [ ] Paper-ready plotting: convergence curves, sim time plots, gate complexity, mixing time
-- [ ] Ding et al. (2024) KMS Lindbladian construction with discrete jump operators (future addition)
+- [ ] Quadrature and Trotter error estimation functions (errors.jl)
+- [ ] Log-Sobolev constant computation (log_sobolev.jl rewrite with apply_lindbladian!)
 - [ ] Jump statistics histogram (empirical rates match theoretical predictions)
+- [ ] Quantum discriminant / anti-Hermitian norm analysis
+- [ ] Lieb-Robinson bound support visualization
+- [ ] Kossakowski matrix analysis tools
 
 ### Out of Scope
 
@@ -195,4 +214,4 @@ Results needed for publication: convergence curves (trace distance vs. steps), m
 | Qiskit for circuit generation (Python interop) | Qiskit is the standard for quantum circuit representation; Julia quantum circuit ecosystem less mature | -- Pending |
 
 ---
-*Last updated: 2026-02-25 after v1.5 milestone*
+*Last updated: 2026-02-25 after v2.0 milestone started*

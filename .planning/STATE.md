@@ -5,16 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-02-25)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** Planning next milestone
+**Current focus:** v2.0 Restructure
 
 ## Current Position
 
-Phase: 32 of 32 (all milestones through v1.5 complete)
-Plan: N/A
-Status: Between milestones
-Last activity: 2026-02-25 - Completed v1.5 Krylov Gap Estimation milestone
-
-Progress: [██████████] 100% (v1.5 shipped)
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-02-25 — Milestone v2.0 started
 
 ## Performance Metrics
 
