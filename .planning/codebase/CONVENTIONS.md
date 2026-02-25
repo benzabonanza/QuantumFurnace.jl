@@ -1,258 +1,152 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-02-13
+**Analysis Date:** 2026-02-25
 
 ## Naming Patterns
 
 **Files:**
-- Lowercase with underscores: `hamiltonian.jl`, `jump_workers.jl`, `coherent.jl`
-- One main concept per file in most cases
-- Grouped logically by domain (e.g., `bohr_domain.jl`, `energy_domain.jl`, `time_domain.jl`)
-- Test files follow pattern: `{concept}_test.jl` (e.g., `trajectory_test.jl`, `ham_test.jl`)
-- Main module file: `QuantumFurnace.jl`
+- `snake_case.jl` for all source files: `krylov_matvec.jl`, `gap_estimation.jl`, `jump_workers.jl`
+- Module entry point: `src/QuantumFurnace.jl`
+- One logical concern per file (domains, structs, trajectories, fitting, etc.)
 
 **Functions:**
-- Snake_case with trailing function indicators: `run_lindbladian`, `construct_lindbladian`, `precompute_data`
-- Action verbs prefix: `create_*`, `compute_*`, `build_*`, `jump_contribution!`
-- Abbreviations common in domain: `oft!` (Operator Fourier Transform), `psi`, `rho`, `dm` (density matrix)
-- Query functions: `is_density_matrix`, `pick_transition`
-- Mutating functions use `!` suffix: `vectorize_liouv_diss_and_add!`, `oft!`, `kron!`, `rmul!`
+- `snake_case` for all functions: `run_lindbladian`, `build_trajectoryframework`, `estimate_spectral_gap`
+- Mutating functions end in `!`: `hermitianize!`, `apply_lindbladian!`, `step_along_trajectory!`, `_kron!`
+- Internal/private functions prefixed with `_`: `_precompute_data`, `_jump_contribution!`, `_gibbs_in_eigen`, `_load_hamiltonian_bson`
+- Inline hot-path functions use `@inline`: `_krylov_oft!`
+
+**Types / Structs:**
+- `PascalCase` for all types: `HamHam`, `TrottTrott`, `LiouvConfig`, `JumpOp`, `KrylovWorkspace`
+- Quirky abbreviations are used for domain-specific types: `HamHam` (Hamiltonian), `TrottTrott` (Trotter)
+- Abstract types prefixed with `Abstract`: `AbstractConfig`, `AbstractDomain`, `AbstractLiouvConfig`
+- Result structs suffixed with `Result`: `LindbladianResult`, `SpectralGapResult`, `FitResult`, `KrylovGapResult`
+- Config structs suffixed with `Config`: `LiouvConfig`, `ThermalizeConfig`, `LiouvConfigGNS`
+- Workspace structs suffixed with `Workspace`: `KrylovWorkspace`, `TrajectoryWorkspace`, `LindbladianWorkspace`
+- GNS variant structs suffixed with `GNS`: `LiouvConfigGNS`, `ThermalizeConfigGNS`
 
 **Variables:**
-- Greek letters used extensively: `beta`, `sigma`, `omega`, `nu`, `eta`, `gamma`, `delta`
-- Math-inspired short names: `H` (Hamiltonian), `A` (jump operator), `B` (coherent term), `L` (Lindblad operator), `U` (unitary), `R` (dissipation matrix), `K` (Kraus operator)
-- Subscripts indicated by underscore: `jump_oft`, `b_plus`, `b_minus`, `f_minus`, `f_plus`
-- Loop indices: `i`, `j`, `k`, `l` (short loops), `site`, `pauli`, `trajectory` (descriptive loops)
-- Configuration abbreviations: `nqb` (num_qubits), `w0`, `t0` (time/energy units)
+- `snake_case` for local variables: `num_qubits`, `jump_normalization`, `eigvals_vec`
+- Physics/math variables use short conventional names: `rho`, `psi`, `beta`, `sigma`, `delta`, `eigvals`, `eigvecs`
+- Scratch/temporary matrices use descriptive names: `jump_tmp`, `jump_conj`, `jump_dag_jump`, `rho_acc`
+- Constants are `UPPER_SNAKE_CASE`: `TOL_EXACT`, `NUM_QUBITS`, `BETA`, `TEST_DELTA`
 
-**Types:**
-- PascalCase: `HamHam`, `TrottTrott`, `JumpOp`, `LiouvConfig`, `ThermalizeConfig`
-- Enum-like domain types: `BohrDomain`, `EnergyDomain`, `TimeDomain`, `TrotterDomain`
-- Abstract types prefix with `Abstract`: `AbstractDomain`, `AbstractConfig`, `AbstractLiouvConfig`
-- Result types: `HotAlgorithmResults`, `HotSpectralResults`
-- Workspace/cache types: `LindbladianWorkspace`, `TrajectoryWorkspace`, `OFTCaches`, `KrausScratch`
+**Constants in source code:**
+- Module-level constants for index aliases: `const _IDX_A = 1`, `const _IDX_GAP = 2`
 
 ## Code Style
 
 **Formatting:**
-- Indentation: 4 spaces
-- Line length: Generally follows Julia convention (~92 characters)
-- No explicit formatter configured (no `.prettierrc` or equivalent)
-- Spacing around operators: `a + b`, `a * b`, `a / b`
+- No autoformatter is configured (no `.prettierrc`, no JuliaFormatter config detected)
+- Standard Julia style: 4-space indentation
+- Spaces around operators and after commas
+- Keyword arguments use `=` without spaces in function signatures
 
 **Linting:**
-- No explicit linter configured
-- Follows Julia style guidelines implicitly
+- Aqua.jl is used for package quality checks (`test/test_aqua.jl`): `Aqua.test_all(QuantumFurnace; ambiguities=false, piracies=false)`
 
-**Documentation:**
-- Triple-quoted docstrings for public functions: `""" ... """`
-- Docstrings placed immediately before function definition
-- Docstrings include: description, `# Fields`, `# Arguments`, implementation notes
-- Examples from `src/structs.jl`:
-  ```julia
-  """
-      LiouvConfig
+## Type Annotations and Parametric Programming
 
-      A configuration object that holds all the parameters...
+**Type parameters on structs:**
+- Structs are parametric on element type `T<:AbstractFloat`: `HamHam{T}`, `LindbladianWorkspace{T}`
+- Complex matrices use `Complex{T}` parametrically: `Matrix{Complex{T}}`
+- Abstract type hierarchies used for dispatch: `AbstractDomain`, `AbstractConfig{D,T}`
 
-      # Fields
-      - `num_qubits`: The number of system qubits.
-      - `with_coherent`: Option to add coherent term.
-      ...
-  """
-  ```
-- Internal functions use short comments instead of docstrings
+**Function signatures:**
+- Type-constrained signatures for performance-critical functions: `where {T<:Complex}`
+- Use `Union{X, Nothing}` for optional fields: `Union{Nothing, Matrix{T}}`, `Union{TrottTrott, Nothing}`
+- Keyword arguments with default `nothing` for optional parameters
+
+**Type annotations in structs:**
+- All struct fields explicitly typed; no untyped fields except where `Any` is required (e.g. `precomputed_data::Any` for NamedTuple variability)
+- `@kwdef` macro used heavily to allow keyword-argument construction: `@kwdef struct LiouvConfig{D,T} ...`
 
 ## Import Organization
 
-**Order:**
-1. Package imports first: `using Pkg`, `using Base`, `using Printf`
-2. External packages: `using LinearAlgebra`, `using SparseArrays`, `using BSON`, `using Arpack`
-3. Specialized packages: `using FINUFFT`, `using QuadGK`, `using Optim`
-4. Utilities: `using Random`, `using ProgressMeter`, `using Distributed`
+**Order in source files:**
+1. Standard library imports (`using LinearAlgebra`, `using Random`, `using Printf`)
+2. Third-party package imports (`using BSON`, `using Arpack`, `using KrylovKit`)
+3. No relative imports — files included via `include()` calls in `src/QuantumFurnace.jl`
 
-**Module Export:**
-- Module defines exports at top after imports: `export AbstractConfig, LiouvConfig, HamHam, ...`
-- Grouped by functionality
-- Public API clearly demarcated with `# --- Public API ---` comment
-- Implementation includes listed with `include()` statements after exports
+**In test files:**
+1. `using Test` first
+2. Then any additional packages needed
+3. No need to re-import `QuantumFurnace` (done in `runtests.jl`)
+4. Comment stating `# test_helpers.jl is already included by runtests.jl`
 
-**Example from `src/QuantumFurnace.jl`:**
-```julia
-module QuantumFurnace
-using Pkg
-using Printf
-using LinearAlgebra
-...
-# --- Public API ---
-export AbstractConfig, AbstractLiouvConfig, ...
-# --- Internal Implementation ---
-include("constants.jl")
-include("hamiltonian.jl")
-...
-end
-```
+**Path Aliases:**
+- Not used; all cross-file references go through the module namespace or are `include()`d
 
 ## Error Handling
 
 **Patterns:**
-- `@assert` with error message for invariant checks: `@assert ishermitian(rescaled_hamiltonian) "..."`
-- `throw(ArgumentError("..."))` for invalid inputs: Used in `is_density_matrix`, `validate_config!`
-- Guard clauses with `===` checks: `trotter === nothing && error("A Trotter object must be provided")`
-- Configuration validation via `validate_config!(config)` before major operations
+- Use `error(message)` for domain invariant violations: `error("GNS configs must have with_coherent=false")`
+- Use `@assert` for runtime precondition checks: `@assert delta < 1.0 "delta = $(delta) >= 1.0: too large for CPTP channel"`
+- Use `throw(ArgumentError(...))` for invalid input arguments: `throw(ArgumentError("Expected $(Complex{T}) term data..."))`
+- Constructors enforce invariants via outer constructor methods (not inner)
+- No exception types beyond base Julia: no custom exception types
 
-**Example from `src/furnace.jl`:**
-```julia
-if config.domain isa TrotterDomain
-    trotter === nothing && error("A Trotter object must be provided for the TrotterDomain")
-    trotter
-else
-    hamiltonian
-end
-```
+## Logging and Debug Output
 
-## Logging
-
-**Framework:** `Printf.@printf` for output (no external logging library)
+**Framework:** `@printf` / `println` (no structured logging library)
 
 **Patterns:**
-- Progress output: `@printf("Done.\n")`, `@printf("Worst quadrature error for the energy integral: %s\n", energy_error)`
-- Debugging: `display()` and `norm()` calls in test/debug files
-- BenchmarkTools: `@time` and `@btime` macros for performance measurement
-
-**Example from test files:**
-```julia
-kraus_jumps = @time precompute_kraus_jumps(config.domain, jumps, hamiltonian, config, precomputed_data)
-psi = @btime evolve_along_trajectory(psi0, fw, total_time)
-```
+- Use `@printf("Done.\n")` for progress in long computations
+- Use `@info` in tests for diagnostic values: `@info "DMTST-01: Bohr fixed point trace distance to Gibbs" dist`
+- Commented-out debug prints are left in-place (e.g. `# @printf("Gaussian\n")`, `# @printf("Smooth Metro\n")`)
+- `ProgressMeter` is imported but usage is in long-running scripts
 
 ## Comments
 
 **When to Comment:**
-- Physics/algorithm explanations: Comments describe mathematical concepts
-- Non-obvious choices: Why a particular approximation or representation is used
-- Performance notes: Explains in-place operations and memory optimization
-- TODO/FIXME: Marked with `#!` or `#*` for visibility
+- All public functions get docstrings in `"""..."""` format with description, parameters, returns
+- Internal helpers get brief docstrings explaining purpose
+- Section delimiters use `# ---` or `# ===` banners with descriptive text
+- Physics/math derivations are commented inline: formula references, convention notes
+- Struct fields documented with `#` inline comments listing buffer purpose
+- Phase/plan references included as comments: `# Phase 27: Core Matvec Infrastructure`, `# TVAL-01`
 
-**JSDoc/TSDoc:**
-- Julia docstrings use `"""` format
-- Structured fields described in `# Fields` section
-- Parameters in `# Arguments` section (when needed)
+**Docstring format:**
+```julia
+"""
+    function_name(arg1, arg2) -> ReturnType
 
-**Style:**
-- Comments prefixed with `#` or `#*` (for section markers)
-- Complex algorithms documented with step-by-step comments
-- Example from `src/qi_tools.jl`:
-  ```julia
-  """
-      Computes C .+= alpha .* kron(A, B) completely in-place, without allocating
-      the result of the Kronecker product. Speed.
-  """
-  ```
+Brief description.
+
+More details if needed.
+
+# Arguments
+- `arg1`: Description
+"""
+```
+
+**Inline annotation style:**
+```julia
+# Compute: out[i,j] = eigenbasis[i,j] * exp(-(energy - bohr_freqs[i,j])^2 * inv_4sigma2)
+```
 
 ## Function Design
 
-**Size:**
-- Most functions 30-100 lines (balance between modularity and readability)
-- Helper functions factored out for reusability
-- Some domain-specific functions can be longer (100-200 lines) due to algorithm complexity
+**Size:** Functions are kept focused; large files are split by logical concern. Hot-path functions are kept minimal.
 
 **Parameters:**
-- Use type annotations for dispatch: `jump::JumpOp`, `hamiltonian::HamHam`
-- Domain dispatch via type: Methods specialized by `AbstractDomain` subtype
-- Keyword arguments for optional parameters: `hermitian_check = false`, `do_adjoint::Bool=false`
-- Union types for multiple accepted types: `Union{TrottTrott, Nothing}`, `Union{HamHam, TrottTrott}`
+- Positional arguments for primary data, keyword arguments for options with defaults
+- Workspace/scratch objects passed explicitly rather than created inside hot-path functions
+- Config structs bundle related parameters rather than long positional argument lists
 
 **Return Values:**
-- Explicit return statements for non-trivial returns
-- In-place functions return modified argument or `nothing`
-- Structured return types for complex results: `HotSpectralResults(data=..., fixed_point=...)`
-
-**Example from `src/hamiltonian.jl`:**
-```julia
-function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64}, num_qubits::Int64;
-    periodic::Bool = true, hermitian_check = false)
-    # Implementation
-    return hamiltonian
-end
-```
+- Functions return named tuples `(; field1, field2)` for lightweight multi-value returns
+- Heavy results use dedicated Result structs (`LindbladianResult`, `KrylovGapResult`, etc.)
+- Mutating functions (`!`) return `nothing` by convention (except `hermitianize!` which returns `A`)
+- Non-mutating hot-path functions return their output matrix
 
 ## Module Design
 
-**Exports:**
-- All public types exported explicitly: Types, main functions
-- Private implementation functions not exported
-- Two-step structure: public API section, then internal includes
+**Exports:** All public API is explicitly listed in `src/QuantumFurnace.jl` under grouped `export` statements with comments (Types, Domains, Trajectory, Results, etc.)
 
-**Barrel Files:**
-- Main module file `src/QuantumFurnace.jl` acts as barrel, importing and re-exporting
-- Each domain (bohr, energy, time, trotter) has dedicated file
-- Utility files: `constants.jl`, `qi_tools.jl`, `misc_tools.jl`
+**Internal naming convention:** Internal symbols prefixed with `_` are not exported but can be accessed as `QuantumFurnace._precompute_data(...)` in tests when needed.
 
-**Example structure:**
-```julia
-# src/QuantumFurnace.jl
-export AbstractConfig, LiouvConfig, HamHam, run_lindbladian, ...
-include("constants.jl")
-include("structs.jl")
-include("hamiltonian.jl")
-include("bohr_domain.jl")
-```
-
-## Dispatch Patterns
-
-**Multiple Dispatch:**
-- Heavy use of dispatch on domain type: `jump_contribution!(::BohrDomain, ...)`, `jump_contribution!(::EnergyDomain, ...)`
-- Dispatch on config type: `create_alpha(...)` functions have multiple implementations
-- Dispatch on struct type: `HamHam` vs `TrottTrott` for basis selection
-
-**Example from `src/jump_workers.jl`:**
-```julia
-function jump_contribution!(
-    L_target::AbstractMatrix{ComplexF64},
-    ::BohrDomain,
-    jump::JumpOp,
-    hamiltonian::HamHam,
-    ...
-)
-    # Bohr-domain specific implementation
-end
-
-function jump_contribution!(
-    L_target::AbstractMatrix{ComplexF64},
-    ::EnergyDomain,
-    jump::JumpOp,
-    ...
-)
-    # Energy-domain specific implementation
-end
-```
-
-## Type Annotations
-
-**Usage:**
-- Function arguments typed: `jump::JumpOp`, `beta::Float64`, `dim::Int`
-- Return type annotations sometimes used but not consistently: `-> Matrix{ComplexF64}`
-- Type-parameterized structs: `struct TrajectoryWorkspace{T}`
-- Union types for optional parameters: `Union{Matrix{T}, Nothing}`
-
-**Example from `src/trajectories.jl`:**
-```julia
-struct TrajectoryWorkspace{T}
-    jump_oft::Matrix{T}
-    psi_tmp::Vector{T}
-    Rpsi::Vector{T}
-end
-
-function TrajectoryWorkspace(::Type{T}, dim::Int) where {T}
-    return TrajectoryWorkspace{T}(
-        zeros(T, dim, dim),
-        zeros(T, dim),
-        zeros(T, dim),
-    )
-end
-```
+**Barrel Files:** Not used; a single module file (`src/QuantumFurnace.jl`) includes all source files via `include()`.
 
 ---
 
-*Convention analysis: 2026-02-13*
+*Convention analysis: 2026-02-25*

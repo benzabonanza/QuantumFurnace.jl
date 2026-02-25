@@ -1,332 +1,188 @@
 # Architecture
 
-**Analysis Date:** 2026-02-13
+**Analysis Date:** 2026-02-25
 
 ## Pattern Overview
 
-**Overall:** Domain-layered quantum simulation framework with progressive approximation levels
+**Overall:** Layered scientific simulation library — domain-parameterized dispatch over a physics abstraction hierarchy
 
 **Key Characteristics:**
-- Four approximation domains (Bohr → Energy → Time → Trotter) representing different levels of physical approximation
-- Central configuration-driven pattern: configuration objects determine behavior across all layers
-- Workspace/precomputation pattern: expensive calculations cached upfront, consumed by operators
-- Generic over domain types: single jump operator contribution logic dispatches by domain
+- All public behavior dispatches on `AbstractDomain` subtypes (`BohrDomain`, `EnergyDomain`, `TimeDomain`, `TrotterDomain`), which represent approximation levels from exact quantum to hardware-realizable circuit
+- Configs carry domain as a type parameter `AbstractConfig{D<:AbstractDomain, T<:AbstractFloat}`, so the compiler selects the right algorithm path at dispatch time with zero runtime overhead
+- Workspaces are pre-allocated structs — all hot-path matrix computations write into pre-allocated scratch buffers with no allocations per step
 
 ## Layers
 
-**Physical Abstraction Layers (Approximation Domains):**
+**Configuration Layer:**
+- Purpose: Encode all physical and numerical parameters for a simulation run
+- Location: `src/structs.jl`
+- Contains: `LiouvConfig`, `LiouvConfigGNS`, `ThermalizeConfig`, `ThermalizeConfigGNS` — all parameterized `{D<:AbstractDomain, T<:AbstractFloat}`
+- Depends on: `AbstractDomain` singletons (`BohrDomain()`, etc.), physical scalars
+- Used by: Everything; configs flow through every computation
 
-The core innovation is a hierarchy of domains, each representing a different level of physical approximation. All domains implement the same computational interface but trade accuracy for performance.
+**Hamiltonian Layer:**
+- Purpose: Store Hamiltonians, their spectral decompositions, Bohr frequencies, Gibbs states, and Trotter approximations
+- Location: `src/hamiltonian.jl`, `src/trotter_domain.jl`
+- Contains: `HamHam{T}` (Hamiltonian data + eigenbasis + Gibbs), `TrottTrott{T}` (Trotter unitary eigenbasis)
+- Depends on: `LinearAlgebra`, `BSON` (for loading pre-computed files from `hamiltonians/`)
+- Used by: All simulation layers; Hamiltonians are constructed once and passed everywhere
 
-- **BohrDomain** (`bohr_domain.jl`)
-  - Purpose: Decompose jump operators by exact Bohr frequencies (ω_ij = E_i - E_j)
-  - Location: `src/bohr_domain.jl`
-  - Consumes: Hamiltonian eigendecomposition, bohr_dict (eigenindex mapping)
-  - Produces: Direct spectral jump contributions
-  - Used by: `jump_contribution!` for BohrDomain dispatch
+**Jump Operator Layer:**
+- Purpose: Represent the physical jump operators (Lindblad operators) that drive thermalization
+- Location: `src/structs.jl` (`JumpOp`), `src/bohr_domain.jl`, `src/energy_domain.jl`, `src/jump_workers.jl`
+- Contains: `JumpOp` struct (data in computational basis + `in_eigenbasis` for fast domain computations)
+- Depends on: `HamHam` or `TrottTrott` for basis; `AbstractConfig` for domain dispatch
+- Used by: `furnace.jl`, `trajectories.jl`, `krylov_workspace.jl`
 
-- **EnergyDomain** (`energy_domain.jl`)
-  - Purpose: Approximate Bohr frequencies as continuous energy integrals via Gaussian envelope
-  - Location: `src/energy_domain.jl`
-  - Consumes: Transition weight functions (Gaussian, Metropolis, Glauber), energy labels
-  - Produces: Energy-discretized jump contributions
-  - Used by: `jump_contribution!` for EnergyDomain dispatch
+**Coherent Correction Layer:**
+- Purpose: Compute and precompute the coherent term B (correction that makes fixed point exactly the Gibbs state)
+- Location: `src/coherent.jl`, `src/furnace_utensils.jl`
+- Contains: `B_bohr`, `B_time`, `B_trotter`; `_precompute_data` family (returns domain-specific NamedTuples)
+- Depends on: `HamHam`/`TrottTrott`, domain-specific OFT functions from `src/ofts.jl` and `src/nufft.jl`
+- Used by: `furnace.jl` (dense Liouvillian path), `krylov_workspace.jl` (matrix-free path)
 
-- **TimeDomain** (`time_domain.jl`, `ofts.jl`)
-  - Purpose: Expand energy approximations via time-domain Fourier transforms (OFT: Oscillatory Fourier Transform)
-  - Location: `src/time_domain.jl`, `src/ofts.jl`
-  - Consumes: Time labels, time_oft_! caches with NUFFT prefactors
-  - Produces: Time-discretized approximations of energy integrals
-  - Used by: `jump_contribution!` for TimeDomain dispatch
+**Simulation Layer — Dense Path:**
+- Purpose: Construct the full `dim^2 × dim^2` Liouvillian matrix or run step-by-step density matrix thermalization
+- Location: `src/furnace.jl`, `src/jump_workers.jl`
+- Contains: `run_lindbladian`, `construct_lindbladian`, `run_thermalization`; `_jump_contribution!` (accumulates dissipator in-place)
+- Depends on: All layers above; uses `LindbladianWorkspace` for scratch buffers
+- Used by: Callers in `simulations/`, spectral analysis via Arpack
 
-- **TrotterDomain** (`trotter_domain.jl`)
-  - Purpose: Implement time evolution via Trotterization for quantum circuit compilation
-  - Location: `src/trotter_domain.jl`
-  - Consumes: Trotter unitaries, quasi-Bohr frequencies from Trotter eigenvalues
-  - Produces: Circuit-implementable jump operators
-  - Used by: `jump_contribution!` for TrotterDomain dispatch
+**Simulation Layer — Matrix-Free Krylov Path:**
+- Purpose: Apply Lindbladian action as a function (matvec) without building the full matrix; enables scaling to larger n
+- Location: `src/krylov_workspace.jl`, `src/krylov_matvec.jl`, `src/krylov_eigsolve.jl`
+- Contains: `KrylovWorkspace` (pre-allocated scratch), `apply_lindbladian!`, `apply_adjoint_lindbladian!`, `krylov_spectral_gap`
+- Depends on: `KrylovKit`, `JumpOp`, `HamHam`/`TrottTrott`, precomputed effective Hamiltonians `G_left`/`G_right`
+- Used by: Large-system spectral gap estimation; cross-validated against dense path
 
-**Computation Layer:**
+**Trajectory Layer:**
+- Purpose: Monte Carlo quantum trajectory simulation (stochastic unraveling of the Lindbladian)
+- Location: `src/trajectories.jl`
+- Contains: `TrajectoryFramework`, `PerOperatorKraus`, `step_along_trajectory!`, `run_observable_trajectories`, `run_trajectories`
+- Depends on: `JumpOp`, `HamHam`/`TrottTrott`, `AbstractThermalizeConfig`; `TrajectoryWorkspace` for scratch
+- Used by: Convergence tracking, gap estimation, experiments
 
-- **Configuration & Validation** (`structs.jl`)
-  - Purpose: Hold all simulation parameters and validate consistency across domains
-  - Location: `src/structs.jl`
-  - Core types: `LiouvConfig`, `LiouvConfigGNS`, `ThermalizeConfig`, `ThermalizeConfigGNS`
-  - Validation: `validate_config!` ensures coherence across domain parameters
+**Analysis Layer:**
+- Purpose: Extract spectral gap and validate convergence from trajectory data
+- Location: `src/gap_estimation.jl`, `src/convergence.jl`, `src/fitting.jl`, `src/diagnostics.jl`
+- Contains: `estimate_spectral_gap`, `run_trajectories_convergence`, `fit_exponential_decay`, `run_exact_diagnostics`
+- Depends on: Trajectory layer results; `LsqFit` for curve fitting; Arpack for dense diagnostics
+- Used by: Experiment scripts in `experiments/`, `simulations/`
 
-- **Jump Operators** (`structs.jl`, `jump_workers.jl`)
-  - Purpose: Encapsulate dissipative dynamics (Lindblad jump operators)
-  - Location: `src/jump_workers.jl`
-  - Core type: `JumpOp(data, in_eigenbasis, orthogonal, hermitian)`
-  - Key function: `jump_contribution!(L_target, domain, jump, ...)` — main dispatcher
-  - Pattern: Single function with domain-specific methods handles all jump accumulation
-
-- **Hamiltonian Management** (`hamiltonian.jl`)
-  - Purpose: Encapsulate system Hamiltonian with spectral decomposition and Bohr frequencies
-  - Location: `src/hamiltonian.jl`
-  - Core type: `HamHam(data, bohr_freqs, bohr_dict, eigvals, eigvecs, gibbs, ...)`
-  - Functions: `HamHam()` constructor, `find_ideal_heisenberg()`, `finalize_hamham()`
-  - Caches: Bohr frequency matrix (dim² × dim²), bohr_dict (frequency → CartesianIndex map)
-
-- **Liouvillian Construction** (`furnace.jl`)
-  - Purpose: Build vectorized Lindbladian superoperators ℒ (dim² × dim²)
-  - Location: `src/furnace.jl`
-  - Core functions:
-    - `run_lindbladian(jumps, config, hamiltonian)` → `HotSpectralResults`
-    - `construct_lindbladian(jumps, config, hamiltonian)` → sparse/dense Liouvillian matrix
-  - Pattern: Accumulates per-jump contributions in-place without allocating full dim² × dim² per jump
-  - Workspace: `LindbladianWorkspace` holds reusable buffers for jump ops and products
-
-- **Thermalization Simulation** (`furnace.jl`, `trajectories.jl`)
-  - Purpose: Implement step-by-step quantum algorithm emulation
-  - Location: `src/furnace.jl`, `src/trajectories.jl`
-  - Core functions:
-    - `run_thermalization(jumps, config, dm_init, hamiltonian)` → `HotAlgorithmResults`
-    - `build_trajectoryframework()` → `TrajectoryFramework` (precomputed Kraus operators)
-    - `step_along_trajectory!(dm, framework, rng)`
-  - Pattern: Precompute all Kraus operators ({K_0, K_res, U_coherent}) once, reuse per step
-  - Measurement: Track trace distance to Gibbs state at each step
-
-**Infrastructure Layer:**
-
-- **Precomputation** (`furnace_utensils.jl`, `coherent.jl`)
-  - Purpose: Cache expensive calculations (energy labels, transition functions, coherent terms)
-  - Location: `src/furnace_utensils.jl`, `src/coherent.jl`
-  - Core function: `precompute_data(domain, config, ham_or_trott)` → precomputed_data tuple
-  - Outputs: Domain-specific cached data (e.g., alpha function, gamma_norm_factor, OFT prefactors)
-
-- **Coherent Terms** (`coherent.jl`, `bohr_domain.jl`)
-  - Purpose: Compute B = sum_k B_k (coherent correction for exact detailed balance)
-  - Location: `src/coherent.jl`, `src/bohr_domain.jl`
-  - Key functions:
-    - `precompute_coherent_total_B()` — computes total coherent term
-    - `precompute_coherent_unitary_terms()` — exp(-iδ B_k) per jump for Kraus
-    - `coherent_bohr()` — domain-specific B computation
-  - Pattern: Reused in both Liouvillian and trajectory (Kraus) contexts
-
-- **Quantum Information Tools** (`qi_tools.jl`)
-  - Purpose: Efficient quantum state operations and metrics
-  - Location: `src/qi_tools.jl`
-  - Functions: `kron!()` (in-place Kronecker), `vectorize_liouv_diss_and_add!()`, `trace_distance_h()`, `fidelity()`, `gibbs_state()`, `gibbs_state_in_eigen()`
-  - Pattern: In-place operations to minimize allocations in large-dim Lindbladian assembly
-
-- **Numerical Transforms** (`nufft.jl`, `ofts.jl`)
-  - Purpose: Oscillatory Fourier transforms and NUFFT acceleration
-  - Location: `src/nufft.jl`, `src/ofts.jl`
-  - Functions: `oft!()`, `time_oft!()`, `trotter_oft!()`, `prepare_oft_nufft_prefactors()`
-  - Pattern: Cache Gaussian prefactors; reuse across all jumps
-
-- **Error Handling** (`errors.jl`)
-  - Purpose: Custom exception types for validation failures
-  - Location: `src/errors.jl`
-  - Currently minimal; room for domain-specific error types
+**Persistence Layer:**
+- Purpose: Save and load experiment results to/from BSON files with metadata and provenance
+- Location: `src/results.jl`
+- Contains: `ExperimentResult`, `save_experiment`, `load_experiment`; Dict-based BSON serialization to handle struct evolution
+- Depends on: `BSON`, `LibGit2` (embeds git hash in metadata)
+- Used by: Experiment scripts; results stored in `results/`
 
 ## Data Flow
 
-**Liouvillian Construction Flow:**
+**Dense Liouvillian Path:**
 
-```
-1. User configures: LiouvConfig(domain, num_qubits, beta, sigma, ...)
+1. User constructs `HamHam` (from terms/coeffs) or loads from `hamiltonians/*.bson` via `load_hamiltonian`
+2. User creates `LiouvConfig` (or `LiouvConfigGNS`) with domain, beta, sigma, etc.
+3. User constructs `JumpOp` vector (one per site/interaction)
+4. `construct_lindbladian(jumps, config, hamiltonian)` → calls `_precompute_data(config, ham_or_trott)` → domain-specific NamedTuple
+5. `_jump_contribution!(liouv_matrix, jump, ...)` accumulates each jump's dissipator into the `dim^2 × dim^2` matrix in-place via `LindbladianWorkspace`
+6. Arpack `eigs()` extracts near-zero eigenvalues → `LindbladianResult` (gap, fixed point, gap mode)
 
-2. validate_config!(config)
-   → Ensures num_energy_bits, t0, w0, coherent flags are consistent
+**Trajectory Thermalization Path:**
 
-3. finalize_hamham(hamiltonian, beta)
-   → Compute bohr_freqs, bohr_dict, gibbs state
+1. User constructs `HamHam`, `ThermalizeConfig`, `JumpOp` vector
+2. `build_trajectoryframework(jumps, ham_or_trott, config, ...)` precomputes per-operator Kraus data (`PerOperatorKraus`: `R`, `K0`, `U_residual`, `U_B`)
+3. `step_along_trajectory!(ws, fw, rng)` applies a random CPTP channel step using pre-allocated `TrajectoryWorkspace`
+4. Multiple trajectories run (multi-threaded via `Base.Threads`), accumulating density matrix
+5. Observable expectation values recorded at save intervals → `ObservableTrajectoryResult`
+6. `fit_exponential_decay` fits observable time series → `FitResult` → `SpectralGapResult`
 
-4. construct_lindbladian(jumps, config, hamiltonian)
-   → precompute_data(config.domain, config, hamiltonian)
-      → Domain-specific: alpha functions, gamma_norm_factor, labels
+**Matrix-Free Krylov Path:**
 
-   → For each jump in jumps:
-      jump_contribution!(L, domain, jump, hamiltonian, config, precomputed_data, ws)
-      → Domain-dispatched method accumulates L in-place
-      → Uses precomputed_data (cached alpha, gamma, transition functions)
+1. `KrylovWorkspace(config, hamiltonian, jumps)` precomputes `G_left`, `G_right` (effective Hamiltonian terms), coherent `B_total`, and per-jump eigenbases
+2. `apply_lindbladian!(out_vec, in_vec, ws)` computes `L(rho)` via BLAS GEMMs on scratch — zero allocations per call
+3. `KrylovKit.eigsolve` invokes the linear map repeatedly → leading eigenvalues
+4. Results packaged as `KrylovGapResult`
 
-   → Result: Full Liouvillian L (dim² × dim²)
-
-5. run_lindbladian(jumps, config, hamiltonian)
-   → construct_lindbladian(...) → L
-   → Spectral analysis via eigs(L)
-   → Extract: steady_state, spectral_gap
-   → Return: HotSpectralResults{D}
-```
-
-**Thermalization (Trajectory) Flow:**
-
-```
-1. build_trajectoryframework(jumps, hamiltonian, config, delta)
-   → precompute_data(...) [same as Liouvillian]
-   → precompute_R() — dissipative skeleton
-   → K0 = (1 - √(1-δ)) I - αR  [Kraus K0 operator]
-   → U_residual from Cholesky of S = 2αR - α²R²
-   → precompute_coherent_unitaries: {U_{B,k}} per jump
-   → Return: TrajectoryFramework (immutable precomputed structure)
-
-2. run_thermalization(jumps, config, dm_init, hamiltonian)
-   → framework = build_trajectoryframework(...)
-   → For each step t = 1, 2, ..., ceil(mixing_time/delta):
-      → Sample jump index k uniformly at random
-      → step_along_trajectory!(dm, framework, k)
-         → Apply K0 (coherent term optional)
-         → Apply randomized jump (Kraus K_{k,i})
-         → Apply U_residual (final Kraus)
-      → Measure: trace_distance_h(dm, gibbs)
-   → Return: HotAlgorithmResults{D}
-```
-
-**Energy Label & Transition Weight Flow:**
-
-```
-Energy/Time discretization:
-   create_energy_labels(num_energy_bits, w0)
-   → w_j = j * w0, j ∈ [-2^(num_energy_bits-1), +2^(num_energy_bits-1)]
-
-   truncate_energy_labels(labels, config)
-   → Discard labels where |transition(w)| < tolerance
-
-   Time labels (for Time/Trotter domains):
-   time_labels = energy_labels * (t0 / w0)
-   truncate_time_labels_for_oft(time_labels, sigma)
-   → Discard times where Gaussian decay negligible
-
-Transition functions (domain-independent selection):
-   pick_transition(config) → Returns ω ↦ γ(ω)
-
-   For KMS (detailed balance):
-   - Gaussian: exp(-(ω - ω_γ)² / (2σ_γ²))
-   - Metropolis (a>0, b=0): exp(-2√((β/4)(1+4a)) |ω + βσ²/2| - βω/2 - ...)
-   - Glauber (a>0, b>0): Metropolis × smoothing via erfc
-
-   For GNS (approx. detailed balance):
-   - Same forms but unshifted (ω instead of ω + βσ²/2)
-
-Normalization:
-   gamma_norm_factor = 1 / max_w γ(w)
-   → All γ(w) scaled by this before use in jump_contribution!
-```
+**State Management:**
+- All mutable state lives in workspace structs (`LindbladianWorkspace`, `TrajectoryWorkspace`, `KrausScratch`, `KrylovWorkspace`) that are explicitly constructed before hot loops
+- Config structs and Hamiltonian structs are fully immutable (all fields computed at construction)
+- `ConvergenceData` accumulates scalar metrics only (not full density matrices) to keep memory O(n_batches)
 
 ## Key Abstractions
 
-**AbstractDomain & Domain Types:**
+**AbstractDomain Hierarchy:**
+- Purpose: Encodes the level of approximation from exact theory to quantum circuit
+- Examples: `BohrDomain` (exact Bohr frequency decomposition), `EnergyDomain` (energy integral), `TimeDomain` (Fourier of time evolution), `TrotterDomain` (Trotterized circuit)
+- Pattern: Singleton structs used purely for dispatch — `config.domain isa TrotterDomain` branch selection at function entry
 
-- Purpose: Encode computational approach; no fields, only use for dispatch
-- Definition: `abstract type AbstractDomain end`; `struct BohrDomain <: AbstractDomain end`, etc.
-- Usage: `jump_contribution!(L, ::BohrDomain, ...)` has different implementation than `jump_contribution!(L, ::TimeDomain, ...)`
-- Benefit: Single function name, type-safe per-domain logic
+**AbstractConfig Hierarchy:**
+- Purpose: Unified carrier for all simulation parameters, parameterized to allow dispatch on domain and precision
+- Examples: `src/structs.jl` — `LiouvConfig{D,T}`, `LiouvConfigGNS{D,T}`, `ThermalizeConfig{D,T}`, `ThermalizeConfigGNS{D,T}`
+- Pattern: `@kwdef struct` with `Union{T, Nothing}` fields for domain-dependent params; `validate_config!` enforces consistency
 
-**AbstractConfig & Config Hierarchy:**
+**HamHam / TrottTrott Pair:**
+- Purpose: Unified "physics object" carrying both the matrix and its spectral decomposition; avoids repeated diagonalization
+- Examples: `src/hamiltonian.jl`, `src/trotter_domain.jl`
+- Pattern: Constructed once with full spectral data; `ham_or_trott::Union{HamHam, TrottTrott}` appears throughout as a unified argument
 
-- Purpose: Unified parameter container validated at entry
-- Hierarchy:
-  ```
-  AbstractConfig{D <: AbstractDomain}
-    ├─ AbstractLiouvConfig{D}
-    │   ├─ LiouvConfig{D}
-    │   └─ LiouvConfigGNS{D}
-    └─ AbstractThermalizeConfig{D}
-        ├─ ThermalizeConfig{D}
-        └─ ThermalizeConfigGNS{D}
-  ```
-- Shared fields: `num_qubits, with_coherent, with_linear_combination, domain, beta, sigma, a, b, num_energy_bits, t0, w0, eta, num_trotter_steps_per_t0`
-- Thermalizing variants add: `mixing_time, delta`
-- GNS variants: `with_coherent::Bool = false` (locked to false by design)
+**Workspace Pattern:**
+- Purpose: Pre-allocated scratch matrices for zero-allocation hot paths
+- Examples: `LindbladianWorkspace` (`src/structs.jl`), `TrajectoryWorkspace` (`src/trajectories.jl`), `KrausScratch` (`src/kraus.jl`), `KrylovWorkspace` (`src/krylov_workspace.jl`)
+- Pattern: Constructed once before a loop; passed mutably into inner functions; never allocated inside the hot path
 
-**JumpOp:**
-
-- Purpose: Encapsulate one dissipative mode
-- Fields:
-  - `data::AbstractMatrix{ComplexF64}` — operator in computational basis
-  - `in_eigenbasis::Matrix{ComplexF64}` — transformed to Hamiltonian eigenbasis
-  - `orthogonal::Bool` — true iff A = A^T (X, Z Paulis)
-  - `hermitian::Bool` — true iff A = A†
-- Usage: `jump_contribution!` branches on orthogonal/hermitian flags to optimize computation
-
-**TrajectoryFramework:**
-
-- Purpose: Immutable cache of all precomputed Kraus operators for trajectory simulation
-- Fields:
-  - `jumps, ham_or_trott, config, precomputed_data` — input references
-  - `B, U_B` — coherent term and its exponentiated unitary (optional)
-  - `R, K0, U_residual` — Kraus skeleton operators
-  - `delta, alpha` — time step and α = 1 - √(1-δ)
-  - `ws::TrajectoryWorkspace` — mutable buffer for stepping
-- Pattern: Build once, reuse across all trajectory steps
+**OFT (Optimal Fourier Transform) family:**
+- Purpose: Compute the frequency-filtered jump operator `A(ω)` — the core operation of the quantum bath coupling
+- Examples: `src/ofts.jl` (`oft!`, `time_oft!`, `trotter_oft!`), `src/krylov_matvec.jl` (`_krylov_oft!`), NUFFT-accelerated version in `src/nufft.jl`
+- Pattern: In-place mutation of output matrix; Gaussian envelope `exp(-(ω - ν)^2 / 4σ²)` applied per Bohr frequency
 
 ## Entry Points
 
-**High-level API Functions:**
+**Library Entry Point:**
+- Location: `src/QuantumFurnace.jl`
+- Triggers: `using QuantumFurnace` in any script
+- Responsibilities: Declares module, all imports, all exports, and `include`s all source files in dependency order
 
-**`run_lindbladian(jumps, config, hamiltonian; trotter=nothing) → HotSpectralResults{D}`**
-- Location: `src/furnace.jl` (lines 1–39)
-- Triggers: User initiates spectral analysis of a single Liouvillian
-- Responsibilities:
-  1. Validate config
-  2. Construct full Liouvillian
-  3. Compute 2 smallest eigenvalues (shift-invert via Arpack)
-  4. Extract steady state and spectral gap
-  5. Return spectral analysis results
+**Dense Simulation Entry Points:**
+- Location: `src/furnace.jl`
+- `run_lindbladian(jumps, config, hamiltonian)` → spectral analysis via Arpack, returns `LindbladianResult`
+- `construct_lindbladian(jumps, config, hamiltonian)` → raw `dim^2 × dim^2` Liouvillian matrix
+- `run_thermalization(jumps, config, evolving_dm, hamiltonian)` → step-by-step DM evolution, returns `DMSimulationResult`
 
-**`run_thermalization(jumps, config, dm_init, hamiltonian; trotter=None, rng, rescale_by_inv_prob) → HotAlgorithmResults{D}`**
-- Location: `src/furnace.jl` (lines 80–145)
-- Triggers: User wants step-by-step algorithm emulation
-- Responsibilities:
-  1. Validate config
-  2. Precompute Kraus operators via `build_trajectoryframework()`
-  3. Iterate: sample jump uniformly, apply Kraus, measure trace distance
-  4. Track convergence; stop early if distance < 1e-5
-  5. Return full evolution history
+**Trajectory Entry Points:**
+- Location: `src/trajectories.jl`
+- `build_trajectoryframework(jumps, ham_or_trott, config, ...)` → `TrajectoryFramework`
+- `run_trajectories(jumps, config, hamiltonian; ...)` → `TrajectoryResult`
+- `run_observable_trajectories(fw, observables, ...)` → `ObservableTrajectoryResult`
 
-**`construct_lindbladian(jumps, config, hamiltonian; trotter=None) → Matrix{ComplexF64}`**
-- Location: `src/furnace.jl` (lines 41–78)
-- Triggers: Internal; called by `run_lindbladian`
-- Responsibilities:
-  1. Dispatch `precompute_data()` by domain
-  2. Allocate workspace buffers
-  3. For each jump, call `jump_contribution!` accumulating into L in-place
-  4. Return full Liouvillian (no allocation of individual dim² × dim² per jump)
+**Gap Estimation Entry Points:**
+- Location: `src/gap_estimation.jl`, `src/krylov_eigsolve.jl`
+- `estimate_spectral_gap(fw, hamiltonian, ...)` → `SpectralGapResult` (trajectory-based)
+- `krylov_spectral_gap(config, hamiltonian, jumps; ...)` → `KrylovGapResult` (matrix-free)
 
-**Module Entry: `src/QuantumFurnace.jl`**
-- Location: `src/QuantumFurnace.jl` (lines 1–67)
-- Responsibilities:
-  1. Define module boundary
-  2. Import all dependencies
-  3. Include all submodules in order (respecting DAG: constants → hamiltonian → ... → furnace)
-  4. Export public API (configs, domains, entry points, utilities)
+**Simulation Scripts:**
+- Location: `simulations/main_liouv.jl`, `simulations/main_thermalize.jl`, `simulations/main_krylov_benchmark.jl`
+- Triggers: Run as standalone Julia scripts with `julia --project simulations/main_*.jl`
 
 ## Error Handling
 
-**Strategy:** Configuration validation upfront; minimal runtime error recovery
+**Strategy:** Eager validation at entry points; hard `error()` calls for type mismatches; `@assert` for preconditions in internal functions; `@warn` for advisory conditions (e.g., memory estimates)
 
 **Patterns:**
-- `validate_config!(config)` checks:
-  - Coherence of approximation parameters (num_energy_bits, t0, w0 interplay)
-  - Domain feasibility (TrotterDomain requires explicit trotter object)
-  - Physical bounds (beta > 0, sigma > 0, etc.)
-- Domain-specific assertions: TrotterDomain errors if `trotter === nothing`
-- Linear algebra: Arpack eigs may fail to converge; wrapped with `tol=1e-12` and shift-invert for robustness
-- Cholesky in trajectory: `cholesky!(..., check=false)` — numerical issues logged but proceed
-
-**Current gaps:**
-- No recovery from failed Liouvillian construction
-- Limited messaging on why convergence fails
-- Room for domain-specific exceptions (e.g., `BohrFrequencyResolutionError`)
+- `validate_config!(config)` called at top of `run_lindbladian` and `run_thermalization` — enforces domain-specific parameter presence
+- Type mismatch between `HamHam{Th}` and config `{Tc}` raises `error("Type mismatch: ...")` immediately
+- `ThermalizeConfigGNS` outer constructor raises `error("GNS configs must have with_coherent=false")` at construction
+- Krylov memory guard: `_check_krylov_memory(n_qubits, krylovdim)` issues `@warn` if estimated memory > 80% of free
 
 ## Cross-Cutting Concerns
 
-**Logging:** Printf-based via `@printf("text")` to stdout; see `print_press(config)` for config summary
+**Logging:** `@printf` / `println` directly to stdout; no logging framework; progress tracked via `ProgressMeter` in multi-trajectory runs
 
-**Validation:** Central `validate_config!(config)` called at entry to `run_lindbladian` and `run_thermalization`
+**Validation:** `validate_config!` in `src/furnace_utensils.jl` (or similar); domain-specific required fields checked at simulation start
 
-**Authentication:** Not applicable (no external services)
+**Precision:** All structs parameterized on `T<:AbstractFloat`; default is `Float64`; mixed precision errors caught early via explicit type checks
 
-**Performance:**
-- In-place operations throughout (Kronecker `kron!()`, OFT `oft!()`, jump accumulation)
-- Workspace pattern: preallocate buffers, reuse across loop iterations
-- NUFFT caching: `prepare_oft_nufft_prefactors()` avoids Fourier transforms in tight loops
-- Thread pools: `@distributed (+)` loops in `construct_lindbladian` (commented; available)
-- SharedArrays support for distributed jumps across nodes (config via `use_shared_array` flag)
+**Multi-threading:** `Base.Threads.@threads` over trajectory batches; `SharedArrays` available for distributed runs; `Distributed` used in simulation scripts for multi-process parallelism
 
 ---
 
-*Architecture analysis: 2026-02-13*
+*Architecture analysis: 2026-02-25*

@@ -1,126 +1,115 @@
 # Technology Stack
 
-**Analysis Date:** 2026-02-13
+**Analysis Date:** 2026-02-25
 
 ## Languages
 
 **Primary:**
-- Julia 1.12.4 - Entire codebase for quantum simulation and numerical computations
+- Julia 1.12.5 - All core library code in `src/`, simulation scripts in `simulations/`, `experiments/`
+
+**Secondary:**
+- Python 3.x (3.11/3.12 seen in `__pycache__`) - Validation and prototype tooling in `tools/python/`
+- Mathematica - Analytical reference notebooks in `tools/mathematica/`
 
 ## Runtime
 
 **Environment:**
-- Julia 1.12.4 (specified in `Manifest.toml`)
+- Julia 1.12.5 (pinned in `Manifest.toml`, minimum 1.11 per `Project.toml` compat)
 
 **Package Manager:**
-- Julia package manager (Pkg) - built into Julia standard library
-- Lockfile: `Manifest.toml` present
+- Julia built-in `Pkg`
+- Lockfile: `Manifest.toml` present and committed (machine-generated)
 
 ## Frameworks
 
 **Core:**
-- LinearAlgebra (1.12.0) - Matrix operations and eigenvalue decomposition
-- SparseArrays (1.12.0) - Sparse matrix handling for efficiency
-- Distributed (built-in) - Distributed computing across nodes/clusters
-- SharedArrays (1.11.0) - Shared memory arrays for distributed workloads
-- Base.Threads - Multi-threaded execution
-
-**Numerical Methods:**
-- Arpack (0.5.4) - Eigenvalue and SVD computations
-- Optim (1.13.3) - Optimization algorithms for energy minimization
-- QuadGK - Adaptive quadrature integration
-- Roots - Root-finding algorithms
-- SpecialFunctions - Special mathematical functions (erfc, etc.)
-
-**Simulation & Visualization:**
-- Plots (in Project.toml) - Visualization and result plotting
-- ProgressMeter - Progress bar tracking for long simulations
-- Printf - Formatted output
-
-**Computation Acceleration:**
-- FINUFFT (3.4.2) - Fast Non-Uniform FFT for trajectory calculations (in `trajectories.jl`)
-
-**Data Serialization:**
-- BSON (in Project.toml) - Binary format for saving/loading Hamiltonian objects (`misc_tools.jl`)
-
-**Development & Debugging:**
-- Revise (3.12.1) - Hot-reloading for iterative development
-- Debugger (0.7.15) - Interactive debugging
-
-**Documentation Generation:**
-- Documenter (1.15.0) - API documentation generation
-- Literate (2.20.1) - Literate programming for tutorials
-- DocumenterTools (0.1.20) - Helper tools for documentation
+- No web framework - pure scientific computing library
 
 **Testing:**
-- Test (built-in) - Julia standard testing framework
+- `Test` (stdlib) v1.11+ - Test runner and `@testset`/`@test` macros
+- `Aqua` v0.8 - Package quality assurance (ambiguity, stale deps, unbound type params)
+- `BenchmarkTools` v1 - Performance regression benchmarking in tests
+- `HypothesisTests` v0.11 - Statistical hypothesis testing for trajectory convergence
+- `StableRNGs` v1 - Reproducible RNG seeding in tests
+- `StatsBase` v0.34 - Statistical utilities
 
-**Cluster Management:**
-- ClusterManagers (in Project.toml) - Management of Julia worker processes on clusters
-- DataStructures (in Project.toml) - Efficient data structures (deques, heaps, etc.)
+**Documentation:**
+- `Documenter` v1 - API doc generation, deployed via GitHub Actions
+- `Literate` v2 - Literate programming: `.jl` files in `docs/src/literate/` compiled to Markdown
 
-**Benchmarking:**
-- BenchmarkTools (1.6.3) - Performance benchmarking and profiling
+**Build/Dev:**
+- `Revise` v3 - Live code reloading during development (dev-only, in `[extras]`)
+- `Debugger` v0.7 - Interactive debugging (dev-only, in `[extras]`)
 
 ## Key Dependencies
 
-**Critical for Core Physics:**
-- Arpack - Essential for eigendecomposition of Hamiltonian and Liouvillian matrices
-- LinearAlgebra - All matrix operations including density matrix evolution
-- SparseArrays - Memory-efficient sparse matrix operations
-- FINUFFT - Fast non-uniform FFT for coherent term calculations in trajectories
+**Critical - Numerical Linear Algebra:**
+- `KrylovKit` v0.8–0.10 - Matrix-free Krylov eigensolver (Arnoldi); used in `src/krylov_eigsolve.jl` for spectral gap computation without constructing full Liouvillian
+- `Arpack` v0.5.4 - Dense eigensolver for full Liouvillian matrices; used in `src/gap_estimation.jl`
+- `LinearAlgebra` (stdlib) - BLAS/LAPACK wrappers; `mul!`, `eigen`, `Hermitian`, `tr`, `I`
+- `LinearMaps` v3 - Lazy linear map abstractions; used in `src/linearmaps_liouv.jl`
+- `SparseArrays` (stdlib) - Sparse matrix support
+
+**Critical - Physics/Signal Processing:**
+- `FINUFFT` v3 - Non-Uniform Fast Fourier Transform; used in `src/nufft.jl` for operator Fourier transforms (OFTs) in `TimeDomain` and `TrotterDomain` — requires Float64 inputs
+- `SpecialFunctions` v2 - `erfc` (complementary error function) for transition functions
+
+**Optimization & Fitting:**
+- `Optim` v1 - Nonlinear optimization; used in `src/log_sobolev.jl` for LSI alpha2 computation
+- `LsqFit` v0.15 - Levenberg-Marquardt nonlinear least squares; used in `src/fitting.jl` for exponential decay fitting of spectral gaps
+- `QuadGK` v2 - Adaptive Gauss-Kronrod integration
+- `Roots` v2 - Root-finding algorithms
+
+**Data & Persistence:**
+- `BSON` v0.3 - Binary JSON serialization; used in `src/results.jl` for experiment persistence (`.bson` files in `results/` and `experiments/`)
+- `DataStructures` v0.18–0.19 - Extended data structures (queues, etc.)
 
 **Infrastructure:**
-- Distributed - Enables distributed computing on multiple nodes for large simulations
-- SharedArrays - Efficient sharing of arrays between worker processes
-- ClusterManagers - Integration with HPC cluster job scheduling
+- `Distributed` (stdlib) - Multi-process parallelism; used in `src/QuantumFurnace.jl` and simulation scripts (`@everywhere` pattern)
+- `SharedArrays` (stdlib) - Shared memory arrays for multi-process workflows
+- `ProgressMeter` v1 - Progress bars for long-running trajectory simulations
+- `Random` (stdlib) - Seeded RNG for reproducibility
+- `Printf` (stdlib) - Formatted output
+- `Dates` (stdlib) - Timestamp capture in experiment metadata
+- `LibGit2` (stdlib) - Git hash capture for experiment provenance in `src/results.jl`
+- `Pkg` (stdlib) - Project path resolution for results directory defaults
+- `ClusterManagers` v0.4 - HPC cluster job management (in `[extras]`, for Slurm/SLURM HPC deployment)
 
-**Serialization:**
-- BSON - Storing computed Hamiltonian matrices in `hamiltonians/` directory
+## Python Tooling (non-library)
 
-**Development:**
-- Revise - Critical for interactive REPL development workflow
-- Documenter + Literate - Auto-generates documentation website with tutorials
+Located in `tools/python/`, these are standalone research scripts and notebooks, not part of the Julia package:
+
+**Key Python libraries used:**
+- `numpy` - Numerical arrays
+- `scipy` (`linalg.logm`, `expm`) - Matrix functions
+- `qutip` - Quantum optics toolbox (reference implementations)
+- `qiskit` + `qiskit_aer` - Quantum circuit simulation (prototype quantum circuit implementations)
 
 ## Configuration
 
 **Environment:**
-- No `.env` file detected - all configuration passed via struct parameters
-- Configuration via `LiouvConfig`, `ThermalizeConfig`, and `*GNS` variants defined in `src/structs.jl`
-- Hamiltonian data loaded from precomputed BSON files in `hamiltonians/` directory
+- No `.env` files; no secrets or external service credentials required
+- All parameters passed directly as Julia structs (`LiouvConfig`, `ThermalizeConfig`)
+- BLAS thread count controlled explicitly in benchmark scripts: `BLAS.set_num_threads(4)`
 
 **Build:**
-- `docs/make.jl` - Documenter configuration for building documentation website
-- Uses Literate.jl to convert tutorial `.jl` scripts to `.md` and Jupyter notebooks
-- Generates docs to `docs/build/` (in `.gitignore`)
+- `Project.toml` - Package manifest with deps and compat bounds
+- `Manifest.toml` - Exact resolved dependency tree (committed, pinned to Julia 1.12.5)
+- `docs/Project.toml` - Separate docs environment (only `Documenter`, `Literate`, `QuantumFurnace`)
 
 ## Platform Requirements
 
 **Development:**
-- Julia 1.12.4 or compatible version
-- BLAS/LAPACK for LinearAlgebra operations (typically OpenBLAS via Julia packaging)
-- HPC environment optional for distributed computing (works on single-node too)
+- Julia 1.11+ (1.12.5 in lockfile)
+- VSCode with Julia extension (`.vscode/settings.json`, `.vscode/launch.json` present)
+- Optional: Mathematica for `tools/mathematica/` notebooks
+- Optional: Python 3.11+ with `numpy`, `scipy`, `qutip`, `qiskit` for `tools/python/`
 
 **Production/HPC:**
-- Julia 1.12.4+
-- Multi-node capability via Distributed + ClusterManagers
-- Suitable for HPC environments with PBS, SLURM job schedulers (via ClusterManagers)
-- Minimal external dependencies - mostly pure Julia or Julia-wrapped BLAS/FFTW
-
-## Data Files
-
-**Precomputed Hamiltonians:**
-- Location: `hamiltonians/` directory
-- Format: BSON serialized objects
-- Examples: `heis_disordered_periodic_n3.bson` through `heis_disordered_periodic_n10.bson`
-- Generated by: `hamiltonians/generate_hamiltonians.jl`
-- Loaded via: `load_hamiltonian()` function in `src/misc_tools.jl`
-
-**Simulation Results:**
-- Saved to `results/` and `simulations/` directories (in `.gitignore`)
-- Filenames generated via `generate_filename()` in `src/misc_tools.jl`
-- Contain distance-to-Gibbs metrics and trajectory data
+- Slurm HPC cluster supported via `ClusterManagers` (listed in `[extras]`)
+- `simulations/` directory contains standalone scripts with `@everywhere` distributed patterns
+- `experiments/` contains archived run data (`.bson` + `.txt` companion files)
 
 ---
 
-*Stack analysis: 2026-02-13*
+*Stack analysis: 2026-02-25*

@@ -1,139 +1,92 @@
 # External Integrations
 
-**Analysis Date:** 2026-02-13
+**Analysis Date:** 2026-02-25
 
 ## APIs & External Services
 
-**None detected** - This is a pure computational physics package with no external API integrations.
+None. QuantumFurnace.jl is a self-contained scientific computing library with no external API calls at runtime. All computation is local.
 
 ## Data Storage
 
-**File Storage:**
-- Local filesystem only
-- Precomputed Hamiltonians stored as BSON files in `hamiltonians/` directory
-- Runtime results saved to `results/` and `simulations/` directories
-
 **Databases:**
-- Not used - All state is either computed in-memory or serialized to disk as BSON
+- None. No database connections.
+
+**File Storage (Local Filesystem):**
+- Experiment results saved as BSON + companion `.txt` files
+- Default output path: `results/{subdir}/` relative to package root (resolved via `Pkg.project().path` in `src/results.jl`)
+- Subdirectory convention: `results/approx_gns/` for GNS configs, `results/kms/` for KMS configs
+- Filename convention: `{db}_{n}_{beta}_{domain}_{date}.bson` (e.g., `gns_n4_beta10_energy_20260225.bson`)
+- Companion `.txt` human-readable summaries written alongside each `.bson` file
+- Archive of prior experiment data present in `experiments/` directory (`.bson` + `.txt` pairs)
+
+**Serialization Format:**
+- BSON via `BSON` package (`BSON.bson(path, dict)` / `BSON.load(path)`)
+- All structs converted to plain `Dict{Symbol, Any}` before serialization (see `src/results.jl`)
+- No direct struct serialization — avoids BSON type instability
 
 **Caching:**
-- Not applicable - No external caching layer used
+- None.
 
 ## Authentication & Identity
 
-**Not applicable** - No user authentication or identity management required. Package is self-contained computational software.
+- None required. No network services accessed at runtime.
 
 ## Monitoring & Observability
 
 **Error Tracking:**
-- Not integrated - Errors handled via Julia's native exception system
+- None. No external error tracking service.
 
 **Logs:**
-- Approach: Standard output via `@printf()` and `@warn` macros
-- Output goes to `stdout`/`stderr`
-- Example in `src/energy_domain.jl`:
-  ```julia
-  @warn "Lower bound cutoff not found for energies, using default range."
-  ```
+- Julia standard `@warn` macros for advisory warnings (e.g., KrylovKit partial convergence in `src/krylov_eigsolve.jl`, memory estimates)
+- `ProgressMeter` progress bars for trajectory loops (`src/trajectories.jl`, `src/convergence.jl`)
+- Companion `.txt` files written alongside BSON results for human-readable run summaries
 
-**Progress Tracking:**
-- ProgressMeter used for long-running simulations to display progress bars
-- Imported in `src/QuantumFurnace.jl`: `using ProgressMeter`
+**Experiment Provenance (captured automatically in `src/results.jl`):**
+- Julia version (`string(VERSION)`)
+- Timestamp (`Dates.now()`)
+- Git commit hash (via `LibGit2.GitRepo` + `LibGit2.head_oid`; falls back to `"unknown"`)
+- Thread count (`Threads.nthreads()`)
+- Wall time in seconds
 
 ## CI/CD & Deployment
 
-**Hosting:**
-- Package registered in Julia package ecosystem
-- Documentation hosted on GitHub Pages: https://tembence.github.io/QuantumFurnace.jl/
-- GitHub repository: https://github.com/tembence/QuantumFurnace.jl
+**Documentation Hosting:**
+- GitHub Actions workflow at `.github/workflows/Documentation.yml`
+- Triggers: push to `main`, any tag, any pull request
+- Runner: `ubuntu-latest`
+- Deploys Documenter.jl-generated docs using `DOCUMENTER_KEY` secret
+- Secrets required: `GITHUB_TOKEN` (automatic), `DOCUMENTER_KEY` (repository secret)
 
-**CI Pipeline:**
-- Documentation deployment configured in `docs/make.jl`
-- Deploydocs to GitHub Pages on `main` branch (devbranch)
-- No external CI service detected (GitHub Actions config may exist in `.github/` but not analyzed)
+**No test CI/CD pipeline detected.** The GitHub Actions workflow only builds documentation. Tests are run manually with `julia --project=@. -e 'using Pkg; Pkg.test()'`.
 
-**HPC Submission:**
-- SLURM batch script present: `simulations/run_julia.sbatch`
-- Enables distributed computing via ClusterManagers on HPC clusters
+## HPC / Cluster Deployment
 
-## Environment Configuration
+**Distributed Execution:**
+- `ClusterManagers` package in `[extras]` enables Slurm cluster integration
+- Simulation scripts (`simulations/main_liouv.jl`, `simulations/main_thermalize.jl`) use Julia `Distributed` with `@everywhere` and optional `addprocs(N, exeflags="--project=@.")`
+- Pattern: `addprocs` commented out by default; uncommented for cluster runs
+- Slurm batch submission: `simulations/run_julia.sbatch` (referenced path; no direct `.sbatch` found in repo root)
 
-**Required env vars:**
-- None required
-- All configuration passed directly via struct initialization
-
-**Configuration Method:**
-- Configuration structs in `src/structs.jl`:
-  - `LiouvConfig` and `LiouvConfigGNS` - For Liouvillian construction
-  - `ThermalizeConfig` and `ThermalizeConfigGNS` - For thermalization simulation
-  - `TrotterDomain`, `TimeDomain`, `BohrDomain`, `EnergyDomain` - Domain representations
-
-**Example Configuration:**
-```julia
-config = ThermalizeConfig(
-    num_qubits = num_qubits,
-    with_coherent = with_coherent,
-    with_linear_combination = with_linear_combination,
-    domain = domain,
-    beta = beta,
-    a = a,
-    b = b,
-    num_energy_bits = num_energy_bits,
-    w0 = w0,
-    t0 = t0,
-    mixing_time = mixing_time_bound,
-    delta = delta,
-)
-```
-
-**Secrets location:**
-- Not applicable - No secrets or credentials used
+**BLAS Thread Control:**
+- Benchmark scripts explicitly set `BLAS.set_num_threads(4)` before heavy computation
+- No global BLAS thread configuration in library code itself
 
 ## Webhooks & Callbacks
 
-**Incoming:**
-- Not applicable
+**Incoming:** None.
 
-**Outgoing:**
-- Documentation auto-deployment via `deploydocs()` in `docs/make.jl` to GitHub Pages
-- Integrated with Documenter.jl: `repo = "github.com/tembence/QuantumFurnace.jl.git"`
+**Outgoing:** None. All CI/CD callbacks are handled by GitHub Actions infrastructure automatically via `GITHUB_TOKEN`.
 
-## Data I/O
+## Environment Configuration
 
-**Reading:**
-- Precomputed Hamiltonian matrices from BSON files via `load_hamiltonian()` in `src/misc_tools.jl`
-  ```julia
-  function load_hamiltonian(type::String, num_qubits::Int)
-      project_root = Pkg.project().path |> dirname
-      data_dir = joinpath(project_root, "hamiltonians")
-      output_filename = join([type, "disordered", "periodic", "n$num_qubits"], "_") * ".bson"
-      ham_path = joinpath(data_dir, output_filename)
-      bson_hamiltonian_data = BSON.load(ham_path)
-      return bson_hamiltonian_data[:hamiltonian]
-  end
-  ```
+**Required environment variables at runtime:** None.
 
-**Writing:**
-- Simulation results saved as BSON via generated filenames from `generate_filename()` functions
-- Filenames encode configuration: `alg_DB_TimeDomain_n=4_beta=10.0_B_a=0.0_b=0.0_mix=10.0.bson`
-- Example usage in `src/kossakowski.jl`:
-  ```julia
-  BSON.load(ham_path)
-  ```
+**CI/CD secrets (GitHub Actions only):**
+- `GITHUB_TOKEN` - Auto-provided by GitHub for docs deployment authentication
+- `DOCUMENTER_KEY` - Repository secret for Documenter.jl SSH deployment key
 
-## Integration Points Summary
-
-**Self-contained Design:**
-- No external API dependencies
-- No authentication/authorization requirements
-- No database connectivity
-- All dependencies are scientific computing libraries
-- Pure Julia package suitable for offline research environments
-
-**Cluster Integration:**
-- Via Julia Distributed system and ClusterManagers
-- Enables embarrassingly-parallel trajectory simulations across HPC nodes
+**No `.env` files present.** No secrets in codebase. No credentials stored.
 
 ---
 
-*Integration audit: 2026-02-13*
+*Integration audit: 2026-02-25*
