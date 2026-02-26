@@ -291,7 +291,7 @@ end
 """
     _accumulate_adjoint_sandwich_2op!(out, A, B_dag, rho, scalar, ws) -> nothing
 
-Accumulate `scalar * B_dag' * rho * A'` into `out`. This is the HS adjoint
+Accumulate `scalar * A' * rho * B_dag'` into `out`. This is the HS adjoint
 of the two-operator sandwich `A * rho * B_dag`, used in apply_adjoint_lindbladian!
 for BohrDomain.
 
@@ -307,8 +307,8 @@ function _accumulate_adjoint_sandwich_2op!(
 ) where {T<:Complex}
     CT = one(T)
     ZT = zero(T)
-    BLAS.gemm!('C', 'N', CT, B_dag, rho, ZT, ws.tmp1)       # tmp1 = B_dag' * rho
-    BLAS.gemm!('N', 'C', CT, ws.tmp1, A, ZT, ws.tmp2)       # tmp2 = B_dag' * rho * A'
+    BLAS.gemm!('C', 'N', CT, A, rho, ZT, ws.tmp1)           # tmp1 = A' * rho
+    BLAS.gemm!('N', 'C', CT, ws.tmp1, B_dag, ZT, ws.tmp2)   # tmp2 = A' * rho * B_dag'
     BLAS.axpy!(T(scalar), ws.tmp2, out)
     return nothing
 end

@@ -66,8 +66,8 @@ struct KrylovWorkspace{T<:Complex, PD<:NamedTuple}
     channel_delta::Union{Nothing, Float64}
 
     # Precomputed effective Hamiltonian for optimized Lindbladian matvec (Phase 32)
-    # G_left = i*B^T - 0.5*R_total^T, G_right = -i*B^T - 0.5*R_total^T
-    # Stored pre-transposed so matvec uses gemm!('N','N',...) for zero-allocation.
+    # G_left = i*B^T - 0.5*R_total, G_right = -i*B^T - 0.5*R_total
+    # Used directly in gemm!('N','N',...) for zero-allocation hot path.
     G_left::Union{Nothing, Matrix{T}}
     G_right::Union{Nothing, Matrix{T}}
     G_left_adj::Union{Nothing, Matrix{T}}
@@ -131,39 +131,27 @@ function KrylovWorkspace(
     hermitianize!(R_total)
 
     # Build G_left/G_right (stored as the actual matrices used in gemm!('N','N',...))
-    # Convention: L(rho) = G_left*rho + rho*G_right + sandwiches
-    # G_left = i*B^T - 0.5*R_total^T, G_right = -i*B^T - 0.5*R_total^T
-    R_total_T = Matrix{CT}(transpose(R_total))
+    # Convention (L*rho*L'): L(rho) = G_left*rho + rho*G_right + sandwiches
+    # Non-sandwich part: i*B^T*rho - i*rho*B^T  (from _vectorize_liouvillian_coherent!)
+    #                  - 0.5*R*rho - 0.5*rho*R   (new anticommutator with kron(I,R) and kron(R^T,I))
+    # => G_left = i*B^T - 0.5*R,  G_right = -i*B^T - 0.5*R
     if B_total !== nothing
         B_T = Matrix{CT}(transpose(B_total))
-        G_left  = 1im .* B_T .- 0.5 .* R_total_T
-        G_right = -1im .* B_T .- 0.5 .* R_total_T
+        G_left  = 1im .* B_T .- 0.5 .* R_total
+        G_right = -1im .* B_T .- 0.5 .* R_total
     else
-        G_left  = -0.5 .* R_total_T
-        G_right = -0.5 .* R_total_T
+        G_left  = -0.5 .* R_total
+        G_right = -0.5 .* R_total
     end
     G_left  = Matrix{CT}(G_left)
     G_right = Matrix{CT}(G_right)
 
-    # Adjoint: for Hermitian R_total (Energy/Time/Trotter), adjoint just swaps G_left/G_right.
-    # For BohrDomain where R_total is not Hermitian: G_left_adj = -i*B^T - 0.5*conj(R_total),
-    # G_right_adj = i*B^T - 0.5*conj(R_total).
-    if config.domain isa BohrDomain
-        R_total_conj = Matrix{CT}(conj.(R_total))
-        if B_total !== nothing
-            B_T = Matrix{CT}(transpose(B_total))
-            G_left_adj  = -1im .* B_T .- 0.5 .* R_total_conj
-            G_right_adj = 1im .* B_T .- 0.5 .* R_total_conj
-        else
-            G_left_adj  = -0.5 .* R_total_conj
-            G_right_adj = -0.5 .* R_total_conj
-        end
-        G_left_adj  = Matrix{CT}(G_left_adj)
-        G_right_adj = Matrix{CT}(G_right_adj)
-    else
-        G_left_adj  = G_right
-        G_right_adj = G_left
-    end
+    # Adjoint: HS adjoint of rho -> M*rho is rho -> M'*rho, of rho -> rho*N is rho -> rho*N'.
+    # G_left_adj  = G_left'  = (i*B^T - 0.5*R)' = -i*B^T - 0.5*R = G_right  (B Hermitian, R Hermitian after hermitianize!)
+    # G_right_adj = G_right' = (-i*B^T - 0.5*R)' = i*B^T - 0.5*R = G_left
+    # This holds for ALL domains because R_total is Hermitianized before G construction.
+    G_left_adj  = G_right
+    G_right_adj = G_left
 
     return KrylovWorkspace{CT, typeof(precomputed_data)}(
         precomputed_data, B_total, jumps,
@@ -377,32 +365,22 @@ function KrylovWorkspace(
     hermitianize!(R_total)
 
     # Precompute G_left/G_right for optimized Lindbladian matvec (Phase 32)
-    R_total_T = Matrix{CT}(transpose(R_total))
+    # Convention (L*rho*L'): G_left = i*B^T - 0.5*R,  G_right = -i*B^T - 0.5*R
     if B_total !== nothing
         B_T = Matrix{CT}(transpose(B_total))
-        G_left  = 1im .* B_T .- 0.5 .* R_total_T
-        G_right = -1im .* B_T .- 0.5 .* R_total_T
+        G_left  = 1im .* B_T .- 0.5 .* R_total
+        G_right = -1im .* B_T .- 0.5 .* R_total
     else
-        G_left  = -0.5 .* R_total_T
-        G_right = -0.5 .* R_total_T
+        G_left  = -0.5 .* R_total
+        G_right = -0.5 .* R_total
     end
     G_left  = Matrix{CT}(G_left)
     G_right = Matrix{CT}(G_right)
 
-    # Adjoint G matrices (same domain logic as Lindbladian constructor)
-    if config.domain isa BohrDomain
-        R_total_conj = Matrix{CT}(conj.(R_total))
-        if B_total !== nothing
-            G_left_adj  = Matrix{CT}(-1im .* B_T .- 0.5 .* R_total_conj)
-            G_right_adj = Matrix{CT}(1im .* B_T .- 0.5 .* R_total_conj)
-        else
-            G_left_adj  = Matrix{CT}(-0.5 .* R_total_conj)
-            G_right_adj = Matrix{CT}(-0.5 .* R_total_conj)
-        end
-    else
-        G_left_adj  = G_right
-        G_right_adj = G_left
-    end
+    # Adjoint G matrices: G_left_adj = G_left' = G_right, G_right_adj = G_right' = G_left
+    # (holds for all domains since R_total is Hermitianized)
+    G_left_adj  = G_right
+    G_right_adj = G_left
 
     # 2. Compute K0, S, U_residual (Chen Eq. 3.2)
     alpha_chen = 1 - sqrt(1 - delta)
