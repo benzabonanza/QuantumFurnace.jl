@@ -1,7 +1,7 @@
 @testset "Diagnostics (Phase 26)" begin
 
     # Build the 3-qubit Lindbladian (BohrDomain for exact Gibbs fixed point)
-    config = make_small_liouv_config(BohrDomain())
+    config = make_small_liouv_config(BohrDomain(); construction=KMS())
     L_sparse = construct_lindbladian(SMALL_JUMPS, config, SMALL_HAM)
     L_dense = Matrix{ComplexF64}(L_sparse)
 
@@ -309,7 +309,7 @@ end
 @testset "Diagnostics TrotterDomain" begin
 
     # Build TrotterDomain Lindbladian (3-qubit)
-    config_trott = make_small_liouv_config(TrotterDomain())
+    config_trott = make_small_liouv_config(TrotterDomain(); construction=KMS())
     L_trott_sparse = construct_lindbladian(SMALL_TROTTER_JUMPS, config_trott, SMALL_HAM; trotter=SMALL_TROTTER)
     L_trott = Matrix{ComplexF64}(L_trott_sparse)
 
@@ -380,14 +380,15 @@ end
         # Compare to BohrDomain fixed point distance -- both should be similar magnitude
         # (for 3-qubit with 10 Trotter steps, Trotter error is very small so distances
         # are nearly equal; we just verify they're in the same ballpark)
-        config_bohr = make_small_liouv_config(BohrDomain())
+        config_bohr = make_small_liouv_config(BohrDomain(); construction=KMS())
         L_bohr_sparse = construct_lindbladian(SMALL_JUMPS, config_bohr, SMALL_HAM)
         L_bohr = Matrix{ComplexF64}(L_bohr_sparse)
         eigen_bohr = extract_leading_eigendata(L_bohr; n_modes=10)
         fp_bohr = compute_fixed_point_distance(eigen_bohr, SMALL_GIBBS)
-        # Both distances are finite and on the same order of magnitude
-        @test fp.trace_distance / fp_bohr.trace_distance > 0.5
-        @test fp.trace_distance / fp_bohr.trace_distance < 2.0
+        # Both distances are small with KMS (exact detailed balance)
+        # Trotter has tiny residual error; Bohr is near machine precision
+        @test fp.trace_distance < 0.01
+        @test fp_bohr.trace_distance < 0.01
     end
 
     # -------------------------------------------------------------------
@@ -510,7 +511,7 @@ end
     # Backward compatibility: BohrDomain without basis_eigvecs
     # -------------------------------------------------------------------
     @testset "backward compatibility: no basis_eigvecs" begin
-        config_bohr = make_small_liouv_config(BohrDomain())
+        config_bohr = make_small_liouv_config(BohrDomain(); construction=KMS())
         L_bohr = Matrix{ComplexF64}(construct_lindbladian(SMALL_JUMPS, config_bohr, SMALL_HAM))
 
         result = run_exact_diagnostics(L_bohr, SMALL_HAM, SMALL_GIBBS; n_modes=10)
