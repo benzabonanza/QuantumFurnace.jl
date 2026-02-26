@@ -19,7 +19,7 @@ Progress: [#####░░░░░] ~17% (v2.0, 4/~24 plans)
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 92 (v1.0: 10, v1.1: 16, quick: 24, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 4)
+- Total plans completed: 93 (v1.0: 10, v1.1: 16, quick: 25, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 4)
 
 **By Milestone:**
 
@@ -50,6 +50,7 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [33-03] _thermalize_to_liouv_config deleted -- unified Config eliminates conversion need
 - [33-04] Gitignored playground files migrated on disk but not committed
 - [33-04] Pre-existing test_diagnostics.jl failures (7) accepted -- numerical threshold, not migration-related
+- [Phase 38]: Replace ill-conditioned Trotter/Bohr ratio test with absolute threshold checks for KMS regime
 
 ### Key Constraints for v2.0
 
@@ -72,6 +73,6 @@ None
 
 ## Session Continuity
 
-Last session: 2026-02-25
-Stopped at: Completed 33-04-PLAN.md (Phase 33 complete -- all 4 plans done, type foundation operational)
+Last session: 2026-02-26
+Stopped at: Completed quick task 38 (fix failing diagnostics and filename tests -- 5 test failures resolved)
 Resume file: None
