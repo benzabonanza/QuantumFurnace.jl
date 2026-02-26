@@ -279,7 +279,7 @@ using BSON
     # -----------------------------------------------------------------------
     @testset "Filename generation" begin
         # KMS TrotterDomain config
-        kms_config = make_small_thermalize_config(TrotterDomain())
+        kms_config = make_small_thermalize_config(TrotterDomain(); construction=KMS())
         kms_filename = QuantumFurnace._generate_experiment_filename(kms_config)
         @test startswith(kms_filename, "kms_")
         @test occursin("n3", kms_filename)
