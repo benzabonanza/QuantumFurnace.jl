@@ -8,13 +8,13 @@
 """
     _accumulate_sandwich!(out, L_op, rho, scalar, ws) -> nothing
 
-Accumulate `scalar * L * rho * L'` into `out`. This is the sandwich-only
-part of the dissipator, used after the anticommutator has been absorbed into
-precomputed G_left/G_right (Phase 32 optimization).
+Accumulate `scalar * L * rho * L'` into `out`. Used for:
+- Forward Lindbladian positive-frequency sandwich (L * rho * L')
+- Adjoint Lindbladian negative-frequency Hermitian partner (HS adjoint of L'*rho*L is L*rho*L')
 
 Uses `ws.tmp1`, `ws.LdagL` as scratch.
 """
-function _accumulate_sandwich!(
+@inline function _accumulate_sandwich!(
     out::Matrix{T},
     L_op::Matrix{T},
     rho::Matrix{T},
@@ -30,15 +30,15 @@ function _accumulate_sandwich!(
 end
 
 """
-    _accumulate_sandwich_adj_L!(out, L_op, rho, scalar, ws) -> nothing
+    _accumulate_sandwich_adj!(out, L_op, rho, scalar, ws) -> nothing
 
-Accumulate `scalar * L' * rho * L` into `out`. This is the sandwich-only
-part for the negative-frequency Hermitian partner (M = L'), used after the
-anticommutator has been absorbed into G_left/G_right.
+Accumulate `scalar * L' * rho * L` into `out`. Used for:
+- Forward Lindbladian negative-frequency Hermitian partner (L_neg = L')
+- Adjoint Lindbladian positive-frequency sandwich (HS adjoint of L*rho*L' is L'*rho*L)
 
 Uses `ws.tmp1`, `ws.LdagL` as scratch.
 """
-function _accumulate_sandwich_adj_L!(
+@inline function _accumulate_sandwich_adj!(
     out::Matrix{T},
     L_op::Matrix{T},
     rho::Matrix{T},
@@ -49,56 +49,6 @@ function _accumulate_sandwich_adj_L!(
     ZT = zero(T)
     BLAS.gemm!('C', 'N', CT, L_op, rho, ZT, ws.tmp1)           # tmp1 = L' * rho
     BLAS.gemm!('N', 'N', CT, ws.tmp1, L_op, ZT, ws.LdagL)      # LdagL = L' * rho * L
-    BLAS.axpy!(T(scalar), ws.LdagL, out)
-    return nothing
-end
-
-"""
-    _accumulate_adjoint_sandwich!(out, L_op, rho, scalar, ws) -> nothing
-
-Accumulate `scalar * L' * rho * L` into `out`. This is the HS adjoint
-of the forward sandwich `L * rho * L'`, used in apply_adjoint_lindbladian!.
-
-Note: identical computation to _accumulate_sandwich_adj_L! (the HS adjoint of
-L*rho*L' equals L'*rho*L, which is the same as the negative-freq partner).
-Uses `ws.tmp1`, `ws.LdagL` as scratch.
-"""
-function _accumulate_adjoint_sandwich!(
-    out::Matrix{T},
-    L_op::Matrix{T},
-    rho::Matrix{T},
-    scalar::Real,
-    ws,
-) where {T<:Complex}
-    CT = one(T)
-    ZT = zero(T)
-    BLAS.gemm!('C', 'N', CT, L_op, rho, ZT, ws.tmp1)           # tmp1 = L' * rho
-    BLAS.gemm!('N', 'N', CT, ws.tmp1, L_op, ZT, ws.LdagL)      # LdagL = L' * rho * L
-    BLAS.axpy!(T(scalar), ws.LdagL, out)
-    return nothing
-end
-
-"""
-    _accumulate_adjoint_sandwich_adj_L!(out, L_op, rho, scalar, ws) -> nothing
-
-Accumulate `scalar * L * rho * L'` into `out`. This is the HS adjoint of
-the negative-frequency sandwich `L' * rho * L`.
-
-Note: identical computation to _accumulate_sandwich! (the HS adjoint of
-L'*rho*L equals L*rho*L', which is the same as the positive-freq forward).
-Uses `ws.tmp1`, `ws.LdagL` as scratch.
-"""
-function _accumulate_adjoint_sandwich_adj_L!(
-    out::Matrix{T},
-    L_op::Matrix{T},
-    rho::Matrix{T},
-    scalar::Real,
-    ws,
-) where {T<:Complex}
-    CT = one(T)
-    ZT = zero(T)
-    BLAS.gemm!('N', 'N', CT, L_op, rho, ZT, ws.tmp1)           # tmp1 = L * rho
-    BLAS.gemm!('N', 'C', CT, ws.tmp1, L_op, ZT, ws.LdagL)      # LdagL = L * rho * L'
     BLAS.axpy!(T(scalar), ws.LdagL, out)
     return nothing
 end
@@ -160,7 +110,7 @@ function apply_lindbladian!(
                 if w > 1e-12
                     # Negative-frequency partner: L = A(omega)'
                     scalar_neg = prefactor * transition(-w)
-                    _accumulate_sandwich_adj_L!(ws.rho_out, ws.jump_oft, rho, scalar_neg, ws)
+                    _accumulate_sandwich_adj!(ws.rho_out, ws.jump_oft, rho, scalar_neg, ws)
                 end
             end
         else
@@ -222,19 +172,19 @@ function apply_adjoint_lindbladian!(
                 oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
 
                 scalar_w = prefactor * transition(w)
-                _accumulate_adjoint_sandwich!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
+                _accumulate_sandwich_adj!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
 
                 if w > 1e-12
                     scalar_neg = prefactor * transition(-w)
                     # Negative-frequency partner: original L = A(omega)'
-                    _accumulate_adjoint_sandwich_adj_L!(ws.rho_out, ws.jump_oft, rho, scalar_neg, ws)
+                    _accumulate_sandwich!(ws.rho_out, ws.jump_oft, rho, scalar_neg, ws)
                 end
             end
         else
             for w in energy_labels
                 oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
                 scalar_w = prefactor * transition(w)
-                _accumulate_adjoint_sandwich!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
+                _accumulate_sandwich_adj!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
             end
         end
     end
@@ -472,7 +422,7 @@ function apply_lindbladian!(
                 if w > 1e-12
                     # Negative-frequency partner: L = A(omega)'
                     scalar_neg = prefactor * transition(-w)
-                    _accumulate_sandwich_adj_L!(ws.rho_out, ws.jump_oft, rho, scalar_neg, ws)
+                    _accumulate_sandwich_adj!(ws.rho_out, ws.jump_oft, rho, scalar_neg, ws)
                 end
             end
         else
@@ -535,12 +485,12 @@ function apply_adjoint_lindbladian!(
                 @. ws.jump_oft = eigenbasis * nufft_prefactor_matrix
 
                 scalar_w = prefactor * transition(w)
-                _accumulate_adjoint_sandwich!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
+                _accumulate_sandwich_adj!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
 
                 if w > 1e-12
                     scalar_neg = prefactor * transition(-w)
                     # Negative-frequency partner: original L = A(omega)'
-                    _accumulate_adjoint_sandwich_adj_L!(ws.rho_out, ws.jump_oft, rho, scalar_neg, ws)
+                    _accumulate_sandwich!(ws.rho_out, ws.jump_oft, rho, scalar_neg, ws)
                 end
             end
         else
@@ -548,7 +498,7 @@ function apply_adjoint_lindbladian!(
                 nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
                 @. ws.jump_oft = eigenbasis * nufft_prefactor_matrix
                 scalar_w = prefactor * transition(w)
-                _accumulate_adjoint_sandwich!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
+                _accumulate_sandwich_adj!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
             end
         end
     end
