@@ -98,7 +98,7 @@ dim = 2^num_qubits
 A = jumps[5]
 w = -3 * w0
 A_oft = Matrix{ComplexF64}(undef, dim, dim)
-oft!(A_oft, A, w, hamiltonian, sigma)
+oft!(A_oft, A.in_eigenbasis, hamiltonian.bohr_freqs, w, 1.0 / (4 * sigma^2))
 A_oft .*= energy_oft_prefactor
 A_oft_time = Matrix{ComplexF64}(undef, dim, dim)
 @time begin

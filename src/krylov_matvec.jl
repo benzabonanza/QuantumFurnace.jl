@@ -1,24 +1,3 @@
-"""
-    _krylov_oft!(out, eigenbasis, bohr_freqs, energy, inv_4sigma2) -> nothing
-
-Compute the Optimal Fourier Transform A(omega) in-place, without accessing
-any abstractly-typed `JumpOp` fields.
-
-    out[i,j] = eigenbasis[i,j] * exp(-(energy - bohr_freqs[i,j])^2 * inv_4sigma2)
-
-This is the zero-allocation replacement for `oft!` in the Krylov hot path.
-"""
-@inline function _krylov_oft!(
-    out::Matrix{T},
-    eigenbasis::Matrix{T},
-    bohr_freqs::Matrix{<:Real},
-    energy::Real,
-    inv_4sigma2::Real,
-) where {T<:Complex}
-    @. out = eigenbasis * exp(-(energy - bohr_freqs)^2 * inv_4sigma2)
-    return nothing
-end
-
 # ---------------------------------------------------------------------------
 # Sandwich-only helpers (Phase 32 optimization)
 # These are stripped-down versions of the dissipator functions with the
@@ -173,7 +152,7 @@ function apply_lindbladian!(
                 w_raw > 1e-12 && continue
                 w = abs(w_raw)
 
-                _krylov_oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+                oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
 
                 scalar_w = prefactor * transition(w)
                 _accumulate_sandwich!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
@@ -186,7 +165,7 @@ function apply_lindbladian!(
             end
         else
             for w in energy_labels
-                _krylov_oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+                oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
                 scalar_w = prefactor * transition(w)
                 _accumulate_sandwich!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
             end
@@ -240,7 +219,7 @@ function apply_adjoint_lindbladian!(
                 w_raw > 1e-12 && continue
                 w = abs(w_raw)
 
-                _krylov_oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+                oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
 
                 scalar_w = prefactor * transition(w)
                 _accumulate_adjoint_sandwich!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
@@ -253,7 +232,7 @@ function apply_adjoint_lindbladian!(
             end
         else
             for w in energy_labels
-                _krylov_oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+                oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
                 scalar_w = prefactor * transition(w)
                 _accumulate_adjoint_sandwich!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
             end
@@ -442,7 +421,7 @@ anticommutator into 2 GEMMs, then iterates sandwich-only terms (2 GEMMs each).
 Total: 2 + 2N GEMMs (down from 2 + 5N before Phase 32).
 
 Key differences from `EnergyDomain`:
-- OFT computation uses NUFFT prefactors (`_prefactor_view`) instead of Gaussian filter (`_krylov_oft!`)
+- OFT computation uses NUFFT prefactors (`_prefactor_view`) instead of Gaussian filter (`oft!`)
 - Scalar prefactor: `w0 * t0^2 * sigma * sqrt(2/pi) / (2pi) * gamma_norm_factor`
 
 Uses concrete-typed `ws.jump_eigenbases` and `ws.jump_hermitian` to avoid
@@ -483,7 +462,7 @@ function apply_lindbladian!(
                 w_raw > 1e-12 && continue
                 w = abs(w_raw)
 
-                # NUFFT OFT: replace _krylov_oft! with prefactor view multiply
+                # NUFFT OFT: replace oft! with prefactor view multiply
                 nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
                 @. ws.jump_oft = eigenbasis * nufft_prefactor_matrix
 
@@ -551,7 +530,7 @@ function apply_adjoint_lindbladian!(
                 w_raw > 1e-12 && continue
                 w = abs(w_raw)
 
-                # NUFFT OFT: replace _krylov_oft! with prefactor view multiply
+                # NUFFT OFT: replace oft! with prefactor view multiply
                 nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
                 @. ws.jump_oft = eigenbasis * nufft_prefactor_matrix
 

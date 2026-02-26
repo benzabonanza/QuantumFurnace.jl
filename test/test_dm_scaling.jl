@@ -146,7 +146,7 @@ end
     # Energy OFT (analytical, Bohr/Energy domain)
     energy_oft_prefactor = 1 / sqrt(SIGMA * sqrt(2 * pi))
     A_energy = Matrix{ComplexF64}(undef, DIM, DIM)
-    oft!(A_energy, jump, w, TEST_HAM, SIGMA)
+    oft!(A_energy, jump.in_eigenbasis, TEST_HAM.bohr_freqs, w, 1.0 / (4 * SIGMA^2))
     A_energy .*= energy_oft_prefactor
 
     # Time OFT (time domain quadrature)
@@ -198,7 +198,7 @@ end
     # --- Analytical OFT (reference) ---
     energy_oft_prefactor = 1 / sqrt(SIGMA * sqrt(2 * pi))
     A_energy = Matrix{ComplexF64}(undef, DIM, DIM)
-    oft!(A_energy, jump, w, TEST_HAM, SIGMA)
+    oft!(A_energy, jump.in_eigenbasis, TEST_HAM.bohr_freqs, w, 1.0 / (4 * SIGMA^2))
     A_energy .*= energy_oft_prefactor
 
     # --- Shared setup ---

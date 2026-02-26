@@ -198,7 +198,7 @@ function _accumulate_R_total!(
             for w_raw in energy_labels
                 w_raw > 1e-12 && continue
                 w = abs(w_raw)
-                @. jump_oft = eigenbasis * exp(-(w - bohr_freqs)^2 * inv_4sigma2)
+                oft!(jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
                 rate2 = prefactor * transition(w)
                 # R += rate^2 * (L' * L)  [physics convention]
                 mul!(LdagL, jump_oft', jump_oft)
@@ -212,7 +212,7 @@ function _accumulate_R_total!(
             end
         else
             for w in energy_labels
-                @. jump_oft = eigenbasis * exp(-(w - bohr_freqs)^2 * inv_4sigma2)
+                oft!(jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
                 rate2 = prefactor * transition(w)
                 mul!(LdagL, jump_oft', jump_oft)
                 @. R += rate2 * LdagL

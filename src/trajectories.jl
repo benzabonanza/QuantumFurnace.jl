@@ -236,6 +236,7 @@ function _precompute_R(
     (; transition, gamma_norm_factor, energy_labels) = precomputed_data
 
     base_prefactor = precomputed_data.domain_prefactor * gamma_norm_factor
+    inv_4sigma2 = 1.0 / (4 * config.sigma^2)
 
     fill!(scratch.R, 0)
 
@@ -247,7 +248,7 @@ function _precompute_R(
                 w = abs(w_raw)
 
                 # Aω := A ∘ exp(-(w-ν)^2/(4σ^2))   (elementwise in eigenbasis)
-                oft!(scratch.jump_oft, jump, w, hamiltonian, config.sigma)
+                oft!(scratch.jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
 
                 # Positive-frequency contribution: rate2(w) * (Aω† Aω)
                 rate2_pos = base_prefactor * transition(w)
@@ -265,7 +266,7 @@ function _precompute_R(
         else
             # Non-Hermitian jump: full grid, no mirroring shortcut.
             for w in energy_labels
-                oft!(scratch.jump_oft, jump, w, hamiltonian, config.sigma)
+                oft!(scratch.jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
 
                 rate2 = base_prefactor * transition(w)
                 mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)
@@ -1072,13 +1073,14 @@ function step_along_trajectory!(
 
         ham = fw.ham_or_trott
         @assert ham isa HamHam
+        inv_4sigma2 = 1.0 / (4 * sigma^2)
 
         @inbounds if jump.hermitian
             for w_raw in energy_labels
                 w_raw > 1e-12 && continue
                 w = abs(w_raw)
 
-                oft!(ws.jump_oft, jump, w, ham, sigma)
+                oft!(ws.jump_oft, jump.in_eigenbasis, ham.bohr_freqs, w, inv_4sigma2)
 
                 mul!(ws.Rpsi, ws.jump_oft, psi)
                 n2 = _norm2(ws.Rpsi)
@@ -1108,7 +1110,7 @@ function step_along_trajectory!(
             end
         else
             for w in energy_labels
-                oft!(ws.jump_oft, jump, w, ham, sigma)
+                oft!(ws.jump_oft, jump.in_eigenbasis, ham.bohr_freqs, w, inv_4sigma2)
 
                 mul!(ws.Rpsi, ws.jump_oft, psi)
                 n2 = _norm2(ws.Rpsi)

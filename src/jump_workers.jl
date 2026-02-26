@@ -63,13 +63,14 @@ function _jump_contribution!(
 
     jump_oft = ws.jump_tmp
     prefactor = precomputed_data.domain_prefactor * gamma_norm_factor
+    inv_4sigma2 = 1.0 / (4 * config.sigma^2)
 
     if jump.hermitian
         for w_raw in energy_labels
             # iterate only half-grid (w<=0) and mirror manually
             w_raw > 1e-12 && continue
             w = abs(w_raw)
-            oft!(jump_oft, jump, w, hamiltonian, config.sigma)
+            oft!(jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
             scalar_w = prefactor * transition(w)
             _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
             if w > 1e-12
@@ -79,7 +80,7 @@ function _jump_contribution!(
         end
     else
         for w in energy_labels
-            oft!(jump_oft, jump, w, hamiltonian, config.sigma)
+            oft!(jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
             scalar_w = prefactor * transition(w)
             _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
         end
@@ -332,6 +333,7 @@ function _jump_contribution!(
     # Matches the Euler prefactor in jump_contribution(::EnergyDomain, ...):
     # prefactor = (delta * gamma_norm_factor) * w0 / (sigma*sqrt(2π))
     base_prefactor = precomputed_data.domain_prefactor * jump_weight_scaling
+    inv_4sigma2 = 1.0 / (4 * config.sigma^2)
 
     fill!(scratch.R, 0)
     fill!(scratch.rho_jump, 0)
@@ -342,7 +344,7 @@ function _jump_contribution!(
             w = abs(w_raw)
 
             # Aω
-            oft!(scratch.jump_oft, jump, w, hamiltonian, config.sigma)
+            oft!(scratch.jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
 
             rate2_pos = base_prefactor * transition(w)
 
@@ -368,7 +370,7 @@ function _jump_contribution!(
         end
     else
         @inbounds for w in energy_labels
-            oft!(scratch.jump_oft, jump, w, hamiltonian, config.sigma)
+            oft!(scratch.jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
 
             rate2 = base_prefactor * transition(w)
 

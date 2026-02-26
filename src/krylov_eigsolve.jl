@@ -236,7 +236,7 @@ function _accumulate_jump_sandwich!(
             for w_raw in energy_labels
                 w_raw > 1e-12 && continue
                 w = abs(w_raw)
-                _krylov_oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+                oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
                 rate2 = prefactor * transition(w)
                 # Physics convention sandwich: delta * rate2 * L * rho * L'
                 mul!(ws.tmp1, rho, ws.jump_oft')          # tmp1 = rho * L'
@@ -250,7 +250,7 @@ function _accumulate_jump_sandwich!(
             end
         else
             for w in energy_labels
-                _krylov_oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+                oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
                 rate2 = prefactor * transition(w)
                 mul!(ws.tmp1, rho, ws.jump_oft')
                 mul!(out, ws.jump_oft, ws.tmp1, delta * rate2, 1.0)
