@@ -148,11 +148,11 @@ Plans:
   2. Shared CPTP channel helper functions compute R, K0, U_residual correctly: per-jump (R^a, K0^a, U_residual^a) for DM/Trajectory paths, summed (R_total, K0_total, U_residual_total) for Krylov path
   3. Zero-allocation hot-path invariants are preserved: existing allocation tests pass with 0 bytes in all domains
   4. Workspace independence test passes (no shared mutable state between workspaces)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 35-01: TBD
-- [ ] 35-02: TBD
+- [ ] 35-01-PLAN.md -- Consolidate KrylovWorkspace + KrausScratch + LindbladianWorkspace into Workspace{Krylov/Lindbladian/Thermalize,D,C,T}; eliminate single-jump B functions; remove dead fields
+- [ ] 35-02-PLAN.md -- Consolidate TrajectoryWorkspace + TrajectoryFramework + PerOperatorKraus into Workspace{Trajectory,D,C,T}; flatten per-operator Kraus data
 
 ### Phase 36: API and Results
 **Goal**: Four clean public entry points (`run_lindblad`, `run_thermalize`, `run_krylov_spectrum`, `run_trajectory`) each return a typed Result struct with optional BSON save capability
