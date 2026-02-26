@@ -12,14 +12,14 @@ See: .planning/PROJECT.md (updated 2026-02-25)
 Phase: 33 of 38 (Type Foundation) -- COMPLETE, VERIFIED
 Plan: 4/4 complete
 Status: Phase 33 verified (5/5 must-haves), ready to plan Phase 34
-Last activity: 2026-02-26 - Completed quick task 38: Fix failing diagnostics and filename tests
+Last activity: 2026-02-26 - Completed quick task 39: Fix Krylov Lindblad operator convention
 
 Progress: [#####░░░░░] ~17% (v2.0, 4/~24 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 93 (v1.0: 10, v1.1: 16, quick: 25, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 4)
+- Total plans completed: 94 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 4)
 
 **By Milestone:**
 
@@ -51,6 +51,7 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [33-04] Gitignored playground files migrated on disk but not committed
 - [33-04] Pre-existing test_diagnostics.jl failures (7) accepted -- numerical threshold, not migration-related
 - [Phase 38]: Replace ill-conditioned Trotter/Bohr ratio test with absolute threshold checks for KMS regime
+- [Phase quick-39]: Use kron(conj(J),J) for L*rho*L' Lindblad convention; simplify adjoint G to swap(G_left,G_right) for all domains
 
 ### Key Constraints for v2.0
 
@@ -76,9 +77,10 @@ None
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 38 | Fix failing diagnostics and filename tests by passing construction=KMS() where tests assume exact Gibbs fixed point | 2026-02-26 | d1a2577 | [38-fix-failing-diagnostics-and-filename-tes](./quick/38-fix-failing-diagnostics-and-filename-tes/) |
+| 39 | Fix Krylov Lindblad operator convention to L*rho*L' matching Thermalize path | 2026-02-26 | b4b1cec | [39-fix-krylov-lindblad-operator-convention-](./quick/39-fix-krylov-lindblad-operator-convention-/) |
 
 ## Session Continuity
 
 Last session: 2026-02-26
-Stopped at: Completed quick task 38 (fix failing diagnostics and filename tests -- 5 test failures resolved)
+Stopped at: Completed quick task 39 (fix Krylov Lindblad operator convention -- L*rho*L' everywhere)
 Resume file: None
