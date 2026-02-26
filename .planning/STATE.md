@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-25)
 Phase: 33 of 38 (Type Foundation) -- COMPLETE, VERIFIED
 Plan: 4/4 complete
 Status: Phase 33 verified (5/5 must-haves), ready to plan Phase 34
-Last activity: 2026-02-25 -- Phase 33 complete and verified
+Last activity: 2026-02-26 - Completed quick task 38: Fix failing diagnostics and filename tests
 
 Progress: [#####░░░░░] ~17% (v2.0, 4/~24 plans)
 
@@ -70,6 +70,12 @@ None
 ### Blockers/Concerns
 
 None
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 38 | Fix failing diagnostics and filename tests by passing construction=KMS() where tests assume exact Gibbs fixed point | 2026-02-26 | d1a2577 | [38-fix-failing-diagnostics-and-filename-tes](./quick/38-fix-failing-diagnostics-and-filename-tes/) |
 
 ## Session Continuity
 
