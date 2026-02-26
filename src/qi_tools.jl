@@ -54,12 +54,17 @@ function _kron!(
 end
 
 """
-    Takes in a jump operator, vectorizes it and adds it to the target liouvillian (Watrous convention).
-    L = J1 * X * J2 - 0.5 * (J2 * J1 * X + X * J2 * J1)
-    The way it is coded, makes it sure, that we allocate the least amount of times, i.e. the liouvillian is only allocated 
-    once, there is no unnecessary copies during the calculations. 
-    Note, that since it adds the liouvillian parts one by one to the liouvillian, on large scales
-    there is some arithmetic error to an implementation that adds the parts together and then to the liouvillian.
+    Vectorize a single-operator Lindblad dissipator and add it to the target Liouvillian.
+
+    Dissipator: J * rho * J' - 0.5 * {J'J, rho}
+
+    Vectorization (Watrous/column-stacking convention):
+      kron(conj(J), J) * vec(rho)         = vec(J * rho * J')       [sandwich]
+      kron(I, J'J) * vec(rho)             = vec(J'J * rho)          [left anticommutator]
+      kron((J'J)^T, I) * vec(rho)         = vec(rho * J'J)          [right anticommutator]
+
+    Coded to minimise allocations: the Liouvillian is allocated once, and partial
+    Kronecker products are accumulated in-place one by one.
 """
 function _vectorize_liouv_diss_and_add!(
     L_target::AbstractMatrix{<:Complex},
@@ -74,15 +79,25 @@ function _vectorize_liouv_diss_and_add!(
     Id = ws.Id
 
     @. jump_conj = conj(jump)
-    _kron!(L_target, jump, jump_conj, scalar)
-    
-    mul!(jump_dag_jump, jump', jump)
-    _kron!(L_target, jump_dag_jump, Id, -0.5 * scalar)
-    _kron!(L_target, Id, transpose(jump_dag_jump), -0.5 * scalar)
-    
+    _kron!(L_target, jump_conj, jump, scalar)                        # kron(conj(J), J) => J*rho*J'
+
+    mul!(jump_dag_jump, jump', jump)                                 # J'J (Hermitian, convention-independent)
+    _kron!(L_target, Id, jump_dag_jump, -0.5 * scalar)              # kron(I, J'J) => J'J*rho
+    _kron!(L_target, transpose(jump_dag_jump), Id, -0.5 * scalar)   # kron((J'J)^T, I) => rho*J'J
+
     return L_target
 end
 
+"""
+    Vectorize a two-operator Lindblad dissipator and add it to the target Liouvillian.
+
+    Dissipator: J1 * X * J2 - 0.5 * (J2 * J1 * X + X * J2 * J1)
+
+    Vectorization:
+      kron(J2^T, J1) * vec(rho) = vec(J1 * rho * J2)       [sandwich]
+      kron(I, J2*J1)            = vec(J2*J1 * rho)          [left anticommutator]
+      kron((J2*J1)^T, I)        = vec(rho * J2*J1)          [right anticommutator]
+"""
 function _vectorize_liouv_diss_and_add!(
     L_target::AbstractMatrix{<:Complex},
     jump_1::AbstractMatrix{<:Complex},
@@ -93,12 +108,12 @@ function _vectorize_liouv_diss_and_add!(
     Id = ws.Id
     jump2_jump1 = ws.jump2_jump1
 
-    _kron!(L_target, jump_1, transpose(jump_2), scalar)
+    _kron!(L_target, transpose(jump_2), jump_1, scalar)              # kron(J2^T, J1) => J1*rho*J2
 
-    mul!(jump2_jump1, jump_2, jump_1)
-    _kron!(L_target, jump2_jump1, Id, -0.5 * scalar)
-    _kron!(L_target, Id, transpose(jump2_jump1), -0.5 * scalar)
-    
+    mul!(jump2_jump1, jump_2, jump_1)                                # J2*J1
+    _kron!(L_target, Id, jump2_jump1, -0.5 * scalar)                # kron(I, J2*J1) => J2*J1*rho
+    _kron!(L_target, transpose(jump2_jump1), Id, -0.5 * scalar)     # kron((J2*J1)^T, I) => rho*J2*J1
+
     return L_target
 end
 
