@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-25)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v2.0 Restructure -- Phase 34: Code Deduplication (next)
+**Current focus:** v2.0 Restructure -- Phase 34: Code Deduplication (Plan 01 complete, Plan 02 next)
 
 ## Current Position
 
-Phase: 33 of 38 (Type Foundation) -- COMPLETE, VERIFIED
-Plan: 4/4 complete
-Status: Phase 33 verified (5/5 must-haves), ready to plan Phase 34
-Last activity: 2026-02-26 - Completed quick task 39: Fix Krylov Lindblad operator convention
+Phase: 34 of 38 (Code Deduplication) -- IN PROGRESS
+Plan: 1/2 complete
+Status: Plan 01 complete (domain_prefactor + OFT unification), Plan 02 next
+Last activity: 2026-02-26 - Completed 34-01: Extract domain_prefactor and unify oft!
 
-Progress: [#####░░░░░] ~17% (v2.0, 4/~24 plans)
+Progress: [#####░░░░░] ~21% (v2.0, 5/~24 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 94 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 4)
+- Total plans completed: 95 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 5)
 
 **By Milestone:**
 
@@ -31,7 +31,7 @@ Progress: [#####░░░░░] ~17% (v2.0, 4/~24 plans)
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
 | v1.5 Krylov Gap Estimation | 27-32 | 12 (+3 quick) | 2026-02-20 to 2026-02-25 |
-| v2.0 Restructure | 33-38 | 4/~24 | 2026-02-25 to ... |
+| v2.0 Restructure | 33-38 | 5/~24 | 2026-02-25 to ... |
 
 ## Accumulated Context
 
@@ -52,6 +52,9 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [33-04] Pre-existing test_diagnostics.jl failures (7) accepted -- numerical threshold, not migration-related
 - [Phase 38]: Replace ill-conditioned Trotter/Bohr ratio test with absolute threshold checks for KMS regime
 - [Phase quick-39]: Use kron(conj(J),J) for L*rho*L' Lindblad convention; simplify adjoint G to swap(G_left,G_right) for all domains
+- [34-01] domain_prefactor returns domain-only scalar; callers compose with gamma_norm_factor/jump_weight_scaling
+- [34-01] Old JumpOp-based oft! deleted; unified oft!(out, eigenbasis, bohr_freqs, energy, inv_4sigma2) is single source
+- [34-01] inv_4sigma2 computed at call site, not stored in precomputed_data
 
 ### Key Constraints for v2.0
 
@@ -82,5 +85,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-26
-Stopped at: Completed quick task 39 (fix Krylov Lindblad operator convention -- L*rho*L' everywhere)
+Stopped at: Completed 34-01-PLAN.md (domain_prefactor + OFT unification)
 Resume file: None
