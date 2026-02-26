@@ -16,7 +16,7 @@ function run_lindbladian(jumps::Vector{JumpOp}, config::Config{Lindbladian,D,C,T
     shift = 1e-9 * (1 + 1im)
     eigvals_near_zero, eigvecs_near_zero = eigs(liouv, nev=2, sigma=shift, tol=1e-12)
     sorted_permutation_eigen = sortperm(abs.(real.(eigvals_near_zero)))
-    
+
     ss_index = sorted_permutation_eigen[1]   # Smallest
     gap_index = sorted_permutation_eigen[2]  # Second smallest
     spectral_gap = eigvals_near_zero[gap_index] # Spectral gap
@@ -41,7 +41,7 @@ end
 
 function construct_lindbladian(jumps::Vector{JumpOp}, config::Config{Lindbladian}, hamiltonian::HamHam;
     trotter::Union{TrottTrott, Nothing}=nothing)
-    
+
     domain_name = replace(string(typeof(config.domain)), "Domain" => "")
     println("Constructing Liouvillian ($(domain_name))")
 
@@ -54,29 +54,38 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::Config{Lindbladian
 
     precomputed_data = _precompute_data(config, ham_or_trott)
 
-    #! uncomment for multi-threads
-    # total_lindbladian = @distributed (+) for jump in jumps
-    #     jump_contribution(config.domain, jump, ham_or_trott, config, precomputed_data)
-    # end
-
     dim = size(hamiltonian.data, 1)
     T = eltype(hamiltonian.eigvals)
     CT = Complex{T}
     total_lindbladian = zeros(CT, dim^2, dim^2)
-    ws = LindbladianWorkspace{T}(dim)
+
+    # Build Workspace{Lindbladian} with LiouvillianScratch
+    sc = LiouvillianScratch(CT, dim)
+    ws = Workspace{Lindbladian, typeof(config.domain), typeof(config.construction), T, typeof(sc)}(
+        nothing, nothing, nothing, nothing,  # physics data
+        nothing, nothing, nothing, nothing,  # G fields
+        nothing, nothing, nothing, nothing, nothing,  # channel fields
+        nothing, nothing, nothing, nothing,  # domain precomputed (transition, gnf, energy_labels, oft_domain_prefactor)
+        nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # domain-specific (oft_nufft_prefactors, bohr_alpha, bohr_keys, bohr_is, bohr_js, b_minus, b_plus)
+        nothing,  # coherent_unitaries
+        sc,       # scratch
+    )
+
+    # Compute identity inline (not stored on workspace)
+    Id = Matrix{CT}(I, dim, dim)
 
     # Precompute all B's for the A's if for KMS DB and with_coherent.
     Btot = _precompute_coherent_B(jumps, ham_or_trott, config, precomputed_data)
     if Btot !== nothing
-        _vectorize_liouvillian_coherent!(total_lindbladian, Btot, ws)
+        _vectorize_liouvillian_coherent!(total_lindbladian, Btot, ws, Id)
     end
 
     # Jumps arrive in the correct basis (trotter.eigvecs for TrotterDomain,
     # hamiltonian.eigvecs for other domains -- basis selection is at the source).
 
-    # Accumulate Liouvillian in-place (no per-jump dim^2×dim^2 allocations).
+    # Accumulate Liouvillian in-place (no per-jump dim^2 x dim^2 allocations).
     for (k, jump) in pairs(jumps)
-        _jump_contribution!(total_lindbladian, jump, ham_or_trott, config, precomputed_data, ws;
+        _jump_contribution!(total_lindbladian, jump, ham_or_trott, config, precomputed_data, ws, Id;
             coherent_term=nothing)
     end
 
@@ -113,15 +122,13 @@ function run_thermalization(
 
     precomputed_data = _precompute_data(config, ham_or_trott)
 
-    # Jumps arrive in the correct basis (trotter.eigvecs for TrotterDomain,
-    # hamiltonian.eigvecs for other domains -- basis selection is at the source).
-
     # precompute coherent U_B = exp(-i delta B(jump)) per jump to avoid allocations
     p_jump = 1.0 / length(jumps)
     coherent_unitaries = _precompute_coherent_unitary(jumps, hamiltonian, config, precomputed_data;
         trotter=trotter, delta_scale = rescale_by_inv_prob ? (1.0 / p_jump) : 1.0)
 
-    scratch = KrausScratch(eltype(evolving_dm), dim)
+    CT = eltype(evolving_dm)
+    scratch = ThermalizeScratch(CT, dim)
 
     num_steps = Int(ceil(config.mixing_time / config.delta))
 
@@ -160,4 +167,3 @@ function run_thermalization(
         time_steps = time_steps,
     )
 end
-

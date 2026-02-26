@@ -142,7 +142,7 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    apply_delta_channel!(ws, rho, config, hamiltonian) -> ws.rho_out
+    apply_delta_channel!(ws, rho, config, hamiltonian) -> ws.scratch.rho_out
 
 Apply the faithful Chen CPTP channel (Eq. 3.2) to a density matrix.
 
@@ -154,54 +154,53 @@ Uses precomputed channel matrices (K0, U_residual, U_coherent) from the workspac
     3. Assembly: E(rho) = K0 * rho_eff * K0' + rho_jump + U_res * rho_eff * U_res'
 
 # Arguments
-- `ws::KrylovWorkspace{T}`: Pre-allocated workspace with channel fields populated
+- `ws::Workspace{Krylov}`: Pre-allocated workspace with channel fields populated
 - `rho::Matrix{T}`: Input density matrix (dim x dim)
 - `config::Config`: Configuration (for sandwich dispatch)
 - `hamiltonian::HamHam`: Hamiltonian
 
 # Returns
-`ws.rho_out` containing E(rho).
+`ws.scratch.rho_out` containing E(rho).
 """
 function apply_delta_channel!(
-    ws::KrylovWorkspace{T},
+    ws::Workspace{Krylov},
     rho::Matrix{T},
     config::Config,
     hamiltonian::HamHam,
 ) where {T<:Complex}
-    K0 = ws.channel_K0
-    U_res = ws.channel_U_residual
-    U_coh = ws.channel_U_coherent
-    delta = ws.channel_delta
+    K0 = ws.K0
+    U_res = ws.U_residual
+    U_coh = ws.U_coherent
+    delta = ws.delta
 
     # 1. Coherent rotation: rho_eff = U_coh * rho * U_coh'
-    #    Use ws.LdagL as scratch for rho_eff (safe: LdagL not used until sandwich loop)
+    #    Use ws.scratch.sandwich_out as scratch for rho_eff (safe: sandwich_out not used until sandwich loop)
     if U_coh !== nothing
-        mul!(ws.tmp1, U_coh, rho)
-        mul!(ws.LdagL, ws.tmp1, U_coh')
-        rho_eff = ws.LdagL
+        mul!(ws.scratch.sandwich_tmp, U_coh, rho)
+        mul!(ws.scratch.sandwich_out, ws.scratch.sandwich_tmp, U_coh')
+        rho_eff = ws.scratch.sandwich_out
     else
         rho_eff = rho
     end
 
     # 2. Accumulate jump sandwich: rho_jump = delta * sum rate^2 * L * rho_eff * L'
-    fill!(ws.channel_rho_jump, 0)
-    _accumulate_jump_sandwich!(ws.channel_rho_jump, ws, rho_eff, delta, config, hamiltonian)
+    fill!(ws.scratch.channel_rho_jump, 0)
+    _accumulate_jump_sandwich!(ws.scratch.channel_rho_jump, ws, rho_eff, delta, config, hamiltonian)
 
     # 3. Need a safe copy of rho_eff before overwriting rho_out
-    #    If U_coh !== nothing, rho_eff = ws.LdagL (not aliased with rho_out) -- safe
+    #    If U_coh !== nothing, rho_eff = ws.scratch.sandwich_out (not aliased with rho_out) -- safe
     #    If U_coh === nothing, rho_eff = rho (input arg) -- safe
-    #    So rho_eff is always safe to read after we write rho_out.
 
     # Assembly: rho_out = K0 * rho_eff * K0' + rho_jump + U_res * rho_eff * U_res'
-    mul!(ws.tmp1, K0, rho_eff)
-    mul!(ws.rho_out, ws.tmp1, K0')
+    mul!(ws.scratch.sandwich_tmp, K0, rho_eff)
+    mul!(ws.scratch.rho_out, ws.scratch.sandwich_tmp, K0')
 
-    ws.rho_out .+= ws.channel_rho_jump
+    ws.scratch.rho_out .+= ws.scratch.channel_rho_jump
 
-    mul!(ws.tmp1, U_res, rho_eff)
-    mul!(ws.rho_out, ws.tmp1, U_res', 1.0, 1.0)
+    mul!(ws.scratch.sandwich_tmp, U_res, rho_eff)
+    mul!(ws.scratch.rho_out, ws.scratch.sandwich_tmp, U_res', 1.0, 1.0)
 
-    return ws.rho_out
+    return ws.scratch.rho_out
 end
 
 # ---------------------------------------------------------------------------
@@ -219,16 +218,16 @@ Matches the rho_jump accumulation in `_jump_contribution!` for EnergyDomain
 """
 function _accumulate_jump_sandwich!(
     out::Matrix{T},
-    ws::KrylovWorkspace{T},
+    ws::Workspace{Krylov},
     rho::Matrix{T},
     delta::Real,
     config::Config{<:Any, EnergyDomain},
     hamiltonian::HamHam,
 ) where {T<:Complex}
-    (; transition, gamma_norm_factor, energy_labels) = ws.precomputed_data
+    (; transition, gamma_norm_factor, energy_labels) = ws
     bohr_freqs = hamiltonian.bohr_freqs
     inv_4sigma2 = 1.0 / (4 * config.sigma^2)
-    prefactor = ws.precomputed_data.oft_domain_prefactor * gamma_norm_factor
+    prefactor = ws.oft_domain_prefactor * gamma_norm_factor
 
     for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
         is_herm = ws.jump_hermitian[k]
@@ -236,24 +235,24 @@ function _accumulate_jump_sandwich!(
             for w_raw in energy_labels
                 w_raw > 1e-12 && continue
                 w = abs(w_raw)
-                oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+                oft!(ws.scratch.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
                 rate2 = prefactor * transition(w)
                 # Physics convention sandwich: delta * rate2 * L * rho * L'
-                mul!(ws.tmp1, rho, ws.jump_oft')          # tmp1 = rho * L'
-                mul!(out, ws.jump_oft, ws.tmp1, delta * rate2, 1.0)  # out += d*r2 * L * rho * L'
+                mul!(ws.scratch.sandwich_tmp, rho, ws.scratch.jump_oft')          # tmp = rho * L'
+                mul!(out, ws.scratch.jump_oft, ws.scratch.sandwich_tmp, delta * rate2, 1.0)  # out += d*r2 * L * rho * L'
                 if w > 1e-12
                     rate2_neg = prefactor * transition(-w)
                     # Neg freq: L_neg = L', sandwich = L' * rho * L
-                    mul!(ws.tmp1, rho, ws.jump_oft)        # tmp1 = rho * L
-                    mul!(out, ws.jump_oft', ws.tmp1, delta * rate2_neg, 1.0)
+                    mul!(ws.scratch.sandwich_tmp, rho, ws.scratch.jump_oft)        # tmp = rho * L
+                    mul!(out, ws.scratch.jump_oft', ws.scratch.sandwich_tmp, delta * rate2_neg, 1.0)
                 end
             end
         else
             for w in energy_labels
-                oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+                oft!(ws.scratch.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
                 rate2 = prefactor * transition(w)
-                mul!(ws.tmp1, rho, ws.jump_oft')
-                mul!(out, ws.jump_oft, ws.tmp1, delta * rate2, 1.0)
+                mul!(ws.scratch.sandwich_tmp, rho, ws.scratch.jump_oft')
+                mul!(out, ws.scratch.jump_oft, ws.scratch.sandwich_tmp, delta * rate2, 1.0)
             end
         end
     end
@@ -267,14 +266,14 @@ TimeDomain / TrotterDomain version: same structure but uses NUFFT prefactor OFT.
 """
 function _accumulate_jump_sandwich!(
     out::Matrix{T},
-    ws::KrylovWorkspace{T},
+    ws::Workspace{Krylov},
     rho::Matrix{T},
     delta::Real,
     config::Config{<:Any, D},
     hamiltonian::HamHam,
 ) where {T<:Complex, D<:Union{TimeDomain, TrotterDomain}}
-    (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = ws.precomputed_data
-    prefactor = ws.precomputed_data.oft_domain_prefactor * gamma_norm_factor
+    (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = ws
+    prefactor = ws.oft_domain_prefactor * gamma_norm_factor
 
     for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
         is_herm = ws.jump_hermitian[k]
@@ -283,23 +282,23 @@ function _accumulate_jump_sandwich!(
                 w_raw > 1e-12 && continue
                 w = abs(w_raw)
                 nufft_pf = _prefactor_view(oft_nufft_prefactors, w)
-                @. ws.jump_oft = eigenbasis * nufft_pf
+                @. ws.scratch.jump_oft = eigenbasis * nufft_pf
                 rate2 = prefactor * transition(w)
-                mul!(ws.tmp1, rho, ws.jump_oft')
-                mul!(out, ws.jump_oft, ws.tmp1, delta * rate2, 1.0)
+                mul!(ws.scratch.sandwich_tmp, rho, ws.scratch.jump_oft')
+                mul!(out, ws.scratch.jump_oft, ws.scratch.sandwich_tmp, delta * rate2, 1.0)
                 if w > 1e-12
                     rate2_neg = prefactor * transition(-w)
-                    mul!(ws.tmp1, rho, ws.jump_oft)
-                    mul!(out, ws.jump_oft', ws.tmp1, delta * rate2_neg, 1.0)
+                    mul!(ws.scratch.sandwich_tmp, rho, ws.scratch.jump_oft)
+                    mul!(out, ws.scratch.jump_oft', ws.scratch.sandwich_tmp, delta * rate2_neg, 1.0)
                 end
             end
         else
             for w in energy_labels
                 nufft_pf = _prefactor_view(oft_nufft_prefactors, w)
-                @. ws.jump_oft = eigenbasis * nufft_pf
+                @. ws.scratch.jump_oft = eigenbasis * nufft_pf
                 rate2 = prefactor * transition(w)
-                mul!(ws.tmp1, rho, ws.jump_oft')
-                mul!(out, ws.jump_oft, ws.tmp1, delta * rate2, 1.0)
+                mul!(ws.scratch.sandwich_tmp, rho, ws.scratch.jump_oft')
+                mul!(out, ws.scratch.jump_oft, ws.scratch.sandwich_tmp, delta * rate2, 1.0)
             end
         end
     end
@@ -317,13 +316,14 @@ Matching jump_workers.jl:276-277.
 """
 function _accumulate_jump_sandwich!(
     out::Matrix{T},
-    ws::KrylovWorkspace{T},
+    ws::Workspace{Krylov},
     rho::Matrix{T},
     delta::Real,
     config::Config{<:Any, BohrDomain},
     hamiltonian::HamHam,
 ) where {T<:Complex}
-    (; alpha, gamma_norm_factor) = ws.precomputed_data
+    bohr_alpha_fn = ws.bohr_alpha
+    gamma_norm_factor = ws.gamma_norm_factor
     dim = size(rho, 1)
     # Allocate A_nu2_dag buffer (one per call, acceptable for Bohr)
     A_nu2_dag = zeros(T, dim, dim)
@@ -331,21 +331,21 @@ function _accumulate_jump_sandwich!(
     for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
         for nu_2 in keys(hamiltonian.bohr_dict)
             # alpha_A = B_nu2
-            @. ws.jump_oft = alpha(hamiltonian.bohr_freqs, nu_2) * eigenbasis
+            @. ws.scratch.jump_oft = bohr_alpha_fn(hamiltonian.bohr_freqs, nu_2) * eigenbasis
 
             # Build A_nu2_dag: entrywise rho*A_nu2_dag via scatter (matches thermalization code)
-            fill!(ws.tmp1, 0)
+            fill!(ws.scratch.sandwich_tmp, 0)
             indices = hamiltonian.bohr_dict[nu_2]
             @inbounds for idx in indices
                 i = idx[1]; j = idx[2]
                 v = conj(eigenbasis[i, j])
                 @inbounds for p in 1:dim
-                    ws.tmp1[p, i] += rho[p, j] * v  # tmp1 = rho * A_nu2_dag
+                    ws.scratch.sandwich_tmp[p, i] += rho[p, j] * v  # sandwich_tmp = rho * A_nu2_dag
                 end
             end
 
             # out += delta * gamma_norm_factor * alpha_A * (rho * A_nu2_dag)
-            mul!(out, ws.jump_oft, ws.tmp1, delta * gamma_norm_factor, 1.0)
+            mul!(out, ws.scratch.jump_oft, ws.scratch.sandwich_tmp, delta * gamma_norm_factor, 1.0)
         end
     end
     return nothing
@@ -407,7 +407,7 @@ function krylov_spectral_gap(
     function lindbladian_matvec(v::AbstractVector)
         rho = reshape(v, dim, dim)
         apply_lindbladian!(ws, rho, config, hamiltonian)
-        return copy(vec(ws.rho_out))  # CRITICAL: copy to avoid aliasing (Pitfall 1)
+        return copy(vec(ws.scratch.rho_out))  # CRITICAL: copy to avoid aliasing (Pitfall 1)
     end
 
     # Initial vector: maximally mixed state
@@ -511,7 +511,7 @@ function krylov_spectral_gap(
     function channel_matvec(v::AbstractVector)
         rho = reshape(v, dim, dim)
         apply_delta_channel!(ws, rho, config, hamiltonian)
-        return copy(vec(ws.rho_out))  # CRITICAL: copy to avoid aliasing
+        return copy(vec(ws.scratch.rho_out))  # CRITICAL: copy to avoid aliasing
     end
 
     # Initial vector: maximally mixed state

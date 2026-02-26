@@ -13,7 +13,7 @@ using LinearAlgebra
     therm_config = make_small_thermalize_config(TimeDomain();
         delta=0.01, mixing_time=1.0, construction=GNS())
     precomputed = QuantumFurnace._precompute_data(therm_config, SMALL_HAM)
-    scratch = QuantumFurnace.KrausScratch(CT, dim)
+    scratch = QuantumFurnace.ThermalizeScratch(CT, dim)
     fw = build_trajectoryframework(SMALL_JUMPS, SMALL_HAM, therm_config, precomputed, scratch, 0.01)
 
     # Create two independent workspaces and RNGs

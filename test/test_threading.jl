@@ -68,7 +68,7 @@ end
 
         # Manual serial reference: accumulate density matrices with same per-trajectory seeds
         precomputed = QuantumFurnace._precompute_data(therm_config, SMALL_HAM)
-        scratch = QuantumFurnace.KrausScratch(CT, dim)
+        scratch = QuantumFurnace.ThermalizeScratch(CT, dim)
         fw = build_trajectoryframework(SMALL_JUMPS, SMALL_HAM, therm_config, precomputed, scratch, 0.01)
         num_steps = ceil(Int, 0.5 / fw.delta)
         rho_ref = zeros(CT, dim, dim)
@@ -152,7 +152,7 @@ end
         # trajectories one at a time in a loop, using inline step loop directly
         # This simulates serial execution regardless of thread count
         precomputed = QuantumFurnace._precompute_data(therm_config, SMALL_HAM)
-        scratch = QuantumFurnace.KrausScratch(CT, dim)
+        scratch = QuantumFurnace.ThermalizeScratch(CT, dim)
         fw = build_trajectoryframework(SMALL_JUMPS, SMALL_HAM, therm_config, precomputed, scratch, 0.01)
         num_steps_perf = ceil(Int, 5.0 / fw.delta)
 

@@ -70,13 +70,13 @@ function _vectorize_liouv_diss_and_add!(
     L_target::AbstractMatrix{<:Complex},
     jump::AbstractMatrix{<:Complex},
     scalar::Number,
-    ws::LindbladianWorkspace
+    ws::Workspace{Lindbladian},
+    Id::AbstractMatrix{<:Complex},
 )
 
-    # scratch buffers
-    jump_conj = ws.jump_conj
-    jump_dag_jump = ws.jump_dag_jump
-    Id = ws.Id
+    # scratch buffers (nested in LiouvillianScratch)
+    jump_conj = ws.scratch.jump_conj
+    jump_dag_jump = ws.scratch.jump_dag_jump
 
     @. jump_conj = conj(jump)
     _kron!(L_target, jump_conj, jump, scalar)                        # kron(conj(J), J) => J*rho*J'
@@ -103,10 +103,10 @@ function _vectorize_liouv_diss_and_add!(
     jump_1::AbstractMatrix{<:Complex},
     jump_2::AbstractMatrix{<:Complex},
     scalar::Number,
-    ws::LindbladianWorkspace
+    ws::Workspace{Lindbladian},
+    Id::AbstractMatrix{<:Complex},
 )
-    Id = ws.Id
-    jump2_jump1 = ws.jump2_jump1
+    jump2_jump1 = ws.scratch.jump2_jump1
 
     _kron!(L_target, transpose(jump_2), jump_1, scalar)              # kron(J2^T, J1) => J1*rho*J2
 
@@ -120,10 +120,9 @@ end
 function _vectorize_liouvillian_coherent!(
     L_target::AbstractMatrix{<:Complex},
     coherent_term::AbstractMatrix{<:Complex},
-    ws::LindbladianWorkspace)
-
-    Id = ws.Id
-
+    ws::Workspace{Lindbladian},
+    Id::AbstractMatrix{<:Complex},
+)
     _kron!(L_target, coherent_term, Id, -1im)
     _kron!(L_target, Id, transpose(coherent_term), +1im)
     return L_target

@@ -110,7 +110,7 @@ function build_trajectoryframework(
     ham_or_trott::Union{HamHam, TrottTrott},
     config::Config{Thermalize},
     precomputed_data,
-    scratch::KrausScratch{<:Complex},
+    scratch::ThermalizeScratch{<:Complex},
     delta::Real)
 
     CT = eltype(scratch.R)
@@ -213,7 +213,7 @@ function _precompute_R(
     hamiltonian::HamHam,
     config::Config{Thermalize, EnergyDomain},
     precomputed_data,
-    scratch::KrausScratch{<:Complex},
+    scratch::ThermalizeScratch{<:Complex},
     )
     dim = size(hamiltonian.data, 1)
     (; transition, gamma_norm_factor, energy_labels) = precomputed_data
@@ -269,7 +269,7 @@ function _precompute_R(
     ham_or_trott::Union{HamHam, TrottTrott},
     config::Config{Thermalize, D},
     precomputed_data,
-    scratch::KrausScratch{<:Complex},
+    scratch::ThermalizeScratch{<:Complex},
     ) where {D<:Union{TimeDomain, TrotterDomain}}
     dim = size(jumps[1].in_eigenbasis, 1)
     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = precomputed_data
@@ -577,7 +577,7 @@ function _build_framework_and_seed(
     precomputed_data = _precompute_data(config, ham_or_trott)
 
     dim = size(hamiltonian.data, 1)
-    builder_scratch = KrausScratch(CT, dim)
+    builder_scratch = ThermalizeScratch(CT, dim)
 
     fw = build_trajectoryframework(jumps, ham_or_trott, config, precomputed_data, builder_scratch, delta)
 

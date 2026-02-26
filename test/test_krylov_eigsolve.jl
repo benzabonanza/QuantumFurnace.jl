@@ -32,7 +32,7 @@ using QuantumFurnace
 
             # Faithful Chen channel
             apply_delta_channel!(ws, rho, config_liouv, TEST_HAM)
-            rho_chen = copy(ws.rho_out)
+            rho_chen = copy(ws.scratch.rho_out)
 
             # Trace preservation: tr(E(rho)) == tr(rho)
             @test isapprox(real(tr(rho_chen)), real(tr(rho)); atol=1e-10)

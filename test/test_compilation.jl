@@ -6,7 +6,7 @@
     @testset "build_trajectoryframework with coherent (KMS)" begin
         config = make_thermalize_config(EnergyDomain(); construction=KMS())
         precomputed = QuantumFurnace._precompute_data(config, TEST_HAM)
-        scratch = QuantumFurnace.KrausScratch(ComplexF64, DIM)
+        scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, DIM)
         fw = build_trajectoryframework(
             TEST_JUMPS, TEST_HAM, config, precomputed, scratch, TEST_DELTA
         )
@@ -19,7 +19,7 @@
     @testset "build_trajectoryframework without coherent (GNS)" begin
         config = make_thermalize_config(EnergyDomain(); construction=GNS())
         precomputed = QuantumFurnace._precompute_data(config, TEST_HAM)
-        scratch = QuantumFurnace.KrausScratch(ComplexF64, DIM)
+        scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, DIM)
         fw = build_trajectoryframework(
             TEST_JUMPS, TEST_HAM, config, precomputed, scratch, TEST_DELTA
         )

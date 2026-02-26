@@ -14,7 +14,7 @@ using Random
                 config = make_thermalize_config(domain; construction=KMS(), delta=TEST_DELTA)
                 ham_or_trott = TEST_HAM
                 precomputed = QuantumFurnace._precompute_data(config, ham_or_trott)
-                scratch = QuantumFurnace.KrausScratch(ComplexF64, DIM)
+                scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, DIM)
                 fw = build_trajectoryframework(
                     TEST_JUMPS, ham_or_trott, config, precomputed, scratch, TEST_DELTA
                 )
@@ -41,7 +41,7 @@ using Random
         # and NO warning should fire. We verify the code path runs without error.
         config = make_thermalize_config(EnergyDomain(); delta=TEST_DELTA)
         precomputed = QuantumFurnace._precompute_data(config, TEST_HAM)
-        scratch = QuantumFurnace.KrausScratch(ComplexF64, DIM)
+        scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, DIM)
         fw = build_trajectoryframework(
             TEST_JUMPS, TEST_HAM, config, precomputed, scratch, TEST_DELTA
         )
@@ -71,7 +71,7 @@ using Random
                 config = make_thermalize_config(domain; delta=TEST_DELTA)
                 ham_or_trott = TEST_HAM
                 precomputed = QuantumFurnace._precompute_data(config, ham_or_trott)
-                scratch = QuantumFurnace.KrausScratch(ComplexF64, DIM)
+                scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, DIM)
                 fw = build_trajectoryframework(
                     TEST_JUMPS, ham_or_trott, config, precomputed, scratch, TEST_DELTA
                 )
@@ -94,7 +94,7 @@ using Random
         # p_nojump + p_jump_total + p_res should sum to ~1.0 for any normalized psi
         config = make_thermalize_config(EnergyDomain(); delta=TEST_DELTA)
         precomputed = QuantumFurnace._precompute_data(config, TEST_HAM)
-        scratch = QuantumFurnace.KrausScratch(ComplexF64, DIM)
+        scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, DIM)
         fw = build_trajectoryframework(
             TEST_JUMPS, TEST_HAM, config, precomputed, scratch, TEST_DELTA
         )

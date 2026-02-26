@@ -15,7 +15,7 @@ Eliminated patterns that these tests guard against:
 
 using QuantumFurnace: B_bohr, B_time, B_trotter,
                       _precompute_data, _jump_contribution!,
-                      KrausScratch,
+                      ThermalizeScratch,
                       TrajectoryWorkspace
 using Random
 
@@ -26,14 +26,12 @@ using Random
         jump = TEST_JUMPS[1]
         num_freqs = length(keys(TEST_HAM.bohr_dict))
 
-        # Single-jump: warmup + measure
-        B_ref = B_bohr(TEST_HAM, jump, config)
-        allocs = @allocated B_bohr(TEST_HAM, jump, config)
+        # Single-jump (wrapped as vector): warmup + measure
+        B_ref = B_bohr(TEST_HAM, JumpOp[jump], config)
+        allocs = @allocated B_bohr(TEST_HAM, JumpOp[jump], config)
         # B_bohr allocates: return matrix B (dim x dim), scratch f_A_nu_1 (dim x dim),
         # plus per-frequency broadcasting overhead from closure-based @. computation.
         # It should NOT allocate sparse matrices per frequency (the eliminated pattern).
-        # The old spzeros+scatter pattern would add ~num_freqs * dim^2 * sizeof(ComplexF64) bytes
-        # from the dense result of sparse*dense multiply per iteration.
         # Threshold: allow current baseline allocations (broadcasting + buffers) with headroom,
         # but catch reintroduction of per-frequency sparse matrix allocations.
         max_expected = num_freqs * DIM^2 * sizeof(ComplexF64)
@@ -54,9 +52,9 @@ using Random
         (; b_minus, b_plus) = precomputed
         jump = TEST_JUMPS[1]
 
-        # Single-jump warmup + measure
-        B_ref = B_time(jump, TEST_HAM, b_minus, b_plus, T0, BETA, SIGMA)
-        allocs = @allocated B_time(jump, TEST_HAM, b_minus, b_plus, T0, BETA, SIGMA)
+        # Single-jump (wrapped as vector) warmup + measure
+        B_ref = B_time(JumpOp[jump], TEST_HAM, b_minus, b_plus, T0, BETA, SIGMA)
+        allocs = @allocated B_time(JumpOp[jump], TEST_HAM, b_minus, b_plus, T0, BETA, SIGMA)
         # Expected allocations: pre-allocated buffers (diag_u, diag_u2 vectors; b_plus_summand,
         # tmp, M, B matrices) and lazy adjoint views from mul! calls.
         # It should NOT include per-iteration Diagonal wrapper allocations (the eliminated pattern).
@@ -86,9 +84,9 @@ using Random
         trotter_jumps = TEST_TROTTER_JUMPS
         jump = trotter_jumps[1]
 
-        # Single-jump warmup + measure
-        B_ref = B_trotter(jump, TEST_TROTTER, b_minus, b_plus, BETA, SIGMA)
-        allocs = @allocated B_trotter(jump, TEST_TROTTER, b_minus, b_plus, BETA, SIGMA)
+        # Single-jump (wrapped as vector) warmup + measure
+        B_ref = B_trotter(JumpOp[jump], TEST_TROTTER, b_minus, b_plus, BETA, SIGMA)
+        allocs = @allocated B_trotter(JumpOp[jump], TEST_TROTTER, b_minus, b_plus, BETA, SIGMA)
         d = DIM
         max_expected = 25 * d^2 * sizeof(ComplexF64) + 4096
         @test allocs <= max_expected
@@ -110,7 +108,7 @@ using Random
         precomputed = _precompute_data(config_therm, TEST_HAM)
         CT = ComplexF64
         d = DIM
-        scratch = KrausScratch(CT, d)
+        scratch = ThermalizeScratch(CT, d)
         jump = TEST_JUMPS[1]
         evolving_dm = copy(Matrix{CT}(TEST_GIBBS))
 
@@ -138,7 +136,7 @@ using Random
         precomputed = _precompute_data(config, SMALL_HAM)
         CT = ComplexF64
         dim = SMALL_DIM  # 8
-        scratch = KrausScratch(CT, dim)
+        scratch = ThermalizeScratch(CT, dim)
         fw = build_trajectoryframework(SMALL_JUMPS, SMALL_HAM, config, precomputed, scratch, 0.01)
 
         ws = TrajectoryWorkspace(CT, dim)

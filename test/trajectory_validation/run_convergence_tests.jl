@@ -52,7 +52,7 @@ function convergence_ratio_test(domain; with_coherent::Bool=false, delta::Float6
     ham_or_trott = domain isa TrotterDomain ? SMALL_TROTTER : SMALL_HAM
     jumps = domain isa TrotterDomain ? SMALL_TROTTER_JUMPS : SMALL_JUMPS
     precomputed = QuantumFurnace._precompute_data(therm_config, ham_or_trott)
-    scratch = QuantumFurnace.KrausScratch(ComplexF64, dim)
+    scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, dim)
     fw = build_trajectoryframework(jumps, ham_or_trott, therm_config,
         precomputed, scratch, delta)
 

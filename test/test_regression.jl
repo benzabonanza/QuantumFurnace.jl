@@ -71,7 +71,7 @@ ref_dir = joinpath(source_root, "test", "reference")
         therm_config = make_small_thermalize_config(EnergyDomain();
             delta=delta, mixing_time=Float64(delta))
         precomputed = QuantumFurnace._precompute_data(therm_config, SMALL_HAM)
-        scratch = QuantumFurnace.KrausScratch(ComplexF64, SMALL_DIM)
+        scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, SMALL_DIM)
         fw = build_trajectoryframework(SMALL_JUMPS, SMALL_HAM, therm_config,
             precomputed, scratch, delta)
 
@@ -136,7 +136,7 @@ ref_dir = joinpath(source_root, "test", "reference")
         therm_config = make_small_thermalize_config(TrotterDomain();
             construction=KMS(), delta=delta, mixing_time=Float64(delta))
         precomputed = QuantumFurnace._precompute_data(therm_config, SMALL_TROTTER)
-        scratch = QuantumFurnace.KrausScratch(ComplexF64, SMALL_DIM)
+        scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, SMALL_DIM)
         fw = build_trajectoryframework(SMALL_TROTTER_JUMPS, SMALL_TROTTER, therm_config,
             precomputed, scratch, delta)
 

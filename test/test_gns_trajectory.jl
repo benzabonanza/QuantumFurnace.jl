@@ -47,7 +47,7 @@ end
 @testset "GNS-01: CPTP completeness (TrotterDomain)" begin
     config = make_small_thermalize_config_gns(TrotterDomain(); delta=0.01)
     precomputed = QuantumFurnace._precompute_data(config, SMALL_TROTTER)
-    scratch = QuantumFurnace.KrausScratch(ComplexF64, SMALL_DIM)
+    scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, SMALL_DIM)
     fw = build_trajectoryframework(
         SMALL_TROTTER_JUMPS, SMALL_TROTTER, config, precomputed, scratch, config.delta
     )

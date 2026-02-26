@@ -2,8 +2,8 @@
 """
     Accumulate the Liouvillian contribution of a single jump operator in-place.
 
-    This avoids allocating a full `dim^2 × dim^2` matrix per jump. Call with a
-    preallocated `L_target` (dense) and a `LindbladianWorkspace`.
+    This avoids allocating a full `dim^2 x dim^2` matrix per jump. Call with a
+    preallocated `L_target` (dense) and a `Workspace{Lindbladian}`.
 
     If `with_coherent(config.construction)==true`, pass `coherent_term` already scaled by
     `gamma_norm_factor` to avoid modifying cached matrices.
@@ -14,7 +14,8 @@ function _jump_contribution!(
     hamiltonian::HamHam,
     config::Config{Lindbladian, BohrDomain},
     precomputed_data,
-    ws::LindbladianWorkspace;
+    ws::Workspace{Lindbladian},
+    Id::AbstractMatrix{<:Complex};
     coherent_term::Union{Nothing, AbstractMatrix{<:Complex}} = nothing,
     )
     dim = size(hamiltonian.data, 1)
@@ -23,10 +24,10 @@ function _jump_contribution!(
 
     B = coherent_term
     if B !== nothing
-        _vectorize_liouvillian_coherent!(L_target, B, ws)
+        _vectorize_liouvillian_coherent!(L_target, B, ws, Id)
     end
 
-    alpha_A_nu1 = ws.jump_tmp
+    alpha_A_nu1 = ws.scratch.jump_tmp
     for nu_2 in unique_freqs
         @. alpha_A_nu1 = alpha(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
 
@@ -39,7 +40,7 @@ function _jump_contribution!(
 
         A_nu_2_dag = sparse(rows_dag, cols_dag, conj.(A_nu_2_vals), dim, dim)
 
-        _vectorize_liouv_diss_and_add!(L_target, alpha_A_nu1, A_nu_2_dag, gamma_norm_factor, ws)
+        _vectorize_liouv_diss_and_add!(L_target, alpha_A_nu1, A_nu_2_dag, gamma_norm_factor, ws, Id)
     end
     return L_target
 end
@@ -50,7 +51,8 @@ function _jump_contribution!(
     hamiltonian::HamHam,
     config::Config{Lindbladian, EnergyDomain},
     precomputed_data,
-    ws::LindbladianWorkspace;
+    ws::Workspace{Lindbladian},
+    Id::AbstractMatrix{<:Complex};
     coherent_term::Union{Nothing, AbstractMatrix{<:Complex}} = nothing,
     )
 
@@ -58,10 +60,10 @@ function _jump_contribution!(
 
     B = coherent_term
     if B !== nothing
-        _vectorize_liouvillian_coherent!(L_target, B, ws)
+        _vectorize_liouvillian_coherent!(L_target, B, ws, Id)
     end
 
-    jump_oft = ws.jump_tmp
+    jump_oft = ws.scratch.jump_tmp
     prefactor = precomputed_data.oft_domain_prefactor * gamma_norm_factor
     inv_4sigma2 = 1.0 / (4 * config.sigma^2)
 
@@ -72,17 +74,17 @@ function _jump_contribution!(
             w = abs(w_raw)
             oft!(jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
             scalar_w = prefactor * transition(w)
-            _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
+            _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws, Id)
             if w > 1e-12
                 scalar_negative_w = prefactor * transition(-w)
-                _vectorize_liouv_diss_and_add!(L_target, jump_oft', scalar_negative_w, ws)
+                _vectorize_liouv_diss_and_add!(L_target, jump_oft', scalar_negative_w, ws, Id)
             end
         end
     else
         for w in energy_labels
             oft!(jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
             scalar_w = prefactor * transition(w)
-            _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
+            _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws, Id)
         end
     end
 
@@ -95,7 +97,8 @@ function _jump_contribution!(
     ham_or_trott::Union{HamHam, TrottTrott},
     config::Config{Lindbladian, D},
     precomputed_data,
-    ws::LindbladianWorkspace;
+    ws::Workspace{Lindbladian},
+    Id::AbstractMatrix{<:Complex};
     coherent_term::Union{Nothing, AbstractMatrix{<:Complex}} = nothing,
     ) where {D<:Union{TimeDomain, TrotterDomain}}
 
@@ -103,10 +106,10 @@ function _jump_contribution!(
 
     B = coherent_term
     if B !== nothing
-        _vectorize_liouvillian_coherent!(L_target, B, ws)
+        _vectorize_liouvillian_coherent!(L_target, B, ws, Id)
     end
 
-    jump_oft = ws.jump_tmp
+    jump_oft = ws.scratch.jump_tmp
     prefactor = precomputed_data.oft_domain_prefactor * gamma_norm_factor
 
     if jump.hermitian
@@ -117,10 +120,10 @@ function _jump_contribution!(
             @. jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
 
             scalar_w = prefactor * transition(w)
-            _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
+            _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws, Id)
             if w > 1e-12
                 scalar_negative_w = prefactor * transition(-w)
-                _vectorize_liouv_diss_and_add!(L_target, jump_oft', scalar_negative_w, ws)
+                _vectorize_liouv_diss_and_add!(L_target, jump_oft', scalar_negative_w, ws, Id)
             end
         end
     else
@@ -128,7 +131,7 @@ function _jump_contribution!(
             nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
             @. jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
             scalar_w = prefactor * transition(w)
-            _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
+            _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws, Id)
         end
     end
 
@@ -146,11 +149,11 @@ No-op if U_B is nothing.
 @inline function _apply_coherent_unitary!(
     evolving_dm::Matrix{<:Complex},
     U_B::Union{Nothing,Matrix{<:Complex}},
-    scratch::KrausScratch{<:Complex},
+    scratch::ThermalizeScratch{<:Complex},
 )
     U_B === nothing && return nothing
-    mul!(scratch.tmp1, U_B, evolving_dm)
-    mul!(scratch.rho_next, scratch.tmp1, U_B')
+    mul!(scratch.sandwich_tmp, U_B, evolving_dm)
+    mul!(scratch.rho_next, scratch.sandwich_tmp, U_B')
     copyto!(evolving_dm, scratch.rho_next)
     return nothing
 end
@@ -172,18 +175,18 @@ domain-specific dissipative accumulation loop.
 function _finalize_kraus_step!(
     evolving_dm::Matrix{<:Complex},
     delta::Real,
-    scratch::KrausScratch{<:Complex},
+    scratch::ThermalizeScratch{<:Complex},
 )
     # Build CPTP channel from accumulated R (Chen Eq. 3.2)
     (; K0, U_residual) = _build_cptp_channel(scratch.R, delta)
 
     # rho_next = K0 * rho * K0' + rho_jump + U_res * rho * U_res'
-    mul!(scratch.tmp1, K0, evolving_dm)
-    mul!(scratch.rho_next, scratch.tmp1, K0')
+    mul!(scratch.sandwich_tmp, K0, evolving_dm)
+    mul!(scratch.rho_next, scratch.sandwich_tmp, K0')
     scratch.rho_next .+= scratch.rho_jump
 
-    mul!(scratch.tmp1, U_residual, evolving_dm)
-    mul!(scratch.rho_next, scratch.tmp1, U_residual', 1.0, 1.0)
+    mul!(scratch.sandwich_tmp, U_residual, evolving_dm)
+    mul!(scratch.rho_next, scratch.sandwich_tmp, U_residual', 1.0, 1.0)
 
     # Keep it a density matrix numerically
     hermitianize!(scratch.rho_next)
@@ -197,7 +200,7 @@ function _jump_contribution!(
     hamiltonian::HamHam,
     config::Config{Thermalize, BohrDomain},
     precomputed_data,
-    scratch::KrausScratch{<:Complex};
+    scratch::ThermalizeScratch{<:Complex};
     coherent_unitary_cache::Union{Nothing,Matrix{<:Complex}} = nothing,
     jump_prob::Real = 1.0,
     rescale_by_inv_prob::Bool = false
@@ -218,18 +221,18 @@ function _jump_contribution!(
     fill!(scratch.R, 0)
     fill!(scratch.rho_jump, 0)
 
-    # For each fixed "right" Bohr label ν2 build the composite
-    #   B_{ν2} = \sum_{ν1} α_{ν1,ν2} A_{ν1}
+    # For each fixed "right" Bohr label v2 build the composite
+    #   B_{v2} = \sum_{v1} alpha_{v1,v2} A_{v1}
     # and accumulate
-    #   rho_jump += δ * B_{ν2} ρ A_{ν2}†
-    #   R        +=     A_{ν2}† B_{ν2}
+    #   rho_jump += delta * B_{v2} rho A_{v2}dag
+    #   R        +=     A_{v2}dag B_{v2}
     @inbounds for (k, nu_2) in pairs(bohr_keys)
-        # B_{ν2}
+        # B_{v2}
         @. scratch.jump_oft = alpha(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
 
-        # tmp1 := ρ A_{ν2}† without explicitly building A_{ν2}†.
-        # If (i,j) is in the ν2 bucket, then (A_{ν2}†)_{j,i} = conj(A_{i,j}).
-        fill!(scratch.tmp1, 0)
+        # sandwich_tmp := rho A_{v2}dag without explicitly building A_{v2}dag.
+        # If (i,j) is in the v2 bucket, then (A_{v2}dag)_{j,i} = conj(A_{i,j}).
+        fill!(scratch.sandwich_tmp, 0)
         if bohr_is !== nothing
             is = bohr_is[k]
             js = bohr_js[k]
@@ -238,7 +241,7 @@ function _jump_contribution!(
                 j = js[t]
                 v = conj(jump.in_eigenbasis[i, j])
                 @inbounds for p in 1:dim
-                    scratch.tmp1[p, i] += evolving_dm[p, j] * v
+                    scratch.sandwich_tmp[p, i] += evolving_dm[p, j] * v
                 end
             end
         else
@@ -248,15 +251,15 @@ function _jump_contribution!(
                 j = idx[2]
                 v = conj(jump.in_eigenbasis[i, j])
                 @inbounds for p in 1:dim
-                    scratch.tmp1[p, i] += evolving_dm[p, j] * v
+                    scratch.sandwich_tmp[p, i] += evolving_dm[p, j] * v
                 end
             end
         end
 
-        # rho_jump += δ * B_{ν2} * (ρ A_{ν2}†)
-        mul!(scratch.rho_jump, scratch.jump_oft, scratch.tmp1, scaled_delta, 1.0)
+        # rho_jump += delta * B_{v2} * (rho A_{v2}dag)
+        mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp, scaled_delta, 1.0)
 
-        # R += A_{ν2}† * B_{ν2}  (no δ factor)
+        # R += A_{v2}dag * B_{v2}  (no delta factor)
         if bohr_is !== nothing
             is = bohr_is[k]
             js = bohr_js[k]
@@ -295,7 +298,7 @@ function _jump_contribution!(
     hamiltonian::HamHam,
     config::Config{Thermalize, EnergyDomain},
     precomputed_data,
-    scratch::KrausScratch{<:Complex};
+    scratch::ThermalizeScratch{<:Complex};
     coherent_unitary_cache::Union{Nothing,Matrix{<:Complex}} = nothing,
     jump_prob::Real = 1.0,
     rescale_by_inv_prob::Bool = false
@@ -309,8 +312,6 @@ function _jump_contribution!(
     _apply_coherent_unitary!(evolving_dm, coherent_unitary_cache, scratch)
 
     # --- Dissipative part ---
-    # Matches the Euler prefactor in jump_contribution(::EnergyDomain, ...):
-    # prefactor = (delta * gamma_norm_factor) * w0 / (sigma*sqrt(2π))
     base_prefactor = precomputed_data.oft_domain_prefactor * jump_weight_scaling
     inv_4sigma2 = 1.0 / (4 * config.sigma^2)
 
@@ -322,29 +323,28 @@ function _jump_contribution!(
             w_raw > 1e-12 && continue
             w = abs(w_raw)
 
-            # Aω
+            # Aw
             oft!(scratch.jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
 
             rate2_pos = base_prefactor * transition(w)
 
-            # R += rate^2 * (Aω† Aω)
+            # R += rate^2 * (Aw_dag Aw)
             mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)
             @. scratch.R += rate2_pos * scratch.LdagL
 
-            # rho_jump += delta * rate^2 * (Aω ρ Aω†)
-            mul!(scratch.tmp1, evolving_dm, scratch.jump_oft')  # ρ Aω†
-            mul!(scratch.rho_jump, scratch.jump_oft, scratch.tmp1, config.delta * rate2_pos, 1.0)
+            # rho_jump += delta * rate^2 * (Aw rho Aw_dag)
+            mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft')  # rho Aw_dag
+            mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp, config.delta * rate2_pos, 1.0)
 
             if w > 1e-12
                 rate2_neg = base_prefactor * transition(-w)
 
-                # Negative-frequency partner uses (Aω)† as Lindblad operator.
-                # Then L†L = Aω Aω† and jump term is Aω† ρ Aω.
+                # Negative-frequency partner uses (Aw)_dag as Lindblad operator.
                 mul!(scratch.LdagL, scratch.jump_oft, scratch.jump_oft')
                 @. scratch.R += rate2_neg * scratch.LdagL
 
-                mul!(scratch.tmp1, evolving_dm, scratch.jump_oft)  # ρ Aω
-                mul!(scratch.rho_jump, scratch.jump_oft', scratch.tmp1, config.delta * rate2_neg, 1.0)
+                mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft)  # rho Aw
+                mul!(scratch.rho_jump, scratch.jump_oft', scratch.sandwich_tmp, config.delta * rate2_neg, 1.0)
             end
         end
     else
@@ -356,8 +356,8 @@ function _jump_contribution!(
             mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)
             @. scratch.R += rate2 * scratch.LdagL
 
-            mul!(scratch.tmp1, evolving_dm, scratch.jump_oft')
-            mul!(scratch.rho_jump, scratch.jump_oft, scratch.tmp1, config.delta * rate2, 1.0)
+            mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft')
+            mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp, config.delta * rate2, 1.0)
         end
     end
 
@@ -375,7 +375,7 @@ function _jump_contribution!(
     ham_or_trott,              # HamHam or TrottTrott depending on domain
     config::Config{Thermalize, D},
     precomputed_data,
-    scratch::KrausScratch{<:Complex};
+    scratch::ThermalizeScratch{<:Complex};
     coherent_unitary_cache::Union{Nothing,Matrix{<:Complex}} = nothing,
     jump_prob::Real = 1.0,
     rescale_by_inv_prob::Bool = false
@@ -406,8 +406,8 @@ function _jump_contribution!(
             mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)
             @. scratch.R += rate2_pos * scratch.LdagL
 
-            mul!(scratch.tmp1, evolving_dm, scratch.jump_oft')
-            mul!(scratch.rho_jump, scratch.jump_oft, scratch.tmp1, config.delta*rate2_pos, 1.0)
+            mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft')
+            mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp, config.delta*rate2_pos, 1.0)
 
             if w > 1e-12
                 rate2_neg = base_prefactor * transition(-w)
@@ -415,8 +415,8 @@ function _jump_contribution!(
                 mul!(scratch.LdagL, scratch.jump_oft, scratch.jump_oft')
                 @. scratch.R += rate2_neg * scratch.LdagL
 
-                mul!(scratch.tmp1, evolving_dm, scratch.jump_oft)
-                mul!(scratch.rho_jump, scratch.jump_oft', scratch.tmp1, config.delta*rate2_neg, 1.0)
+                mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft)
+                mul!(scratch.rho_jump, scratch.jump_oft', scratch.sandwich_tmp, config.delta*rate2_neg, 1.0)
             end
         end
     else
@@ -429,8 +429,8 @@ function _jump_contribution!(
             mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)
             @. scratch.R += rate2_pos * scratch.LdagL
 
-            mul!(scratch.tmp1, evolving_dm, scratch.jump_oft')
-            mul!(scratch.rho_jump, scratch.jump_oft, scratch.tmp1, config.delta*rate2_pos, 1.0)
+            mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft')
+            mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp, config.delta*rate2_pos, 1.0)
         end
     end
 

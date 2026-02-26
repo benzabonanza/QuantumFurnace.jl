@@ -52,7 +52,7 @@ function single_step_crossval(domain, delta::Float64;
         construction=with_coherent ? KMS() : GNS(), delta=delta, mixing_time=Float64(delta))
     ham_or_trott = domain isa TrotterDomain ? SMALL_TROTTER : SMALL_HAM
     precomputed = QuantumFurnace._precompute_data(therm_config, ham_or_trott)
-    scratch = QuantumFurnace.KrausScratch(ComplexF64, dim)
+    scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, dim)
     fw = build_trajectoryframework(jumps, ham_or_trott, therm_config,
         precomputed, scratch, delta)
 

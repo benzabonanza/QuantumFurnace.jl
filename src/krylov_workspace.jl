@@ -1,92 +1,12 @@
 """
-    KrylovWorkspace{T, PD}
+    Workspace(config::Config{Lindbladian}, hamiltonian, jumps; trotter=nothing)
 
-Pre-allocated workspace for matrix-free Lindbladian action (matvec).
-
-Stores precomputed data (transition function, energy labels, gamma normalization),
-the coherent correction matrix B (if applicable), jump operator references,
-and scratch matrices for zero-allocation dissipator accumulation.
-
-Tied to a specific (config, hamiltonian) pair at construction time.
-
-# Type Parameters
-- `T <: Complex`: element type of all matrices (e.g. `ComplexF64`)
-- `PD <: NamedTuple`: concrete type of the precomputed data tuple (varies by domain)
-
-# Fields
-- `precomputed_data::PD`: from `_precompute_data(config, ham_or_trott)`
-- `B_total::Union{Nothing, Matrix{T}}`: precomputed coherent B (nothing for GNS / with_coherent(construction)=false)
-- `jumps::Vector{JumpOp}`: reference to jump operators (kept for external access)
-- `jump_eigenbases::Vector{Matrix{T}}`: concrete-typed eigenbasis matrices (avoids JumpOp abstract field boxing)
-- `jump_hermitian::Vector{Bool}`: hermitian flags for each jump operator
-
-Scratch matrices (all dim x dim, zeroed or overwritten each matvec call):
-- `jump_oft::Matrix{T}`: A(omega) buffer (written by `oft!`)
-- `tmp1::Matrix{T}`: scratch for `mul!` results
-- `tmp2::Matrix{T}`: scratch for `mul!` results
-- `LdagL::Matrix{T}`: scratch for L'*L product
-- `rho_out::Matrix{T}`: output accumulator (zeroed at start of each matvec)
-
-Channel fields (populated only for Config{Thermalize}, nothing for Config{Lindbladian}):
-- `channel_K0::Union{Nothing, Matrix{T}}`: I - alpha * R_total (Chen Eq. 3.2)
-- `channel_U_residual::Union{Nothing, Matrix{T}}`: sqrt_psd(S) residual TP fix
-- `channel_U_coherent::Union{Nothing, Matrix{T}}`: exp(-i*delta*B_total) coherent unitary
-- `channel_rho_jump::Union{Nothing, Matrix{T}}`: scratch for jump sandwich accumulation
-- `channel_delta::Union{Nothing, Float64}`: delta from Config{Thermalize}
-
-Precomputed effective Hamiltonian for optimized Lindbladian matvec (Phase 32):
-- `G_left::Union{Nothing, Matrix{T}}`: i*B^T - 0.5*R_total^T (left action in L(rho) = G_left*rho + rho*G_right + sandwiches)
-- `G_right::Union{Nothing, Matrix{T}}`: -i*B^T - 0.5*R_total^T (right action)
-- `G_left_adj::Union{Nothing, Matrix{T}}`: adjoint left action (= G_right for Hermitian R_total, differs for BohrDomain)
-- `G_right_adj::Union{Nothing, Matrix{T}}`: adjoint right action (= G_left for Hermitian R_total, differs for BohrDomain)
-"""
-struct KrylovWorkspace{T<:Complex, PD<:NamedTuple}
-    # Precomputed data (immutable after construction)
-    precomputed_data::PD
-    B_total::Union{Nothing, Matrix{T}}
-    jumps::Vector{JumpOp}
-
-    # Concrete-typed jump data for zero-allocation hot path
-    # (JumpOp.in_eigenbasis is Matrix{<:Complex} -- abstract element type causes boxing)
-    jump_eigenbases::Vector{Matrix{T}}
-    jump_hermitian::Vector{Bool}
-
-    # Scratch matrices for dissipator accumulation (dim x dim)
-    jump_oft::Matrix{T}
-    tmp1::Matrix{T}
-    tmp2::Matrix{T}
-    LdagL::Matrix{T}
-    rho_out::Matrix{T}
-
-    # Channel fields (populated only for Config{Thermalize} constructor)
-    channel_K0::Union{Nothing, Matrix{T}}
-    channel_U_residual::Union{Nothing, Matrix{T}}
-    channel_U_coherent::Union{Nothing, Matrix{T}}
-    channel_rho_jump::Union{Nothing, Matrix{T}}
-    channel_delta::Union{Nothing, Float64}
-
-    # Precomputed effective Hamiltonian for optimized Lindbladian matvec (Phase 32)
-    # G_left = i*B^T - 0.5*R_total, G_right = -i*B^T - 0.5*R_total
-    # Used directly in gemm!('N','N',...) for zero-allocation hot path.
-    G_left::Union{Nothing, Matrix{T}}
-    G_right::Union{Nothing, Matrix{T}}
-    G_left_adj::Union{Nothing, Matrix{T}}
-    G_right_adj::Union{Nothing, Matrix{T}}
-end
-
-"""
-    KrylovWorkspace(config::Config{Lindbladian}, hamiltonian, jumps; trotter=nothing)
-
-Construct a `KrylovWorkspace` pre-allocating all scratch matrices for the given
+Construct a `Workspace{Krylov}` pre-allocating all scratch matrices for the given
 (config, hamiltonian) pair. Mirrors `construct_lindbladian` setup in `furnace.jl`.
 
-# Arguments
-- `config::Config{Lindbladian}`: Lindbladian configuration (EnergyDomain, TimeDomain, etc.)
-- `hamiltonian::HamHam`: Hamiltonian with eigenbasis data
-- `jumps::Vector{JumpOp}`: Jump operators (stored by reference)
-- `trotter::Union{TrottTrott, Nothing}=nothing`: Trotter object (required for TrotterDomain)
+Returns `Workspace{Krylov,D,C,T,KrylovScratch{Complex{T}}}`.
 """
-function KrylovWorkspace(
+function Workspace(
     config::Config{Lindbladian},
     hamiltonian::HamHam,
     jumps::Vector{JumpOp};
@@ -108,57 +28,58 @@ function KrylovWorkspace(
 
     # Determine dimensions and element type
     dim = size(hamiltonian.data, 1)
-    CT = Complex{eltype(hamiltonian.eigvals)}
+    T = eltype(hamiltonian.eigvals)
+    CT = Complex{T}
 
     # Extract concrete-typed eigenbasis matrices and hermitian flags
-    # (JumpOp.in_eigenbasis is Matrix{<:Complex} -- abstract type parameter
-    #  causes boxing allocations in the hot path)
     jump_eigenbases = [Matrix{CT}(j.in_eigenbasis) for j in jumps]
     jump_hermitian  = [j.hermitian for j in jumps]
 
-    # Allocate scratch matrices
-    jump_oft = zeros(CT, dim, dim)
-    tmp1     = zeros(CT, dim, dim)
-    tmp2     = zeros(CT, dim, dim)
-    LdagL    = zeros(CT, dim, dim)
-    rho_out  = zeros(CT, dim, dim)
+    # Allocate KrylovScratch (no channel_rho_jump for Lindbladian)
+    sc = KrylovScratch(CT, dim; with_channel_rho_jump=false)
 
     # Precompute G_left/G_right for optimized Lindbladian matvec (Phase 32)
-    # R_total = sum_i scalar_i * L_i'L_i (physics convention, reuse existing helper)
     R_total = zeros(CT, dim, dim)
     _accumulate_R_total!(R_total, jump_eigenbases, jump_hermitian,
                          precomputed_data, config, ham_or_trott)
     hermitianize!(R_total)
 
-    # Build G_left/G_right (stored as the actual matrices used in gemm!('N','N',...))
-    # Convention (L*rho*L'): L(rho) = G_left*rho + rho*G_right + sandwiches
-    # Non-sandwich part: i*B^T*rho - i*rho*B^T  (from _vectorize_liouvillian_coherent!)
-    #                  - 0.5*R*rho - 0.5*rho*R   (new anticommutator with kron(I,R) and kron(R^T,I))
-    # => G_left = i*B^T - 0.5*R,  G_right = -i*B^T - 0.5*R
     if B_total !== nothing
         B_T = Matrix{CT}(transpose(B_total))
-        G_left  = 1im .* B_T .- 0.5 .* R_total
-        G_right = -1im .* B_T .- 0.5 .* R_total
+        G_left  = Matrix{CT}(1im .* B_T .- 0.5 .* R_total)
+        G_right = Matrix{CT}(-1im .* B_T .- 0.5 .* R_total)
     else
-        G_left  = -0.5 .* R_total
-        G_right = -0.5 .* R_total
+        G_left  = Matrix{CT}(-0.5 .* R_total)
+        G_right = Matrix{CT}(-0.5 .* R_total)
     end
-    G_left  = Matrix{CT}(G_left)
-    G_right = Matrix{CT}(G_right)
 
-    # Adjoint: HS adjoint of rho -> M*rho is rho -> M'*rho, of rho -> rho*N is rho -> rho*N'.
-    # G_left_adj  = G_left'  = (i*B^T - 0.5*R)' = -i*B^T - 0.5*R = G_right  (B Hermitian, R Hermitian after hermitianize!)
-    # G_right_adj = G_right' = (-i*B^T - 0.5*R)' = i*B^T - 0.5*R = G_left
-    # This holds for ALL domains because R_total is Hermitianized before G construction.
     G_left_adj  = G_right
     G_right_adj = G_left
 
-    return KrylovWorkspace{CT, typeof(precomputed_data)}(
-        precomputed_data, B_total, jumps,
-        jump_eigenbases, jump_hermitian,
-        jump_oft, tmp1, tmp2, LdagL, rho_out,
+    # Absorb precomputed_data fields into flat workspace fields
+    pd_transition = hasproperty(precomputed_data, :transition) ? precomputed_data.transition : nothing
+    pd_gnf = hasproperty(precomputed_data, :gamma_norm_factor) ? precomputed_data.gamma_norm_factor : nothing
+    pd_el = hasproperty(precomputed_data, :energy_labels) ? precomputed_data.energy_labels : nothing
+    pd_odp = hasproperty(precomputed_data, :oft_domain_prefactor) ? precomputed_data.oft_domain_prefactor : nothing
+    pd_nufft = hasproperty(precomputed_data, :oft_nufft_prefactors) ? precomputed_data.oft_nufft_prefactors : nothing
+    pd_alpha = hasproperty(precomputed_data, :alpha) ? precomputed_data.alpha : nothing
+    pd_bkeys = hasproperty(precomputed_data, :bohr_keys) ? precomputed_data.bohr_keys : nothing
+    pd_bis = hasproperty(precomputed_data, :bohr_is) ? precomputed_data.bohr_is : nothing
+    pd_bjs = hasproperty(precomputed_data, :bohr_js) ? precomputed_data.bohr_js : nothing
+    pd_bminus = hasproperty(precomputed_data, :b_minus) ? precomputed_data.b_minus : nothing
+    pd_bplus = hasproperty(precomputed_data, :b_plus) ? precomputed_data.b_plus : nothing
+
+    D = typeof(config.domain)
+    C = typeof(config.construction)
+
+    return Workspace{Krylov, D, C, T, typeof(sc)}(
+        jump_eigenbases, jump_hermitian, jumps, B_total,
+        G_left, G_right, G_left_adj, G_right_adj,
         nothing, nothing, nothing, nothing, nothing,  # channel fields
-        G_left, G_right, G_left_adj, G_right_adj,     # Phase 32 precomputed effective Hamiltonian
+        pd_transition, pd_gnf, pd_el, pd_odp, pd_nufft,
+        pd_alpha, pd_bkeys, pd_bis, pd_bjs, pd_bminus, pd_bplus,
+        nothing,  # coherent_unitaries
+        sc,
     )
 end
 
@@ -171,9 +92,6 @@ end
 
 Accumulate R_total = sum over all jumps and frequencies of rate^2 * (L' * L)
 in physics convention. Used at workspace construction time (not per-matvec).
-
-Matches the R accumulation in `_jump_contribution!` for EnergyDomain
-(jump_workers.jl) but summed over all jumps.
 """
 function _accumulate_R_total!(
     R::Matrix{T},
@@ -200,12 +118,10 @@ function _accumulate_R_total!(
                 w = abs(w_raw)
                 oft!(jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
                 rate2 = prefactor * transition(w)
-                # R += rate^2 * (L' * L)  [physics convention]
                 mul!(LdagL, jump_oft', jump_oft)
                 @. R += rate2 * LdagL
                 if w > 1e-12
                     rate2_neg = prefactor * transition(-w)
-                    # Negative freq: L_neg = L', so L_neg'*L_neg = L*L'
                     mul!(LdagL, jump_oft, jump_oft')
                     @. R += rate2_neg * LdagL
                 end
@@ -282,10 +198,8 @@ function _accumulate_R_total!(
 
     for (k, eigenbasis) in enumerate(ws_eigenbases)
         for nu_2 in keys(hamiltonian.bohr_dict)
-            # alpha_A = B_nu2
             @. jump_oft = alpha(hamiltonian.bohr_freqs, nu_2) * eigenbasis
 
-            # Build A_nu2_dag via index scatter
             fill!(A_nu2_dag, 0)
             indices = hamiltonian.bohr_dict[nu_2]
             @inbounds for idx in indices
@@ -293,8 +207,6 @@ function _accumulate_R_total!(
                 A_nu2_dag[j, i] = conj(eigenbasis[i, j])
             end
 
-            # R += gamma_norm_factor * (A_nu2_dag * alpha_A)
-            # This matches the R accumulation in _jump_contribution! for BohrDomain
             mul!(R, A_nu2_dag, jump_oft, gamma_norm_factor, 1.0)
         end
     end
@@ -306,21 +218,14 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    KrylovWorkspace(config::Config{Thermalize}, hamiltonian, jumps; trotter=nothing)
+    Workspace(config::Config{Thermalize}, hamiltonian, jumps; trotter=nothing)
 
-Construct a `KrylovWorkspace` with precomputed CPTP channel matrices for
+Construct a `Workspace{Krylov}` with precomputed CPTP channel matrices for
 the faithful Chen channel (Eq. 3.2).
 
-Precomputes R_total, K0, U_residual, U_coherent at construction time so the
-per-matvec cost is only the rho-dependent sandwich terms.
-
-# Arguments
-- `config::Config{Thermalize}`: Thermalization configuration (provides delta)
-- `hamiltonian::HamHam`: Hamiltonian with eigenbasis data
-- `jumps::Vector{JumpOp}`: Jump operators (stored by reference)
-- `trotter::Union{TrottTrott, Nothing}=nothing`: Trotter object (required for TrotterDomain)
+Returns `Workspace{Krylov,D,C,T,KrylovScratch{Complex{T}}}`.
 """
-function KrylovWorkspace(
+function Workspace(
     config::Config{Thermalize},
     hamiltonian::HamHam,
     jumps::Vector{JumpOp};
@@ -334,7 +239,7 @@ function KrylovWorkspace(
         hamiltonian
     end
 
-    # Precompute domain-specific data (Config accepts both Lindbladian and Thermalize)
+    # Precompute domain-specific data
     precomputed_data = _precompute_data(config, ham_or_trott)
 
     # Precompute coherent B_total (returns nothing for GNS / with_coherent=false)
@@ -342,18 +247,15 @@ function KrylovWorkspace(
 
     # Determine dimensions and element type
     dim = size(hamiltonian.data, 1)
-    CT = Complex{eltype(hamiltonian.eigvals)}
+    T = eltype(hamiltonian.eigvals)
+    CT = Complex{T}
 
     # Extract concrete-typed eigenbasis matrices and hermitian flags
     jump_eigenbases = [Matrix{CT}(j.in_eigenbasis) for j in jumps]
     jump_hermitian  = [j.hermitian for j in jumps]
 
-    # Allocate scratch matrices
-    jump_oft = zeros(CT, dim, dim)
-    tmp1     = zeros(CT, dim, dim)
-    tmp2     = zeros(CT, dim, dim)
-    LdagL    = zeros(CT, dim, dim)
-    rho_out  = zeros(CT, dim, dim)
+    # Allocate KrylovScratch (with channel_rho_jump for Thermalize)
+    sc = KrylovScratch(CT, dim; with_channel_rho_jump=true)
 
     # --- Precompute channel matrices ---
     delta = config.delta
@@ -364,26 +266,21 @@ function KrylovWorkspace(
                          precomputed_data, config, ham_or_trott)
     hermitianize!(R_total)
 
-    # Precompute G_left/G_right for optimized Lindbladian matvec (Phase 32)
-    # Convention (L*rho*L'): G_left = i*B^T - 0.5*R,  G_right = -i*B^T - 0.5*R
+    # Precompute G_left/G_right
     if B_total !== nothing
         B_T = Matrix{CT}(transpose(B_total))
-        G_left  = 1im .* B_T .- 0.5 .* R_total
-        G_right = -1im .* B_T .- 0.5 .* R_total
+        G_left  = Matrix{CT}(1im .* B_T .- 0.5 .* R_total)
+        G_right = Matrix{CT}(-1im .* B_T .- 0.5 .* R_total)
     else
-        G_left  = -0.5 .* R_total
-        G_right = -0.5 .* R_total
+        G_left  = Matrix{CT}(-0.5 .* R_total)
+        G_right = Matrix{CT}(-0.5 .* R_total)
     end
-    G_left  = Matrix{CT}(G_left)
-    G_right = Matrix{CT}(G_right)
 
-    # Adjoint G matrices: G_left_adj = G_left' = G_right, G_right_adj = G_right' = G_left
-    # (holds for all domains since R_total is Hermitianized)
     G_left_adj  = G_right
     G_right_adj = G_left
 
     # 2. Compute K0, U_residual (Chen Eq. 3.2)
-    (; K0, U_residual) = _build_cptp_channel(R_total, delta)
+    channel = _build_cptp_channel(R_total, delta)
 
     # 3. Compute U_coherent = exp(-i*delta*B_total) if coherent
     U_coherent = if B_total !== nothing
@@ -392,14 +289,32 @@ function KrylovWorkspace(
         nothing
     end
 
-    # 4. Allocate channel scratch
-    channel_rho_jump = zeros(CT, dim, dim)
+    # Absorb precomputed_data fields
+    pd_transition = hasproperty(precomputed_data, :transition) ? precomputed_data.transition : nothing
+    pd_gnf = hasproperty(precomputed_data, :gamma_norm_factor) ? precomputed_data.gamma_norm_factor : nothing
+    pd_el = hasproperty(precomputed_data, :energy_labels) ? precomputed_data.energy_labels : nothing
+    pd_odp = hasproperty(precomputed_data, :oft_domain_prefactor) ? precomputed_data.oft_domain_prefactor : nothing
+    pd_nufft = hasproperty(precomputed_data, :oft_nufft_prefactors) ? precomputed_data.oft_nufft_prefactors : nothing
+    pd_alpha = hasproperty(precomputed_data, :alpha) ? precomputed_data.alpha : nothing
+    pd_bkeys = hasproperty(precomputed_data, :bohr_keys) ? precomputed_data.bohr_keys : nothing
+    pd_bis = hasproperty(precomputed_data, :bohr_is) ? precomputed_data.bohr_is : nothing
+    pd_bjs = hasproperty(precomputed_data, :bohr_js) ? precomputed_data.bohr_js : nothing
+    pd_bminus = hasproperty(precomputed_data, :b_minus) ? precomputed_data.b_minus : nothing
+    pd_bplus = hasproperty(precomputed_data, :b_plus) ? precomputed_data.b_plus : nothing
 
-    return KrylovWorkspace{CT, typeof(precomputed_data)}(
-        precomputed_data, B_total, jumps,
-        jump_eigenbases, jump_hermitian,
-        jump_oft, tmp1, tmp2, LdagL, rho_out,
-        K0, U_residual, U_coherent, channel_rho_jump, Float64(delta),
+    D = typeof(config.domain)
+    C = typeof(config.construction)
+
+    return Workspace{Krylov, D, C, T, typeof(sc)}(
+        jump_eigenbases, jump_hermitian, jumps, B_total,
         G_left, G_right, G_left_adj, G_right_adj,
+        channel.K0, channel.U_residual, U_coherent, nothing, Float64(delta),
+        pd_transition, pd_gnf, pd_el, pd_odp, pd_nufft,
+        pd_alpha, pd_bkeys, pd_bis, pd_bjs, pd_bminus, pd_bplus,
+        nothing,  # coherent_unitaries
+        sc,
     )
 end
+
+# Backward-compatible alias
+const KrylovWorkspace = Workspace
