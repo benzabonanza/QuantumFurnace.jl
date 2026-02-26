@@ -99,7 +99,7 @@ Full details: [milestones/v1.5-ROADMAP.md](milestones/v1.5-ROADMAP.md)
 **Milestone Goal:** Major codebase restructure -- redesign Config type hierarchy for extensibility (KMS/GNS/DLL), eliminate code duplication across simulation paths, consolidate workspaces, reorganize files, and slim down tests. Prepare architecture for DLL construction, error estimation, and gate complexity features.
 
 - [x] **Phase 33: Type Foundation** - Define Config{S,D,C,T} hierarchy with simulation/construction singleton types, hard swap all call sites -- completed 2026-02-25
-- [ ] **Phase 34: Code Deduplication** - Extract domain_prefactor(), unified oft!(), consolidated sandwiches, and shared CPTP channel helper replacing copy-pasted patterns
+- [x] **Phase 34: Code Deduplication** - Extract domain_prefactor(), unified oft!(), consolidated sandwiches, and shared CPTP channel helper replacing copy-pasted patterns -- completed 2026-02-26
 - [ ] **Phase 35: Workspace and Channel Consolidation** - Merge KrylovWorkspace + KrausScratch + LindbladianWorkspace; unify R/K0/U_residual computation paths
 - [ ] **Phase 36: API and Results** - Define 4 clean run_* entry points with matching Result structs and save capability
 - [ ] **Phase 37: File Organization and Dead Code** - Rename src/ files to PRE/MID/POST grouping, move staging code, remove @distributed, update exports
@@ -136,8 +136,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 34-01-PLAN.md -- Extract domain_prefactor and unify oft!/\_krylov_oft! into single function
-- [ ] 34-02-PLAN.md -- Consolidate sandwich helpers (4->2) and extract shared \_build_cptp_channel
+- [x] 34-01-PLAN.md -- Extract domain_prefactor and unify oft!/\_krylov_oft! into single function
+- [x] 34-02-PLAN.md -- Consolidate sandwich helpers (4->2) and extract shared \_build_cptp_channel
 
 ### Phase 35: Workspace and Channel Consolidation
 **Goal**: Workspace types are consolidated with unified naming, and R/K0/U_residual CPTP channel computation uses shared helper functions with correct per-jump vs summed semantics
@@ -240,7 +240,7 @@ Phases execute in numeric order: 33 -> 34 -> 35 -> 36 -> 37 -> 38
 | 31. Scaling Benchmarks | v1.5 | 2/2 | Complete | 2026-02-24 |
 | 32. Krylov Simulator Speedup | v1.5 | 2/2 | Complete | 2026-02-25 |
 | 33. Type Foundation | v2.0 | 4/4 | Complete | 2026-02-25 |
-| 34. Code Deduplication | v2.0 | 0/TBD | Not started | - |
+| 34. Code Deduplication | v2.0 | 2/2 | Complete | 2026-02-26 |
 | 35. Workspace and Channel Consolidation | v2.0 | 0/TBD | Not started | - |
 | 36. API and Results | v2.0 | 0/TBD | Not started | - |
 | 37. File Organization and Dead Code | v2.0 | 0/TBD | Not started | - |
