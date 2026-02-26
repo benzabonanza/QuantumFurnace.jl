@@ -156,27 +156,10 @@ function build_trajectoryframework(
         R_a = copy(scratch.R)
         R_a .*= (1.0 / p_jump)   # rescale: R_a = (1/p_jump) * sum_w rate2(w) * A_w' * A_w
 
-        # K0_a = I - alpha * R_a
-        K0_a = copy(R_a)
-        K0_a .*= (-alpha)
-        @inbounds for i in 1:dim
-            K0_a[i,i] += 1
-        end
+        # Build CPTP channel for this operator (Chen Eq. 3.2)
+        (; K0, U_residual) = _build_cptp_channel(R_a, delta)
 
-        # S_a = (2*alpha - delta)*R_a - alpha^2 * R_a^2
-        mul!(scratch.tmp1, R_a, R_a)   # tmp1 := R_a^2
-        s1 = 2 * alpha - delta
-        s2 = alpha * alpha
-        @. scratch.tmp2 = s1 * R_a - s2 * scratch.tmp1
-
-        # TFIX-04: PSD guard -- clamp negative eigenvalues to zero (silent fallback)
-        hermitianize!(scratch.tmp2)
-        S_herm = Hermitian(scratch.tmp2)
-        eig = eigen(S_herm)
-        eig.values .= max.(eig.values, 0.0)
-        U_residual_a = Matrix{CT}(Diagonal(sqrt.(eig.values)) * eig.vectors')
-
-        per_operator[a] = PerOperatorKraus(R_a, K0_a, U_residual_a, per_op_U_B[a])
+        per_operator[a] = PerOperatorKraus(R_a, K0, U_residual, per_op_U_B[a])
     end
 
     # Precompute scaled_prefactor for the hot path (avoids accessing abstract config/precomputed_data in step loop)

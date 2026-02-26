@@ -155,3 +155,48 @@ function _select_b_plus_calculator(config::Config{<:Any, <:Any, KMS})
         end
     end
 end
+
+# ---------------------------------------------------------------------------
+# CPTP weak-measurement channel construction (Chen et al. Eq. 3.2)
+# ---------------------------------------------------------------------------
+
+"""
+    _build_cptp_channel(R, delta) -> (; K0, U_residual, alpha)
+
+Construct the CPTP weak-measurement channel matrices from the accumulated R matrix
+(Chen et al. Eq. 3.2).
+
+Returns a NamedTuple with:
+- `K0 = I - alpha * R` (no-event Kraus operator)
+- `U_residual = sqrt_psd(S)` where `S = (2*alpha - delta)*R - alpha^2 * R^2`
+- `alpha = 1 - sqrt(1 - delta)` (the step-size parameter)
+
+The PSD guard clamps negative eigenvalues of S to zero before taking the square root,
+handling numerical noise robustly.
+
+# Arguments
+- `R::Matrix{<:Complex}`: accumulated R matrix (Hermitianized), either per-operator R^a or summed R_total
+- `delta::Real`: step size parameter
+
+# Returns
+NamedTuple `(; K0, U_residual, alpha)` with `K0::Matrix` and `U_residual::Matrix`.
+"""
+function _build_cptp_channel(R::Matrix{T}, delta::Real) where {T<:Complex}
+    dim = size(R, 1)
+    alpha = 1 - sqrt(1 - delta)
+
+    # K0 = I - alpha * R
+    K0 = Matrix{T}(I, dim, dim) .- alpha .* R
+
+    # S = (2*alpha - delta)*R - alpha^2 * R^2
+    R2 = R * R
+    S = (2 * alpha - delta) .* R .- (alpha^2) .* R2
+    hermitianize!(S)
+
+    # PSD guard: clamp negative eigenvalues to zero
+    eig = eigen(Hermitian(S))
+    eig.values .= max.(eig.values, 0.0)
+    U_residual = Matrix{T}(Diagonal(sqrt.(eig.values)) * eig.vectors')
+
+    return (; K0, U_residual, alpha)
+end

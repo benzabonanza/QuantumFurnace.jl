@@ -382,19 +382,8 @@ function KrylovWorkspace(
     G_left_adj  = G_right
     G_right_adj = G_left
 
-    # 2. Compute K0, S, U_residual (Chen Eq. 3.2)
-    alpha_chen = 1 - sqrt(1 - delta)
-    K0 = Matrix{CT}(I, dim, dim) .- alpha_chen .* R_total
-
-    # S = (2*alpha - delta)*R - alpha^2 * R^2
-    R2 = R_total * R_total
-    S = (2 * alpha_chen - delta) .* R_total .- (alpha_chen^2) .* R2
-    hermitianize!(S)
-
-    # PSD guard: clamp negative eigenvalues to zero
-    eig = eigen(Hermitian(S))
-    eig.values .= max.(eig.values, 0.0)
-    U_residual = Matrix{CT}(Diagonal(sqrt.(eig.values)) * eig.vectors')
+    # 2. Compute K0, U_residual (Chen Eq. 3.2)
+    (; K0, U_residual) = _build_cptp_channel(R_total, delta)
 
     # 3. Compute U_coherent = exp(-i*delta*B_total) if coherent
     U_coherent = if B_total !== nothing
