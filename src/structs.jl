@@ -134,16 +134,6 @@ via the trait function `with_coherent(construction)`, not stored as a field.
     delta::Union{T, Nothing} = nothing
 end
 
-# Outer constructor: infer S, D, C from singletons and T from beta.
-# Required because @kwdef with 4 type parameters needs help with type inference.
-function Config(;
-    sim::S, domain::D, construction::C,
-    beta::T,
-    kwargs...
-) where {S <: AbstractSimulation, D <: AbstractDomain, C <: AbstractConstruction, T <: AbstractFloat}
-    Config{S, D, C, T}(; sim=sim, domain=domain, construction=construction, beta=beta, kwargs...)
-end
-
 """
     JumpOp
 

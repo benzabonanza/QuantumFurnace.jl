@@ -104,7 +104,7 @@ function KrylovWorkspace(
     precomputed_data = _precompute_data(config, ham_or_trott)
 
     # Precompute coherent B_total (returns nothing for GNS / with_coherent=false)
-    B_total = _precompute_coherent_total_B(jumps, ham_or_trott, config, precomputed_data)
+    B_total = _precompute_coherent_B(jumps, ham_or_trott, config, precomputed_data)
 
     # Determine dimensions and element type
     dim = size(hamiltonian.data, 1)
@@ -186,7 +186,7 @@ function _accumulate_R_total!(
     (; transition, gamma_norm_factor, energy_labels) = precomputed_data
     bohr_freqs = hamiltonian.bohr_freqs
     inv_4sigma2 = 1.0 / (4 * config.sigma^2)
-    prefactor = precomputed_data.domain_prefactor * gamma_norm_factor
+    prefactor = precomputed_data.oft_domain_prefactor * gamma_norm_factor
 
     dim = size(R, 1)
     jump_oft = zeros(T, dim, dim)
@@ -231,7 +231,7 @@ function _accumulate_R_total!(
     ham_or_trott::Union{HamHam, TrottTrott},
 ) where {T<:Complex, D<:Union{TimeDomain, TrotterDomain}}
     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = precomputed_data
-    prefactor = precomputed_data.domain_prefactor * gamma_norm_factor
+    prefactor = precomputed_data.oft_domain_prefactor * gamma_norm_factor
 
     dim = size(R, 1)
     jump_oft = zeros(T, dim, dim)
@@ -338,7 +338,7 @@ function KrylovWorkspace(
     precomputed_data = _precompute_data(config, ham_or_trott)
 
     # Precompute coherent B_total (returns nothing for GNS / with_coherent=false)
-    B_total = _precompute_coherent_total_B(jumps, ham_or_trott, config, precomputed_data)
+    B_total = _precompute_coherent_B(jumps, ham_or_trott, config, precomputed_data)
 
     # Determine dimensions and element type
     dim = size(hamiltonian.data, 1)

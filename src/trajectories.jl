@@ -138,7 +138,7 @@ function build_trajectoryframework(
     if with_coherent(config.construction)
         @inbounds for a in 1:n_jumps
             single_jump = JumpOp[jumps[a]]  # Force Vector{JumpOp} for dispatch compatibility
-            B_a = _precompute_coherent_total_B(single_jump, ham_or_trott, config, precomputed_data)
+            B_a = _precompute_coherent_B(single_jump, ham_or_trott, config, precomputed_data)
             hermitianize!(B_a)
             # Coherent uses delta/p_jump = delta*n_jumps (matching DM coherent_unitaries scaling)
             per_op_U_B[a] = exp(-1im * (delta / p_jump) * Hermitian(B_a))
@@ -164,7 +164,7 @@ function build_trajectoryframework(
 
     # Precompute scaled_prefactor for the hot path (avoids accessing abstract config/precomputed_data in step loop)
     gamma_norm_factor = precomputed_data.gamma_norm_factor
-    scaled_prefactor = precomputed_data.domain_prefactor * gamma_norm_factor / (1.0 / n_jumps)
+    scaled_prefactor = precomputed_data.oft_domain_prefactor * gamma_norm_factor / (1.0 / n_jumps)
 
     # Extract hot-path fields from precomputed_data with concrete types
     transition_fn = precomputed_data.transition
@@ -218,7 +218,7 @@ function _precompute_R(
     dim = size(hamiltonian.data, 1)
     (; transition, gamma_norm_factor, energy_labels) = precomputed_data
 
-    base_prefactor = precomputed_data.domain_prefactor * gamma_norm_factor
+    base_prefactor = precomputed_data.oft_domain_prefactor * gamma_norm_factor
     inv_4sigma2 = 1.0 / (4 * config.sigma^2)
 
     fill!(scratch.R, 0)
@@ -275,7 +275,7 @@ function _precompute_R(
     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = precomputed_data
 
     # Same weight as in jump_contribution!(::Union{TimeDomain,TrotterDomain}, ...), but without δ.
-    base_prefactor = precomputed_data.domain_prefactor * gamma_norm_factor
+    base_prefactor = precomputed_data.oft_domain_prefactor * gamma_norm_factor
 
     fill!(scratch.R, 0)
 

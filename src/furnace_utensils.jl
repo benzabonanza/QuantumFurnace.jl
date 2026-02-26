@@ -1,7 +1,7 @@
 """
-    domain_prefactor(::EnergyDomain, w0, sigma)
-    domain_prefactor(::TimeDomain, w0, sigma, t0)
-    domain_prefactor(::TrotterDomain, w0, sigma, t0)
+    oft_domain_prefactor(::EnergyDomain, w0, sigma)
+    oft_domain_prefactor(::TimeDomain, w0, sigma, t0)
+    oft_domain_prefactor(::TrotterDomain, w0, sigma, t0)
 
 Compute the domain-dependent scalar prefactor for OFT-based rate calculations.
 
@@ -10,9 +10,9 @@ Time/Trotter:  w0 * t0^2 * sigma * sqrt(2/pi) / (2*pi)
 
 No method for BohrDomain -- callers use `gamma_norm_factor` directly.
 """
-domain_prefactor(::EnergyDomain, w0::Real, sigma::Real) = w0 / (sigma * sqrt(2 * pi))
-domain_prefactor(::TimeDomain, w0::Real, sigma::Real, t0::Real) = w0 * t0^2 * (sigma * sqrt(2 / pi)) / (2 * pi)
-domain_prefactor(::TrotterDomain, w0::Real, sigma::Real, t0::Real) = w0 * t0^2 * (sigma * sqrt(2 / pi)) / (2 * pi)
+oft_domain_prefactor(::EnergyDomain, w0::Real, sigma::Real) = w0 / (sigma * sqrt(2 * pi))
+oft_domain_prefactor(::TimeDomain, w0::Real, sigma::Real, t0::Real) = w0 * t0^2 * (sigma * sqrt(2 / pi)) / (2 * pi)
+oft_domain_prefactor(::TrotterDomain, w0::Real, sigma::Real, t0::Real) = w0 * t0^2 * (sigma * sqrt(2 / pi)) / (2 * pi)
 
 function _precompute_labels(config::Config{<:Any, D}) where {D<:Union{BohrDomain, EnergyDomain}}
     energy_labels = _create_energy_labels(config.num_energy_bits, config.w0)
@@ -87,13 +87,13 @@ function _precompute_data(
     energy_labels, = _precompute_labels(config)
     transition = pick_transition(config)
     gamma_norm_factor =  1.0 / maximum(transition.(energy_labels))
-    dp = domain_prefactor(config.domain, config.w0, config.sigma)
+    dp = oft_domain_prefactor(config.domain, config.w0, config.sigma)
 
     return (
         transition = transition,
         gamma_norm_factor = gamma_norm_factor,
         energy_labels = energy_labels,
-        domain_prefactor = dp,
+        oft_domain_prefactor = dp,
     )
 end
 
@@ -128,7 +128,7 @@ function _precompute_data(
         use_shared_array=(nprocs() > 1),
     )
     
-    dp = domain_prefactor(config.domain, config.w0, config.sigma, config.t0)
+    dp = oft_domain_prefactor(config.domain, config.w0, config.sigma, config.t0)
 
     return (
         transition = transition,
@@ -137,7 +137,7 @@ function _precompute_data(
         oft_nufft_prefactors = oft_nufft_prefactors,
         b_minus = b_minus,
         b_plus = b_plus,
-        domain_prefactor = dp,
+        oft_domain_prefactor = dp,
     )
 end
 

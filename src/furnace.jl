@@ -66,7 +66,7 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::Config{Lindbladian
     ws = LindbladianWorkspace{T}(dim)
 
     # Precompute all B's for the A's if for KMS DB and with_coherent.
-    Btot = _precompute_coherent_total_B(jumps, ham_or_trott, config, precomputed_data)
+    Btot = _precompute_coherent_B(jumps, ham_or_trott, config, precomputed_data)
     if Btot !== nothing
         _vectorize_liouvillian_coherent!(total_lindbladian, Btot, ws)
     end
@@ -118,7 +118,7 @@ function run_thermalization(
 
     # precompute coherent U_B = exp(-i delta B(jump)) per jump to avoid allocations
     p_jump = 1.0 / length(jumps)
-    coherent_unitaries = _precompute_coherent_unitary_terms(jumps, hamiltonian, config, precomputed_data;
+    coherent_unitaries = _precompute_coherent_unitary(jumps, hamiltonian, config, precomputed_data;
         trotter=trotter, delta_scale = rescale_by_inv_prob ? (1.0 / p_jump) : 1.0)
 
     scratch = KrausScratch(eltype(evolving_dm), dim)

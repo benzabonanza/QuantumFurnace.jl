@@ -1,6 +1,6 @@
 #* COHERENT TERMS -----------------------------------------------------------------------------------------------------------
 """
-    _precompute_coherent_total_B(
+    _precompute_coherent_B(
         jumps,
         hamiltonian,
         config,
@@ -11,7 +11,7 @@
     Returns the total coherent operator B = sum_k B_k, already scaled by gamma_norm_factor.
     Returns nothing if with_coherent(config.construction) == false.
 """
-function _precompute_coherent_total_B(
+function _precompute_coherent_B(
     jumps::AbstractVector{<:JumpOp},
     ham_or_trott::Union{HamHam, TrottTrott},
     config::Config,
@@ -40,7 +40,7 @@ function _precompute_coherent_total_B(
 end
 
 """
-    _precompute_coherent_unitary_terms(
+    _precompute_coherent_unitary(
         jumps::AbstractVector{<:JumpOp},
         hamiltonian::HamHam,
         config::Config{Thermalize},
@@ -55,7 +55,7 @@ end
     scaled by `gamma_norm_factor` (same convention as Liouvillian construction).
     Returns `nothing` if `with_coherent(config.construction) == false`.
 """
-function _precompute_coherent_unitary_terms(
+function _precompute_coherent_unitary(
     jumps::AbstractVector{<:JumpOp},
     hamiltonian::HamHam,
     config::Config{Thermalize},
@@ -97,62 +97,6 @@ function _precompute_coherent_unitary_terms(
         end
     end
     return U_terms
-end
-
-
-"""
-    precompute_coherent_terms(
-        jumps::AbstractVector{<:JumpOp},
-        hamiltonian::HamHam,
-        config::Config,
-        precomputed_data;
-        trotter::Union{Nothing, TrottTrott}=nothing,
-    ) -> Union{Nothing, Vector{Matrix{<:Complex}}}
-
-    Precompute and cache the coherent B term for each `JumpOp`, already scaled by `gamma_norm_factor`.
-    Returns `nothing` if `with_coherent(config.construction) == false`.
-"""
-function _precompute_coherent_terms(
-    jumps::AbstractVector{<:JumpOp},
-    hamiltonian::HamHam,
-    config::Config,
-    precomputed_data;
-    trotter::Union{Nothing, TrottTrott}=nothing,
-    )
-
-    with_coherent(config.construction) || return nothing
-
-    CT = Complex{eltype(hamiltonian.eigvals)}
-    coherent_terms = Vector{Matrix{CT}}(undef, length(jumps))
-
-    if config.domain isa TimeDomain
-        (; b_minus, b_plus, gamma_norm_factor) = precomputed_data
-        @inbounds for (k, jump) in pairs(jumps)
-            B = B_time(jump, hamiltonian, b_minus, b_plus, config.t0, config.beta, config.sigma)
-            rmul!(B, gamma_norm_factor)
-            coherent_terms[k] = B
-        end
-
-    elseif config.domain isa TrotterDomain
-        (; b_minus, b_plus, gamma_norm_factor) = precomputed_data
-        @assert trotter !== nothing
-        @inbounds for (k, jump) in pairs(jumps)
-            B = B_trotter(jump, trotter, b_minus, b_plus, config.beta, config.sigma)
-            rmul!(B, gamma_norm_factor)
-            coherent_terms[k] = B
-        end
-
-    else
-        # BohrDomain / EnergyDomain: coherent term is the BohrDomain B operator.
-        (; gamma_norm_factor) = precomputed_data
-        @inbounds for (k, jump) in pairs(jumps)
-            B = B_bohr(hamiltonian, jump, config)
-            rmul!(B, gamma_norm_factor)
-            coherent_terms[k] = B
-        end
-    end
-
-    return coherent_terms
 end
 
 # (3.1) and Proposition III.1

@@ -62,7 +62,7 @@ function _jump_contribution!(
     end
 
     jump_oft = ws.jump_tmp
-    prefactor = precomputed_data.domain_prefactor * gamma_norm_factor
+    prefactor = precomputed_data.oft_domain_prefactor * gamma_norm_factor
     inv_4sigma2 = 1.0 / (4 * config.sigma^2)
 
     if jump.hermitian
@@ -107,7 +107,7 @@ function _jump_contribution!(
     end
 
     jump_oft = ws.jump_tmp
-    prefactor = precomputed_data.domain_prefactor * gamma_norm_factor
+    prefactor = precomputed_data.oft_domain_prefactor * gamma_norm_factor
 
     if jump.hermitian
         for w_raw in energy_labels
@@ -311,7 +311,7 @@ function _jump_contribution!(
     # --- Dissipative part ---
     # Matches the Euler prefactor in jump_contribution(::EnergyDomain, ...):
     # prefactor = (delta * gamma_norm_factor) * w0 / (sigma*sqrt(2π))
-    base_prefactor = precomputed_data.domain_prefactor * jump_weight_scaling
+    base_prefactor = precomputed_data.oft_domain_prefactor * jump_weight_scaling
     inv_4sigma2 = 1.0 / (4 * config.sigma^2)
 
     fill!(scratch.R, 0)
@@ -388,7 +388,7 @@ function _jump_contribution!(
 
     _apply_coherent_unitary!(evolving_dm, coherent_unitary_cache, scratch)
 
-    base_prefactor = precomputed_data.domain_prefactor * jump_weight_scaling
+    base_prefactor = precomputed_data.oft_domain_prefactor * jump_weight_scaling
 
     fill!(scratch.R, 0)
     fill!(scratch.rho_jump, 0)
