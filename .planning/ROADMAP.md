@@ -99,7 +99,7 @@ Full details: [milestones/v1.5-ROADMAP.md](milestones/v1.5-ROADMAP.md)
 **Milestone Goal:** Major codebase restructure -- redesign Config type hierarchy for extensibility (KMS/GNS/DLL), eliminate code duplication across simulation paths, consolidate workspaces, reorganize files, and slim down tests. Prepare architecture for DLL construction, error estimation, and gate complexity features.
 
 - [x] **Phase 33: Type Foundation** - Define Config{S,D,C,T} hierarchy with simulation/construction singleton types, hard swap all call sites -- completed 2026-02-25
-- [ ] **Phase 34: Code Deduplication** - Extract domain_prefactor(), foreach_frequency(), and unified oft!() replacing 16+ copy-pasted patterns
+- [ ] **Phase 34: Code Deduplication** - Extract domain_prefactor(), unified oft!(), consolidated sandwiches, and shared CPTP channel helper replacing copy-pasted patterns
 - [ ] **Phase 35: Workspace and Channel Consolidation** - Merge KrylovWorkspace + KrausScratch + LindbladianWorkspace; unify R/K0/U_residual computation paths
 - [ ] **Phase 36: API and Results** - Define 4 clean run_* entry points with matching Result structs and save capability
 - [ ] **Phase 37: File Organization and Dead Code** - Rename src/ files to PRE/MID/POST grouping, move staging code, remove @distributed, update exports
@@ -134,11 +134,11 @@ Plans:
   2. `foreach_frequency()` iterator replaces the 16 hermitian half-grid branching patterns with zero allocation overhead verified by existing allocation tests
   3. A single `oft!()` function (with domain dispatch) replaces both `oft!` and `_krylov_oft!`; `time_oft!`/`trotter_oft!` remain as clearly-marked test/debug utilities
   4. All regression, allocation, and Krylov cross-validation tests pass with identical numerical results
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 34-01: TBD
-- [ ] 34-02: TBD
+- [ ] 34-01-PLAN.md -- Extract domain_prefactor and unify oft!/\_krylov_oft! into single function
+- [ ] 34-02-PLAN.md -- Consolidate sandwich helpers (4->2) and extract shared \_build_cptp_channel
 
 ### Phase 35: Workspace and Channel Consolidation
 **Goal**: Workspace types are consolidated with unified naming, and R/K0/U_residual CPTP channel computation uses shared helper functions with correct per-jump vs summed semantics
