@@ -163,7 +163,7 @@ function apply_lindbladian!(
     BLAS.gemm!('N', 'N', CT, rho, ws.G_right, CT, ws.rho_out)     # + rho * G_right
 
     # Sandwich-only loop: sum_i scalar_i * L_i * rho * L_i'
-    prefactor = (config.w0 / (config.sigma * sqrt(2 * pi))) * gamma_norm_factor
+    prefactor = ws.precomputed_data.domain_prefactor * gamma_norm_factor
 
     for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
         is_herm = ws.jump_hermitian[k]
@@ -231,7 +231,7 @@ function apply_adjoint_lindbladian!(
     BLAS.gemm!('N', 'N', CT, rho, ws.G_right_adj, CT, ws.rho_out)
 
     # Adjoint sandwich-only loop: sum_i scalar_i * L_i' * rho * L_i
-    prefactor = (config.w0 / (config.sigma * sqrt(2 * pi))) * gamma_norm_factor
+    prefactor = ws.precomputed_data.domain_prefactor * gamma_norm_factor
 
     for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
         is_herm = ws.jump_hermitian[k]
@@ -473,8 +473,7 @@ function apply_lindbladian!(
     BLAS.gemm!('N', 'N', CT, rho, ws.G_right, CT, ws.rho_out)
 
     # Sandwich-only loop: sum_i scalar_i * L_i * rho * L_i'
-    # Time/Trotter prefactor from jump_workers.jl:109
-    prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
+    prefactor = ws.precomputed_data.domain_prefactor * gamma_norm_factor
 
     for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
         is_herm = ws.jump_hermitian[k]
@@ -543,8 +542,7 @@ function apply_adjoint_lindbladian!(
     BLAS.gemm!('N', 'N', CT, rho, ws.G_right_adj, CT, ws.rho_out)
 
     # Adjoint sandwich-only loop
-    # Same prefactor as forward (no changes for adjoint)
-    prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
+    prefactor = ws.precomputed_data.domain_prefactor * gamma_norm_factor
 
     for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
         is_herm = ws.jump_hermitian[k]

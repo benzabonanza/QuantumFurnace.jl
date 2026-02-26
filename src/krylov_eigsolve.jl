@@ -228,7 +228,7 @@ function _accumulate_jump_sandwich!(
     (; transition, gamma_norm_factor, energy_labels) = ws.precomputed_data
     bohr_freqs = hamiltonian.bohr_freqs
     inv_4sigma2 = 1.0 / (4 * config.sigma^2)
-    prefactor = (config.w0 / (config.sigma * sqrt(2 * pi))) * gamma_norm_factor
+    prefactor = ws.precomputed_data.domain_prefactor * gamma_norm_factor
 
     for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
         is_herm = ws.jump_hermitian[k]
@@ -274,7 +274,7 @@ function _accumulate_jump_sandwich!(
     hamiltonian::HamHam,
 ) where {T<:Complex, D<:Union{TimeDomain, TrotterDomain}}
     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = ws.precomputed_data
-    prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
+    prefactor = ws.precomputed_data.domain_prefactor * gamma_norm_factor
 
     for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
         is_herm = ws.jump_hermitian[k]

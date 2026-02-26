@@ -186,7 +186,7 @@ function _accumulate_R_total!(
     (; transition, gamma_norm_factor, energy_labels) = precomputed_data
     bohr_freqs = hamiltonian.bohr_freqs
     inv_4sigma2 = 1.0 / (4 * config.sigma^2)
-    prefactor = (config.w0 / (config.sigma * sqrt(2 * pi))) * gamma_norm_factor
+    prefactor = precomputed_data.domain_prefactor * gamma_norm_factor
 
     dim = size(R, 1)
     jump_oft = zeros(T, dim, dim)
@@ -231,7 +231,7 @@ function _accumulate_R_total!(
     ham_or_trott::Union{HamHam, TrottTrott},
 ) where {T<:Complex, D<:Union{TimeDomain, TrotterDomain}}
     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = precomputed_data
-    prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
+    prefactor = precomputed_data.domain_prefactor * gamma_norm_factor
 
     dim = size(R, 1)
     jump_oft = zeros(T, dim, dim)

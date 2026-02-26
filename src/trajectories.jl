@@ -181,13 +181,7 @@ function build_trajectoryframework(
 
     # Precompute scaled_prefactor for the hot path (avoids accessing abstract config/precomputed_data in step loop)
     gamma_norm_factor = precomputed_data.gamma_norm_factor
-    scaled_prefactor = if config.domain isa EnergyDomain
-        # EnergyDomain formula
-        config.w0 / (config.sigma * sqrt(2 * pi)) * gamma_norm_factor / (1.0 / n_jumps)
-    else
-        # TimeDomain / TrotterDomain formula
-        config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor / (1.0 / n_jumps)
-    end
+    scaled_prefactor = precomputed_data.domain_prefactor * gamma_norm_factor / (1.0 / n_jumps)
 
     # Extract hot-path fields from precomputed_data with concrete types
     transition_fn = precomputed_data.transition
@@ -241,8 +235,7 @@ function _precompute_R(
     dim = size(hamiltonian.data, 1)
     (; transition, gamma_norm_factor, energy_labels) = precomputed_data
 
-
-    base_prefactor = config.w0 / (config.sigma * sqrt(2 * pi)) * gamma_norm_factor
+    base_prefactor = precomputed_data.domain_prefactor * gamma_norm_factor
 
     fill!(scratch.R, 0)
 
@@ -298,7 +291,7 @@ function _precompute_R(
     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = precomputed_data
 
     # Same weight as in jump_contribution!(::Union{TimeDomain,TrotterDomain}, ...), but without δ.
-    base_prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
+    base_prefactor = precomputed_data.domain_prefactor * gamma_norm_factor
 
     fill!(scratch.R, 0)
 
