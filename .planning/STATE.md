@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-25)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v2.0 Restructure -- Phase 34: Code Deduplication COMPLETE, Phase 35 next
+**Current focus:** v2.0 Restructure -- Phase 35: Workspace and Channel Consolidation IN PROGRESS
 
 ## Current Position
 
-Phase: 34 of 38 (Code Deduplication) -- COMPLETE
-Plan: 2/2 complete
-Status: Phase 34 complete (sandwich consolidation + CPTP channel extraction)
-Last activity: 2026-02-26 - Completed 34-02: Consolidate sandwich helpers and extract CPTP channel
+Phase: 35 of 38 (Workspace and Channel Consolidation)
+Plan: 1/2 complete
+Status: Completed 35-01 (workspace consolidation). Plan 02 (trajectory workspace) next.
+Last activity: 2026-02-26 - Completed 35-01: Unified Workspace struct, Scratch sub-structs, caller migration
 
-Progress: [######░░░░] ~25% (v2.0, 7/~24 plans)
+Progress: [######░░░░] ~30% (v2.0, 8/~24 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 97 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 7)
+- Total plans completed: 98 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 8)
 
 **By Milestone:**
 
@@ -31,7 +31,7 @@ Progress: [######░░░░] ~25% (v2.0, 7/~24 plans)
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
 | v1.5 Krylov Gap Estimation | 27-32 | 12 (+3 quick) | 2026-02-20 to 2026-02-25 |
-| v2.0 Restructure | 33-38 | 7/~24 | 2026-02-25 to ... |
+| v2.0 Restructure | 33-38 | 8/~24 | 2026-02-25 to ... |
 
 ## Accumulated Context
 
@@ -58,6 +58,11 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [34-02] _accumulate_sandwich_adj! as canonical name for L'*rho*L sandwich (symmetric with _accumulate_sandwich!)
 - [34-02] _build_cptp_channel returns NamedTuple (; K0, U_residual, alpha); callers destructure what they need
 - [34-02] scratch.K0 field now dead in KrausScratch (struct removal deferred to Phase 35)
+- [35-01] Workspace{S,D,C,T,SC} uses 5th type parameter SC for concrete scratch typing on hot paths
+- [35-01] Union{Nothing, Function} boxing accepted at ~300 bytes/call (MATVEC_ALLOC_BUDGET=512)
+- [35-01] _TransitionWrap{F} pattern for function barrier dispatch on transition closures
+- [35-01] KrylovWorkspace kept as const alias for backward compatibility
+- [35-01] JumpOp[jump] typed vector literal for Julia invariant parameterization
 
 ### Key Constraints for v2.0
 
@@ -88,5 +93,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-26
-Stopped at: Completed 34-02-PLAN.md (sandwich consolidation + CPTP channel extraction). Phase 34 complete.
+Stopped at: Completed 35-01-PLAN.md (unified Workspace struct, Scratch sub-structs, caller migration). Plan 02 next.
 Resume file: None
