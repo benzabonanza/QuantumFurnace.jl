@@ -1,30 +1,4 @@
-#! Changed it slightly for speed without debugging
-function B_bohr(hamiltonian::HamHam{T}, jump::JumpOp, config::Config{<:Any, <:Any, KMS}) where {T<:AbstractFloat}
-
-    dim = size(hamiltonian.data, 1)
-    CT = Complex{T}
-    unique_freqs = keys(hamiltonian.bohr_dict)
-
-    f = _pick_f(config)  # Picks rates for B in Bohr domain
-
-    B = zeros(CT, dim, dim)
-    f_A_nu_1 = zeros(CT, dim, dim)
-    for nu_2 in unique_freqs
-        indices = hamiltonian.bohr_dict[nu_2]
-        @. f_A_nu_1 = f(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
-        # B += A_nu_2' * f_A_nu_1 expanded per-index:
-        # A_nu_2'[j,i] = conj(jump.in_eigenbasis[i,j]) for (i,j) in indices
-        @inbounds for idx in indices
-            i, j = idx[1], idx[2]
-            val = conj(jump.in_eigenbasis[i, j])
-            @inbounds for col in 1:dim
-                B[j, col] += val * f_A_nu_1[i, col]
-            end
-        end
-    end
-    return B
-end
-
+# Single-jump B_bohr variant removed in Phase 35; callers use [jump] wrapper.
 function B_bohr(hamiltonian::HamHam{T}, jumps::Vector{JumpOp}, config::Config{<:Any, <:Any, KMS}) where {T<:AbstractFloat}
 
     dim = size(hamiltonian.data, 1)

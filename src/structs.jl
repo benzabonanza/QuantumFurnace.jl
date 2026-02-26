@@ -6,41 +6,13 @@ struct EnergyDomain <: AbstractDomain end
 struct TimeDomain <: AbstractDomain end
 struct TrotterDomain <: AbstractDomain end
 
-"""Workspace for building a dense Liouvillian matrix with minimal allocations.
-
-Used by `construct_liouvillian` when accumulating the full vectorized Lindbladian
-(`dim^2 × dim^2`).
-
-Buffers:
-  - `Id`: identity on the system Hilbert space.
-  - `jump_tmp`: generic scratch (e.g. OFT output, alpha-weighted jump).
-  - `jump_conj`: scratch for elementwise conjugate of `jump_tmp`.
-  - `jump_dag_jump`: scratch for `jump_tmp' * jump_tmp`.
-  - `jump2_jump1`: scratch for `jump_2 * jump_1` in mixed (Bohr) note.
-"""
-struct LindbladianWorkspace{T<:AbstractFloat}
-    Id::Matrix{Complex{T}}
-    jump_tmp::Matrix{Complex{T}}
-    jump_conj::Matrix{Complex{T}}
-    jump_dag_jump::Matrix{Complex{T}}
-    jump2_jump1::Matrix{Complex{T}}
-
-    function LindbladianWorkspace{T}(dim::Int) where {T<:AbstractFloat}
-        CT = Complex{T}
-        Id = Matrix{CT}(I, dim, dim)
-        jump_tmp = zeros(CT, dim, dim)
-        jump_conj = zeros(CT, dim, dim)
-        jump_dag_jump = zeros(CT, dim, dim)
-        jump2_jump1 = zeros(CT, dim, dim)
-        new{T}(Id, jump_tmp, jump_conj, jump_dag_jump, jump2_jump1)
-    end
-end
 # Simulation types
 abstract type AbstractSimulation end
 struct Lindbladian    <: AbstractSimulation end
 struct Thermalize     <: AbstractSimulation end
 struct KrylovSpectrum <: AbstractSimulation end
 struct Trajectory     <: AbstractSimulation end
+struct Krylov         <: AbstractSimulation end
 
 # Construction types (detailed balance)
 abstract type AbstractConstruction end
@@ -284,4 +256,124 @@ struct OFTCaches{T<:AbstractFloat}
         temp_op = zeros(CT, dim, dim)
         new{T}(prefactors, U, temp_op)
     end
+end
+
+# ---------------------------------------------------------------------------
+# Scratch sub-structs for Workspace (Phase 35)
+# ---------------------------------------------------------------------------
+
+"""
+    LiouvillianScratch{T<:Complex}
+
+Scratch buffers for dense Liouvillian construction (`construct_lindbladian`).
+Replaces the old `LindbladianWorkspace` (Id is now computed inline at call sites).
+"""
+struct LiouvillianScratch{T<:Complex}
+    jump_tmp::Matrix{T}
+    jump_conj::Matrix{T}
+    jump_dag_jump::Matrix{T}
+    jump2_jump1::Matrix{T}
+end
+
+function LiouvillianScratch(::Type{CT}, dim::Int) where {CT<:Complex}
+    Zm() = zeros(CT, dim, dim)
+    return LiouvillianScratch{CT}(Zm(), Zm(), Zm(), Zm())
+end
+
+"""
+    ThermalizeScratch{T<:Complex}
+
+Scratch buffers for DM Kraus evolution (`run_thermalization`).
+Replaces the old `KrausScratch` with physics-descriptive names and dead K0 removed.
+"""
+struct ThermalizeScratch{T<:Complex}
+    jump_oft::Matrix{T}
+    LdagL::Matrix{T}
+    R::Matrix{T}
+    rho_jump::Matrix{T}
+    sandwich_tmp::Matrix{T}    # was tmp1
+    rho_work::Matrix{T}        # was tmp2
+    rho_next::Matrix{T}
+end
+
+function ThermalizeScratch(::Type{CT}, dim::Int) where {CT<:Complex}
+    Zm() = zeros(CT, dim, dim)
+    return ThermalizeScratch{CT}(Zm(), Zm(), Zm(), Zm(), Zm(), Zm(), Zm())
+end
+
+"""
+    KrylovScratch{T<:Complex}
+
+Scratch buffers for Krylov matvec and eigsolve hot paths.
+Fields use physics-descriptive names (sandwich_tmp replaces tmp1, sandwich_out replaces LdagL).
+"""
+struct KrylovScratch{T<:Complex}
+    jump_oft::Matrix{T}
+    sandwich_tmp::Matrix{T}    # was tmp1 (BLAS gemm scratch)
+    sandwich_out::Matrix{T}    # was LdagL (sandwich result)
+    rho_out::Matrix{T}
+    channel_rho_jump::Union{Nothing, Matrix{T}}  # Thermalize-channel only
+end
+
+function KrylovScratch(::Type{CT}, dim::Int; with_channel_rho_jump::Bool=false) where {CT<:Complex}
+    Zm() = zeros(CT, dim, dim)
+    crj = with_channel_rho_jump ? Zm() : nothing
+    return KrylovScratch{CT}(Zm(), Zm(), Zm(), Zm(), crj)
+end
+
+"""
+    Workspace{S, D, C, T, SC}
+
+Unified parametric workspace for all non-trajectory simulation paths.
+
+Type parameters:
+- `S <: AbstractSimulation`: simulation kind (Krylov, Lindbladian, Thermalize)
+- `D <: AbstractDomain`: domain (BohrDomain, EnergyDomain, TimeDomain, TrotterDomain)
+- `C <: AbstractConstruction`: detailed-balance construction (KMS, GNS, DLL)
+- `T <: AbstractFloat`: numeric precision
+- `SC`: concrete scratch type (LiouvillianScratch, ThermalizeScratch, KrylovScratch)
+        Ensures type-stable access to `scratch` field on the hot path.
+
+The 5th type parameter `SC` is inferred automatically from the constructor and never
+needs to be written by callers. Dispatch signatures use partial parameterization:
+`ws::Workspace{Krylov}`, `ws::Workspace{Lindbladian}`, etc.
+"""
+struct Workspace{S<:AbstractSimulation, D<:AbstractDomain, C<:AbstractConstruction, T<:AbstractFloat, SC}
+    # Physics data (Krylov/Thermalize)
+    jump_eigenbases::Union{Nothing, Vector{Matrix{Complex{T}}}}
+    jump_hermitian::Union{Nothing, Vector{Bool}}
+    jumps::Union{Nothing, Vector{JumpOp}}
+    B_total::Union{Nothing, Matrix{Complex{T}}}
+
+    # Krylov effective Hamiltonian (Lindbladian mode)
+    G_left::Union{Nothing, Matrix{Complex{T}}}
+    G_right::Union{Nothing, Matrix{Complex{T}}}
+    G_left_adj::Union{Nothing, Matrix{Complex{T}}}
+    G_right_adj::Union{Nothing, Matrix{Complex{T}}}
+
+    # CPTP channel (Krylov Thermalize mode, and Thermalize DM)
+    K0::Union{Nothing, Matrix{Complex{T}}}
+    U_residual::Union{Nothing, Matrix{Complex{T}}}
+    U_coherent::Union{Nothing, Matrix{Complex{T}}}
+    alpha::Union{Nothing, Float64}
+    delta::Union{Nothing, Float64}
+
+    # Domain-specific precomputed data (absorbed from NamedTuple)
+    transition::Union{Nothing, Function}
+    gamma_norm_factor::Union{Nothing, Float64}
+    energy_labels::Union{Nothing, Vector{Float64}}
+    oft_domain_prefactor::Union{Nothing, Float64}
+    oft_nufft_prefactors::Any  # NUFFTPrefactors or Nothing
+    bohr_alpha::Any            # BohrDomain alpha function (renamed to avoid clash with CPTP alpha)
+    bohr_keys::Any             # BohrDomain keys
+    bohr_is::Any               # BohrDomain row indices
+    bohr_js::Any               # BohrDomain column indices
+    b_minus::Any               # Time/TrotterDomain coherent
+    b_plus::Any                # Time/TrotterDomain coherent
+
+    # Thermalize DM-specific (coherent unitaries)
+    coherent_unitaries::Union{Nothing, Vector{Matrix{Complex{T}}}}
+
+    # Scratch buffers (nested, simulation-path-specific -- concrete-typed via SC parameter)
+    scratch::SC
 end

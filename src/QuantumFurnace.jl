@@ -27,12 +27,15 @@ using Dates
 
 # Types: Simulation
 export Config,
-       AbstractSimulation, Lindbladian, Thermalize, KrylovSpectrum, Trajectory,
+       AbstractSimulation, Lindbladian, Thermalize, KrylovSpectrum, Trajectory, Krylov,
        AbstractConstruction, KMS, GNS, DLL,
        with_coherent,
        HamHam, TrottTrott,
        LindbladianResult, DMSimulationResult,
        JumpOp
+
+# Workspace (Phase 35)
+export Workspace, LiouvillianScratch, ThermalizeScratch, KrylovScratch
 
 # Types: Domains
 export BohrDomain, EnergyDomain, TimeDomain, TrotterDomain

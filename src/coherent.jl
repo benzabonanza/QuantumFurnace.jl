@@ -73,7 +73,7 @@ function _precompute_coherent_unitary(
     if config.domain isa TimeDomain
         (; b_minus, b_plus, gamma_norm_factor) = precomputed_data
         @inbounds for (k, jump) in pairs(jumps)
-            B = B_time(jump, hamiltonian, b_minus, b_plus, config.t0, config.beta, config.sigma)
+            B = B_time([jump], hamiltonian, b_minus, b_plus, config.t0, config.beta, config.sigma)
             rmul!(B, gamma_norm_factor)
             U_terms[k] = exp(-1im * delta * Hermitian(B))
         end
@@ -82,7 +82,7 @@ function _precompute_coherent_unitary(
         (; b_minus, b_plus, gamma_norm_factor) = precomputed_data
         @assert trotter !== nothing
         @inbounds for (k, jump) in pairs(jumps)
-            B = B_trotter(jump, trotter, b_minus, b_plus, config.beta, config.sigma)
+            B = B_trotter([jump], trotter, b_minus, b_plus, config.beta, config.sigma)
             rmul!(B, gamma_norm_factor)
             U_terms[k] = exp(-1im * delta * Hermitian(B))
         end
@@ -91,7 +91,7 @@ function _precompute_coherent_unitary(
         # BohrDomain / EnergyDomain
         (; gamma_norm_factor) = precomputed_data
         @inbounds for (k, jump) in pairs(jumps)
-            B = B_bohr(hamiltonian, jump, config)
+            B = B_bohr(hamiltonian, [jump], config)
             rmul!(B, gamma_norm_factor)
             U_terms[k] = exp(-1im * delta * Hermitian(B))
         end
@@ -101,50 +101,7 @@ end
 
 # (3.1) and Proposition III.1
 # Has to be on a symmetric time domain, otherwise it can't be Hermitian.
-function B_time(jump::JumpOp, hamiltonian::HamHam, b_minus, b_plus, t0, beta, sigma)
-
-    d = size(hamiltonian.data, 1)
-    CT = Complex{eltype(hamiltonian.eigvals)}
-    eigvals = hamiltonian.eigvals
-    jump_eig = jump.in_eigenbasis
-
-    # Pre-allocated diagonal vector buffers (replace Diagonal wrappers)
-    diag_u = Vector{CT}(undef, d)
-    diag_u2 = Vector{CT}(undef, d)
-
-    # Pre-allocated matrix scratch buffers
-    b_plus_summand = zeros(CT, d, d)
-    tmp = Matrix{CT}(undef, d, d)
-    M = Matrix{CT}(undef, d, d)
-
-    # Inner summand b_plus
-    # Product: diag(u) * A' * diag(u2) * A * diag(u)
-    for s in keys(b_plus)
-        t_s = s * beta
-        @. diag_u = exp(1im * eigvals * t_s)
-        @. diag_u2 = exp(-2im * eigvals * t_s)
-
-        # tmp = diag(u2) * A  (row-scale A by u2)
-        @. tmp = diag_u2 * jump_eig
-        # M = A' * tmp = A' * diag(u2) * A
-        mul!(M, jump_eig', tmp)
-        # b_plus_summand += b_s * diag(u) * M * diag(u) = b_s * (u .* M .* u')
-        diag_u_row = transpose(diag_u)  # (1,d) row view for column-scaling
-        b_plus_summand .+= b_plus[s] .* diag_u .* M .* diag_u_row
-    end
-
-    # Outer summand b_minus
-    # B += b_t * diag(u)' * b_plus_summand * diag(u) = b_t * conj(u) .* bps .* u'
-    B = zeros(CT, d, d)
-    for t in keys(b_minus)
-        @. diag_u = exp(1im * eigvals * (t / sigma))
-        diag_u_row = transpose(diag_u)
-        B .+= b_minus[t] .* conj.(diag_u) .* b_plus_summand .* diag_u_row
-    end
-
-    return B .* t0^2
-end
-
+# Single-jump variant removed in Phase 35; callers use [jump] wrapper.
 function B_time(jumps::Vector{JumpOp}, hamiltonian::HamHam, b_minus, b_plus, t0, beta, sigma)
 
     d = size(hamiltonian.data, 1)
@@ -191,53 +148,7 @@ function B_time(jumps::Vector{JumpOp}, hamiltonian::HamHam, b_minus, b_plus, t0,
     return B .* t0^2
 end
 
-function B_trotter(jump::JumpOp, trotter::TrottTrott, b_minus, b_plus, beta, sigma)
-
-    d = size(trotter.eigvecs, 1)
-    CT = Complex{eltype(trotter.bohr_freqs)}
-
-    # In Trotter eigenbasis:
-    jump_eig = jump.in_eigenbasis
-
-    # Pre-allocated diagonal vector buffers (replace Diagonal wrappers)
-    diag_u = Vector{CT}(undef, d)
-    diag_u2 = Vector{CT}(undef, d)
-
-    # Pre-allocated matrix scratch buffers
-    b_plus_summand = zeros(CT, d, d)
-    tmp = Matrix{CT}(undef, d, d)
-    M = Matrix{CT}(undef, d, d)
-
-    # Inner summand b_plus
-    # Product: diag(u) * A' * diag(u2) * A * diag(u)
-    for (s, b_s) in b_plus
-        num_t0_steps = Int(round(s * beta / trotter.t0))
-
-        @. diag_u = trotter.eigvals_t0 ^ num_t0_steps
-        @. diag_u2 = trotter.eigvals_t0 ^ (-2 * num_t0_steps)
-
-        # tmp = diag(u2) * A  (row-scale A by u2)
-        @. tmp = diag_u2 * jump_eig
-        # M = A' * tmp = A' * diag(u2) * A
-        mul!(M, jump_eig', tmp)
-        # b_plus_summand += b_s * diag(u) * M * diag(u)
-        diag_u_row = transpose(diag_u)
-        b_plus_summand .+= b_s .* diag_u .* M .* diag_u_row
-    end
-
-    B = zeros(CT, d, d)
-    for (t, b_t) in b_minus
-        num_t0_steps = Int(round(t / (sigma * trotter.t0)))
-        @. diag_u = trotter.eigvals_t0 ^ num_t0_steps
-
-        # B += b_t * diag(u)' * b_plus_summand * diag(u)
-        diag_u_row = transpose(diag_u)
-        B .+= b_t .* conj.(diag_u) .* b_plus_summand .* diag_u_row
-    end
-
-    return B .* trotter.t0^2  # B in Trotter basis
-end
-
+# Single-jump B_trotter variant removed in Phase 35; callers use [jump] wrapper.
 function B_trotter(jumps::Vector{JumpOp}, trotter::TrottTrott, b_minus, b_plus, beta, sigma)
 
     d = size(trotter.eigvecs, 1)
