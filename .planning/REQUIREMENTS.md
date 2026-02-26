@@ -19,7 +19,7 @@ Requirements for the v2.0 Restructure milestone. Each maps to roadmap phases.
 ### Code Deduplication
 
 - [ ] **DEDUP-01**: Extract `domain_prefactor()` function replacing 16 identical formula copies across jump_workers.jl, trajectories.jl, krylov_workspace.jl, krylov_matvec.jl, krylov_eigsolve.jl
-- [ ] **DEDUP-02**: Extract `foreach_frequency()` iterator replacing 16 hermitian half-grid branching patterns across all simulation paths
+- [ ] **DEDUP-02**: ~~Extract `foreach_frequency()` iterator replacing 16 hermitian half-grid branching patterns across all simulation paths~~ — **DEFERRED** (user decision: keep explicit for-loop patterns as-is; see Phase 34 CONTEXT.md)
 - [ ] **DEDUP-03**: Unify `oft!()` with best logic from `_krylov_oft!` (keep `time_oft!`/`trotter_oft!` as test/debug utilities with clear marking)
 
 ### Workspace & API
@@ -92,7 +92,7 @@ Requirements for the v2.0 Restructure milestone. Each maps to roadmap phases.
 | TYPE-05 | Phase 33 | Pending |
 | TYPE-06 | Phase 33 | Pending |
 | DEDUP-01 | Phase 34 | Pending |
-| DEDUP-02 | Phase 34 | Pending |
+| DEDUP-02 | ~~Phase 34~~ | Deferred |
 | DEDUP-03 | Phase 34 | Pending |
 | WORK-01 | Phase 35 | Pending |
 | WORK-02 | Phase 35 | Pending |

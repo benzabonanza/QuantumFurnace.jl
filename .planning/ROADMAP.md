@@ -128,12 +128,11 @@ Plans:
 ### Phase 34: Code Deduplication
 **Goal**: The 16+ copy-pasted prefactor formulas, hermitian half-grid branching patterns, and OFT variants are each single-source functions dispatched on domain type
 **Depends on**: Phase 33 (new Config type needed for dispatch signatures)
-**Requirements**: DEDUP-01, DEDUP-02, DEDUP-03
+**Requirements**: DEDUP-01, DEDUP-03
 **Success Criteria** (what must be TRUE):
   1. `domain_prefactor(config, gamma_norm_factor)` is called from all 5 files (jump_workers, krylov_workspace, krylov_matvec, krylov_eigsolve, trajectories) instead of inline formula computation
-  2. `foreach_frequency()` iterator replaces the 16 hermitian half-grid branching patterns with zero allocation overhead verified by existing allocation tests
-  3. A single `oft!()` function (with domain dispatch) replaces both `oft!` and `_krylov_oft!`; `time_oft!`/`trotter_oft!` remain as clearly-marked test/debug utilities
-  4. All regression, allocation, and Krylov cross-validation tests pass with identical numerical results
+  2. A single `oft!()` function (with domain dispatch) replaces both `oft!` and `_krylov_oft!`; `time_oft!`/`trotter_oft!` remain as clearly-marked test/debug utilities
+  3. All regression, allocation, and Krylov cross-validation tests pass with identical numerical results
 **Plans**: 2 plans
 
 Plans:
