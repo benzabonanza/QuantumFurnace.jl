@@ -29,11 +29,11 @@ end
 """
     _accumulate_sandwich!(out, L_op, rho, scalar, ws) -> nothing
 
-Accumulate `scalar * conj(L) * rho * L^T` into `out`. This is the sandwich-only
+Accumulate `scalar * L * rho * L'` into `out`. This is the sandwich-only
 part of the dissipator, used after the anticommutator has been absorbed into
 precomputed G_left/G_right (Phase 32 optimization).
 
-Uses `ws.tmp1`, `ws.tmp2`, `ws.LdagL` as scratch.
+Uses `ws.tmp1`, `ws.LdagL` as scratch.
 """
 function _accumulate_sandwich!(
     out::Matrix{T},
@@ -44,9 +44,8 @@ function _accumulate_sandwich!(
 ) where {T<:Complex}
     CT = one(T)
     ZT = zero(T)
-    @. ws.tmp2 = conj(L_op)                                    # tmp2 = conj(L)
-    BLAS.gemm!('N', 'N', CT, ws.tmp2, rho, ZT, ws.tmp1)        # tmp1 = conj(L) * rho
-    BLAS.gemm!('N', 'T', CT, ws.tmp1, L_op, ZT, ws.LdagL)     # LdagL = conj(L) * rho * L^T
+    BLAS.gemm!('N', 'N', CT, L_op, rho, ZT, ws.tmp1)           # tmp1 = L * rho
+    BLAS.gemm!('N', 'C', CT, ws.tmp1, L_op, ZT, ws.LdagL)      # LdagL = L * rho * L'
     BLAS.axpy!(T(scalar), ws.LdagL, out)
     return nothing
 end
@@ -54,11 +53,11 @@ end
 """
     _accumulate_sandwich_adj_L!(out, L_op, rho, scalar, ws) -> nothing
 
-Accumulate `scalar * L^T * rho * conj(L)` into `out`. This is the sandwich-only
+Accumulate `scalar * L' * rho * L` into `out`. This is the sandwich-only
 part for the negative-frequency Hermitian partner (M = L'), used after the
 anticommutator has been absorbed into G_left/G_right.
 
-Uses `ws.tmp1`, `ws.tmp2`, `ws.LdagL` as scratch.
+Uses `ws.tmp1`, `ws.LdagL` as scratch.
 """
 function _accumulate_sandwich_adj_L!(
     out::Matrix{T},
@@ -69,9 +68,8 @@ function _accumulate_sandwich_adj_L!(
 ) where {T<:Complex}
     CT = one(T)
     ZT = zero(T)
-    @. ws.tmp2 = conj(L_op)                                    # tmp2 = conj(L)
-    BLAS.gemm!('T', 'N', CT, L_op, rho, ZT, ws.tmp1)           # tmp1 = L^T * rho
-    BLAS.gemm!('N', 'N', CT, ws.tmp1, ws.tmp2, ZT, ws.LdagL)  # LdagL = L^T * rho * conj(L)
+    BLAS.gemm!('C', 'N', CT, L_op, rho, ZT, ws.tmp1)           # tmp1 = L' * rho
+    BLAS.gemm!('N', 'N', CT, ws.tmp1, L_op, ZT, ws.LdagL)      # LdagL = L' * rho * L
     BLAS.axpy!(T(scalar), ws.LdagL, out)
     return nothing
 end
@@ -79,12 +77,12 @@ end
 """
     _accumulate_adjoint_sandwich!(out, L_op, rho, scalar, ws) -> nothing
 
-Accumulate `scalar * L^T * rho * conj(L)` into `out`. This is the HS adjoint
-of the forward sandwich `conj(L) * rho * L^T`, used in apply_adjoint_lindbladian!.
+Accumulate `scalar * L' * rho * L` into `out`. This is the HS adjoint
+of the forward sandwich `L * rho * L'`, used in apply_adjoint_lindbladian!.
 
 Note: identical computation to _accumulate_sandwich_adj_L! (the HS adjoint of
-conj(L)*rho*L^T equals L^T*rho*conj(L), which is the same as the negative-freq partner).
-Uses `ws.tmp1`, `ws.tmp2`, `ws.LdagL` as scratch.
+L*rho*L' equals L'*rho*L, which is the same as the negative-freq partner).
+Uses `ws.tmp1`, `ws.LdagL` as scratch.
 """
 function _accumulate_adjoint_sandwich!(
     out::Matrix{T},
@@ -95,9 +93,8 @@ function _accumulate_adjoint_sandwich!(
 ) where {T<:Complex}
     CT = one(T)
     ZT = zero(T)
-    @. ws.tmp2 = conj(L_op)                                    # tmp2 = conj(L)
-    BLAS.gemm!('T', 'N', CT, L_op, rho, ZT, ws.tmp1)           # tmp1 = L^T * rho
-    BLAS.gemm!('N', 'N', CT, ws.tmp1, ws.tmp2, ZT, ws.LdagL)  # LdagL = L^T * rho * conj(L)
+    BLAS.gemm!('C', 'N', CT, L_op, rho, ZT, ws.tmp1)           # tmp1 = L' * rho
+    BLAS.gemm!('N', 'N', CT, ws.tmp1, L_op, ZT, ws.LdagL)      # LdagL = L' * rho * L
     BLAS.axpy!(T(scalar), ws.LdagL, out)
     return nothing
 end
@@ -105,12 +102,12 @@ end
 """
     _accumulate_adjoint_sandwich_adj_L!(out, L_op, rho, scalar, ws) -> nothing
 
-Accumulate `scalar * conj(L) * rho * L^T` into `out`. This is the HS adjoint of
-the negative-frequency sandwich `L^T * rho * conj(L)`.
+Accumulate `scalar * L * rho * L'` into `out`. This is the HS adjoint of
+the negative-frequency sandwich `L' * rho * L`.
 
 Note: identical computation to _accumulate_sandwich! (the HS adjoint of
-L^T*rho*conj(L) equals conj(L)*rho*L^T, which is the same as the positive-freq forward).
-Uses `ws.tmp1`, `ws.tmp2`, `ws.LdagL` as scratch.
+L'*rho*L equals L*rho*L', which is the same as the positive-freq forward).
+Uses `ws.tmp1`, `ws.LdagL` as scratch.
 """
 function _accumulate_adjoint_sandwich_adj_L!(
     out::Matrix{T},
@@ -121,9 +118,8 @@ function _accumulate_adjoint_sandwich_adj_L!(
 ) where {T<:Complex}
     CT = one(T)
     ZT = zero(T)
-    @. ws.tmp2 = conj(L_op)                                    # tmp2 = conj(L)
-    BLAS.gemm!('N', 'N', CT, ws.tmp2, rho, ZT, ws.tmp1)        # tmp1 = conj(L) * rho
-    BLAS.gemm!('N', 'T', CT, ws.tmp1, L_op, ZT, ws.LdagL)     # LdagL = conj(L) * rho * L^T
+    BLAS.gemm!('N', 'N', CT, L_op, rho, ZT, ws.tmp1)           # tmp1 = L * rho
+    BLAS.gemm!('N', 'C', CT, ws.tmp1, L_op, ZT, ws.LdagL)      # LdagL = L * rho * L'
     BLAS.axpy!(T(scalar), ws.LdagL, out)
     return nothing
 end
@@ -166,7 +162,7 @@ function apply_lindbladian!(
     BLAS.gemm!('N', 'N', CT, ws.G_left, rho, ZT, ws.rho_out)     # G_left * rho -> rho_out
     BLAS.gemm!('N', 'N', CT, rho, ws.G_right, CT, ws.rho_out)     # + rho * G_right
 
-    # Sandwich-only loop: sum_i scalar_i * conj(L_i) * rho * L_i^T
+    # Sandwich-only loop: sum_i scalar_i * L_i * rho * L_i'
     prefactor = (config.w0 / (config.sigma * sqrt(2 * pi))) * gamma_norm_factor
 
     for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
@@ -234,7 +230,7 @@ function apply_adjoint_lindbladian!(
     BLAS.gemm!('N', 'N', CT, ws.G_left_adj, rho, ZT, ws.rho_out)
     BLAS.gemm!('N', 'N', CT, rho, ws.G_right_adj, CT, ws.rho_out)
 
-    # Adjoint sandwich-only loop: sum_i scalar_i * L_i^T * rho * conj(L_i)
+    # Adjoint sandwich-only loop: sum_i scalar_i * L_i' * rho * L_i
     prefactor = (config.w0 / (config.sigma * sqrt(2 * pi))) * gamma_norm_factor
 
     for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
@@ -270,7 +266,7 @@ end
 """
     _accumulate_sandwich_2op!(out, A, B_dag, rho, scalar, ws) -> nothing
 
-Accumulate `scalar * B_dag^T * rho * A^T` into `out`. This is the sandwich-only
+Accumulate `scalar * A * rho * B_dag` into `out`. This is the sandwich-only
 part of the two-operator dissipator for BohrDomain, used after the anticommutator
 has been absorbed into G_left/G_right.
 
@@ -286,8 +282,8 @@ function _accumulate_sandwich_2op!(
 ) where {T<:Complex}
     CT = one(T)
     ZT = zero(T)
-    BLAS.gemm!('T', 'N', CT, B_dag, rho, ZT, ws.tmp1)      # tmp1 = B_dag^T * rho
-    BLAS.gemm!('N', 'T', CT, ws.tmp1, A, ZT, ws.tmp2)       # tmp2 = B_dag^T * rho * A^T
+    BLAS.gemm!('N', 'N', CT, A, rho, ZT, ws.tmp1)           # tmp1 = A * rho
+    BLAS.gemm!('N', 'N', CT, ws.tmp1, B_dag, ZT, ws.tmp2)   # tmp2 = A * rho * B_dag
     BLAS.axpy!(T(scalar), ws.tmp2, out)
     return nothing
 end
@@ -295,11 +291,11 @@ end
 """
     _accumulate_adjoint_sandwich_2op!(out, A, B_dag, rho, scalar, ws) -> nothing
 
-Accumulate `scalar * conj(B_dag) * rho * conj(A)` into `out`. This is the HS adjoint
-of the two-operator sandwich `B_dag^T * rho * A^T`, used in apply_adjoint_lindbladian!
+Accumulate `scalar * B_dag' * rho * A'` into `out`. This is the HS adjoint
+of the two-operator sandwich `A * rho * B_dag`, used in apply_adjoint_lindbladian!
 for BohrDomain.
 
-Uses `ws.tmp1`, `ws.tmp2`, `ws.LdagL` as scratch.
+Uses `ws.tmp1`, `ws.tmp2` as scratch.
 """
 function _accumulate_adjoint_sandwich_2op!(
     out::Matrix{T},
@@ -311,10 +307,8 @@ function _accumulate_adjoint_sandwich_2op!(
 ) where {T<:Complex}
     CT = one(T)
     ZT = zero(T)
-    @. ws.tmp2 = conj(B_dag)                                   # tmp2 = conj(B_dag)
-    BLAS.gemm!('N', 'N', CT, ws.tmp2, rho, ZT, ws.tmp1)        # tmp1 = conj(B_dag) * rho
-    @. ws.LdagL = conj(A)                                      # LdagL = conj(A), reuse as scratch
-    BLAS.gemm!('N', 'N', CT, ws.tmp1, ws.LdagL, ZT, ws.tmp2)  # tmp2 = conj(B_dag) * rho * conj(A)
+    BLAS.gemm!('C', 'N', CT, B_dag, rho, ZT, ws.tmp1)       # tmp1 = B_dag' * rho
+    BLAS.gemm!('N', 'C', CT, ws.tmp1, A, ZT, ws.tmp2)       # tmp2 = B_dag' * rho * A'
     BLAS.axpy!(T(scalar), ws.tmp2, out)
     return nothing
 end
@@ -478,7 +472,7 @@ function apply_lindbladian!(
     BLAS.gemm!('N', 'N', CT, ws.G_left, rho, ZT, ws.rho_out)
     BLAS.gemm!('N', 'N', CT, rho, ws.G_right, CT, ws.rho_out)
 
-    # Sandwich-only loop: sum_i scalar_i * conj(L_i) * rho * L_i^T
+    # Sandwich-only loop: sum_i scalar_i * L_i * rho * L_i'
     # Time/Trotter prefactor from jump_workers.jl:109
     prefactor = config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
 
