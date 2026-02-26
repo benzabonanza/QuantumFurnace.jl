@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-25)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v2.0 Restructure -- Phase 34: Code Deduplication (Plan 01 complete, Plan 02 next)
+**Current focus:** v2.0 Restructure -- Phase 34: Code Deduplication COMPLETE, Phase 35 next
 
 ## Current Position
 
-Phase: 34 of 38 (Code Deduplication) -- IN PROGRESS
-Plan: 1/2 complete
-Status: Plan 01 complete (domain_prefactor + OFT unification), Plan 02 next
-Last activity: 2026-02-26 - Completed 34-01: Extract domain_prefactor and unify oft!
+Phase: 34 of 38 (Code Deduplication) -- COMPLETE
+Plan: 2/2 complete
+Status: Phase 34 complete (sandwich consolidation + CPTP channel extraction)
+Last activity: 2026-02-26 - Completed 34-02: Consolidate sandwich helpers and extract CPTP channel
 
-Progress: [#####░░░░░] ~21% (v2.0, 5/~24 plans)
+Progress: [######░░░░] ~25% (v2.0, 7/~24 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 95 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 5)
+- Total plans completed: 97 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 7)
 
 **By Milestone:**
 
@@ -31,7 +31,7 @@ Progress: [#####░░░░░] ~21% (v2.0, 5/~24 plans)
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
 | v1.5 Krylov Gap Estimation | 27-32 | 12 (+3 quick) | 2026-02-20 to 2026-02-25 |
-| v2.0 Restructure | 33-38 | 5/~24 | 2026-02-25 to ... |
+| v2.0 Restructure | 33-38 | 7/~24 | 2026-02-25 to ... |
 
 ## Accumulated Context
 
@@ -55,6 +55,9 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [34-01] domain_prefactor returns domain-only scalar; callers compose with gamma_norm_factor/jump_weight_scaling
 - [34-01] Old JumpOp-based oft! deleted; unified oft!(out, eigenbasis, bohr_freqs, energy, inv_4sigma2) is single source
 - [34-01] inv_4sigma2 computed at call site, not stored in precomputed_data
+- [34-02] _accumulate_sandwich_adj! as canonical name for L'*rho*L sandwich (symmetric with _accumulate_sandwich!)
+- [34-02] _build_cptp_channel returns NamedTuple (; K0, U_residual, alpha); callers destructure what they need
+- [34-02] scratch.K0 field now dead in KrausScratch (struct removal deferred to Phase 35)
 
 ### Key Constraints for v2.0
 
@@ -85,5 +88,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-26
-Stopped at: Completed 34-01-PLAN.md (domain_prefactor + OFT unification)
+Stopped at: Completed 34-02-PLAN.md (sandwich consolidation + CPTP channel extraction). Phase 34 complete.
 Resume file: None
