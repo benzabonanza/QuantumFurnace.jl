@@ -10,16 +10,16 @@ See: .planning/PROJECT.md (updated 2026-02-25)
 ## Current Position
 
 Phase: 35 of 38 (Workspace and Channel Consolidation)
-Plan: 1/2 complete
-Status: Completed 35-01 (workspace consolidation). Plan 02 (trajectory workspace) next.
-Last activity: 2026-02-26 - Completed 35-01: Unified Workspace struct, Scratch sub-structs, caller migration
+Plan: 2/2 complete
+Status: Phase 35 COMPLETE. All workspace types unified into Workspace{S,D,C,T,SC}.
+Last activity: 2026-02-27 - Completed 35-02: Trajectory workspace consolidation (TrajectoryWorkspace+TrajectoryFramework+PerOperatorKraus -> Workspace{Trajectory})
 
-Progress: [######░░░░] ~30% (v2.0, 8/~24 plans)
+Progress: [######░░░░] ~33% (v2.0, 9/~24 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 98 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 8)
+- Total plans completed: 99 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 9)
 
 **By Milestone:**
 
@@ -63,6 +63,10 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [35-01] _TransitionWrap{F} pattern for function barrier dispatch on transition closures
 - [35-01] KrylovWorkspace kept as const alias for backward compatibility
 - [35-01] JumpOp[jump] typed vector literal for Julia invariant parameterization
+- [35-02] _build_trajectory_workspace factory avoids dispatch conflict with Workspace(Config{Thermalize}) constructor
+- [35-02] Per-operator Kraus data as flat Vector{Matrix{CT}} (Rs, K0s, U_residuals, U_Bs) eliminating PerOperatorKraus struct
+- [35-02] TrajectoryScratch holds only mutable buffers; _copy_workspace_for_thread shares immutable data
+- [35-02] step_along_trajectory! simplified from 4-arg (psi, fw, ws, rng) to 3-arg (psi, ws, rng)
 
 ### Key Constraints for v2.0
 
@@ -92,6 +96,6 @@ None
 
 ## Session Continuity
 
-Last session: 2026-02-26
-Stopped at: Completed 35-01-PLAN.md (unified Workspace struct, Scratch sub-structs, caller migration). Plan 02 next.
+Last session: 2026-02-27
+Stopped at: Completed 35-02-PLAN.md (trajectory workspace consolidation). Phase 35 complete. Ready for Phase 36 or 37.
 Resume file: None
