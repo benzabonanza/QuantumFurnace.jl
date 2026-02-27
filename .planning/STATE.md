@@ -84,7 +84,7 @@ All decisions logged in PROJECT.md Key Decisions table.
 - Config is `Config{S,D,C,T}` where C = Construction (KMS, GNS, DLL future)
 - Stay flat in src/ for active code (src/staging/ is for dormant code only) -- rename files for clarity
 - Diagnostics stays as separate module
-- SharedArrays stays, only @distributed code is dead
+- SharedArrays removed (was only used behind dead Distributed branches)
 - Bohr domain may resist full unification (different loop structure)
 
 ### Pending Todos

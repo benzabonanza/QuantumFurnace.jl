@@ -102,7 +102,7 @@ Full details: [milestones/v1.5-ROADMAP.md](milestones/v1.5-ROADMAP.md)
 - [x] **Phase 34: Code Deduplication** - Extract domain_prefactor(), unified oft!(), consolidated sandwiches, and shared CPTP channel helper replacing copy-pasted patterns -- completed 2026-02-26
 - [x] **Phase 35: Workspace and Channel Consolidation** - Merge KrylovWorkspace + KrausScratch + LindbladianWorkspace; unify R/K0/U_residual computation paths -- completed 2026-02-27
 - [x] **Phase 36: API and Results** - Define 4 clean run_* entry points with matching Result structs and save capability -- completed 2026-02-27
-- [ ] **Phase 37: File Organization and Dead Code** - Remove dead code, move staging files, reorganize exports, create Krylov simulation script
+- [x] **Phase 37: File Organization and Dead Code** - Remove dead code, move staging files, reorganize exports, create Krylov simulation script -- completed 2026-02-27
 - [ ] **Phase 38: Test Cleanup** - Consolidate test helpers, add @info printouts, review dubious thresholds
 
 ## Phase Details
@@ -245,5 +245,5 @@ Phases execute in numeric order: 33 -> 34 -> 35 -> 36 -> 37 -> 38
 | 34. Code Deduplication | v2.0 | 2/2 | Complete | 2026-02-26 |
 | 35. Workspace and Channel Consolidation | v2.0 | 2/2 | Complete | 2026-02-27 |
 | 36. API and Results | v2.0 | 4/4 | Complete | 2026-02-27 |
-| 37. File Organization and Dead Code | v2.0 | 0/TBD | Not started | - |
+| 37. File Organization and Dead Code | v2.0 | 2/2 | Complete | 2026-02-27 |
 | 38. Test Cleanup | v2.0 | 0/TBD | Not started | - |
