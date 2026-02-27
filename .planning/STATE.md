@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-25)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v2.0 Restructure -- Phase 36 complete, ready for Phase 37: File Organization and Dead Code
+**Current focus:** v2.0 Restructure -- Phase 37 Plan 01 complete, ready for Plan 02: Module Definition and Exports
 
 ## Current Position
 
-Phase: 36 of 38 (API and Results)
-Plan: 4/4 complete (Phase 36 COMPLETE)
-Status: Completed 36-04: Exports, tests, and simulation scripts
-Last activity: 2026-02-27 - Completed 36-04: Round-trip tests for all 4 Result types + simulation script API migration
+Phase: 37 of 38 (File Organization and Dead Code)
+Plan: 1/2 complete
+Status: Completed 37-01: Dead code removal and staging
+Last activity: 2026-02-27 - Completed 37-01: Removed old entry points, dead structs, staged gap estimation code, cleaned Project.toml
 
-Progress: [######░░░░] ~42% (v2.0, 13/~24 plans)
+Progress: [######░░░░] ~46% (v2.0, 14/~24 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 102 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 12)
+- Total plans completed: 103 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 13)
 
 **By Milestone:**
 
@@ -31,7 +31,7 @@ Progress: [######░░░░] ~42% (v2.0, 13/~24 plans)
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
 | v1.5 Krylov Gap Estimation | 27-32 | 12 (+3 quick) | 2026-02-20 to 2026-02-25 |
-| v2.0 Restructure | 33-38 | 13/~24 | 2026-02-25 to ... |
+| v2.0 Restructure | 33-38 | 14/~24 | 2026-02-25 to ... |
 
 ## Accumulated Context
 
@@ -70,6 +70,8 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [36-01] config_kind tag changed from "liouv" to "lindbladian" for new saves; backward compat with "liouv" preserved
 - [36-01] _result_to_dict uses multiple dispatch (one method per concrete Result type)
 - [36-01] _trajectory_to_dict_new suffix avoids name clash with existing _trajectory_to_dict
+- [37-01] src/staging/ directory for dormant gap estimation code excluded from module includes and test suite
+- [37-01] using/include cleanup for deleted/moved files done in Task 2 as Rule 3 blocking fix (module would not load otherwise)
 
 ### Key Constraints for v2.0
 
@@ -77,7 +79,7 @@ All decisions logged in PROJECT.md Key Decisions table.
 - Keep OFTCaches for testing reference
 - R/K0/U_residual: per-jump (R^a) for DM/Trajectory, summed (R_total) for Krylov -- don't mix
 - Config is `Config{S,D,C,T}` where C = Construction (KMS, GNS, DLL future)
-- Stay flat in src/ (no subdirectories) -- rename files for clarity
+- Stay flat in src/ for active code (src/staging/ is for dormant code only) -- rename files for clarity
 - Diagnostics stays as separate module
 - SharedArrays stays, only @distributed code is dead
 - Bohr domain may resist full unification (different loop structure)
@@ -100,5 +102,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-27
-Stopped at: Completed 36-04-PLAN.md (Exports, tests, simulation scripts). Phase 36 COMPLETE. Ready for Phase 37.
+Stopped at: Completed 37-01-PLAN.md (Dead code removal and staging). Ready for 37-02.
 Resume file: None

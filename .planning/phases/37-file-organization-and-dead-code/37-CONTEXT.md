@@ -15,8 +15,8 @@ Reorganize source files, remove dead code and backward-compat shims, move trajec
 
 ### Staging area design
 - Move trajectory gap estimation files to `src/staging/` subdirectory
-- Files to stage: convergence.jl, fitting.jl, gap_estimation.jl, log_sobolev.jl
-- **Critical:** Verify each file contains ONLY trajectory gap estimation code. If any functions are used by Krylov or Lindbladian spectral gap paths, those functions must stay in active src/
+- Files to stage: fitting.jl, gap_estimation.jl, log_sobolev.jl (convergence.jl stays active — research confirmed it powers run_trajectory's convergence/adaptive modes via _run_trajectory_convergence and _run_trajectory_adaptive)
+- **Critical:** Verified: convergence.jl contains functions called by trajectories.jl:1205,1223 — must stay in active src/
 - Staging code is **excluded from the module** — not included in QuantumFurnace.jl
 - Related tests move to `test/staging/` and are **not run** by the regular test suite (dormant)
 
