@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-25)
 ## Current Position
 
 Phase: 36 of 38 (API and Results)
-Plan: 3/4 complete
-Status: Completed 36-03: Unified run_trajectory entry point
-Last activity: 2026-02-27 - Completed 36-03: Unified run_trajectory with keyword-driven dispatch across 4 modes
+Plan: 4/4 complete (Phase 36 COMPLETE)
+Status: Completed 36-04: Exports, tests, and simulation scripts
+Last activity: 2026-02-27 - Completed 36-04: Round-trip tests for all 4 Result types + simulation script API migration
 
-Progress: [######░░░░] ~39% (v2.0, 12/~24 plans)
+Progress: [######░░░░] ~42% (v2.0, 13/~24 plans)
 
 ## Performance Metrics
 
@@ -31,7 +31,7 @@ Progress: [######░░░░] ~39% (v2.0, 12/~24 plans)
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
 | v1.5 Krylov Gap Estimation | 27-32 | 12 (+3 quick) | 2026-02-20 to 2026-02-25 |
-| v2.0 Restructure | 33-38 | 11/~24 | 2026-02-25 to ... |
+| v2.0 Restructure | 33-38 | 13/~24 | 2026-02-25 to ... |
 
 ## Accumulated Context
 
@@ -100,5 +100,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-27
-Stopped at: Completed 36-03-PLAN.md (Unified run_trajectory). Ready for 36-04 (run_krylov_spectrum entry point).
+Stopped at: Completed 36-04-PLAN.md (Exports, tests, simulation scripts). Phase 36 COMPLETE. Ready for Phase 37.
 Resume file: None
