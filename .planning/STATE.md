@@ -10,16 +10,16 @@ See: .planning/PROJECT.md (updated 2026-02-25)
 ## Current Position
 
 Phase: 36 of 38 (API and Results)
-Plan: 1/4 complete
-Status: Completed 36-01: Result structs and serialization layer
-Last activity: 2026-02-27 - Completed 36-01: AbstractResults type hierarchy, save_result/load_result with Dict-based BSON
+Plan: 2/4 complete
+Status: Completed 36-02: Entry points (run_lindblad, run_thermalize, run_krylov_spectrum)
+Last activity: 2026-02-27 - Completed 36-02: Three new entry points with uniform signature and typed Results
 
-Progress: [######░░░░] ~37% (v2.0, 10/~24 plans)
+Progress: [######░░░░] ~38% (v2.0, 11/~24 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 101 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 11)
+- Total plans completed: 102 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 12)
 
 **By Milestone:**
 
@@ -31,7 +31,7 @@ Progress: [######░░░░] ~37% (v2.0, 10/~24 plans)
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
 | v1.5 Krylov Gap Estimation | 27-32 | 12 (+3 quick) | 2026-02-20 to 2026-02-25 |
-| v2.0 Restructure | 33-38 | 10/~24 | 2026-02-25 to ... |
+| v2.0 Restructure | 33-38 | 11/~24 | 2026-02-25 to ... |
 
 ## Accumulated Context
 
@@ -100,5 +100,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-27
-Stopped at: Completed 36-01-PLAN.md (Result structs and serialization). Ready for 36-02 (run_lindblad/run_thermalize entry points).
+Stopped at: Completed 36-02-PLAN.md (Entry points). Ready for 36-03 (run_trajectory entry point).
 Resume file: None
