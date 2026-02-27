@@ -48,14 +48,14 @@ using QuantumFurnace
     end
 
     # ========================================================================
-    # Testset 2: KrylovGapResult struct fields
+    # Testset 2: krylov_spectral_gap result fields
     # ========================================================================
-    @testset "KrylovGapResult struct fields" begin
+    @testset "krylov_spectral_gap result fields" begin
         config_kms = make_liouv_config(EnergyDomain(); construction=KMS())
         result = krylov_spectral_gap(config_kms, TEST_HAM, TEST_JUMPS;
             krylovdim=30, howmany=4)
 
-        @test result isa KrylovGapResult
+        @test result isa NamedTuple
         @test length(result.eigenvalues) >= 2
         @test result.spectral_gap > 0
         @test size(result.fixed_point) == (DIM, DIM)
@@ -180,7 +180,7 @@ using QuantumFurnace
         # Memory guard should not throw for small n=4 system
         result = krylov_spectral_gap(config, TEST_HAM, TEST_JUMPS;
             krylovdim=50, howmany=2)
-        @test result isa KrylovGapResult
+        @test result isa NamedTuple
     end
 
     # ========================================================================

@@ -59,7 +59,7 @@ Consolidates the old `build_trajectoryframework` + `TrajectoryFramework` + `PerO
 into a single Workspace with flattened per-operator Kraus data and nested TrajectoryScratch.
 """
 function _build_trajectory_workspace(
-    config::Config{Thermalize,D,C,T},
+    config::Config{<:Union{Thermalize, Trajectory},D,C,T},
     hamiltonian::HamHam,
     jumps::Vector{JumpOp};
     trotter::Union{TrottTrott,Nothing}=nothing,
@@ -533,7 +533,7 @@ and reuse it across batches.
 """
 function _build_framework_and_seed(
     jumps::Vector{JumpOp},
-    config::Config{Thermalize},
+    config::Config{<:Union{Thermalize, Trajectory}},
     psi0::Vector{<:Complex},
     hamiltonian::HamHam;
     trotter::Union{TrottTrott,Nothing}=nothing,
@@ -565,7 +565,7 @@ end
 """
 function run_trajectories(
     jumps::Vector{JumpOp},
-    config::Config{Thermalize},
+    config::Config{<:Union{Thermalize, Trajectory}},
     psi0::Vector{<:Complex},
     hamiltonian::HamHam;
     trotter::Union{TrottTrott,Nothing}=nothing,
@@ -679,7 +679,7 @@ Returns an `ObservableTrajectoryResult` with `rho_mean=nothing` when `reconstruc
 """
 function run_observable_trajectories(
     jumps::Vector{JumpOp},
-    config::Config{Thermalize},
+    config::Config{<:Union{Thermalize, Trajectory}},
     psi0::Vector{<:Complex},
     hamiltonian::HamHam;
     trotter::Union{TrottTrott,Nothing}=nothing,
@@ -1172,7 +1172,7 @@ Unified trajectory runner. Mode is determined by keyword arguments:
 """
 function run_trajectory(
     jumps::Vector{JumpOp},
-    config::Config{Thermalize},
+    config::Config{<:Union{Thermalize, Trajectory}},
     hamiltonian::HamHam,
     trotter::Union{TrottTrott, Nothing}=nothing;
     psi0::Vector{<:Complex},

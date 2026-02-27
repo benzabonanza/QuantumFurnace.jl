@@ -12,43 +12,6 @@
 #
 # Covers: MATVEC-06, KRYLOV-01 through KRYLOV-05
 
-# ---------------------------------------------------------------------------
-# Result struct
-# ---------------------------------------------------------------------------
-
-"""
-    KrylovGapResult{T<:AbstractFloat}
-
-Result of a matrix-free Krylov spectral gap computation.
-
-Stores the leading Lindbladian eigenvalues, the spectral gap, the fixed-point
-density matrix (steady state), and the gap mode operator.  For the channel path
-(`Config{Thermalize}`), the raw channel eigenvalues and delta are also stored.
-
-# Fields
-- `eigenvalues`: Leading Lindbladian eigenvalues sorted by |Re(lambda)| ascending.
-- `spectral_gap`: abs(real(eigenvalues[2])) -- the Lindbladian spectral gap.
-- `fixed_point`: Steady-state density matrix (eigvec 1, Hermitianized, trace-normalized).
-- `gap_mode`: Gap mode operator (eigvec 2, reshaped to dim x dim).
-- `converged`: Number of converged eigenvalues reported by KrylovKit.
-- `matvec_count`: Number of linear map applications (info.numops).
-- `num_restarts`: Number of Krylov subspace rebuilds (info.numiter).
-- `normres`: Residual norms for each eigenvalue.
-- `channel_eigenvalues`: Raw channel eigenvalues before conversion (nothing for Lindbladian path).
-- `delta_used`: Delta from Config{Thermalize} (nothing for Lindbladian path).
-"""
-struct KrylovGapResult{T<:AbstractFloat}
-    eigenvalues::Vector{Complex{T}}
-    spectral_gap::T
-    fixed_point::Matrix{Complex{T}}
-    gap_mode::Matrix{Complex{T}}
-    converged::Int
-    matvec_count::Int
-    num_restarts::Int
-    normres::Vector{T}
-    channel_eigenvalues::Union{Nothing, Vector{Complex{T}}}
-    delta_used::Union{Nothing, T}
-end
 
 # ---------------------------------------------------------------------------
 # Pre-flight memory guard
@@ -360,7 +323,7 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    krylov_spectral_gap(config::Config{Lindbladian}, hamiltonian, jumps; kwargs...) -> KrylovGapResult
+    krylov_spectral_gap(config::Config{Lindbladian}, hamiltonian, jumps; kwargs...) -> NamedTuple
 
 Compute the Lindbladian spectral gap matrix-free using KrylovKit Arnoldi with `:LR` targeting.
 
@@ -384,7 +347,7 @@ is `abs(real(lambda_2))` where lambda_2 is the second eigenvalue sorted by |Re(l
 - `krylov_kwargs...`: Additional keyword arguments passed to KrylovKit
 
 # Returns
-`KrylovGapResult` with Lindbladian eigenvalues, spectral gap, fixed point, and gap mode.
+A NamedTuple with Lindbladian eigenvalues, spectral gap, fixed point, and gap mode.
 """
 function krylov_spectral_gap(
     config::Config{Lindbladian},
@@ -443,17 +406,17 @@ function krylov_spectral_gap(
     # Residual norms (reorder to match sorted eigenvalues)
     normres = Float64.(info.normres[perm])
 
-    return KrylovGapResult{Float64}(
-        Complex{Float64}.(eigenvalues_sorted),
+    return (;
+        eigenvalues = Complex{Float64}.(eigenvalues_sorted),
         spectral_gap,
-        Complex{Float64}.(fixed_point),
-        Complex{Float64}.(gap_mode),
-        info.converged,
-        info.numops,
-        info.numiter,
+        fixed_point = Complex{Float64}.(fixed_point),
+        gap_mode = Complex{Float64}.(gap_mode),
+        converged = info.converged,
+        matvec_count = info.numops,
+        num_restarts = info.numiter,
         normres,
-        nothing,   # channel_eigenvalues
-        nothing,   # delta_used
+        channel_eigenvalues = nothing,
+        delta_used = nothing,
     )
 end
 
@@ -462,7 +425,7 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    krylov_spectral_gap(config::Config{Thermalize}, hamiltonian, jumps; kwargs...) -> KrylovGapResult
+    krylov_spectral_gap(config::Config{Thermalize}, hamiltonian, jumps; kwargs...) -> NamedTuple
 
 Compute the Lindbladian spectral gap via the faithful Chen CPTP channel (Eq. 3.2),
 using KrylovKit Arnoldi with `:LM` targeting.
@@ -484,7 +447,7 @@ actually implements via `_finalize_kraus_step!`.
 Same as the `Config{Lindbladian}` method.
 
 # Returns
-`KrylovGapResult` with converted Lindbladian eigenvalues, spectral gap, fixed point,
+A NamedTuple with converted Lindbladian eigenvalues, spectral gap, fixed point,
 gap mode, and the raw channel eigenvalues stored in `channel_eigenvalues`.
 """
 function krylov_spectral_gap(
@@ -554,17 +517,17 @@ function krylov_spectral_gap(
     # Residual norms (reorder to match sorted eigenvalues)
     normres = Float64.(info.normres[perm])
 
-    return KrylovGapResult{Float64}(
-        Complex{Float64}.(eigenvalues_sorted),
+    return (;
+        eigenvalues = Complex{Float64}.(eigenvalues_sorted),
         spectral_gap,
-        Complex{Float64}.(fixed_point),
-        Complex{Float64}.(gap_mode),
-        info.converged,
-        info.numops,
-        info.numiter,
+        fixed_point = Complex{Float64}.(fixed_point),
+        gap_mode = Complex{Float64}.(gap_mode),
+        converged = info.converged,
+        matvec_count = info.numops,
+        num_restarts = info.numiter,
         normres,
-        channel_eigenvalues_sorted,
-        Float64(delta),
+        channel_eigenvalues = channel_eigenvalues_sorted,
+        delta_used = Float64(delta),
     )
 end
 

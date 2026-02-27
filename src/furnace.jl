@@ -1,9 +1,5 @@
-function run_lindbladian(jumps::Vector{JumpOp}, config::Config{Lindbladian,D,C,Tc}, hamiltonian::HamHam{Th};
-    trotter::Union{TrottTrott, Nothing}=nothing) where {D, C, Tc<:AbstractFloat, Th<:AbstractFloat}
-
-    if Tc !== Th
-        error("Type mismatch: HamHam uses $Th but config uses $Tc. All structs must share the same precision.")
-    end
+function run_lindbladian(jumps::Vector{JumpOp}, config::Config{Lindbladian,D,C,T}, hamiltonian::HamHam{T};
+    trotter::Union{TrottTrott, Nothing}=nothing) where {D, C, T<:AbstractFloat}
 
     validate_config!(config)
     _print_press(config)
@@ -94,17 +90,13 @@ end
 
 function run_thermalization(
     jumps::Vector{JumpOp},
-    config::Config{Thermalize,D,C,Tc},
+    config::Config{Thermalize,D,C,T},
     evolving_dm::Matrix{<:Complex},
-    hamiltonian::HamHam{Th};
+    hamiltonian::HamHam{T};
     trotter::Union{TrottTrott, Nothing}=nothing,
     rng::AbstractRNG = Random.default_rng(),
     rescale_by_inv_prob::Bool = true,  # to retain the physical meaning of the input mixing time the same
-    ) where {D, C, Tc<:AbstractFloat, Th<:AbstractFloat}
-
-    if Tc !== Th
-        error("Type mismatch: HamHam uses $Th but config uses $Tc. All structs must share the same precision.")
-    end
+    ) where {D, C, T<:AbstractFloat}
 
     dim = size(hamiltonian.data, 1)
     validate_config!(config)
@@ -191,14 +183,10 @@ Constructs the full Lindbladian superoperator, finds the two eigenvalues nearest
 """
 function run_lindblad(
     jumps::Vector{JumpOp},
-    config::Config{Lindbladian,D,C,Tc},
-    hamiltonian::HamHam{Th},
+    config::Config{Lindbladian,D,C,T},
+    hamiltonian::HamHam{T},
     trotter::Union{TrottTrott, Nothing}=nothing,
-) where {D, C, Tc<:AbstractFloat, Th<:AbstractFloat}
-
-    if Tc !== Th
-        error("Type mismatch: HamHam uses $Th but config uses $Tc. All structs must share the same precision.")
-    end
+) where {D, C, T<:AbstractFloat}
 
     t_start = time()
 
@@ -228,12 +216,12 @@ function run_lindblad(
     wall_time = time() - t_start
     metadata = _capture_metadata(wall_time_seconds=wall_time)
 
-    return LindbladResults{Tc}(
+    return LindbladResults{T}(
         config,
-        Complex{Tc}.(eigvals_near_zero[sorted_permutation_eigen]),
-        Complex{Tc}.(steady_state_dm),
-        Complex{Tc}.(gap_mode_op),
-        Complex{Tc}(spectral_gap),
+        Complex{T}.(eigvals_near_zero[sorted_permutation_eigen]),
+        Complex{T}.(steady_state_dm),
+        Complex{T}.(gap_mode_op),
+        Complex{T}(spectral_gap),
         metadata,
     )
 end
@@ -263,23 +251,19 @@ in a `ThermalizeResults` struct.
 """
 function run_thermalize(
     jumps::Vector{JumpOp},
-    config::Config{Thermalize,D,C,Tc},
-    hamiltonian::HamHam{Th},
+    config::Config{Thermalize,D,C,T},
+    hamiltonian::HamHam{T},
     trotter::Union{TrottTrott, Nothing}=nothing;
     initial_dm::Union{Nothing, Matrix{<:Complex}}=nothing,
     rng::AbstractRNG = Random.default_rng(),
     rescale_by_inv_prob::Bool = true,
-) where {D, C, Tc<:AbstractFloat, Th<:AbstractFloat}
-
-    if Tc !== Th
-        error("Type mismatch: HamHam uses $Th but config uses $Tc. All structs must share the same precision.")
-    end
+) where {D, C, T<:AbstractFloat}
 
     dim = size(hamiltonian.data, 1)
 
     # Default initial_dm: maximally mixed state I/d
     evolving_dm = if initial_dm === nothing
-        Matrix{Complex{Tc}}(I(dim) / dim)
+        Matrix{Complex{T}}(I(dim) / dim)
     else
         copy(initial_dm)
     end
@@ -338,11 +322,11 @@ function run_thermalize(
     wall_time = time() - t_start
     metadata = _capture_metadata(wall_time_seconds=wall_time)
 
-    return ThermalizeResults{Tc}(
+    return ThermalizeResults{T}(
         config,
-        Complex{Tc}.(evolving_dm),
-        Tc.(trace_distances),
-        Tc.(time_steps),
+        Complex{T}.(evolving_dm),
+        T.(trace_distances),
+        T.(time_steps),
         metadata,
     )
 end

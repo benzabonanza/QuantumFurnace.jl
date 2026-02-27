@@ -8,46 +8,6 @@
 #   - fit_exponential_decay (fitting.jl, Phase 21)
 # into a single estimate_spectral_gap function.
 
-# ---------------------------------------------------------------------------
-# SpectralGapResult struct
-# ---------------------------------------------------------------------------
-
-"""
-    SpectralGapResult
-
-Result of spectral gap estimation via trajectory-based exponential decay fitting.
-
-Returned by [`estimate_spectral_gap`](@ref). Contains the best gap estimate,
-per-observable fit details, and metadata for reproducibility.
-
-# Fields
-- `gap::Float64`: Gap estimate from the best-fit observable.
-- `gap_ci::Tuple{Float64, Float64}`: 95% confidence interval on the gap.
-- `gap_se::Float64`: Standard error on the gap.
-- `best_observable::String`: Name of the observable selected as best.
-- `best_r_squared::Float64`: R-squared of the best fit.
-- `per_observable::Vector{FitResult}`: All fits, one per observable.
-- `observable_names::Vector{String}`: Names matching `per_observable` order.
-- `ntraj::Int`: Number of trajectories used.
-- `total_time::Float64`: Total simulation time.
-- `save_every::Int`: Save interval in steps.
-- `seed::Int`: RNG seed used (for reproducibility).
-- `skip_initial::Float64`: Fraction of initial data skipped for fitting.
-"""
-struct SpectralGapResult
-    gap::Float64
-    gap_ci::Tuple{Float64, Float64}
-    gap_se::Float64
-    best_observable::String
-    best_r_squared::Float64
-    per_observable::Vector{FitResult}
-    observable_names::Vector{String}
-    ntraj::Int
-    total_time::Float64
-    save_every::Int
-    seed::Int
-    skip_initial::Float64
-end
 
 # ---------------------------------------------------------------------------
 # Internal helper: best-observable selection (GAP-03)
@@ -103,7 +63,7 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    estimate_spectral_gap(jumps, config, psi0, hamiltonian; kwargs...) -> SpectralGapResult
+    estimate_spectral_gap(jumps, config, psi0, hamiltonian; kwargs...) -> NamedTuple
 
 Estimate the Lindbladian spectral gap from trajectory simulations. This is
 the single-call API that composes observable construction, trajectory
@@ -127,7 +87,7 @@ simulation, exponential fitting, and best-observable selection.
 - `skip_initial::Float64=0.0`: Fraction of initial data to skip for fitting.
 
 # Returns
-A [`SpectralGapResult`](@ref) containing the gap estimate, confidence interval,
+A NamedTuple containing the gap estimate, confidence interval,
 per-observable fits, and simulation metadata.
 
 # Example
@@ -188,20 +148,11 @@ function estimate_spectral_gap(
     best_fit = fits[best_idx]
 
     # 5. Build and return result
-    return SpectralGapResult(
-        best_fit.gap,
-        best_fit.gap_ci,
-        best_fit.gap_se,
-        best_name,
-        best_r2,
-        fits,
-        observable_names,
-        traj_result.n_trajectories,
-        Float64(total_time),
-        save_every,
-        traj_result.seed,
-        skip_initial,
-    )
+    return (; gap = best_fit.gap, gap_ci = best_fit.gap_ci, gap_se = best_fit.gap_se,
+              best_observable = best_name, best_r_squared = best_r2,
+              per_observable = fits, observable_names,
+              ntraj = traj_result.n_trajectories, total_time = Float64(total_time),
+              save_every, seed = traj_result.seed, skip_initial)
 end
 
 # ---------------------------------------------------------------------------

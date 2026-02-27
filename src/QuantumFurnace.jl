@@ -46,9 +46,6 @@ export BohrDomain, EnergyDomain, TimeDomain, TrotterDomain
 # Trajectory
 export TrajectoryResult, ObservableTrajectoryResult, step_along_trajectory!, run_observable_trajectories
 
-# Results / Data persistence
-export ExperimentResult, save_experiment, load_experiment
-
 # New typed Results (Phase 36)
 export AbstractResults, LindbladResults, ThermalizeResults, KrylovSpectrumResults, TrajectoryResults
 export save_result, load_result
@@ -60,7 +57,7 @@ export ConvergenceData, run_trajectories_convergence, run_trajectories_adaptive,
 export fit_exponential_decay, FitResult
 
 # Gap estimation
-export SpectralGapResult, estimate_spectral_gap, OverlapAnalysisResult, eigenbasis_overlap_analysis
+export estimate_spectral_gap, OverlapAnalysisResult, eigenbasis_overlap_analysis
 
 # Diagnostics (Phase 26)
 export EigenDecompositionResult, FixedPointResult, DefectResult, OverlapResult,
@@ -80,7 +77,7 @@ export run_lindblad, run_thermalize, run_krylov_spectrum, run_trajectory
 export apply_lindbladian!, apply_adjoint_lindbladian!
 
 # Krylov eigsolve (Phase 29)
-export KrylovGapResult, krylov_spectral_gap, apply_delta_channel!
+export krylov_spectral_gap, apply_delta_channel!
 
 # QI Tools
 export trace_distance_h, trace_distance_nh, trace_norm_h, trace_norm_nh,

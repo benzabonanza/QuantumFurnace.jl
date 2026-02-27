@@ -1,15 +1,6 @@
-using Distributed
-# addprocs(4, exeflags="--project=@.")
-
 using Revise
 includet("../src/QuantumFurnace.jl")
 using .QuantumFurnace
-
-@everywhere begin
-    using Revise
-    includet("../src/QuantumFurnace.jl")
-    using .QuantumFurnace
-end
 
 using Pkg, LinearAlgebra, Random, Printf, SparseArrays, BSON, Arpack
 
@@ -138,9 +129,7 @@ function main()
     # save_result(alg_results, joinpath(results_dir, "thermalize_result.bson"))
 end
 
-if myid() == 1
-    main()
-end
+main()
 
 # Load
 # bson_data = BSON.load(full_path)

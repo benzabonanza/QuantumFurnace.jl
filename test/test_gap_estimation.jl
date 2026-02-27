@@ -17,13 +17,13 @@ using LinearAlgebra
         delta=0.01, mixing_time=10.0, construction=GNS())
 
     # -----------------------------------------------------------------
-    @testset "Basic estimate_spectral_gap returns SpectralGapResult" begin
+    @testset "Basic estimate_spectral_gap returns NamedTuple" begin
         result = estimate_spectral_gap(
             SMALL_JUMPS, config, psi0, SMALL_HAM;
             ntraj=500, save_every=5, seed=42,
         )
 
-        @test result isa SpectralGapResult
+        @test result isa NamedTuple
         @test result.gap > 0.0
         @test result.gap_ci[1] < result.gap < result.gap_ci[2]
         @test result.gap_se > 0.0
@@ -100,7 +100,7 @@ using LinearAlgebra
             ntraj=200, save_every=5, seed=42,
         )
 
-        @test result isa SpectralGapResult
+        @test result isa NamedTuple
         @test length(result.per_observable) == length(obs)
         @test result.observable_names == names
     end
