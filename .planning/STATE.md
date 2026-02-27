@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-25)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v2.0 Restructure -- Phase 36: API and Results (next)
+**Current focus:** v2.0 Restructure -- Phase 36: API and Results
 
 ## Current Position
 
-Phase: 35 of 38 (Workspace and Channel Consolidation)
-Plan: 2/2 complete
-Status: Phase 35 COMPLETE. All workspace types unified into Workspace{S,D,C,T,SC}.
-Last activity: 2026-02-27 - Completed 35-02: Trajectory workspace consolidation (TrajectoryWorkspace+TrajectoryFramework+PerOperatorKraus -> Workspace{Trajectory})
+Phase: 36 of 38 (API and Results)
+Plan: 1/4 complete
+Status: Completed 36-01: Result structs and serialization layer
+Last activity: 2026-02-27 - Completed 36-01: AbstractResults type hierarchy, save_result/load_result with Dict-based BSON
 
-Progress: [######░░░░] ~33% (v2.0, 9/~24 plans)
+Progress: [######░░░░] ~37% (v2.0, 10/~24 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 100 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 10)
+- Total plans completed: 101 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 11)
 
 **By Milestone:**
 
@@ -67,6 +67,9 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [35-02] Per-operator Kraus data as flat Vector{Matrix{CT}} (Rs, K0s, U_residuals, U_Bs) eliminating PerOperatorKraus struct
 - [35-02] TrajectoryScratch holds only mutable buffers; _copy_workspace_for_thread shares immutable data
 - [35-02] step_along_trajectory! simplified from 4-arg (psi, fw, ws, rng) to 3-arg (psi, ws, rng)
+- [36-01] config_kind tag changed from "liouv" to "lindbladian" for new saves; backward compat with "liouv" preserved
+- [36-01] _result_to_dict uses multiple dispatch (one method per concrete Result type)
+- [36-01] _trajectory_to_dict_new suffix avoids name clash with existing _trajectory_to_dict
 
 ### Key Constraints for v2.0
 
@@ -97,5 +100,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-27
-Stopped at: Completed 35-02-PLAN.md (trajectory workspace consolidation). Phase 35 complete. Ready for Phase 36 or 37.
+Stopped at: Completed 36-01-PLAN.md (Result structs and serialization). Ready for 36-02 (run_lindblad/run_thermalize entry points).
 Resume file: None
