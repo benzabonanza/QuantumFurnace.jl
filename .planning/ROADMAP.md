@@ -161,13 +161,15 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. `run_lindblad()`, `run_thermalize()`, `run_krylov_spectrum()`, `run_trajectory()` are the 4 public entry points, each dispatching on `Config{S,D,C,T}`
   2. Each entry point returns a typed Result struct (`LindbladResults`, `ThermalizeResults`, `KrylovSpectrumResults`, `TrajectoryResults`) containing the config and metadata (git hash, timestamp)
-  3. Passing `save_path="path.bson"` to any `run_*` function serializes the result to BSON with companion .txt, and the result round-trips correctly via `load_result`
+  3. `save_result(result, "path.bson")` serializes any Result to BSON with companion .txt, and the result round-trips correctly via `load_result`
   4. Simulation scripts in `simulations/` demonstrate all 4 entry points with working examples
-**Plans**: TBD
+**Plans**: 4 plans
 
 Plans:
-- [ ] 36-01: TBD
-- [ ] 36-02: TBD
+- [ ] 36-01-PLAN.md -- Define AbstractResults + 4 Result structs, update metadata, implement save_result/load_result
+- [ ] 36-02-PLAN.md -- Create run_lindblad, run_thermalize, run_krylov_spectrum entry points
+- [ ] 36-03-PLAN.md -- Create unified run_trajectory entry point (consolidates 4 trajectory functions)
+- [ ] 36-04-PLAN.md -- Update exports, add round-trip tests, update simulation scripts
 
 ### Phase 37: File Organization and Dead Code
 **Goal**: Source files are renamed for clarity with PRE/MID/POST logical grouping, dead code is removed, staging code is separated, and the module export list matches the new structure
