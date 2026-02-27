@@ -608,6 +608,15 @@ function main()
 end
 
 # ---------------------------------------------------------------------------
+# New API entry point (Phase 36) -- equivalent to krylov_spectral_gap but
+# returns KrylovSpectrumResults with config + metadata:
+#
+#   result = run_krylov_spectrum(jumps, config, hamiltonian, trotter;
+#       krylovdim=30, howmany=4, tol=1e-10)
+#   save_result(result, "krylov_result.bson")
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 try

@@ -127,10 +127,11 @@ function main()
         @printf("Jumps are created.\n")
 
         #* Liouvillian
-        liouv_result = @time run_lindbladian(jumps, config, hamiltonian; trotter = trotter)
+        liouv_result = @time run_lindblad(jumps, config, hamiltonian, trotter)
         @printf("Distance to Gibbs: %s\n", norm(liouv_result.fixed_point - hamiltonian.gibbs))
         @printf("Distance to Gibbs (TROTTER): %s\n", norm(liouv_result.fixed_point - gibbs_in_trotter))
         @printf("Spectral gap: %s\n", abs(real(liouv_result.spectral_gap)))
+        @printf("Wall time: %s s\n", liouv_result.metadata[:wall_time_seconds])
 
 
         # opt_delta =  2 / (abs(liouv_eigvals[2]) + abs(liouv_eigvals[end]))
@@ -141,16 +142,7 @@ function main()
         # norm(liouv_result_energy.data - liouv_result.data)
 
         # Save
-        # project_root = Pkg.project().path |> dirname
-        # project_root = joinpath(project_root, "julia")  #! Omit this on cluster
-        # results_dir = joinpath(project_root, "results")
-        # output_filename = generate_filename(config)
-        # full_path = joinpath(results_dir, output_filename)
-
-
-#         println("Saving results to: ", full_path)
-#         BSON.bson(full_path, Dict("results" => liouv_result)) # Save as a dictionary
-#         println("Save complete.")
+        # save_result(liouv_result, joinpath(results_dir, "lindblad_result.bson"))
 end
 
 if myid() == 1

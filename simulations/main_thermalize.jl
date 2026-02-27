@@ -127,22 +127,15 @@ function main()
     end
 
     #* Thermalization
-    alg_results = @time run_thermalization(jumps, config, initial_dm, hamiltonian; trotter=trotter)
+    alg_results = @time run_thermalize(jumps, config, hamiltonian, trotter; initial_dm=initial_dm)
 
-    @printf("\n Last distance to Gibbs: %s\n", alg_results.distances_to_gibbs[end])
+    @printf("\n Last distance to Gibbs: %s\n", alg_results.trace_distances[end])
     @printf("Number of steps taken: %s\n", length(alg_results.time_steps))
-    # plot(alg_results.time_steps, alg_results.distances_to_gibbs, label="Distance to Gibbs", xlabel="Time", ylabel="Distance", title="Distance to Gibbs over time")
+    @printf("Wall time: %s s\n", alg_results.metadata[:wall_time_seconds])
+    # plot(alg_results.time_steps, alg_results.trace_distances, label="Distance to Gibbs", xlabel="Time", ylabel="Distance", title="Distance to Gibbs over time")
 
     # Save
-    # project_root = Pkg.project().path |> dirname
-    # project_root = joinpath(project_root, "julia")  #! Omit this on cluster
-    # results_dir = joinpath(project_root, "results")
-    # output_filename = generate_filename(config)
-    # full_path = joinpath(results_dir, output_filename)
-
-    # println("Saving results to: ", full_path)
-    # BSON.bson(full_path, Dict("results" => alg_results)) # Save as a dictionary
-    # println("Save complete.")
+    # save_result(alg_results, joinpath(results_dir, "thermalize_result.bson"))
 end
 
 if myid() == 1
