@@ -101,7 +101,7 @@ Full details: [milestones/v1.5-ROADMAP.md](milestones/v1.5-ROADMAP.md)
 - [x] **Phase 33: Type Foundation** - Define Config{S,D,C,T} hierarchy with simulation/construction singleton types, hard swap all call sites -- completed 2026-02-25
 - [x] **Phase 34: Code Deduplication** - Extract domain_prefactor(), unified oft!(), consolidated sandwiches, and shared CPTP channel helper replacing copy-pasted patterns -- completed 2026-02-26
 - [x] **Phase 35: Workspace and Channel Consolidation** - Merge KrylovWorkspace + KrausScratch + LindbladianWorkspace; unify R/K0/U_residual computation paths -- completed 2026-02-27
-- [ ] **Phase 36: API and Results** - Define 4 clean run_* entry points with matching Result structs and save capability
+- [x] **Phase 36: API and Results** - Define 4 clean run_* entry points with matching Result structs and save capability -- completed 2026-02-27
 - [ ] **Phase 37: File Organization and Dead Code** - Rename src/ files to PRE/MID/POST grouping, move staging code, remove @distributed, update exports
 - [ ] **Phase 38: Test Cleanup** - Consolidate test helpers, add @info printouts, review dubious thresholds
 
@@ -166,10 +166,10 @@ Plans:
 **Plans**: 4 plans
 
 Plans:
-- [ ] 36-01-PLAN.md -- Define AbstractResults + 4 Result structs, update metadata, implement save_result/load_result
-- [ ] 36-02-PLAN.md -- Create run_lindblad, run_thermalize, run_krylov_spectrum entry points
-- [ ] 36-03-PLAN.md -- Create unified run_trajectory entry point (consolidates 4 trajectory functions)
-- [ ] 36-04-PLAN.md -- Update exports, add round-trip tests, update simulation scripts
+- [x] 36-01-PLAN.md -- Define AbstractResults + 4 Result structs, update metadata, implement save_result/load_result
+- [x] 36-02-PLAN.md -- Create run_lindblad, run_thermalize, run_krylov_spectrum entry points
+- [x] 36-03-PLAN.md -- Create unified run_trajectory entry point (consolidates 4 trajectory functions)
+- [x] 36-04-PLAN.md -- Update exports, add round-trip tests, update simulation scripts
 
 ### Phase 37: File Organization and Dead Code
 **Goal**: Source files are renamed for clarity with PRE/MID/POST logical grouping, dead code is removed, staging code is separated, and the module export list matches the new structure
@@ -244,6 +244,6 @@ Phases execute in numeric order: 33 -> 34 -> 35 -> 36 -> 37 -> 38
 | 33. Type Foundation | v2.0 | 4/4 | Complete | 2026-02-25 |
 | 34. Code Deduplication | v2.0 | 2/2 | Complete | 2026-02-26 |
 | 35. Workspace and Channel Consolidation | v2.0 | 2/2 | Complete | 2026-02-27 |
-| 36. API and Results | v2.0 | 0/TBD | Not started | - |
+| 36. API and Results | v2.0 | 4/4 | Complete | 2026-02-27 |
 | 37. File Organization and Dead Code | v2.0 | 0/TBD | Not started | - |
 | 38. Test Cleanup | v2.0 | 0/TBD | Not started | - |
