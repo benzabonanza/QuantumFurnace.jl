@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-25)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v2.0 Restructure -- Phase 37 Plan 01 complete, ready for Plan 02: Module Definition and Exports
+**Current focus:** v2.0 Restructure -- Phase 37 complete, ready for Phase 38
 
 ## Current Position
 
-Phase: 37 of 38 (File Organization and Dead Code)
-Plan: 1/2 complete
-Status: Completed 37-01: Dead code removal and staging
-Last activity: 2026-02-27 - Completed 37-01: Removed old entry points, dead structs, staged gap estimation code, cleaned Project.toml
+Phase: 37 of 38 (File Organization and Dead Code) -- COMPLETE
+Plan: 2/2 complete
+Status: Completed 37-02: Module definition and exports reorganization
+Last activity: 2026-02-27 - Completed 37-02: Reorganized exports into simulation-type sections, created main_krylov.jl, fixed nprocs/SharedArrays
 
-Progress: [######░░░░] ~46% (v2.0, 14/~24 plans)
+Progress: [######░░░░] ~48% (v2.0, 15/~24 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 103 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 13)
+- Total plans completed: 104 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 14)
 
 **By Milestone:**
 
@@ -31,7 +31,7 @@ Progress: [######░░░░] ~46% (v2.0, 14/~24 plans)
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
 | v1.5 Krylov Gap Estimation | 27-32 | 12 (+3 quick) | 2026-02-20 to 2026-02-25 |
-| v2.0 Restructure | 33-38 | 14/~24 | 2026-02-25 to ... |
+| v2.0 Restructure | 33-38 | 15/~24 | 2026-02-25 to ... |
 
 ## Accumulated Context
 
@@ -72,6 +72,9 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [36-01] _trajectory_to_dict_new suffix avoids name clash with existing _trajectory_to_dict
 - [37-01] src/staging/ directory for dormant gap estimation code excluded from module includes and test suite
 - [37-01] using/include cleanup for deleted/moved files done in Task 2 as Rule 3 blocking fix (module would not load otherwise)
+- [37-02] Export list organized into Lindbladian/Thermalize/Krylov/Trajectory/Diagnostics/Common sections with Common at bottom
+- [37-02] Dormant exports kept as # STAGING: commented-out block (not deleted)
+- [37-02] Dead nprocs()/SharedArrays removed -- multi-process mode fully dead after Distributed removal
 
 ### Key Constraints for v2.0
 
@@ -102,5 +105,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-27
-Stopped at: Completed 37-01-PLAN.md (Dead code removal and staging). Ready for 37-02.
+Stopped at: Completed 37-02-PLAN.md (Module definition and exports). Phase 37 complete. Ready for Phase 38.
 Resume file: None
