@@ -9,16 +9,13 @@ using LinearAlgebra
 using SparseArrays
 using Random
 using ProgressMeter
-using Distributed
 using Roots
 using DataStructures
 using SpecialFunctions: erfc
 using QuadGK
-using Optim
 using Base.Threads
 using SharedArrays
 using FINUFFT
-using LsqFit
 using KrylovKit
 using LibGit2
 using Dates
@@ -117,8 +114,6 @@ include("misc_tools.jl")
 include("time_domain.jl")
 include("nufft.jl")
 include("ofts.jl")
-include("errors.jl")
-include("kraus.jl")
 include("energy_domain.jl")
 include("bohr_domain.jl")
 include("coherent.jl")
@@ -129,10 +124,7 @@ include("furnace.jl")
 include("krylov_workspace.jl")
 include("krylov_matvec.jl")
 include("krylov_eigsolve.jl")
-include("log_sobolev.jl")
 include("convergence.jl")
-include("fitting.jl")
-include("gap_estimation.jl")
 include("diagnostics.jl")
 include("results.jl")
 
