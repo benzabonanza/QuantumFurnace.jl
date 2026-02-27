@@ -393,3 +393,89 @@ function run_trajectories_adaptive(
 
     return TrajectoryResult(rho_final, n_total, actual_seed, nothing, nothing, conv_data)
 end
+
+# ============================================================================
+# Internal helpers for unified run_trajectory (Phase 36-03)
+# ============================================================================
+
+"""
+    _run_trajectory_convergence(jumps, config, hamiltonian, trotter, psi0; kwargs...)
+
+Internal helper: fixed-batch convergence path for `run_trajectory`.
+Computes Gibbs reference, auto-builds observables if needed, then delegates
+to `run_trajectories_convergence`.
+"""
+function _run_trajectory_convergence(
+    jumps, config, hamiltonian, trotter, psi0;
+    seed, total_time, delta, observables, observable_names,
+    batch_size, n_batches,
+)
+    # Compute Gibbs reference
+    gibbs = if config.domain isa TrotterDomain
+        @assert trotter !== nothing
+        Hermitian(trotter.eigvecs' * hamiltonian.eigvecs * hamiltonian.gibbs *
+                  hamiltonian.eigvecs' * trotter.eigvecs)
+    else
+        hamiltonian.gibbs
+    end
+
+    # Auto-build observables if convergence=true and none provided
+    obs, obs_names = if observables === nothing
+        build_preset_trajectory_observables(hamiltonian, config.num_qubits; trotter=trotter)
+    else
+        observable_names === nothing && error("observable_names required when custom observables provided with convergence=true")
+        observables, observable_names
+    end
+
+    # Delegate to existing run_trajectories_convergence
+    result = run_trajectories_convergence(
+        jumps, config, psi0, hamiltonian;
+        gibbs=gibbs, observables=obs, observable_names=obs_names,
+        batch_size=batch_size, n_batches=n_batches,
+        seed=seed, trotter=trotter, total_time=total_time, delta=delta,
+    )
+
+    return result
+end
+
+"""
+    _run_trajectory_adaptive(jumps, config, hamiltonian, trotter, psi0; kwargs...)
+
+Internal helper: adaptive convergence path for `run_trajectory`.
+Computes Gibbs reference, auto-builds observables if needed, then delegates
+to `run_trajectories_adaptive`.
+"""
+function _run_trajectory_adaptive(
+    jumps, config, hamiltonian, trotter, psi0;
+    seed, total_time, delta, observables, observable_names,
+    batch_size, n_max, convergence_threshold, patience, min_batches, window_size,
+)
+    # Compute Gibbs reference
+    gibbs = if config.domain isa TrotterDomain
+        @assert trotter !== nothing
+        Hermitian(trotter.eigvecs' * hamiltonian.eigvecs * hamiltonian.gibbs *
+                  hamiltonian.eigvecs' * trotter.eigvecs)
+    else
+        hamiltonian.gibbs
+    end
+
+    # Auto-build observables if none provided
+    obs, obs_names = if observables === nothing
+        build_preset_trajectory_observables(hamiltonian, config.num_qubits; trotter=trotter)
+    else
+        observable_names === nothing && error("observable_names required when custom observables provided with convergence=true")
+        observables, observable_names
+    end
+
+    # Delegate to existing run_trajectories_adaptive
+    result = run_trajectories_adaptive(
+        jumps, config, psi0, hamiltonian;
+        gibbs=gibbs, observables=obs, observable_names=obs_names,
+        batch_size=batch_size, n_max=n_max,
+        convergence_threshold=convergence_threshold, patience=patience,
+        min_batches=min_batches, window_size=window_size,
+        seed=seed, trotter=trotter, total_time=total_time, delta=delta,
+    )
+
+    return result
+end

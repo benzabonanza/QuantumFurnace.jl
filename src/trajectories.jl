@@ -1085,3 +1085,182 @@ function step_along_trajectory!(
     end
     return nothing
 end
+
+# ============================================================================
+# Unified run_trajectory entry point (Phase 36-03)
+# ============================================================================
+
+"""
+    _run_trajectory_with_obs(jumps, config, hamiltonian, trotter, psi0; kwargs...)
+
+Internal helper: observable tracking path without convergence.
+Delegates to `run_observable_trajectories` with `reconstruct_dm=true`
+(reconstructs DM once at the end as the final average).
+
+Returns a NamedTuple with fields expected by `run_trajectory`.
+"""
+function _run_trajectory_with_obs(
+    jumps, config, hamiltonian, trotter, psi0;
+    seed, total_time, delta, ntraj, observables, save_every,
+)
+    # Delegate to existing run_observable_trajectories with reconstruct_dm=true
+    # (reconstructs DM once at the end as the final average)
+    obs_result = run_observable_trajectories(
+        jumps, config, psi0, hamiltonian;
+        trotter=trotter, total_time=total_time, delta=delta,
+        ntraj=ntraj, observables=observables, save_every=save_every,
+        seed=seed, reconstruct_dm=true,
+    )
+
+    # Wrap into the NamedTuple interface run_trajectory expects
+    # run_observable_trajectories returns ObservableTrajectoryResult
+    return (
+        rho_mean = obs_result.rho_mean,
+        n_trajectories = obs_result.n_trajectories,
+        seed = obs_result.seed,
+        times = obs_result.times,
+        measurements_mean = obs_result.measurements_mean,
+    )
+end
+
+"""
+    run_trajectory(jumps, config, hamiltonian, trotter=nothing; psi0, kwargs...) -> TrajectoryResults
+
+Unified trajectory runner. Mode is determined by keyword arguments:
+
+- **Default** (`observables=nothing, convergence=false`): Run `ntraj` trajectories, reconstruct
+  averaged density matrix at save points. Returns `TrajectoryResults` with `times=nothing`,
+  `measurements_mean=nothing`, `convergence=nothing`.
+
+- **Observable mode** (`observables=<matrices>`): Track time-resolved `<O>(t)` across trajectories.
+  Density matrix is reconstructed once at the end as the final average.
+  Returns `TrajectoryResults` with `times`, `measurements_mean` populated.
+
+- **Convergence mode** (`convergence=true`): Run in batches, tracking trace distance to Gibbs
+  and preset observables. Gibbs reference from `hamiltonian.gibbs` (or Trotter-transformed).
+  Returns `TrajectoryResults` with `convergence::ConvergenceData` populated.
+
+- **Adaptive mode** (`convergence=true, adaptive=true`): Like convergence mode, but stops early
+  when trace distance convergence is detected. Additional kwargs control stopping criteria.
+
+# Arguments
+- `jumps::Vector{JumpOp}`: Jump operators.
+- `config::Config{Thermalize}`: Thermalization configuration.
+- `hamiltonian::HamHam`: Hamiltonian data (provides Gibbs reference via `hamiltonian.gibbs`).
+- `trotter::Union{TrottTrott, Nothing}=nothing`: Trotter object (required for TrotterDomain).
+
+# Required Keyword Arguments
+- `psi0::Vector{<:Complex}`: Initial state vector (required).
+
+# Optional Keyword Arguments
+- `ntraj::Int=1`: Number of trajectories (default mode) or batch_size x n_batches (convergence mode).
+- `total_time::Real=config.mixing_time`: Evolution time per trajectory.
+- `delta::Real=config.delta`: Time step.
+- `seed::Union{Int, Nothing}=nothing`: Master RNG seed (nothing = random from entropy).
+- `save_every::Int=1`: Save observable measurements every N steps.
+- `observables::Union{Nothing, Vector{<:Matrix{<:Complex}}}=nothing`: Observable matrices.
+- `observable_names::Union{Nothing, Vector{String}}=nothing`: Names for observables (auto-built for convergence).
+- `convergence::Bool=false`: Enable convergence tracking.
+- `adaptive::Bool=false`: Enable adaptive early stopping (requires convergence=true).
+- `batch_size::Int=1000`: Trajectories per batch (convergence mode; 200 for adaptive mode).
+- `n_batches::Int=10`: Number of batches (convergence mode only).
+- `n_max::Int=20_000`: Hard cap on total trajectories (adaptive mode only).
+- `convergence_threshold::Float64=0.01`: Relative change threshold (adaptive mode).
+- `patience::Int=3`: Consecutive stable checks required (adaptive mode).
+- `min_batches::Int=5`: Minimum batches before convergence can trigger (adaptive mode).
+- `window_size::Int=3`: Window size for windowed average comparison (adaptive mode).
+"""
+function run_trajectory(
+    jumps::Vector{JumpOp},
+    config::Config{Thermalize},
+    hamiltonian::HamHam,
+    trotter::Union{TrottTrott, Nothing}=nothing;
+    psi0::Vector{<:Complex},
+    ntraj::Int = 1,
+    total_time::Real = config.mixing_time,
+    delta::Real = config.delta,
+    seed::Union{Int, Nothing} = nothing,
+    save_every::Int = 1,
+    observables::Union{Nothing, Vector{<:Matrix{<:Complex}}} = nothing,
+    observable_names::Union{Nothing, Vector{String}} = nothing,
+    convergence::Bool = false,
+    adaptive::Bool = false,
+    batch_size::Int = adaptive ? 200 : 1000,
+    n_batches::Int = 10,
+    n_max::Int = 20_000,
+    convergence_threshold::Float64 = 0.01,
+    patience::Int = 3,
+    min_batches::Int = 5,
+    window_size::Int = 3,
+)
+    # Validation
+    adaptive && !convergence && error("adaptive=true requires convergence=true")
+    @assert ntraj >= 1
+    @assert save_every >= 1
+
+    t_start = time()
+
+    # ---- Convergence path: adaptive ----
+    if adaptive
+        result = _run_trajectory_adaptive(
+            jumps, config, hamiltonian, trotter, psi0;
+            seed=seed, total_time=total_time, delta=delta,
+            observables=observables, observable_names=observable_names,
+            batch_size=batch_size, n_max=n_max,
+            convergence_threshold=convergence_threshold, patience=patience,
+            min_batches=min_batches, window_size=window_size,
+        )
+        wall_time = time() - t_start
+        metadata = _capture_metadata(wall_time_seconds=wall_time)
+        return TrajectoryResults{Float64}(
+            config, result.rho_mean, result.n_trajectories, result.seed,
+            result.times, result.measurements_mean, result.convergence, metadata,
+        )
+    end
+
+    # ---- Convergence path: fixed batches ----
+    if convergence
+        result = _run_trajectory_convergence(
+            jumps, config, hamiltonian, trotter, psi0;
+            seed=seed, total_time=total_time, delta=delta,
+            observables=observables, observable_names=observable_names,
+            batch_size=batch_size, n_batches=n_batches,
+        )
+        wall_time = time() - t_start
+        metadata = _capture_metadata(wall_time_seconds=wall_time)
+        return TrajectoryResults{Float64}(
+            config, result.rho_mean, result.n_trajectories, result.seed,
+            result.times, result.measurements_mean, result.convergence, metadata,
+        )
+    end
+
+    # ---- Observable path (no convergence) ----
+    if observables !== nothing
+        result = _run_trajectory_with_obs(
+            jumps, config, hamiltonian, trotter, psi0;
+            seed=seed, total_time=total_time, delta=delta, ntraj=ntraj,
+            observables=observables, save_every=save_every,
+        )
+        wall_time = time() - t_start
+        metadata = _capture_metadata(wall_time_seconds=wall_time)
+        return TrajectoryResults{Float64}(
+            config, result.rho_mean, result.n_trajectories, result.seed,
+            result.times, result.measurements_mean, nothing, metadata,
+        )
+    end
+
+    # ---- Default path: plain trajectories, DM reconstruction ----
+    ws, actual_seed = _build_framework_and_seed(
+        jumps, config, psi0, hamiltonian;
+        trotter=trotter, delta=delta, seed=seed,
+    )
+    rho_result = _run_batch_no_obs!(ws, psi0, ntraj, actual_seed, total_time)
+
+    wall_time = time() - t_start
+    metadata = _capture_metadata(wall_time_seconds=wall_time)
+
+    return TrajectoryResults{Float64}(
+        config, rho_result, ntraj, actual_seed,
+        nothing, nothing, nothing, metadata,
+    )
+end
