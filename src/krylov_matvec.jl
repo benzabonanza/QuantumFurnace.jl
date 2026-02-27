@@ -95,7 +95,6 @@ function apply_lindbladian!(
     hamiltonian::HamHam,
 ) where {T<:Complex}
     sc = ws.scratch::KrylovScratch{T}
-    transition = ws.transition
     G_left = ws.G_left::Matrix{T}
     G_right = ws.G_right::Matrix{T}
     jump_eigenbases = ws.jump_eigenbases::Vector{Matrix{T}}
@@ -120,18 +119,18 @@ function apply_lindbladian!(
 
                 oft!(sc.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
 
-                scalar_w = prefactor * transition(w)
+                scalar_w = prefactor * pick_transition(config, w)
                 _accumulate_sandwich_scratch!(sc.rho_out, sc.jump_oft, rho, scalar_w, sc.sandwich_tmp, sc.sandwich_out)
 
                 if w > 1e-12
-                    scalar_neg = prefactor * transition(-w)
+                    scalar_neg = prefactor * pick_transition(config, -w)
                     _accumulate_sandwich_adj_scratch!(sc.rho_out, sc.jump_oft, rho, scalar_neg, sc.sandwich_tmp, sc.sandwich_out)
                 end
             end
         else
             for w in energy_labels
                 oft!(sc.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
-                scalar_w = prefactor * transition(w)
+                scalar_w = prefactor * pick_transition(config, w)
                 _accumulate_sandwich_scratch!(sc.rho_out, sc.jump_oft, rho, scalar_w, sc.sandwich_tmp, sc.sandwich_out)
             end
         end
@@ -152,7 +151,6 @@ function apply_adjoint_lindbladian!(
     hamiltonian::HamHam,
 ) where {T<:Complex}
     sc = ws.scratch::KrylovScratch{T}
-    transition = ws.transition
     G_left_adj = ws.G_left_adj::Matrix{T}
     G_right_adj = ws.G_right_adj::Matrix{T}
     jump_eigenbases = ws.jump_eigenbases::Vector{Matrix{T}}
@@ -177,18 +175,18 @@ function apply_adjoint_lindbladian!(
 
                 oft!(sc.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
 
-                scalar_w = prefactor * transition(w)
+                scalar_w = prefactor * pick_transition(config, w)
                 _accumulate_sandwich_adj_scratch!(sc.rho_out, sc.jump_oft, rho, scalar_w, sc.sandwich_tmp, sc.sandwich_out)
 
                 if w > 1e-12
-                    scalar_neg = prefactor * transition(-w)
+                    scalar_neg = prefactor * pick_transition(config, -w)
                     _accumulate_sandwich_scratch!(sc.rho_out, sc.jump_oft, rho, scalar_neg, sc.sandwich_tmp, sc.sandwich_out)
                 end
             end
         else
             for w in energy_labels
                 oft!(sc.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
-                scalar_w = prefactor * transition(w)
+                scalar_w = prefactor * pick_transition(config, w)
                 _accumulate_sandwich_adj_scratch!(sc.rho_out, sc.jump_oft, rho, scalar_w, sc.sandwich_tmp, sc.sandwich_out)
             end
         end
@@ -257,7 +255,6 @@ function apply_lindbladian!(
     hamiltonian::HamHam,
 ) where {T<:Complex}
     sc = ws.scratch::KrylovScratch{T}
-    bohr_alpha = ws.bohr_alpha
     gamma_norm_factor = ws.gamma_norm_factor
     dim = size(rho, 1)
 
@@ -271,7 +268,7 @@ function apply_lindbladian!(
 
     for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
         for nu_2 in keys(hamiltonian.bohr_dict)
-            @. sc.jump_oft = bohr_alpha(hamiltonian.bohr_freqs, nu_2) * eigenbasis
+            @. sc.jump_oft = _pick_alpha($Ref(config), hamiltonian.bohr_freqs, nu_2) * eigenbasis
 
             fill!(A_nu2_dag, 0)
             indices = hamiltonian.bohr_dict[nu_2]
@@ -299,7 +296,6 @@ function apply_adjoint_lindbladian!(
     hamiltonian::HamHam,
 ) where {T<:Complex}
     sc = ws.scratch::KrylovScratch{T}
-    bohr_alpha = ws.bohr_alpha
     gamma_norm_factor = ws.gamma_norm_factor
     dim = size(rho, 1)
 
@@ -313,7 +309,7 @@ function apply_adjoint_lindbladian!(
 
     for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
         for nu_2 in keys(hamiltonian.bohr_dict)
-            @. sc.jump_oft = bohr_alpha(hamiltonian.bohr_freqs, nu_2) * eigenbasis
+            @. sc.jump_oft = _pick_alpha($Ref(config), hamiltonian.bohr_freqs, nu_2) * eigenbasis
 
             fill!(A_nu2_dag, 0)
             indices = hamiltonian.bohr_dict[nu_2]
@@ -345,8 +341,9 @@ function apply_lindbladian!(
     hamiltonian::HamHam,
 ) where {T<:Complex, D<:Union{TimeDomain, TrotterDomain}}
     sc = ws.scratch::KrylovScratch{T}
-    transition = ws.transition
-    oft_nufft_prefactors = ws.oft_nufft_prefactors
+    _nufft = ws.oft_nufft_prefactors::NUFFTPrefactors{real(T), Array{T, 3}}
+    nufft_data = _nufft.data
+    nufft_idx = _nufft.energy_to_index
     G_left = ws.G_left::Matrix{T}
     G_right = ws.G_right::Matrix{T}
     jump_eigenbases = ws.jump_eigenbases::Vector{Matrix{T}}
@@ -367,22 +364,22 @@ function apply_lindbladian!(
                 w_raw > 1e-12 && continue
                 w = abs(w_raw)
 
-                nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
+                nufft_prefactor_matrix = @view nufft_data[:, :, nufft_idx[w]]
                 @. sc.jump_oft = eigenbasis * nufft_prefactor_matrix
 
-                scalar_w = prefactor * transition(w)
+                scalar_w = prefactor * pick_transition(config, w)
                 _accumulate_sandwich_scratch!(sc.rho_out, sc.jump_oft, rho, scalar_w, sc.sandwich_tmp, sc.sandwich_out)
 
                 if w > 1e-12
-                    scalar_neg = prefactor * transition(-w)
+                    scalar_neg = prefactor * pick_transition(config, -w)
                     _accumulate_sandwich_adj_scratch!(sc.rho_out, sc.jump_oft, rho, scalar_neg, sc.sandwich_tmp, sc.sandwich_out)
                 end
             end
         else
-            for w in energy_labels
-                nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
+            for (i, w) in enumerate(energy_labels)
+                nufft_prefactor_matrix = @view nufft_data[:, :, i]
                 @. sc.jump_oft = eigenbasis * nufft_prefactor_matrix
-                scalar_w = prefactor * transition(w)
+                scalar_w = prefactor * pick_transition(config, w)
                 _accumulate_sandwich_scratch!(sc.rho_out, sc.jump_oft, rho, scalar_w, sc.sandwich_tmp, sc.sandwich_out)
             end
         end
@@ -403,8 +400,9 @@ function apply_adjoint_lindbladian!(
     hamiltonian::HamHam,
 ) where {T<:Complex, D<:Union{TimeDomain, TrotterDomain}}
     sc = ws.scratch::KrylovScratch{T}
-    transition = ws.transition
-    oft_nufft_prefactors = ws.oft_nufft_prefactors
+    _nufft = ws.oft_nufft_prefactors::NUFFTPrefactors{real(T), Array{T, 3}}
+    nufft_data = _nufft.data
+    nufft_idx = _nufft.energy_to_index
     G_left_adj = ws.G_left_adj::Matrix{T}
     G_right_adj = ws.G_right_adj::Matrix{T}
     jump_eigenbases = ws.jump_eigenbases::Vector{Matrix{T}}
@@ -425,22 +423,22 @@ function apply_adjoint_lindbladian!(
                 w_raw > 1e-12 && continue
                 w = abs(w_raw)
 
-                nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
+                nufft_prefactor_matrix = @view nufft_data[:, :, nufft_idx[w]]
                 @. sc.jump_oft = eigenbasis * nufft_prefactor_matrix
 
-                scalar_w = prefactor * transition(w)
+                scalar_w = prefactor * pick_transition(config, w)
                 _accumulate_sandwich_adj_scratch!(sc.rho_out, sc.jump_oft, rho, scalar_w, sc.sandwich_tmp, sc.sandwich_out)
 
                 if w > 1e-12
-                    scalar_neg = prefactor * transition(-w)
+                    scalar_neg = prefactor * pick_transition(config, -w)
                     _accumulate_sandwich_scratch!(sc.rho_out, sc.jump_oft, rho, scalar_neg, sc.sandwich_tmp, sc.sandwich_out)
                 end
             end
         else
-            for w in energy_labels
-                nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
+            for (i, w) in enumerate(energy_labels)
+                nufft_prefactor_matrix = @view nufft_data[:, :, i]
                 @. sc.jump_oft = eigenbasis * nufft_prefactor_matrix
-                scalar_w = prefactor * transition(w)
+                scalar_w = prefactor * pick_transition(config, w)
                 _accumulate_sandwich_adj_scratch!(sc.rho_out, sc.jump_oft, rho, scalar_w, sc.sandwich_tmp, sc.sandwich_out)
             end
         end

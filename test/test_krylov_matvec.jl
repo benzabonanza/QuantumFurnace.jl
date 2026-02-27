@@ -134,12 +134,11 @@ end
     # ========================================================================
     # Testset 7: Zero allocations in matvec hot path
     # ========================================================================
-    # Budget for Union{Nothing, Function} boxing on the transition field.
-    # The unified Workspace stores transition as Union{Nothing, Function};
-    # calling it in the hot loop incurs boxing overhead (~300 bytes per call).
-    # The scratch field is untyped (no SC parameter), adding further overhead.
-    # This threshold catches regressions while allowing the inherent boxing.
-    MATVEC_ALLOC_BUDGET = 100_000  # bytes
+    # Transition/alpha values are now computed via dispatched 2-arg methods
+    # (pick_transition(config, w) / _pick_alpha(config, nu1, nu2)) instead of
+    # stored closures, eliminating the Union{Nothing, Function} boxing overhead.
+    MATVEC_ALLOC_BUDGET = 0  # bytes (EnergyDomain / BohrDomain)
+    MATVEC_ALLOC_BUDGET_NUFFT = 0  # bytes (TimeDomain / TrotterDomain)
 
     @testset "Near-zero allocations in matvec hot path" begin
         config = make_liouv_config(EnergyDomain(); construction=KMS())
@@ -203,8 +202,8 @@ end
         ws = Workspace(config, TEST_HAM, TEST_JUMPS)
         rho = Matrix(random_density_matrix(NUM_QUBITS))
         allocs, allocs_adj = _measure_matvec_allocs(ws, rho, config, TEST_HAM)
-        @test allocs <= MATVEC_ALLOC_BUDGET
-        @test allocs_adj <= MATVEC_ALLOC_BUDGET
+        @test allocs <= MATVEC_ALLOC_BUDGET_NUFFT
+        @test allocs_adj <= MATVEC_ALLOC_BUDGET_NUFFT
     end
 
     # ========================================================================
@@ -259,8 +258,8 @@ end
         ws = Workspace(config, TEST_HAM, TEST_TROTTER_JUMPS; trotter=TEST_TROTTER)
         rho = Matrix(random_density_matrix(NUM_QUBITS))
         allocs, allocs_adj = _measure_matvec_allocs(ws, rho, config, TEST_HAM)
-        @test allocs <= MATVEC_ALLOC_BUDGET
-        @test allocs_adj <= MATVEC_ALLOC_BUDGET
+        @test allocs <= MATVEC_ALLOC_BUDGET_NUFFT
+        @test allocs_adj <= MATVEC_ALLOC_BUDGET_NUFFT
     end
 
     # ========================================================================
