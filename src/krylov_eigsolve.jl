@@ -567,3 +567,76 @@ function krylov_spectral_gap(
         Float64(delta),
     )
 end
+
+# ---------------------------------------------------------------------------
+# run_krylov_spectrum: new public entry point (Phase 36)
+# ---------------------------------------------------------------------------
+
+"""
+    run_krylov_spectrum(jumps, config, hamiltonian, trotter=nothing; krylov_kwargs...) -> KrylovSpectrumResults
+
+Matrix-free spectral gap computation via KrylovKit, returning a `KrylovSpectrumResults` struct.
+
+Wraps `krylov_spectral_gap` with the uniform positional signature
+`(jumps, config, hamiltonian, trotter)` and adds config + timing metadata to the result.
+
+Works for both `Config{Lindbladian}` (direct Lindbladian matvec with `:LR` targeting)
+and `Config{Thermalize}` (CPTP channel matvec with `:LM` targeting and delta conversion).
+
+# Arguments
+- `jumps::Vector{JumpOp}`: Jump operators
+- `config::Config`: Lindbladian or Thermalize configuration
+- `hamiltonian::HamHam`: Hamiltonian with eigenbasis data
+- `trotter::Union{TrottTrott, Nothing}=nothing`: Trotter object (required for TrotterDomain)
+
+# Keyword Arguments
+- `krylovdim::Int=30`: Krylov subspace dimension
+- `howmany::Int=4`: Number of eigenvalues to compute
+- `tol::Real=1e-10`: Convergence tolerance
+- `max_retries::Int=3`: Maximum retry attempts on partial convergence
+- `krylov_kwargs...`: Additional keyword arguments passed to KrylovKit
+
+# Returns
+`KrylovSpectrumResults` with eigenvalues, spectral gap, fixed point, gap mode,
+convergence info, optional channel data, config, and timing metadata.
+"""
+function run_krylov_spectrum(
+    jumps::Vector{JumpOp},
+    config::Config{S,D,C,T},
+    hamiltonian::HamHam,
+    trotter::Union{TrottTrott, Nothing}=nothing;
+    krylovdim::Int=30,
+    howmany::Int=4,
+    tol::Real=1e-10,
+    max_retries::Int=3,
+    krylov_kwargs...
+) where {S<:Union{Lindbladian, Thermalize}, D, C, T}
+
+    t_start = time()
+
+    # Delegate to existing krylov_spectral_gap (handles both Config{Lindbladian} and Config{Thermalize})
+    # Note: krylov_spectral_gap uses (config, hamiltonian, jumps; ...) argument order
+    krylov_result = krylov_spectral_gap(
+        config, hamiltonian, jumps;
+        trotter=trotter, krylovdim=krylovdim, howmany=howmany,
+        tol=tol, max_retries=max_retries, krylov_kwargs...
+    )
+
+    wall_time = time() - t_start
+    metadata = _capture_metadata(wall_time_seconds=wall_time)
+
+    return KrylovSpectrumResults{Float64}(
+        config,
+        krylov_result.eigenvalues,
+        krylov_result.spectral_gap,
+        krylov_result.fixed_point,
+        krylov_result.gap_mode,
+        krylov_result.converged,
+        krylov_result.matvec_count,
+        krylov_result.num_restarts,
+        krylov_result.normres,
+        krylov_result.channel_eigenvalues,
+        krylov_result.delta_used,
+        metadata,
+    )
+end
