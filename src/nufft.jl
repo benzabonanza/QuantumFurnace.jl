@@ -23,7 +23,6 @@ function _prepare_oft_nufft_prefactors(
     sigma::AbstractFloat;
     eps::Float64 = 1e-12,
     nthreads::Int = 1,
-    use_shared_array::Bool = false,
 )
     dim1, dim2 = size(bohr_freqs)
     @assert dim1 == dim2
