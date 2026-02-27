@@ -14,8 +14,7 @@ function _jump_contribution!(
     hamiltonian::HamHam,
     config::Config{Lindbladian, BohrDomain},
     precomputed_data,
-    ws::Workspace{Lindbladian},
-    Id::AbstractMatrix{<:Complex};
+    ws::Workspace{Lindbladian};
     coherent_term::Union{Nothing, AbstractMatrix{<:Complex}} = nothing,
     )
     dim = size(hamiltonian.data, 1)
@@ -24,7 +23,7 @@ function _jump_contribution!(
 
     B = coherent_term
     if B !== nothing
-        _vectorize_liouvillian_coherent!(L_target, B, ws, Id)
+        _vectorize_liouvillian_coherent!(L_target, B, ws)
     end
 
     alpha_A_nu1 = ws.scratch.jump_tmp
@@ -40,7 +39,7 @@ function _jump_contribution!(
 
         A_nu_2_dag = sparse(rows_dag, cols_dag, conj.(A_nu_2_vals), dim, dim)
 
-        _vectorize_liouv_diss_and_add!(L_target, alpha_A_nu1, A_nu_2_dag, gamma_norm_factor, ws, Id)
+        _vectorize_liouv_diss_and_add!(L_target, alpha_A_nu1, A_nu_2_dag, gamma_norm_factor, ws)
     end
     return L_target
 end
@@ -51,8 +50,7 @@ function _jump_contribution!(
     hamiltonian::HamHam,
     config::Config{Lindbladian, EnergyDomain},
     precomputed_data,
-    ws::Workspace{Lindbladian},
-    Id::AbstractMatrix{<:Complex};
+    ws::Workspace{Lindbladian};
     coherent_term::Union{Nothing, AbstractMatrix{<:Complex}} = nothing,
     )
 
@@ -60,7 +58,7 @@ function _jump_contribution!(
 
     B = coherent_term
     if B !== nothing
-        _vectorize_liouvillian_coherent!(L_target, B, ws, Id)
+        _vectorize_liouvillian_coherent!(L_target, B, ws)
     end
 
     jump_oft = ws.scratch.jump_tmp
@@ -74,17 +72,17 @@ function _jump_contribution!(
             w = abs(w_raw)
             oft!(jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
             scalar_w = prefactor * transition(w)
-            _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws, Id)
+            _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
             if w > 1e-12
                 scalar_negative_w = prefactor * transition(-w)
-                _vectorize_liouv_diss_and_add!(L_target, jump_oft', scalar_negative_w, ws, Id)
+                _vectorize_liouv_diss_and_add!(L_target, jump_oft', scalar_negative_w, ws)
             end
         end
     else
         for w in energy_labels
             oft!(jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
             scalar_w = prefactor * transition(w)
-            _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws, Id)
+            _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
         end
     end
 
@@ -97,8 +95,7 @@ function _jump_contribution!(
     ham_or_trott::Union{HamHam, TrottTrott},
     config::Config{Lindbladian, D},
     precomputed_data,
-    ws::Workspace{Lindbladian},
-    Id::AbstractMatrix{<:Complex};
+    ws::Workspace{Lindbladian};
     coherent_term::Union{Nothing, AbstractMatrix{<:Complex}} = nothing,
     ) where {D<:Union{TimeDomain, TrotterDomain}}
 
@@ -106,7 +103,7 @@ function _jump_contribution!(
 
     B = coherent_term
     if B !== nothing
-        _vectorize_liouvillian_coherent!(L_target, B, ws, Id)
+        _vectorize_liouvillian_coherent!(L_target, B, ws)
     end
 
     jump_oft = ws.scratch.jump_tmp
@@ -120,10 +117,10 @@ function _jump_contribution!(
             @. jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
 
             scalar_w = prefactor * transition(w)
-            _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws, Id)
+            _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
             if w > 1e-12
                 scalar_negative_w = prefactor * transition(-w)
-                _vectorize_liouv_diss_and_add!(L_target, jump_oft', scalar_negative_w, ws, Id)
+                _vectorize_liouv_diss_and_add!(L_target, jump_oft', scalar_negative_w, ws)
             end
         end
     else
@@ -131,7 +128,7 @@ function _jump_contribution!(
             nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
             @. jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
             scalar_w = prefactor * transition(w)
-            _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws, Id)
+            _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
         end
     end
 

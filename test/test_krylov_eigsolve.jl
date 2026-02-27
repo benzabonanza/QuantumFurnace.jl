@@ -20,7 +20,7 @@ using QuantumFurnace
     @testset "apply_delta_channel! faithful Chen channel" begin
         config_therm = make_thermalize_config(EnergyDomain(); construction=KMS(), delta=0.01)
         config_liouv = make_liouv_config(EnergyDomain(); construction=KMS())
-        ws = KrylovWorkspace(config_therm, TEST_HAM, TEST_JUMPS)
+        ws = Workspace(config_therm, TEST_HAM, TEST_JUMPS)
         delta = config_therm.delta
 
         # Dense Lindbladian for Euler comparison

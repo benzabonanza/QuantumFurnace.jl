@@ -5,7 +5,7 @@
 See: .planning/PROJECT.md (updated 2026-02-25)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v2.0 Restructure -- Phase 35: Workspace and Channel Consolidation IN PROGRESS
+**Current focus:** v2.0 Restructure -- Phase 36: API and Results (next)
 
 ## Current Position
 
@@ -19,7 +19,7 @@ Progress: [######░░░░] ~33% (v2.0, 9/~24 plans)
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 99 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 9)
+- Total plans completed: 100 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 10)
 
 **By Milestone:**
 
@@ -31,7 +31,7 @@ Progress: [######░░░░] ~33% (v2.0, 9/~24 plans)
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
 | v1.5 Krylov Gap Estimation | 27-32 | 12 (+3 quick) | 2026-02-20 to 2026-02-25 |
-| v2.0 Restructure | 33-38 | 8/~24 | 2026-02-25 to ... |
+| v2.0 Restructure | 33-38 | 10/~24 | 2026-02-25 to ... |
 
 ## Accumulated Context
 

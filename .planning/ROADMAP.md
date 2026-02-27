@@ -100,7 +100,7 @@ Full details: [milestones/v1.5-ROADMAP.md](milestones/v1.5-ROADMAP.md)
 
 - [x] **Phase 33: Type Foundation** - Define Config{S,D,C,T} hierarchy with simulation/construction singleton types, hard swap all call sites -- completed 2026-02-25
 - [x] **Phase 34: Code Deduplication** - Extract domain_prefactor(), unified oft!(), consolidated sandwiches, and shared CPTP channel helper replacing copy-pasted patterns -- completed 2026-02-26
-- [ ] **Phase 35: Workspace and Channel Consolidation** - Merge KrylovWorkspace + KrausScratch + LindbladianWorkspace; unify R/K0/U_residual computation paths
+- [x] **Phase 35: Workspace and Channel Consolidation** - Merge KrylovWorkspace + KrausScratch + LindbladianWorkspace; unify R/K0/U_residual computation paths -- completed 2026-02-27
 - [ ] **Phase 36: API and Results** - Define 4 clean run_* entry points with matching Result structs and save capability
 - [ ] **Phase 37: File Organization and Dead Code** - Rename src/ files to PRE/MID/POST grouping, move staging code, remove @distributed, update exports
 - [ ] **Phase 38: Test Cleanup** - Consolidate test helpers, add @info printouts, review dubious thresholds
@@ -151,8 +151,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 35-01-PLAN.md -- Consolidate KrylovWorkspace + KrausScratch + LindbladianWorkspace into Workspace{Krylov/Lindbladian/Thermalize,D,C,T}; eliminate single-jump B functions; remove dead fields
-- [ ] 35-02-PLAN.md -- Consolidate TrajectoryWorkspace + TrajectoryFramework + PerOperatorKraus into Workspace{Trajectory,D,C,T}; flatten per-operator Kraus data
+- [x] 35-01-PLAN.md -- Consolidate KrylovWorkspace + KrausScratch + LindbladianWorkspace into Workspace{Krylov/Lindbladian/Thermalize,D,C,T}; eliminate single-jump B functions; remove dead fields
+- [x] 35-02-PLAN.md -- Consolidate TrajectoryWorkspace + TrajectoryFramework + PerOperatorKraus into Workspace{Trajectory,D,C,T}; flatten per-operator Kraus data
 
 ### Phase 36: API and Results
 **Goal**: Four clean public entry points (`run_lindblad`, `run_thermalize`, `run_krylov_spectrum`, `run_trajectory`) each return a typed Result struct with optional BSON save capability
@@ -241,7 +241,7 @@ Phases execute in numeric order: 33 -> 34 -> 35 -> 36 -> 37 -> 38
 | 32. Krylov Simulator Speedup | v1.5 | 2/2 | Complete | 2026-02-25 |
 | 33. Type Foundation | v2.0 | 4/4 | Complete | 2026-02-25 |
 | 34. Code Deduplication | v2.0 | 2/2 | Complete | 2026-02-26 |
-| 35. Workspace and Channel Consolidation | v2.0 | 0/TBD | Not started | - |
+| 35. Workspace and Channel Consolidation | v2.0 | 2/2 | Complete | 2026-02-27 |
 | 36. API and Results | v2.0 | 0/TBD | Not started | - |
 | 37. File Organization and Dead Code | v2.0 | 0/TBD | Not started | - |
 | 38. Test Cleanup | v2.0 | 0/TBD | Not started | - |

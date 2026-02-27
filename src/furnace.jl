@@ -61,7 +61,8 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::Config{Lindbladian
 
     # Build Workspace{Lindbladian} with LiouvillianScratch
     sc = LiouvillianScratch(CT, dim)
-    ws = Workspace{Lindbladian, typeof(config.domain), typeof(config.construction), T, typeof(sc)}(
+    Id = Matrix{CT}(I, dim, dim)
+    ws = Workspace{Lindbladian, typeof(config.domain), typeof(config.construction), T}(
         nothing, nothing, nothing, nothing,  # physics data
         nothing, nothing, nothing, nothing,  # G fields
         nothing, nothing, nothing, nothing, nothing,  # channel fields
@@ -69,16 +70,14 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::Config{Lindbladian
         nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # domain-specific (oft_nufft_prefactors, bohr_alpha, bohr_keys, bohr_is, bohr_js, b_minus, b_plus)
         nothing,  # coherent_unitaries
         nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # trajectory fields
+        Id,       # Id
         sc,       # scratch
     )
-
-    # Compute identity inline (not stored on workspace)
-    Id = Matrix{CT}(I, dim, dim)
 
     # Precompute all B's for the A's if for KMS DB and with_coherent.
     Btot = _precompute_coherent_B(jumps, ham_or_trott, config, precomputed_data)
     if Btot !== nothing
-        _vectorize_liouvillian_coherent!(total_lindbladian, Btot, ws, Id)
+        _vectorize_liouvillian_coherent!(total_lindbladian, Btot, ws)
     end
 
     # Jumps arrive in the correct basis (trotter.eigvecs for TrotterDomain,
@@ -86,7 +85,7 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::Config{Lindbladian
 
     # Accumulate Liouvillian in-place (no per-jump dim^2 x dim^2 allocations).
     for (k, jump) in pairs(jumps)
-        _jump_contribution!(total_lindbladian, jump, ham_or_trott, config, precomputed_data, ws, Id;
+        _jump_contribution!(total_lindbladian, jump, ham_or_trott, config, precomputed_data, ws;
             coherent_term=nothing)
     end
 

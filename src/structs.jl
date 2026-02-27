@@ -12,7 +12,6 @@ struct Lindbladian    <: AbstractSimulation end
 struct Thermalize     <: AbstractSimulation end
 struct KrylovSpectrum <: AbstractSimulation end
 struct Trajectory     <: AbstractSimulation end
-struct Krylov         <: AbstractSimulation end
 
 # Construction types (detailed balance)
 abstract type AbstractConstruction end
@@ -345,24 +344,24 @@ function TrajectoryScratch(::Type{CT}, dim::Int) where {CT<:Complex}
 end
 
 """
-    Workspace{S, D, C, T, SC}
+    Workspace{S, D, C, T}
 
-Unified parametric workspace for all simulation paths (Krylov, Lindbladian,
+Unified parametric workspace for all simulation paths (KrylovSpectrum, Lindbladian,
 Thermalize, Trajectory).
 
 Type parameters:
-- `S <: AbstractSimulation`: simulation kind (Krylov, Lindbladian, Thermalize, Trajectory)
+- `S <: AbstractSimulation`: simulation kind (KrylovSpectrum, Lindbladian, Thermalize, Trajectory)
 - `D <: AbstractDomain`: domain (BohrDomain, EnergyDomain, TimeDomain, TrotterDomain)
 - `C <: AbstractConstruction`: detailed-balance construction (KMS, GNS, DLL)
 - `T <: AbstractFloat`: numeric precision
-- `SC`: concrete scratch type (LiouvillianScratch, ThermalizeScratch, KrylovScratch, TrajectoryScratch)
-        Ensures type-stable access to `scratch` field on the hot path.
 
-The 5th type parameter `SC` is inferred automatically from the constructor and never
-needs to be written by callers. Dispatch signatures use partial parameterization:
-`ws::Workspace{Krylov}`, `ws::Workspace{Lindbladian}`, `ws::Workspace{Trajectory}`, etc.
+Dispatch signatures use partial parameterization:
+`ws::Workspace{KrylovSpectrum}`, `ws::Workspace{Lindbladian}`, `ws::Workspace{Trajectory}`, etc.
+
+Scratch sub-structs are accessed via type assertions at function entry points
+(e.g. `sc = ws.scratch::KrylovScratch{T}`) for type-stable hot-path access.
 """
-struct Workspace{S<:AbstractSimulation, D<:AbstractDomain, C<:AbstractConstruction, T<:AbstractFloat, SC}
+struct Workspace{S<:AbstractSimulation, D<:AbstractDomain, C<:AbstractConstruction, T<:AbstractFloat}
     # Physics data (Krylov/Thermalize)
     jump_eigenbases::Union{Nothing, Vector{Matrix{Complex{T}}}}
     jump_hermitian::Union{Nothing, Vector{Bool}}
@@ -408,6 +407,9 @@ struct Workspace{S<:AbstractSimulation, D<:AbstractDomain, C<:AbstractConstructi
     U_residuals::Union{Nothing, Vector{Matrix{Complex{T}}}}  # per-jump U_residual^a
     U_Bs::Union{Nothing, Vector{Union{Nothing, Matrix{Complex{T}}}}}  # per-jump coherent unitary
 
-    # Scratch buffers (nested, simulation-path-specific -- concrete-typed via SC parameter)
-    scratch::SC
+    # Identity matrix (Lindbladian construction path)
+    Id::Union{Nothing, Matrix{Complex{T}}}
+
+    # Scratch buffers (nested, simulation-path-specific)
+    scratch
 end

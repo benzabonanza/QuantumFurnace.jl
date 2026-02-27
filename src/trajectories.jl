@@ -53,7 +53,7 @@ Build a `Workspace{Trajectory,D,C,T}` from config, hamiltonian, and jumps.
 
 This is a factory function (NOT a Workspace constructor) to avoid dispatch conflict
 with `Workspace(config::Config{Thermalize}, ...)` in krylov_workspace.jl which returns
-`Workspace{Krylov,...}`.
+`Workspace{KrylovSpectrum,...}`.
 
 Consolidates the old `build_trajectoryframework` + `TrajectoryFramework` + `PerOperatorKraus`
 into a single Workspace with flattened per-operator Kraus data and nested TrajectoryScratch.
@@ -137,7 +137,7 @@ function _build_trajectory_workspace(
     # Build TrajectoryScratch
     sc = TrajectoryScratch(CT, dim)
 
-    return Workspace{Trajectory, D, C, T, typeof(sc)}(
+    return Workspace{Trajectory, D, C, T}(
         nothing, nothing, jumps_for_diss, nothing,  # physics data (jumps stored here)
         nothing, nothing, nothing, nothing,  # G fields
         nothing, nothing, nothing, Float64(alpha), Float64(delta),  # channel: K0/U_residual/U_coherent=nothing, alpha, delta
@@ -146,6 +146,7 @@ function _build_trajectory_workspace(
         nothing,  # coherent_unitaries
         ham_or_trott, n_jumps, Float64(scaled_prefactor), Float64(config.sigma),  # trajectory fields
         Rs, K0s, U_residuals, per_op_U_B,  # per-operator Kraus vectors
+        nothing,  # Id
         sc,  # scratch
     )
 end
@@ -157,12 +158,12 @@ Create a copy of the trajectory workspace for use in a separate thread.
 Shares all immutable data (Rs, K0s, U_residuals, U_Bs, jumps, etc.) but
 allocates a fresh TrajectoryScratch to avoid shared mutable state.
 """
-function _copy_workspace_for_thread(ws::Workspace{Trajectory,D,C,T,SC}) where {D,C,T,SC}
+function _copy_workspace_for_thread(ws::Workspace{Trajectory,D,C,T}) where {D,C,T}
     CT = Complex{T}
     dim = size(ws.Rs[1], 1)
     fresh_scratch = TrajectoryScratch(CT, dim)
 
-    return Workspace{Trajectory, D, C, T, typeof(fresh_scratch)}(
+    return Workspace{Trajectory, D, C, T}(
         ws.jump_eigenbases, ws.jump_hermitian, ws.jumps, ws.B_total,
         ws.G_left, ws.G_right, ws.G_left_adj, ws.G_right_adj,
         ws.K0, ws.U_residual, ws.U_coherent, ws.alpha, ws.delta,
@@ -171,6 +172,7 @@ function _copy_workspace_for_thread(ws::Workspace{Trajectory,D,C,T,SC}) where {D
         ws.coherent_unitaries,
         ws.ham_or_trott, ws.n_jumps, ws.scaled_prefactor, ws.sigma,
         ws.Rs, ws.K0s, ws.U_residuals, ws.U_Bs,
+        ws.Id,
         fresh_scratch,
     )
 end
@@ -813,6 +815,8 @@ function step_along_trajectory!(
     rng::AbstractRNG,
     ) where {D<:Union{TimeDomain,TrotterDomain},C,T}
 
+    sc = ws.scratch::TrajectoryScratch{Complex{T}}
+
     # All hot-path data lives in concrete-typed fields of ws (no abstract access)
     delta = ws.delta
     scaled_prefactor = ws.scaled_prefactor
@@ -832,24 +836,24 @@ function step_along_trajectory!(
     # Apply per-operator coherent unitary FIRST (matches DM code ordering)
     # ------------------------------------------------------------------
     if U_B_a !== nothing
-        mul!(ws.scratch.psi_tmp, U_B_a, psi)
-        copyto!(psi, ws.scratch.psi_tmp)
+        mul!(sc.psi_tmp, U_B_a, psi)
+        copyto!(psi, sc.psi_tmp)
         rmul!(psi, 1.0 / sqrt(max(_norm2(psi), eps(Float64))))
     end
 
     # ------------------------------------------------------------------
     # Compute probabilities from per-operator R_a, K0_a, U_residual_a
     # ------------------------------------------------------------------
-    mul!(ws.scratch.Rpsi, R_a, psi)                    # R_a * psi
-    expR = max(real(dot(psi, ws.scratch.Rpsi)), 0.0)   # <psi|R_a|psi>
+    mul!(sc.Rpsi, R_a, psi)                    # R_a * psi
+    expR = max(real(dot(psi, sc.Rpsi)), 0.0)   # <psi|R_a|psi>
 
-    mul!(ws.scratch.psi_tmp, K0_a, psi)                # K0_a * psi
-    p_nojump = _norm2(ws.scratch.psi_tmp)
+    mul!(sc.psi_tmp, K0_a, psi)                # K0_a * psi
+    p_nojump = _norm2(sc.psi_tmp)
 
     p_jump_total = delta * expR                         # bare delta (R_a already scaled by n_jumps)
 
-    mul!(ws.scratch.Rpsi, U_res_a, psi)                # U_res_a * psi (reuse buffer)
-    p_res = _norm2(ws.scratch.Rpsi)
+    mul!(sc.Rpsi, U_res_a, psi)                # U_res_a * psi (reuse buffer)
+    p_res = _norm2(sc.Rpsi)
 
     total_weight = p_nojump + p_res + p_jump_total
     total_weight = max(total_weight, 0.0)
@@ -864,11 +868,11 @@ function step_along_trajectory!(
     # Branch: no-jump / residual / dissipative jump (for selected operator a only)
     # ------------------------------------------------------------------
     if r < p_nojump
-        copyto!(psi, ws.scratch.psi_tmp)
+        copyto!(psi, sc.psi_tmp)
         rmul!(psi, 1.0 / sqrt(max(p_nojump, eps(Float64))))
 
     elseif r < (p_nojump + p_res)
-        copyto!(psi, ws.scratch.Rpsi)
+        copyto!(psi, sc.Rpsi)
         rmul!(psi, 1.0 / sqrt(max(p_res, eps(Float64))))
 
     else
@@ -884,16 +888,16 @@ function step_along_trajectory!(
                 w = abs(w_raw)
 
                 pref = _prefactor_view(oft_prefactors, w)
-                @. ws.scratch.jump_oft = jump.in_eigenbasis * pref
+                @. sc.jump_oft = jump.in_eigenbasis * pref
 
                 # Positive-frequency
-                mul!(ws.scratch.Rpsi, ws.scratch.jump_oft, psi)
-                n2 = _norm2(ws.scratch.Rpsi)
+                mul!(sc.Rpsi, sc.jump_oft, psi)
+                n2 = _norm2(sc.Rpsi)
                 last_norm2 = n2
                 p = delta * (scaled_prefactor * transition(w)) * n2
                 csum += p
                 if csum >= target
-                    copyto!(psi, ws.scratch.Rpsi)
+                    copyto!(psi, sc.Rpsi)
                     rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
                     chosen = true
                     break
@@ -901,13 +905,13 @@ function step_along_trajectory!(
 
                 # Negative-frequency partner
                 if w > 1e-12
-                    mul!(ws.scratch.Rpsi, ws.scratch.jump_oft', psi)
-                    n2 = _norm2(ws.scratch.Rpsi)
+                    mul!(sc.Rpsi, sc.jump_oft', psi)
+                    n2 = _norm2(sc.Rpsi)
                     last_norm2 = n2
                     p = delta * (scaled_prefactor * transition(-w)) * n2
                     csum += p
                     if csum >= target
-                        copyto!(psi, ws.scratch.Rpsi)
+                        copyto!(psi, sc.Rpsi)
                         rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
                         chosen = true
                         break
@@ -917,15 +921,15 @@ function step_along_trajectory!(
         else
             for w in energy_labels
                 pref = _prefactor_view(oft_prefactors, w)
-                @. ws.scratch.jump_oft = jump.in_eigenbasis * pref
+                @. sc.jump_oft = jump.in_eigenbasis * pref
 
-                mul!(ws.scratch.Rpsi, ws.scratch.jump_oft, psi)
-                n2 = _norm2(ws.scratch.Rpsi)
+                mul!(sc.Rpsi, sc.jump_oft, psi)
+                n2 = _norm2(sc.Rpsi)
                 last_norm2 = n2
                 p = delta * (scaled_prefactor * transition(w)) * n2
                 csum += p
                 if csum >= target
-                    copyto!(psi, ws.scratch.Rpsi)
+                    copyto!(psi, sc.Rpsi)
                     rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
                     chosen = true
                     break
@@ -934,7 +938,7 @@ function step_along_trajectory!(
         end
 
         if !chosen
-            copyto!(psi, ws.scratch.Rpsi)
+            copyto!(psi, sc.Rpsi)
             rmul!(psi, 1.0 / sqrt(max(last_norm2, eps(Float64))))
         end
     end
@@ -952,6 +956,8 @@ function step_along_trajectory!(
     ws::Workspace{Trajectory,EnergyDomain,C,T},
     rng::AbstractRNG,
     ) where {C,T}
+
+    sc = ws.scratch::TrajectoryScratch{Complex{T}}
 
     # All hot-path data lives in concrete-typed fields of ws (no abstract access)
     delta = ws.delta
@@ -972,24 +978,24 @@ function step_along_trajectory!(
     # Apply per-operator coherent unitary FIRST
     # ------------------------------------------------------------------
     if U_B_a !== nothing
-        mul!(ws.scratch.psi_tmp, U_B_a, psi)
-        copyto!(psi, ws.scratch.psi_tmp)
+        mul!(sc.psi_tmp, U_B_a, psi)
+        copyto!(psi, sc.psi_tmp)
         rmul!(psi, 1.0 / sqrt(max(_norm2(psi), eps(Float64))))
     end
 
     # ------------------------------------------------------------------
     # Compute probabilities from per-operator Kraus data
     # ------------------------------------------------------------------
-    mul!(ws.scratch.Rpsi, R_a, psi)
-    expR = max(real(dot(psi, ws.scratch.Rpsi)), 0.0)
+    mul!(sc.Rpsi, R_a, psi)
+    expR = max(real(dot(psi, sc.Rpsi)), 0.0)
 
-    mul!(ws.scratch.psi_tmp, K0_a, psi)
-    p_nojump = _norm2(ws.scratch.psi_tmp)
+    mul!(sc.psi_tmp, K0_a, psi)
+    p_nojump = _norm2(sc.psi_tmp)
 
     p_jump_total = delta * expR                         # bare delta (R_a already scaled by n_jumps)
 
-    mul!(ws.scratch.Rpsi, U_res_a, psi)
-    p_res = _norm2(ws.scratch.Rpsi)
+    mul!(sc.Rpsi, U_res_a, psi)
+    p_res = _norm2(sc.Rpsi)
 
     total_weight = p_nojump + p_res + p_jump_total
     total_weight = max(total_weight, 0.0)
@@ -1004,11 +1010,11 @@ function step_along_trajectory!(
     # Branch: no-jump / residual / dissipative jump (for selected operator a only)
     # ------------------------------------------------------------------
     if r < p_nojump
-        copyto!(psi, ws.scratch.psi_tmp)
+        copyto!(psi, sc.psi_tmp)
         rmul!(psi, 1.0 / sqrt(max(p_nojump, eps(Float64))))
 
     elseif r < (p_nojump + p_res)
-        copyto!(psi, ws.scratch.Rpsi)
+        copyto!(psi, sc.Rpsi)
         rmul!(psi, 1.0 / sqrt(max(p_res, eps(Float64))))
 
     else
@@ -1026,28 +1032,28 @@ function step_along_trajectory!(
                 w_raw > 1e-12 && continue
                 w = abs(w_raw)
 
-                oft!(ws.scratch.jump_oft, jump.in_eigenbasis, ham.bohr_freqs, w, inv_4sigma2)
+                oft!(sc.jump_oft, jump.in_eigenbasis, ham.bohr_freqs, w, inv_4sigma2)
 
-                mul!(ws.scratch.Rpsi, ws.scratch.jump_oft, psi)
-                n2 = _norm2(ws.scratch.Rpsi)
+                mul!(sc.Rpsi, sc.jump_oft, psi)
+                n2 = _norm2(sc.Rpsi)
                 last_norm2 = n2
                 p = delta * (scaled_prefactor * transition(w)) * n2
                 csum += p
                 if csum >= target
-                    copyto!(psi, ws.scratch.Rpsi)
+                    copyto!(psi, sc.Rpsi)
                     rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
                     chosen = true
                     break
                 end
 
                 if w > 1e-12
-                    mul!(ws.scratch.Rpsi, ws.scratch.jump_oft', psi)
-                    n2 = _norm2(ws.scratch.Rpsi)
+                    mul!(sc.Rpsi, sc.jump_oft', psi)
+                    n2 = _norm2(sc.Rpsi)
                     last_norm2 = n2
                     p = delta * (scaled_prefactor * transition(-w)) * n2
                     csum += p
                     if csum >= target
-                        copyto!(psi, ws.scratch.Rpsi)
+                        copyto!(psi, sc.Rpsi)
                         rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
                         chosen = true
                         break
@@ -1056,15 +1062,15 @@ function step_along_trajectory!(
             end
         else
             for w in energy_labels
-                oft!(ws.scratch.jump_oft, jump.in_eigenbasis, ham.bohr_freqs, w, inv_4sigma2)
+                oft!(sc.jump_oft, jump.in_eigenbasis, ham.bohr_freqs, w, inv_4sigma2)
 
-                mul!(ws.scratch.Rpsi, ws.scratch.jump_oft, psi)
-                n2 = _norm2(ws.scratch.Rpsi)
+                mul!(sc.Rpsi, sc.jump_oft, psi)
+                n2 = _norm2(sc.Rpsi)
                 last_norm2 = n2
                 p = delta * (scaled_prefactor * transition(w)) * n2
                 csum += p
                 if csum >= target
-                    copyto!(psi, ws.scratch.Rpsi)
+                    copyto!(psi, sc.Rpsi)
                     rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
                     chosen = true
                     break
@@ -1073,7 +1079,7 @@ function step_along_trajectory!(
         end
 
         if !chosen
-            copyto!(psi, ws.scratch.Rpsi)
+            copyto!(psi, sc.Rpsi)
             rmul!(psi, 1.0 / sqrt(max(last_norm2, eps(Float64))))
         end
     end

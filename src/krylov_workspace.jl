@@ -1,10 +1,10 @@
 """
     Workspace(config::Config{Lindbladian}, hamiltonian, jumps; trotter=nothing)
 
-Construct a `Workspace{Krylov}` pre-allocating all scratch matrices for the given
+Construct a `Workspace{KrylovSpectrum}` pre-allocating all scratch matrices for the given
 (config, hamiltonian) pair. Mirrors `construct_lindbladian` setup in `furnace.jl`.
 
-Returns `Workspace{Krylov,D,C,T,KrylovScratch{Complex{T}}}`.
+Returns `Workspace{KrylovSpectrum,D,C,T}`.
 """
 function Workspace(
     config::Config{Lindbladian},
@@ -72,7 +72,7 @@ function Workspace(
     D = typeof(config.domain)
     C = typeof(config.construction)
 
-    return Workspace{Krylov, D, C, T, typeof(sc)}(
+    return Workspace{KrylovSpectrum, D, C, T}(
         jump_eigenbases, jump_hermitian, jumps, B_total,
         G_left, G_right, G_left_adj, G_right_adj,
         nothing, nothing, nothing, nothing, nothing,  # channel fields
@@ -80,6 +80,7 @@ function Workspace(
         pd_alpha, pd_bkeys, pd_bis, pd_bjs, pd_bminus, pd_bplus,
         nothing,  # coherent_unitaries
         nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # trajectory fields
+        nothing,  # Id
         sc,
     )
 end
@@ -221,10 +222,10 @@ end
 """
     Workspace(config::Config{Thermalize}, hamiltonian, jumps; trotter=nothing)
 
-Construct a `Workspace{Krylov}` with precomputed CPTP channel matrices for
+Construct a `Workspace{KrylovSpectrum}` with precomputed CPTP channel matrices for
 the faithful Chen channel (Eq. 3.2).
 
-Returns `Workspace{Krylov,D,C,T,KrylovScratch{Complex{T}}}`.
+Returns `Workspace{KrylovSpectrum,D,C,T}`.
 """
 function Workspace(
     config::Config{Thermalize},
@@ -306,7 +307,7 @@ function Workspace(
     D = typeof(config.domain)
     C = typeof(config.construction)
 
-    return Workspace{Krylov, D, C, T, typeof(sc)}(
+    return Workspace{KrylovSpectrum, D, C, T}(
         jump_eigenbases, jump_hermitian, jumps, B_total,
         G_left, G_right, G_left_adj, G_right_adj,
         channel.K0, channel.U_residual, U_coherent, nothing, Float64(delta),
@@ -314,9 +315,7 @@ function Workspace(
         pd_alpha, pd_bkeys, pd_bis, pd_bjs, pd_bminus, pd_bplus,
         nothing,  # coherent_unitaries
         nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # trajectory fields
+        nothing,  # Id
         sc,
     )
 end
-
-# Backward-compatible alias
-const KrylovWorkspace = Workspace

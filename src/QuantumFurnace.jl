@@ -27,7 +27,7 @@ using Dates
 
 # Types: Simulation
 export Config,
-       AbstractSimulation, Lindbladian, Thermalize, KrylovSpectrum, Trajectory, Krylov,
+       AbstractSimulation, Lindbladian, Thermalize, KrylovSpectrum, Trajectory,
        AbstractConstruction, KMS, GNS, DLL,
        with_coherent,
        HamHam, TrottTrott,
@@ -70,7 +70,7 @@ export run_lindbladian, run_thermalization, construct_lindbladian,
        run_trajectories
 
 # Krylov matvec (Phase 27)
-export KrylovWorkspace, apply_lindbladian!, apply_adjoint_lindbladian!
+export apply_lindbladian!, apply_adjoint_lindbladian!
 
 # Krylov eigsolve (Phase 29)
 export KrylovGapResult, krylov_spectral_gap, apply_delta_channel!
