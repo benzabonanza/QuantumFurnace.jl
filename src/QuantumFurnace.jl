@@ -51,6 +51,7 @@ export ExperimentResult, save_experiment, load_experiment
 
 # New typed Results (Phase 36)
 export AbstractResults, LindbladResults, ThermalizeResults, KrylovSpectrumResults, TrajectoryResults
+export save_result, load_result
 
 # Convergence tracking
 export ConvergenceData, run_trajectories_convergence, run_trajectories_adaptive, build_preset_trajectory_observables

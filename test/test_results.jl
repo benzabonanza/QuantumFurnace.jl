@@ -329,8 +329,8 @@ using BSON
             @test loaded.config.domain isa TrotterDomain
             @test loaded.config.num_qubits == 3
 
-            # Metadata has auto-captured fields
-            @test haskey(loaded.metadata, :julia_version)
+            # Metadata has auto-captured fields (julia_version removed per Phase 36 decision)
+            @test !haskey(loaded.metadata, :julia_version)
             @test haskey(loaded.metadata, :timestamp)
             @test haskey(loaded.metadata, :git_hash)
 
@@ -346,13 +346,13 @@ using BSON
     @testset "Metadata auto-capture" begin
         meta = QuantumFurnace._capture_metadata(n_threads=2, wall_time_seconds=3.14)
 
-        @test haskey(meta, :julia_version)
+        # julia_version removed per Phase 36 locked decision
+        @test !haskey(meta, :julia_version)
         @test haskey(meta, :timestamp)
         @test haskey(meta, :git_hash)
         @test haskey(meta, :n_threads)
         @test haskey(meta, :wall_time_seconds)
 
-        @test meta[:julia_version] == string(VERSION)
         @test meta[:n_threads] == 2
         @test meta[:wall_time_seconds] == 3.14
         @test meta[:git_hash] isa String
