@@ -435,7 +435,7 @@ approximation: `lambda_L = (mu - 1) / delta`. Since mu = exp(delta * lambda_L) +
 the conversion introduces O(delta) error. The steady state has mu ~ 1 (largest magnitude),
 and the gap is recovered from the second eigenvalue after conversion.
 
-The channel is CPTP and O(delta^2) accurate, matching what `run_thermalization`
+The channel is CPTP and O(delta^2) accurate, matching what `run_thermalize`
 actually implements via `_finalize_kraus_step!`.
 
 # Arguments

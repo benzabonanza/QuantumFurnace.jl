@@ -93,7 +93,7 @@ end
     _gibbs_in_trotter_basis(hamiltonian::HamHam, trotter::TrottTrott) -> Hermitian
 
 Compute the Gibbs state in the Trotter eigenbasis.
-Follows the same transform as furnace.jl run_thermalization (line 116-118).
+Follows the same Trotter basis transform as run_thermalize.
 """
 function _gibbs_in_trotter_basis(hamiltonian::HamHam, trotter::TrottTrott)
     return Hermitian(trotter.eigvecs' * hamiltonian.eigvecs * hamiltonian.gibbs *

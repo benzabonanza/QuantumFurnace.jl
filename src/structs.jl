@@ -123,46 +123,6 @@ struct JumpOp{T <: AbstractMatrix{<:Complex}}
 end
 
 """
-        DMSimulationResult{T}
-
-    Results from the step-by-step quantum algorithm emulation on thermalization.
-
-    Slimmed version of the former HotAlgorithmResults: carries only the simulation
-    output, not the hamiltonian/trotter/config (callers already have those at the call site).
-
-    # Fields
-    - `final_dm`: The final density matrix after evolution.
-    - `trace_distances`: Trace distances to the target Gibbs state at each time step.
-    - `time_steps`: Vector of time points where data was recorded.
-"""
-@kwdef struct DMSimulationResult{T<:AbstractFloat}
-    final_dm::Matrix{Complex{T}}
-    trace_distances::Vector{T}
-    time_steps::Vector{T}
-end
-
-"""
-        LindbladianResult{T}
-
-    Results from the spectral analysis of the Liouvillian.
-
-    Slimmed version of the former HotSpectralResults: carries only the spectral
-    output, not the hamiltonian/trotter/config (callers already have those at the call site).
-
-    # Fields
-    - `liouvillian`: The Liouvillian matrix.
-    - `fixed_point`: The steady state found via spectral analysis.
-    - `gap_mode`: The next eigenmode after the steady state.
-    - `spectral_gap`: The first non-zero eigenvalue (gap).
-"""
-@kwdef struct LindbladianResult{T<:AbstractFloat}
-    liouvillian::Matrix{Complex{T}}
-    fixed_point::Matrix{Complex{T}}
-    gap_mode::Matrix{Complex{T}}
-    spectral_gap::Complex{T}
-end
-
-"""
     ConvergenceData
 
 Stores convergence metrics at batch checkpoints during trajectory sampling.
@@ -285,38 +245,6 @@ struct TrajectoryResults{T<:AbstractFloat} <: AbstractResults
     metadata::Dict{Symbol, Any}
 end
 
-struct LSIFramework{T}
-    dim::Int
-
-    A::Matrix{T}            # Parameter matrix
-    AdagA::Matrix{T}            # B = A'A
-    Gamma2_AdagA::Matrix{T}  # Γ_2(A'A) = sig^1/4 A'A sig^1/4
-    gradient::Matrix{T}     # Gradient accumulator
-
-    temp1::Matrix{T}
-    temp2::Matrix{T}
-    temp3::Matrix{T}
-
-    sigma_quarter::Matrix{T}   # Sigma^1/4
-    sigma_half::Matrix{T}      # Sigma^1/2
-    sigma_log::Matrix{T}       # log(Sigma)
-
-    AdagA_vec::Vector{T}    # vec(A'A)
-    L_AdagA_vec::Vector{T}  # vec(L(A'A))
-end
-
-function LSIFramework(dim::Int)
-    T = ComplexF64
-    dim2 = dim^2
-    return LSIFramework{T}(
-        dim,
-        Matrix{T}(undef, dim, dim), Matrix{T}(undef, dim, dim), Matrix{T}(undef, dim, dim), Matrix{T}(undef, dim, dim),
-        Matrix{T}(undef, dim, dim), Matrix{T}(undef, dim, dim), Matrix{T}(undef, dim, dim),
-        Matrix{T}(undef, dim, dim), Matrix{T}(undef, dim, dim), Matrix{T}(undef, dim, dim),
-        Vector{T}(undef, dim2), Vector{T}(undef, dim2)
-    )
-end
-
 # Became obsolete with NUFFTCaches. But used for debugging.
 struct OFTCaches{T<:AbstractFloat}
     prefactors::Vector{Complex{T}}
@@ -357,7 +285,7 @@ end
 """
     ThermalizeScratch{T<:Complex}
 
-Scratch buffers for DM Kraus evolution (`run_thermalization`).
+Scratch buffers for DM Kraus evolution (`run_thermalize`).
 Replaces the old `KrausScratch` with physics-descriptive names and dead K0 removed.
 """
 struct ThermalizeScratch{T<:Complex}
