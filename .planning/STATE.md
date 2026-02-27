@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-25)
 ## Current Position
 
 Phase: 36 of 38 (API and Results)
-Plan: 2/4 complete
-Status: Completed 36-02: Entry points (run_lindblad, run_thermalize, run_krylov_spectrum)
-Last activity: 2026-02-27 - Completed 36-02: Three new entry points with uniform signature and typed Results
+Plan: 3/4 complete
+Status: Completed 36-03: Unified run_trajectory entry point
+Last activity: 2026-02-27 - Completed 36-03: Unified run_trajectory with keyword-driven dispatch across 4 modes
 
-Progress: [######░░░░] ~38% (v2.0, 11/~24 plans)
+Progress: [######░░░░] ~39% (v2.0, 12/~24 plans)
 
 ## Performance Metrics
 
@@ -100,5 +100,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-27
-Stopped at: Completed 36-02-PLAN.md (Entry points). Ready for 36-03 (run_trajectory entry point).
+Stopped at: Completed 36-03-PLAN.md (Unified run_trajectory). Ready for 36-04 (run_krylov_spectrum entry point).
 Resume file: None
