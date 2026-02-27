@@ -102,7 +102,7 @@ Full details: [milestones/v1.5-ROADMAP.md](milestones/v1.5-ROADMAP.md)
 - [x] **Phase 34: Code Deduplication** - Extract domain_prefactor(), unified oft!(), consolidated sandwiches, and shared CPTP channel helper replacing copy-pasted patterns -- completed 2026-02-26
 - [x] **Phase 35: Workspace and Channel Consolidation** - Merge KrylovWorkspace + KrausScratch + LindbladianWorkspace; unify R/K0/U_residual computation paths -- completed 2026-02-27
 - [x] **Phase 36: API and Results** - Define 4 clean run_* entry points with matching Result structs and save capability -- completed 2026-02-27
-- [ ] **Phase 37: File Organization and Dead Code** - Rename src/ files to PRE/MID/POST grouping, move staging code, remove @distributed, update exports
+- [ ] **Phase 37: File Organization and Dead Code** - Remove dead code, move staging files, reorganize exports, create Krylov simulation script
 - [ ] **Phase 38: Test Cleanup** - Consolidate test helpers, add @info printouts, review dubious thresholds
 
 ## Phase Details
@@ -181,11 +181,11 @@ Plans:
   3. `@distributed` dead code and `using Distributed` import are removed from furnace.jl; SharedArrays import stays
   4. Diagnostics remains as a separate analysis module, not folded into the Lindblad simulation path
   5. Module export list is reorganized by simulation type (Lindblad, Thermalize, Krylov, Trajectory) with clean groupings
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 37-01: TBD
-- [ ] 37-02: TBD
+- [ ] 37-01-PLAN.md -- Dead code removal, staging file moves, placeholder deletion, Project.toml cleanup
+- [ ] 37-02-PLAN.md -- Module export reorganization, runtests.jl update, main_krylov.jl simulation script
 
 ### Phase 38: Test Cleanup
 **Goal**: Test infrastructure is consolidated with parametrized helpers, informative output, and validated thresholds so that tests are maintainable and trustworthy
