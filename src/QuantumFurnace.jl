@@ -73,6 +73,9 @@ export EigenDecompositionResult, FixedPointResult, DefectResult, OverlapResult,
 export run_lindbladian, run_thermalization, construct_lindbladian,
        run_trajectories
 
+# New entry points (Phase 36)
+export run_lindblad, run_thermalize
+
 # Krylov matvec (Phase 27)
 export apply_lindbladian!, apply_adjoint_lindbladian!
 

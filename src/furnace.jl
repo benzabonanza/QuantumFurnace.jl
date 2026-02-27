@@ -167,3 +167,182 @@ function run_thermalization(
         time_steps = time_steps,
     )
 end
+
+# ============================================================================
+# New public entry points (Phase 36)
+# ============================================================================
+
+"""
+    run_lindblad(jumps, config, hamiltonian, trotter=nothing) -> LindbladResults
+
+Dense Liouvillian spectral analysis via Arpack shift-invert.
+
+Constructs the full Lindbladian superoperator, finds the two eigenvalues nearest zero
+(steady state and gap mode), and returns spectral data in a `LindbladResults` struct.
+
+# Arguments
+- `jumps::Vector{JumpOp}`: Jump operators
+- `config::Config{Lindbladian}`: Lindbladian configuration
+- `hamiltonian::HamHam`: Hamiltonian with eigenbasis data
+- `trotter::Union{TrottTrott, Nothing}=nothing`: Trotter object (required for TrotterDomain)
+
+# Returns
+`LindbladResults` with eigenvalues, fixed point, gap mode, spectral gap, and metadata.
+"""
+function run_lindblad(
+    jumps::Vector{JumpOp},
+    config::Config{Lindbladian,D,C,Tc},
+    hamiltonian::HamHam{Th},
+    trotter::Union{TrottTrott, Nothing}=nothing,
+) where {D, C, Tc<:AbstractFloat, Th<:AbstractFloat}
+
+    if Tc !== Th
+        error("Type mismatch: HamHam uses $Th but config uses $Tc. All structs must share the same precision.")
+    end
+
+    t_start = time()
+
+    validate_config!(config)
+    _print_press(config)
+
+    liouv = construct_lindbladian(jumps, config, hamiltonian, trotter=trotter)
+    @printf("Done.\n")
+
+    # Arpack eigs (same logic as existing run_lindbladian)
+    shift = 1e-9 * (1 + 1im)
+    eigvals_near_zero, eigvecs_near_zero = eigs(liouv, nev=2, sigma=shift, tol=1e-12)
+    sorted_permutation_eigen = sortperm(abs.(real.(eigvals_near_zero)))
+
+    ss_index = sorted_permutation_eigen[1]
+    gap_index = sorted_permutation_eigen[2]
+    spectral_gap = eigvals_near_zero[gap_index]
+
+    steady_state_vec = eigvecs_near_zero[:, ss_index]
+    steady_state_dm = reshape(steady_state_vec, size(hamiltonian.data))
+    hermitianize!(steady_state_dm)
+    steady_state_dm ./= tr(steady_state_dm)
+
+    gap_vec = eigvecs_near_zero[:, gap_index]
+    gap_mode_op = reshape(gap_vec, size(hamiltonian.data))
+
+    wall_time = time() - t_start
+    metadata = _capture_metadata(wall_time_seconds=wall_time)
+
+    return LindbladResults{Tc}(
+        config,
+        Complex{Tc}.(eigvals_near_zero[sorted_permutation_eigen]),
+        Complex{Tc}.(steady_state_dm),
+        Complex{Tc}.(gap_mode_op),
+        Complex{Tc}(spectral_gap),
+        metadata,
+    )
+end
+
+"""
+    run_thermalize(jumps, config, hamiltonian, trotter=nothing; initial_dm=nothing, rng, rescale_by_inv_prob) -> ThermalizeResults
+
+Density-matrix Kraus evolution toward the Gibbs state.
+
+Evolves an initial density matrix via random jump channels, recording trace distance
+to the Gibbs state at each step. Returns the final state and convergence history
+in a `ThermalizeResults` struct.
+
+# Arguments
+- `jumps::Vector{JumpOp}`: Jump operators
+- `config::Config{Thermalize}`: Thermalization configuration (provides mixing_time, delta)
+- `hamiltonian::HamHam`: Hamiltonian with eigenbasis data
+- `trotter::Union{TrottTrott, Nothing}=nothing`: Trotter object (required for TrotterDomain)
+
+# Keyword Arguments
+- `initial_dm::Union{Nothing, Matrix{<:Complex}}=nothing`: Initial density matrix (defaults to maximally mixed I/d)
+- `rng::AbstractRNG=Random.default_rng()`: Random number generator
+- `rescale_by_inv_prob::Bool=true`: Rescale delta by 1/p_jump for physical mixing time
+
+# Returns
+`ThermalizeResults` with final density matrix, trace distances, time steps, and metadata.
+"""
+function run_thermalize(
+    jumps::Vector{JumpOp},
+    config::Config{Thermalize,D,C,Tc},
+    hamiltonian::HamHam{Th},
+    trotter::Union{TrottTrott, Nothing}=nothing;
+    initial_dm::Union{Nothing, Matrix{<:Complex}}=nothing,
+    rng::AbstractRNG = Random.default_rng(),
+    rescale_by_inv_prob::Bool = true,
+) where {D, C, Tc<:AbstractFloat, Th<:AbstractFloat}
+
+    if Tc !== Th
+        error("Type mismatch: HamHam uses $Th but config uses $Tc. All structs must share the same precision.")
+    end
+
+    dim = size(hamiltonian.data, 1)
+
+    # Default initial_dm: maximally mixed state I/d
+    evolving_dm = if initial_dm === nothing
+        Matrix{Complex{Tc}}(I(dim) / dim)
+    else
+        copy(initial_dm)
+    end
+
+    t_start = time()
+
+    validate_config!(config)
+    _print_press(config)
+
+    if config.domain isa TrotterDomain
+        @assert trotter !== nothing
+        ham_or_trott = trotter
+        gibbs = Hermitian(trotter.eigvecs' * hamiltonian.eigvecs * hamiltonian.gibbs *
+                          hamiltonian.eigvecs' * trotter.eigvecs)
+    else
+        ham_or_trott = hamiltonian
+        gibbs = hamiltonian.gibbs
+    end
+
+    precomputed_data = _precompute_data(config, ham_or_trott)
+
+    p_jump = 1.0 / length(jumps)
+    coherent_unitaries = _precompute_coherent_unitary(jumps, hamiltonian, config, precomputed_data;
+        trotter=trotter, delta_scale = rescale_by_inv_prob ? (1.0 / p_jump) : 1.0)
+
+    CT = eltype(evolving_dm)
+    scratch = ThermalizeScratch(CT, dim)
+
+    num_steps = Int(ceil(config.mixing_time / config.delta))
+
+    convergence_cutoff = 1e-5
+    trace_distances = [trace_distance_h(Hermitian(evolving_dm), gibbs)]
+
+    for step in 1:num_steps
+        idx = rand(rng, 1:length(jumps))
+        jump = jumps[idx]
+
+        _jump_contribution!(
+            evolving_dm, jump, ham_or_trott, config, precomputed_data, scratch;
+            coherent_unitary_cache = (coherent_unitaries === nothing ? nothing : coherent_unitaries[idx]),
+            jump_prob = p_jump,
+            rescale_by_inv_prob = rescale_by_inv_prob,
+        )
+
+        dist = trace_distance_h(Hermitian(evolving_dm), gibbs)
+        push!(trace_distances, dist)
+        @printf("Dist to Gibbs: %s\n", dist)
+        if dist < convergence_cutoff
+            num_steps = step
+            break
+        end
+    end
+
+    time_steps = collect(0.0:config.delta:(num_steps * config.delta))
+
+    wall_time = time() - t_start
+    metadata = _capture_metadata(wall_time_seconds=wall_time)
+
+    return ThermalizeResults{Tc}(
+        config,
+        Complex{Tc}.(evolving_dm),
+        Tc.(trace_distances),
+        Tc.(time_steps),
+        metadata,
+    )
+end
