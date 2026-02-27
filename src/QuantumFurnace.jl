@@ -14,7 +14,6 @@ using DataStructures
 using SpecialFunctions: erfc
 using QuadGK
 using Base.Threads
-using SharedArrays
 using FINUFFT
 using KrylovKit
 using LibGit2

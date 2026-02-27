@@ -23,7 +23,7 @@ function _prepare_oft_nufft_prefactors(
     sigma::AbstractFloat;
     eps::Float64 = 1e-12,
     nthreads::Int = 1,
-    use_shared_array::Bool = (nprocs() > 1),
+    use_shared_array::Bool = false,
 )
     dim1, dim2 = size(bohr_freqs)
     @assert dim1 == dim2
@@ -48,12 +48,7 @@ function _prepare_oft_nufft_prefactors(
 
     # Allocate prefactor stack in Complex{T}.
     CT = Complex{T}
-    prefactors = if use_shared_array && (nprocs() > 1)
-        # Use all processes by default (SharedArray requires co-located processes).
-        SharedArray{CT}(dim, dim, length(energy_labels))
-    else
-        Array{CT}(undef, dim, dim, length(energy_labels))
-    end
+    prefactors = Array{CT}(undef, dim, dim, length(energy_labels))
 
     # FINUFFT plan - type 3, 1D, + sign: exp(+i s x)
     plan = FINUFFT.finufft_makeplan(3, 1, +1, 1, eps; dtype=Float64, nthreads=nthreads)

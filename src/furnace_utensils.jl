@@ -125,7 +125,7 @@ function _precompute_data(
         config.sigma;
         eps=1e-12,
         nthreads=1,
-        use_shared_array=(nprocs() > 1),
+        use_shared_array=false,
     )
     
     dp = oft_domain_prefactor(config.domain, config.w0, config.sigma, config.t0)
