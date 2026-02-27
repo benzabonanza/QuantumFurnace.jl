@@ -322,21 +322,45 @@ function KrylovScratch(::Type{CT}, dim::Int; with_channel_rho_jump::Bool=false) 
 end
 
 """
+    TrajectoryScratch{T<:Complex}
+
+Scratch buffers for trajectory simulation hot paths (`step_along_trajectory!`).
+All fields are mutable per-trajectory working memory. Each thread needs its own
+TrajectoryScratch to avoid shared mutable state.
+"""
+struct TrajectoryScratch{T<:Complex}
+    jump_oft::Matrix{T}
+    psi_tmp::Vector{T}
+    Rpsi::Vector{T}
+    rho_acc::Matrix{T}
+end
+
+function TrajectoryScratch(::Type{CT}, dim::Int) where {CT<:Complex}
+    TrajectoryScratch{CT}(
+        zeros(CT, dim, dim),  # jump_oft
+        zeros(CT, dim),       # psi_tmp
+        zeros(CT, dim),       # Rpsi
+        zeros(CT, dim, dim),  # rho_acc
+    )
+end
+
+"""
     Workspace{S, D, C, T, SC}
 
-Unified parametric workspace for all non-trajectory simulation paths.
+Unified parametric workspace for all simulation paths (Krylov, Lindbladian,
+Thermalize, Trajectory).
 
 Type parameters:
-- `S <: AbstractSimulation`: simulation kind (Krylov, Lindbladian, Thermalize)
+- `S <: AbstractSimulation`: simulation kind (Krylov, Lindbladian, Thermalize, Trajectory)
 - `D <: AbstractDomain`: domain (BohrDomain, EnergyDomain, TimeDomain, TrotterDomain)
 - `C <: AbstractConstruction`: detailed-balance construction (KMS, GNS, DLL)
 - `T <: AbstractFloat`: numeric precision
-- `SC`: concrete scratch type (LiouvillianScratch, ThermalizeScratch, KrylovScratch)
+- `SC`: concrete scratch type (LiouvillianScratch, ThermalizeScratch, KrylovScratch, TrajectoryScratch)
         Ensures type-stable access to `scratch` field on the hot path.
 
 The 5th type parameter `SC` is inferred automatically from the constructor and never
 needs to be written by callers. Dispatch signatures use partial parameterization:
-`ws::Workspace{Krylov}`, `ws::Workspace{Lindbladian}`, etc.
+`ws::Workspace{Krylov}`, `ws::Workspace{Lindbladian}`, `ws::Workspace{Trajectory}`, etc.
 """
 struct Workspace{S<:AbstractSimulation, D<:AbstractDomain, C<:AbstractConstruction, T<:AbstractFloat, SC}
     # Physics data (Krylov/Thermalize)
@@ -351,7 +375,7 @@ struct Workspace{S<:AbstractSimulation, D<:AbstractDomain, C<:AbstractConstructi
     G_left_adj::Union{Nothing, Matrix{Complex{T}}}
     G_right_adj::Union{Nothing, Matrix{Complex{T}}}
 
-    # CPTP channel (Krylov Thermalize mode, and Thermalize DM)
+    # CPTP channel (Krylov Thermalize mode, and Thermalize DM; also per-operator alpha/delta for Trajectory)
     K0::Union{Nothing, Matrix{Complex{T}}}
     U_residual::Union{Nothing, Matrix{Complex{T}}}
     U_coherent::Union{Nothing, Matrix{Complex{T}}}
@@ -373,6 +397,16 @@ struct Workspace{S<:AbstractSimulation, D<:AbstractDomain, C<:AbstractConstructi
 
     # Thermalize DM-specific (coherent unitaries)
     coherent_unitaries::Union{Nothing, Vector{Matrix{Complex{T}}}}
+
+    # Trajectory-specific fields (per-operator Lie-Trotter splitting)
+    ham_or_trott::Any          # HamHam or TrottTrott (needed for EnergyDomain oft!())
+    n_jumps::Union{Nothing, Int}
+    scaled_prefactor::Union{Nothing, Float64}
+    sigma::Union{Nothing, Float64}
+    Rs::Union{Nothing, Vector{Matrix{Complex{T}}}}         # per-jump R^a
+    K0s::Union{Nothing, Vector{Matrix{Complex{T}}}}        # per-jump K0^a
+    U_residuals::Union{Nothing, Vector{Matrix{Complex{T}}}}  # per-jump U_residual^a
+    U_Bs::Union{Nothing, Vector{Union{Nothing, Matrix{Complex{T}}}}}  # per-jump coherent unitary
 
     # Scratch buffers (nested, simulation-path-specific -- concrete-typed via SC parameter)
     scratch::SC

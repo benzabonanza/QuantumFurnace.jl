@@ -79,6 +79,7 @@ function Workspace(
         pd_transition, pd_gnf, pd_el, pd_odp, pd_nufft,
         pd_alpha, pd_bkeys, pd_bis, pd_bjs, pd_bminus, pd_bplus,
         nothing,  # coherent_unitaries
+        nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # trajectory fields
         sc,
     )
 end
@@ -312,6 +313,7 @@ function Workspace(
         pd_transition, pd_gnf, pd_el, pd_odp, pd_nufft,
         pd_alpha, pd_bkeys, pd_bis, pd_bjs, pd_bminus, pd_bplus,
         nothing,  # coherent_unitaries
+        nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # trajectory fields
         sc,
     )
 end

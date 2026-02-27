@@ -1,23 +1,4 @@
 """
-Run-time cache for trajectory simulations
-"""
-struct TrajectoryWorkspace{T}
-    jump_oft::Matrix{T}   # buffer for A_ω (or its dagger-partner is handled by swapping mul order)
-    psi_tmp::Vector{T}    # generic tmp for matvec results (K0ψ, Aωψ, Uresψ, etc.)
-    Rpsi::Vector{T}       # cache Rψ so K0ψ can be formed as ψ - α(Rψ) without a second matvec
-    rho_acc::Matrix{T}    # density matrix accumulator for trajectory averaging
-end
-
-function TrajectoryWorkspace(::Type{T}, dim::Int) where {T}
-    return TrajectoryWorkspace{T}(
-        zeros(T, dim, dim),  # jump_oft
-        zeros(T, dim),       # psi_tmp
-        zeros(T, dim),       # Rpsi
-        zeros(T, dim, dim),  # rho_acc
-    )
-end
-
-"""
 Result of a trajectory simulation run.
 """
 struct TrajectoryResult{T}
@@ -66,132 +47,131 @@ function ObservableTrajectoryResult(
 end
 
 """
-Per-operator Kraus data for Lie-Trotter splitting.
-Each operator `a` has its own R_a, K0_a, U_residual_a, U_B_a.
+    _build_trajectory_workspace(config, hamiltonian, jumps; trotter=nothing, delta=config.delta)
+
+Build a `Workspace{Trajectory,D,C,T}` from config, hamiltonian, and jumps.
+
+This is a factory function (NOT a Workspace constructor) to avoid dispatch conflict
+with `Workspace(config::Config{Thermalize}, ...)` in krylov_workspace.jl which returns
+`Workspace{Krylov,...}`.
+
+Consolidates the old `build_trajectoryframework` + `TrajectoryFramework` + `PerOperatorKraus`
+into a single Workspace with flattened per-operator Kraus data and nested TrajectoryScratch.
 """
-struct PerOperatorKraus{T}
-    R::Matrix{T}                        # R^a for this operator (rescaled by 1/p_jump)
-    K0::Matrix{T}                       # I - alpha * R^a
-    U_residual::Matrix{T}               # sqrt(S^a) via eigendecomposition
-    U_B::Union{Nothing, Matrix{T}}      # exp(-i * delta_eff * B^a), or nothing
-end
+function _build_trajectory_workspace(
+    config::Config{Thermalize,D,C,T},
+    hamiltonian::HamHam,
+    jumps::Vector{JumpOp};
+    trotter::Union{TrottTrott,Nothing}=nothing,
+    delta::Real = config.delta,
+) where {D<:AbstractDomain, C<:AbstractConstruction, T<:AbstractFloat}
 
-struct TrajectoryFramework{T,D<:AbstractDomain,F,P}
-    domain::D
-    jumps::Vector{JumpOp{Matrix{T}}}
-    ham_or_trott::Union{HamHam, TrottTrott}
-    config::Config{Thermalize, D}
-    precomputed_data::Any  # NamedTuple from precompute_data, varies by domain
+    CT = Complex{T}
+    dim = size(hamiltonian.data, 1)
 
-    # Per-operator Kraus data (Lie-Trotter splitting)
-    per_operator::Vector{PerOperatorKraus{T}}
-    n_jumps::Int
+    # Choose evolution object consistent with domain
+    ham_or_trott = if config.domain isa TrotterDomain
+        trotter === nothing && error("TrotterDomain requires `trotter`.")
+        trotter
+    else
+        hamiltonian
+    end
 
-    # Step parameters
-    delta::Float64           # original delta (for time stepping / num_steps)
-    delta_eff::Float64       # CPTP channel time parameter (equals delta; R scaling handles 1/p_jump compensation)
-    alpha::Float64           # α = 1 - sqrt(1-δ)
+    precomputed_data = _precompute_data(config, ham_or_trott)
 
-    # Hot-path fields with concrete types (avoid accessing abstract-typed config/precomputed_data in step loop)
-    scaled_prefactor::Float64   # rate prefactor with 1/p_jump rescaling, domain-specific
-    sigma::Float64              # cfg.sigma, needed by EnergyDomain oft!() call
-    transition::F               # transition function (concrete closure type)
-    energy_labels::Vector{Float64}
-    oft_nufft_prefactors::P     # NUFFTPrefactors or Nothing (EnergyDomain uses oft! instead)
-end
-
-function TrajectoryWorkspace(fw::TrajectoryFramework{T}) where {T}
-    dim = size(fw.per_operator[1].R, 1)
-    TrajectoryWorkspace(T, dim)
-end
-
-function build_trajectoryframework(
-    jumps::AbstractVector{<:JumpOp},
-    ham_or_trott::Union{HamHam, TrottTrott},
-    config::Config{Thermalize},
-    precomputed_data,
-    scratch::ThermalizeScratch{<:Complex},
-    delta::Real)
-
-    CT = eltype(scratch.R)
-    dim = size(jumps[1].data, 1)
     n_jumps = length(jumps)
     p_jump = 1.0 / n_jumps
 
-    # The per-operator CPTP channel uses bare delta (NOT delta*n_jumps).
-    # R_a is already scaled by 1/p_jump = n_jumps to compensate for random
-    # operator selection. Using delta*n_jumps would double-count.
-    # (The DM _finalize_kraus_step! uses the same approach: scaled R, bare delta.)
     @assert delta < 1.0 "delta = $(delta) >= 1.0: too large for CPTP channel"
-
     alpha = 1 - sqrt(1 - delta)
 
     # Convert to concrete element type for zero-allocation access in hot loop
-    # (jumps arrive in the correct basis: trotter.eigvecs for TrotterDomain,
-    #  hamiltonian.eigvecs for other domains -- basis selection is at the source)
     jumps_for_diss = convert(Vector{JumpOp{Matrix{CT}}}, collect(JumpOp, jumps))
 
     # Precompute per-operator coherent B terms (one per jump)
-    # Jumps are already in the correct basis (trotter.eigvecs for TrotterDomain,
-    # hamiltonian.eigvecs for other domains), so pass them directly.
     per_op_U_B = Vector{Union{Nothing, Matrix{CT}}}(undef, n_jumps)
     if with_coherent(config.construction)
         @inbounds for a in 1:n_jumps
             single_jump = JumpOp[jumps[a]]  # Force Vector{JumpOp} for dispatch compatibility
             B_a = _precompute_coherent_B(single_jump, ham_or_trott, config, precomputed_data)
             hermitianize!(B_a)
-            # Coherent uses delta/p_jump = delta*n_jumps (matching DM coherent_unitaries scaling)
             per_op_U_B[a] = exp(-1im * (delta / p_jump) * Hermitian(B_a))
         end
     else
         fill!(per_op_U_B, nothing)
     end
 
-    # Build per-operator Kraus data
-    per_operator = Vector{PerOperatorKraus{CT}}(undef, n_jumps)
+    # Build per-operator Kraus data as flat vectors
+    Rs = Vector{Matrix{CT}}(undef, n_jumps)
+    K0s = Vector{Matrix{CT}}(undef, n_jumps)
+    U_residuals = Vector{Matrix{CT}}(undef, n_jumps)
+
+    # Create a temporary ThermalizeScratch for _precompute_R (construction-time only)
+    builder_scratch = ThermalizeScratch(CT, dim)
 
     @inbounds for a in 1:n_jumps
-        # Compute R^a for single operator, rescaled by 1/p_jump
-        _precompute_R([jumps_for_diss[a]], ham_or_trott, config, precomputed_data, scratch)
-        R_a = copy(scratch.R)
-        R_a .*= (1.0 / p_jump)   # rescale: R_a = (1/p_jump) * sum_w rate2(w) * A_w' * A_w
+        _precompute_R([jumps_for_diss[a]], ham_or_trott, config, precomputed_data, builder_scratch)
+        R_a = copy(builder_scratch.R)
+        R_a .*= (1.0 / p_jump)
 
-        # Build CPTP channel for this operator (Chen Eq. 3.2)
         (; K0, U_residual) = _build_cptp_channel(R_a, delta)
 
-        per_operator[a] = PerOperatorKraus(R_a, K0, U_residual, per_op_U_B[a])
+        Rs[a] = R_a
+        K0s[a] = K0
+        U_residuals[a] = U_residual
     end
 
-    # Precompute scaled_prefactor for the hot path (avoids accessing abstract config/precomputed_data in step loop)
+    # Precompute scaled_prefactor for the hot path
     gamma_norm_factor = precomputed_data.gamma_norm_factor
-    scaled_prefactor = precomputed_data.oft_domain_prefactor * gamma_norm_factor / (1.0 / n_jumps)
+    scaled_prefactor = precomputed_data.oft_domain_prefactor * gamma_norm_factor / p_jump
 
     # Extract hot-path fields from precomputed_data with concrete types
     transition_fn = precomputed_data.transition
     energy_labels_vec = Vector{Float64}(precomputed_data.energy_labels)
-    # OFT NUFFT prefactors: present for Time/Trotter domains, absent for EnergyDomain
     oft_nufft_pref = if hasproperty(precomputed_data, :oft_nufft_prefactors)
         precomputed_data.oft_nufft_prefactors
     else
         nothing
     end
 
-    return TrajectoryFramework(
-        config.domain,
-        jumps_for_diss,
-        ham_or_trott,
-        config,
-        precomputed_data,
-        per_operator,
-        n_jumps,
-        Float64(delta),
-        Float64(delta),       # delta_eff field = delta (R scaling handles 1/p_jump)
-        Float64(alpha),
-        Float64(scaled_prefactor),
-        Float64(config.sigma),
-        transition_fn,
-        energy_labels_vec,
-        oft_nufft_pref,
+    # Build TrajectoryScratch
+    sc = TrajectoryScratch(CT, dim)
+
+    return Workspace{Trajectory, D, C, T, typeof(sc)}(
+        nothing, nothing, jumps_for_diss, nothing,  # physics data (jumps stored here)
+        nothing, nothing, nothing, nothing,  # G fields
+        nothing, nothing, nothing, Float64(alpha), Float64(delta),  # channel: K0/U_residual/U_coherent=nothing, alpha, delta
+        transition_fn, gamma_norm_factor, energy_labels_vec, nothing, oft_nufft_pref,  # domain precomputed
+        nothing, nothing, nothing, nothing, nothing, nothing,  # bohr/b fields
+        nothing,  # coherent_unitaries
+        ham_or_trott, n_jumps, Float64(scaled_prefactor), Float64(config.sigma),  # trajectory fields
+        Rs, K0s, U_residuals, per_op_U_B,  # per-operator Kraus vectors
+        sc,  # scratch
+    )
+end
+
+"""
+    _copy_workspace_for_thread(ws::Workspace{Trajectory})
+
+Create a copy of the trajectory workspace for use in a separate thread.
+Shares all immutable data (Rs, K0s, U_residuals, U_Bs, jumps, etc.) but
+allocates a fresh TrajectoryScratch to avoid shared mutable state.
+"""
+function _copy_workspace_for_thread(ws::Workspace{Trajectory,D,C,T,SC}) where {D,C,T,SC}
+    CT = Complex{T}
+    dim = size(ws.Rs[1], 1)
+    fresh_scratch = TrajectoryScratch(CT, dim)
+
+    return Workspace{Trajectory, D, C, T, typeof(fresh_scratch)}(
+        ws.jump_eigenbases, ws.jump_hermitian, ws.jumps, ws.B_total,
+        ws.G_left, ws.G_right, ws.G_left_adj, ws.G_right_adj,
+        ws.K0, ws.U_residual, ws.U_coherent, ws.alpha, ws.delta,
+        ws.transition, ws.gamma_norm_factor, ws.energy_labels, ws.oft_domain_prefactor, ws.oft_nufft_prefactors,
+        ws.bohr_alpha, ws.bohr_keys, ws.bohr_is, ws.bohr_js, ws.b_minus, ws.b_plus,
+        ws.coherent_unitaries,
+        ws.ham_or_trott, ws.n_jumps, ws.scaled_prefactor, ws.sigma,
+        ws.Rs, ws.K0s, ws.U_residuals, ws.U_Bs,
+        fresh_scratch,
     )
 end
 
@@ -199,11 +179,11 @@ end
     precompute_R(jumps, ham_or_trott, config, precomputed_data, scratch) -> Matrix{<:Complex}
 
     Compute
-        R = ∑_{k>0} L_k† L_k
+        R = sum_{k>0} L_k^dagger L_k
     in the same basis as `jump.in_eigenbasis` (Hamiltonian eigenbasis for `HamHam`, Trotter basis for `TrottTrott`).
 
     Conventions are matched to `jump_contribution!(domain, ::Config{Thermalize}, ...)`:
-    - the weights are `rate2(ω) = base_prefactor * transition(ω)` (no extra `δ` factor),
+    - the weights are `rate2(w) = base_prefactor * transition(w)` (no extra delta factor),
     - for Hermitian jumps we iterate half-grid and add the mirrored negative-frequency partner explicitly.
 
     This returns `scratch.R` (Hermitianized).
@@ -225,22 +205,22 @@ function _precompute_R(
 
     @inbounds for jump in jumps
         if jump.hermitian
-            # Half-grid (w_raw <= 0) and mirror partner at -w using Aω† as the Lindblad operator.
+            # Half-grid (w_raw <= 0) and mirror partner at -w using Aw^dagger as the Lindblad operator.
             for w_raw in energy_labels
                 w_raw > 1e-12 && continue
                 w = abs(w_raw)
 
-                # Aω := A ∘ exp(-(w-ν)^2/(4σ^2))   (elementwise in eigenbasis)
+                # Aw := A .* exp(-(w-nu)^2/(4sigma^2))   (elementwise in eigenbasis)
                 oft!(scratch.jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
 
-                # Positive-frequency contribution: rate2(w) * (Aω† Aω)
+                # Positive-frequency contribution: rate2(w) * (Aw^dagger Aw)
                 rate2_pos = base_prefactor * transition(w)
                 mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)
                 @. scratch.R += rate2_pos * scratch.LdagL
 
                 if w > 1e-12
-                    # Negative-frequency partner uses Lindblad op = Aω†:
-                    # contribution is rate2(-w) * (Aω Aω†)
+                    # Negative-frequency partner uses Lindblad op = Aw^dagger:
+                    # contribution is rate2(-w) * (Aw Aw^dagger)
                     rate2_neg = base_prefactor * transition(-w)
                     mul!(scratch.LdagL, scratch.jump_oft, scratch.jump_oft')
                     @. scratch.R += rate2_neg * scratch.LdagL
@@ -274,7 +254,7 @@ function _precompute_R(
     dim = size(jumps[1].in_eigenbasis, 1)
     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = precomputed_data
 
-    # Same weight as in jump_contribution!(::Union{TimeDomain,TrotterDomain}, ...), but without δ.
+    # Same weight as in jump_contribution!(::Union{TimeDomain,TrotterDomain}, ...), but without delta.
     base_prefactor = precomputed_data.oft_domain_prefactor * gamma_norm_factor
 
     fill!(scratch.R, 0)
@@ -288,7 +268,7 @@ function _precompute_R(
 
                 nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
 
-                # Aω := A ∘ prefactor_matrix(ω)  (elementwise)
+                # Aw := A .* prefactor_matrix(w)  (elementwise)
                 @. scratch.jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
 
                 rate2_pos = base_prefactor * transition(w)
@@ -339,8 +319,8 @@ function _accumulate_measurements!(
     tmp::Vector{<:Complex},
 )
     @inbounds for i in eachindex(observables)
-        mul!(tmp, observables[i], psi)                 # tmp := O_i ψ
-        acc[i, save_idx] += real(dot(psi, tmp))        # += <ψ|O_i|ψ>
+        mul!(tmp, observables[i], psi)                 # tmp := O_i psi
+        acc[i, save_idx] += real(dot(psi, tmp))        # += <psi|O_i|psi>
     end
     return nothing
 end
@@ -366,21 +346,20 @@ function _partition_trajectories(range::UnitRange{Int}, n_chunks::Int)
 end
 
 """
-    _run_chunk_no_obs!(ws, fw, psi0, chunk, master_seed, total_time)
+    _run_chunk_no_obs!(ws, psi0, chunk, master_seed, total_time)
 
-Run a chunk of trajectories without observables, accumulating density matrices in ws.rho_acc.
+Run a chunk of trajectories without observables, accumulating density matrices in ws.scratch.rho_acc.
 Each trajectory gets Xoshiro(master_seed + traj_id) for reproducibility.
 Step loop is inlined (no intermediate _evolve_along_trajectory! wrapper).
 """
 function _run_chunk_no_obs!(
-    ws::TrajectoryWorkspace{<:Complex},
-    fw::TrajectoryFramework{<:Complex},
+    ws::Workspace{Trajectory},
     psi0::Vector{<:Complex},
     chunk::UnitRange{Int},
     master_seed::Int,
     total_time::Real,
 )
-    delta = fw.delta
+    delta = ws.delta
     num_steps = ceil(Int, total_time / delta)
     psi = copy(psi0)
     for traj_id in chunk
@@ -391,23 +370,22 @@ function _run_chunk_no_obs!(
         rmul!(psi, 1.0 / sqrt(max(psi_norm2, eps(Float64))))
         # Step loop (was _evolve_along_trajectory!)
         @inbounds for _ in 1:num_steps
-            step_along_trajectory!(psi, fw, ws, rng)
+            step_along_trajectory!(psi, ws, rng)
         end
-        _accumulate_density_matrix!(ws.rho_acc, psi)
+        _accumulate_density_matrix!(ws.scratch.rho_acc, psi)
     end
     return nothing
 end
 
 """
-    _run_chunk_with_obs!(ws, fw, psi0, chunk, master_seed, total_time,
+    _run_chunk_with_obs!(ws, psi0, chunk, master_seed, total_time,
                           observables, save_every, num_steps, num_saves, mean_data_local)
 
 Run a chunk of trajectories with observable measurements, accumulating density matrices
-in ws.rho_acc and measurements in mean_data_local.
+in ws.scratch.rho_acc and measurements in mean_data_local.
 """
 function _run_chunk_with_obs!(
-    ws::TrajectoryWorkspace{<:Complex},
-    fw::TrajectoryFramework{<:Complex},
+    ws::Workspace{Trajectory},
     psi0::Vector{<:Complex},
     chunk::UnitRange{Int},
     master_seed::Int,
@@ -419,7 +397,7 @@ function _run_chunk_with_obs!(
     mean_data_local::Matrix{Float64},
 )
     psi = copy(psi0)
-    tmp_meas = ws.psi_tmp  # reuse workspace vector as gemv buffer
+    tmp_meas = ws.scratch.psi_tmp  # reuse workspace vector as gemv buffer
 
     for traj_id in chunk
         rng = Random.Xoshiro(master_seed + traj_id)
@@ -434,27 +412,26 @@ function _run_chunk_with_obs!(
 
         save_idx = 1
         for step in 1:num_steps
-            step_along_trajectory!(psi, fw, ws, rng)
+            step_along_trajectory!(psi, ws, rng)
             if step % save_every == 0
                 save_idx += 1
                 _accumulate_measurements!(mean_data_local, save_idx, psi, observables, tmp_meas)
             end
         end
-        _accumulate_density_matrix!(ws.rho_acc, psi)
+        _accumulate_density_matrix!(ws.scratch.rho_acc, psi)
     end
     return nothing
 end
 
 """
-    _run_chunk_obs_only!(ws, fw, psi0, chunk, master_seed, total_time,
+    _run_chunk_obs_only!(ws, psi0, chunk, master_seed, total_time,
                           observables, save_every, num_steps, num_saves, mean_data_local)
 
 Run a chunk of trajectories with observable measurements but WITHOUT density matrix accumulation.
 Each trajectory gets Xoshiro(master_seed + traj_id) for reproducibility.
 """
 function _run_chunk_obs_only!(
-    ws::TrajectoryWorkspace{<:Complex},
-    fw::TrajectoryFramework{<:Complex},
+    ws::Workspace{Trajectory},
     psi0::Vector{<:Complex},
     chunk::UnitRange{Int},
     master_seed::Int,
@@ -466,7 +443,7 @@ function _run_chunk_obs_only!(
     mean_data_local::Matrix{Float64},
 )
     psi = copy(psi0)
-    tmp_meas = ws.psi_tmp  # reuse workspace vector as gemv buffer
+    tmp_meas = ws.scratch.psi_tmp  # reuse workspace vector as gemv buffer
 
     for traj_id in chunk
         rng = Random.Xoshiro(master_seed + traj_id)
@@ -481,7 +458,7 @@ function _run_chunk_obs_only!(
 
         save_idx = 1
         for step in 1:num_steps
-            step_along_trajectory!(psi, fw, ws, rng)
+            step_along_trajectory!(psi, ws, rng)
             if step % save_every == 0
                 save_idx += 1
                 _accumulate_measurements!(mean_data_local, save_idx, psi, observables, tmp_meas)
@@ -493,9 +470,9 @@ function _run_chunk_obs_only!(
 end
 
 """
-    _run_batch_no_obs!(fw, psi0, ntraj, master_seed, total_time) -> Matrix{CT}
+    _run_batch_no_obs!(ws, psi0, ntraj, master_seed, total_time) -> Matrix{CT}
 
-Run `ntraj` trajectories using pre-built `fw`, returning the averaged density matrix.
+Run `ntraj` trajectories using pre-built `ws`, returning the averaged density matrix.
 Handles serial vs multi-threaded dispatch internally. The master_seed is the base
 seed; each trajectory gets Xoshiro(master_seed + traj_id) where traj_id is 1:ntraj.
 
@@ -503,7 +480,7 @@ This is the shared batch execution function used by `run_trajectories` (no-obser
 path), `run_trajectories_convergence`, and `run_trajectories_adaptive`.
 """
 function _run_batch_no_obs!(
-    fw::TrajectoryFramework{<:Complex},
+    ws::Workspace{Trajectory},
     psi0::Vector{<:Complex},
     ntraj::Int,
     master_seed::Int,
@@ -516,27 +493,27 @@ function _run_batch_no_obs!(
         # Multi-threaded path
         nt = min(Threads.nthreads(), ntraj)
         chunks = _partition_trajectories(1:ntraj, nt)
-        ws_per_task = [TrajectoryWorkspace(CT, dim) for _ in 1:length(chunks)]
+        ws_per_task = [_copy_workspace_for_thread(ws) for _ in 1:length(chunks)]
 
         old_blas = BLAS.get_num_threads()
         BLAS.set_num_threads(1)
         try
             @sync for (idx, chunk) in enumerate(chunks)
                 Threads.@spawn _run_chunk_no_obs!(
-                    ws_per_task[idx], fw, psi0, chunk, master_seed, total_time)
+                    ws_per_task[idx], psi0, chunk, master_seed, total_time)
             end
         finally
             BLAS.set_num_threads(old_blas)
         end
 
-        rho_total = sum(ws.rho_acc for ws in ws_per_task)
+        rho_total = sum(ws.scratch.rho_acc for ws in ws_per_task)
         rho_result = rho_total ./ ntraj
         hermitianize!(rho_result)
     else
-        # Serial path
-        ws = TrajectoryWorkspace(CT, dim)
-        _run_chunk_no_obs!(ws, fw, psi0, 1:ntraj, master_seed, total_time)
-        rho_result = ws.rho_acc ./ ntraj
+        # Serial path: reset scratch rho_acc and run
+        fill!(ws.scratch.rho_acc, 0)
+        _run_chunk_no_obs!(ws, psi0, 1:ntraj, master_seed, total_time)
+        rho_result = ws.scratch.rho_acc ./ ntraj
         hermitianize!(rho_result)
     end
 
@@ -546,10 +523,10 @@ end
 """
     _build_framework_and_seed(jumps, config, psi0, hamiltonian; trotter, delta, seed)
 
-One-time setup: validates config, chooses ham_or_trott, precomputes data, builds
-TrajectoryFramework, and generates actual seed. Returns `(fw, actual_seed)`.
+One-time setup: validates config, chooses ham_or_trott, builds
+Workspace{Trajectory}, and generates actual seed. Returns `(ws, actual_seed)`.
 
-This is extracted so convergence/adaptive runners can build the framework ONCE
+This is extracted so convergence/adaptive runners can build the workspace ONCE
 and reuse it across batches.
 """
 function _build_framework_and_seed(
@@ -564,26 +541,11 @@ function _build_framework_and_seed(
     validate_config!(config)
     _print_press(config)
 
-    CT = eltype(psi0)
-
-    # Choose evolution object consistent with domain
-    ham_or_trott = if config.domain isa TrotterDomain
-        trotter === nothing && error("TrotterDomain requires `trotter`.")
-        trotter
-    else
-        hamiltonian
-    end
-
-    precomputed_data = _precompute_data(config, ham_or_trott)
-
-    dim = size(hamiltonian.data, 1)
-    builder_scratch = ThermalizeScratch(CT, dim)
-
-    fw = build_trajectoryframework(jumps, ham_or_trott, config, precomputed_data, builder_scratch, delta)
+    ws = _build_trajectory_workspace(config, hamiltonian, jumps; trotter=trotter, delta=delta)
 
     actual_seed = seed === nothing ? Int(rand(Random.RandomDevice(), UInt64) >> 1) : seed
 
-    return fw, actual_seed
+    return ws, actual_seed
 end
 
 """
@@ -591,13 +553,13 @@ end
                      total_time=config.mixing_time, delta=config.delta,
                      ntraj=1, observables=nothing, save_every=1, seed=nothing)
 
-    Builds the TrajectoryFramework once, then runs `ntraj` trajectories.
+    Builds the Workspace{Trajectory} once, then runs `ntraj` trajectories.
     Returns a `TrajectoryResult` containing the averaged density matrix, trajectory count,
     and the RNG seed used (for reproducibility).
 
     - If `seed` is `nothing`, a random seed is generated from system entropy.
     - If `observables === nothing`: returns `TrajectoryResult` with `times=nothing`, `measurements_mean=nothing`.
-    - If `observables` provided: returns `TrajectoryResult` with time grid and trajectory-averaged ⟨O_i⟩(t).
+    - If `observables` provided: returns `TrajectoryResult` with time grid and trajectory-averaged <O_i>(t).
 """
 function run_trajectories(
     jumps::Vector{JumpOp},
@@ -616,7 +578,7 @@ function run_trajectories(
     @assert ntraj >= 1
     @assert save_every >= 1
 
-    fw, actual_seed = _build_framework_and_seed(
+    ws, actual_seed = _build_framework_and_seed(
         jumps, config, psi0, hamiltonian;
         trotter=trotter, delta=delta, seed=seed,
     )
@@ -628,15 +590,14 @@ function run_trajectories(
     # No measurements: use shared _run_batch_no_obs!
     # ------------------------------------------------------------------
     if observables === nothing
-        rho_result = _run_batch_no_obs!(fw, psi0, ntraj, actual_seed, total_time)
+        rho_result = _run_batch_no_obs!(ws, psi0, ntraj, actual_seed, total_time)
         return TrajectoryResult(rho_result, ntraj, actual_seed, nothing, nothing, nothing)
     end
 
     # ------------------------------------------------------------------
     # With measurements: average <O> over trajectories, saved every `save_every`
     # ------------------------------------------------------------------
-    ws = TrajectoryWorkspace(CT, dim)
-    delta_step = fw.delta
+    delta_step = ws.delta
     num_steps = ceil(Int, total_time / delta_step)
     num_saves = div(num_steps, save_every) + 1
     num_obs   = length(observables)
@@ -650,7 +611,7 @@ function run_trajectories(
         # Multi-threaded observable path
         nt = min(Threads.nthreads(), ntraj)
         chunks = _partition_trajectories(1:ntraj, nt)
-        ws_per_task = [TrajectoryWorkspace(CT, dim) for _ in 1:length(chunks)]
+        ws_per_task = [_copy_workspace_for_thread(ws) for _ in 1:length(chunks)]
         mean_data_per_task = [zeros(Float64, num_obs, num_saves) for _ in 1:length(chunks)]
 
         old_blas = BLAS.get_num_threads()
@@ -658,7 +619,7 @@ function run_trajectories(
         try
             @sync for (idx, chunk) in enumerate(chunks)
                 Threads.@spawn _run_chunk_with_obs!(
-                    ws_per_task[idx], fw, psi0, chunk, actual_seed, total_time,
+                    ws_per_task[idx], psi0, chunk, actual_seed, total_time,
                     observables, save_every, num_steps, num_saves, mean_data_per_task[idx])
             end
         finally
@@ -667,7 +628,7 @@ function run_trajectories(
 
         mean_data = sum(mean_data_per_task)
         mean_data ./= ntraj
-        rho_total = sum(ws.rho_acc for ws in ws_per_task)
+        rho_total = sum(ws.scratch.rho_acc for ws in ws_per_task)
         rho_result = rho_total ./ ntraj
         hermitianize!(rho_result)
     else
@@ -682,21 +643,21 @@ function run_trajectories(
             n2 = real(dot(psi, psi))
             rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
 
-            _accumulate_measurements!(mean_data, 1, psi, observables, ws.psi_tmp)
+            _accumulate_measurements!(mean_data, 1, psi, observables, ws.scratch.psi_tmp)
 
             save_idx = 1
             for step in 1:num_steps
-                step_along_trajectory!(psi, fw, ws, rng_serial)
+                step_along_trajectory!(psi, ws, rng_serial)
                 if step % save_every == 0
                     save_idx += 1
-                    _accumulate_measurements!(mean_data, save_idx, psi, observables, ws.psi_tmp)
+                    _accumulate_measurements!(mean_data, save_idx, psi, observables, ws.scratch.psi_tmp)
                 end
             end
-            _accumulate_density_matrix!(ws.rho_acc, psi)
+            _accumulate_density_matrix!(ws.scratch.rho_acc, psi)
         end
 
         mean_data ./= ntraj
-        rho_result = ws.rho_acc ./ ntraj
+        rho_result = ws.scratch.rho_acc ./ ntraj
         hermitianize!(rho_result)
     end
 
@@ -731,7 +692,7 @@ function run_observable_trajectories(
     @assert ntraj >= 1
     @assert save_every >= 1
 
-    fw, actual_seed = _build_framework_and_seed(
+    ws, actual_seed = _build_framework_and_seed(
         jumps, config, psi0, hamiltonian;
         trotter=trotter, delta=delta, seed=seed,
     )
@@ -739,7 +700,7 @@ function run_observable_trajectories(
     CT = eltype(psi0)
     dim = size(hamiltonian.data, 1)
 
-    delta_step = fw.delta
+    delta_step = ws.delta
     num_steps = ceil(Int, total_time / delta_step)
     num_saves = div(num_steps, save_every) + 1
     num_obs   = length(observables)
@@ -753,7 +714,7 @@ function run_observable_trajectories(
         # Multi-threaded path
         nt = min(Threads.nthreads(), ntraj)
         chunks = _partition_trajectories(1:ntraj, nt)
-        ws_per_task = [TrajectoryWorkspace(CT, dim) for _ in 1:length(chunks)]
+        ws_per_task = [_copy_workspace_for_thread(ws) for _ in 1:length(chunks)]
         mean_data_per_task = [zeros(Float64, num_obs, num_saves) for _ in 1:length(chunks)]
 
         old_blas = BLAS.get_num_threads()
@@ -762,13 +723,13 @@ function run_observable_trajectories(
             if reconstruct_dm
                 @sync for (idx, chunk) in enumerate(chunks)
                     Threads.@spawn _run_chunk_with_obs!(
-                        ws_per_task[idx], fw, psi0, chunk, actual_seed, total_time,
+                        ws_per_task[idx], psi0, chunk, actual_seed, total_time,
                         observables, save_every, num_steps, num_saves, mean_data_per_task[idx])
                 end
             else
                 @sync for (idx, chunk) in enumerate(chunks)
                     Threads.@spawn _run_chunk_obs_only!(
-                        ws_per_task[idx], fw, psi0, chunk, actual_seed, total_time,
+                        ws_per_task[idx], psi0, chunk, actual_seed, total_time,
                         observables, save_every, num_steps, num_saves, mean_data_per_task[idx])
                 end
             end
@@ -780,7 +741,7 @@ function run_observable_trajectories(
         mean_data ./= ntraj
 
         if reconstruct_dm
-            rho_total = sum(ws.rho_acc for ws in ws_per_task)
+            rho_total = sum(ws.scratch.rho_acc for ws in ws_per_task)
             rho_result = rho_total ./ ntraj
             hermitianize!(rho_result)
             rho_mean = rho_result
@@ -789,7 +750,6 @@ function run_observable_trajectories(
         end
     else
         # Serial path
-        ws = TrajectoryWorkspace(CT, dim)
         mean_data = zeros(Float64, num_obs, num_saves)
         psi = copy(psi0)
 
@@ -800,25 +760,25 @@ function run_observable_trajectories(
             n2 = real(dot(psi, psi))
             rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
 
-            _accumulate_measurements!(mean_data, 1, psi, observables, ws.psi_tmp)
+            _accumulate_measurements!(mean_data, 1, psi, observables, ws.scratch.psi_tmp)
 
             save_idx = 1
             for step in 1:num_steps
-                step_along_trajectory!(psi, fw, ws, rng_serial)
+                step_along_trajectory!(psi, ws, rng_serial)
                 if step % save_every == 0
                     save_idx += 1
-                    _accumulate_measurements!(mean_data, save_idx, psi, observables, ws.psi_tmp)
+                    _accumulate_measurements!(mean_data, save_idx, psi, observables, ws.scratch.psi_tmp)
                 end
             end
             if reconstruct_dm
-                _accumulate_density_matrix!(ws.rho_acc, psi)
+                _accumulate_density_matrix!(ws.scratch.rho_acc, psi)
             end
         end
 
         mean_data ./= ntraj
 
         if reconstruct_dm
-            rho_result = ws.rho_acc ./ ntraj
+            rho_result = ws.scratch.rho_acc ./ ntraj
             hermitianize!(rho_result)
             rho_mean = rho_result
         else
@@ -830,19 +790,18 @@ function run_observable_trajectories(
 end
 
 """
-    step_along_trajectory!(psi, fw, ws, rng)  for D ∈ {TimeDomain, TrotterDomain}
+    step_along_trajectory!(psi, ws, rng)  for D in {TimeDomain, TrotterDomain}
 
     Per-operator Lie-Trotter splitting: randomly select ONE operator a, apply that operator's
     CPTP channel (K0_a, U_res_a, jump outcomes for operator a only).
 
     Arguments:
     - `psi`: state vector (modified in-place)
-    - `fw`: read-only trajectory framework
-    - `ws`: mutable workspace (scratch buffers)
+    - `ws`: Workspace{Trajectory} containing both framework data and scratch buffers
     - `rng`: random number generator (explicit for thread safety and reproducibility)
 
     # Per-operator channel structure (Chen 2023, adapted for Lie-Trotter splitting):
-    #   Pick a ∈ {1,...,N_jumps} uniformly at random
+    #   Pick a in {1,...,N_jumps} uniformly at random
     #   K0_a = I - alpha*R_a, where alpha = 1 - sqrt(1-delta), R_a scaled by n_jumps
     #   K_{a,w} = sqrt(delta * scaled_rate(w)) * L_{a,w}  (jump operators for operator a)
     #   U_res_a: U_res_a'*U_res_a = S_a  (residual for operator a)
@@ -850,45 +809,47 @@ end
 """
 function step_along_trajectory!(
     psi::Vector{<:Complex},
-    fw::TrajectoryFramework{<:Complex,D},
-    ws::TrajectoryWorkspace{<:Complex},
+    ws::Workspace{Trajectory,D,C,T},
     rng::AbstractRNG,
-    ) where {D<:Union{TimeDomain,TrotterDomain}}
+    ) where {D<:Union{TimeDomain,TrotterDomain},C,T}
 
-    # All hot-path data lives in concrete-typed fields of fw (no abstract access)
-    delta = fw.delta
-    scaled_prefactor = fw.scaled_prefactor
-    transition = fw.transition
-    energy_labels = fw.energy_labels
-    oft_prefactors = fw.oft_nufft_prefactors
+    # All hot-path data lives in concrete-typed fields of ws (no abstract access)
+    delta = ws.delta
+    scaled_prefactor = ws.scaled_prefactor
+    transition = ws.transition
+    energy_labels = ws.energy_labels
+    oft_prefactors = ws.oft_nufft_prefactors
 
     # Select random operator (Vector elements are concrete-typed)
-    a = rand(rng, 1:fw.n_jumps)
-    @inbounds per_op = fw.per_operator[a]
-    @inbounds jump = fw.jumps[a]
+    a = rand(rng, 1:ws.n_jumps)
+    @inbounds R_a = ws.Rs[a]
+    @inbounds K0_a = ws.K0s[a]
+    @inbounds U_res_a = ws.U_residuals[a]
+    @inbounds U_B_a = ws.U_Bs[a]
+    @inbounds jump = ws.jumps[a]
 
     # ------------------------------------------------------------------
     # Apply per-operator coherent unitary FIRST (matches DM code ordering)
     # ------------------------------------------------------------------
-    if per_op.U_B !== nothing
-        mul!(ws.psi_tmp, per_op.U_B, psi)
-        copyto!(psi, ws.psi_tmp)
+    if U_B_a !== nothing
+        mul!(ws.scratch.psi_tmp, U_B_a, psi)
+        copyto!(psi, ws.scratch.psi_tmp)
         rmul!(psi, 1.0 / sqrt(max(_norm2(psi), eps(Float64))))
     end
 
     # ------------------------------------------------------------------
     # Compute probabilities from per-operator R_a, K0_a, U_residual_a
     # ------------------------------------------------------------------
-    mul!(ws.Rpsi, per_op.R, psi)                    # R_a * psi
-    expR = max(real(dot(psi, ws.Rpsi)), 0.0)        # <psi|R_a|psi>
+    mul!(ws.scratch.Rpsi, R_a, psi)                    # R_a * psi
+    expR = max(real(dot(psi, ws.scratch.Rpsi)), 0.0)   # <psi|R_a|psi>
 
-    mul!(ws.psi_tmp, per_op.K0, psi)                # K0_a * psi
-    p_nojump = _norm2(ws.psi_tmp)
+    mul!(ws.scratch.psi_tmp, K0_a, psi)                # K0_a * psi
+    p_nojump = _norm2(ws.scratch.psi_tmp)
 
-    p_jump_total = delta * expR                     # bare delta (R_a already scaled by n_jumps)
+    p_jump_total = delta * expR                         # bare delta (R_a already scaled by n_jumps)
 
-    mul!(ws.Rpsi, per_op.U_residual, psi)           # U_res_a * psi (reuse buffer)
-    p_res = _norm2(ws.Rpsi)
+    mul!(ws.scratch.Rpsi, U_res_a, psi)                # U_res_a * psi (reuse buffer)
+    p_res = _norm2(ws.scratch.Rpsi)
 
     total_weight = p_nojump + p_res + p_jump_total
     total_weight = max(total_weight, 0.0)
@@ -903,15 +864,15 @@ function step_along_trajectory!(
     # Branch: no-jump / residual / dissipative jump (for selected operator a only)
     # ------------------------------------------------------------------
     if r < p_nojump
-        copyto!(psi, ws.psi_tmp)
+        copyto!(psi, ws.scratch.psi_tmp)
         rmul!(psi, 1.0 / sqrt(max(p_nojump, eps(Float64))))
 
     elseif r < (p_nojump + p_res)
-        copyto!(psi, ws.Rpsi)
+        copyto!(psi, ws.scratch.Rpsi)
         rmul!(psi, 1.0 / sqrt(max(p_res, eps(Float64))))
 
     else
-        # Dissipative jump: sample one (ω,±) outcome for the SINGLE selected operator a
+        # Dissipative jump: sample one (w,+/-) outcome for the SINGLE selected operator a
         target = r - p_nojump - p_res
         csum   = 0.0
         chosen = false
@@ -923,16 +884,16 @@ function step_along_trajectory!(
                 w = abs(w_raw)
 
                 pref = _prefactor_view(oft_prefactors, w)
-                @. ws.jump_oft = jump.in_eigenbasis * pref
+                @. ws.scratch.jump_oft = jump.in_eigenbasis * pref
 
                 # Positive-frequency
-                mul!(ws.Rpsi, ws.jump_oft, psi)
-                n2 = _norm2(ws.Rpsi)
+                mul!(ws.scratch.Rpsi, ws.scratch.jump_oft, psi)
+                n2 = _norm2(ws.scratch.Rpsi)
                 last_norm2 = n2
                 p = delta * (scaled_prefactor * transition(w)) * n2
                 csum += p
                 if csum >= target
-                    copyto!(psi, ws.Rpsi)
+                    copyto!(psi, ws.scratch.Rpsi)
                     rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
                     chosen = true
                     break
@@ -940,13 +901,13 @@ function step_along_trajectory!(
 
                 # Negative-frequency partner
                 if w > 1e-12
-                    mul!(ws.Rpsi, ws.jump_oft', psi)
-                    n2 = _norm2(ws.Rpsi)
+                    mul!(ws.scratch.Rpsi, ws.scratch.jump_oft', psi)
+                    n2 = _norm2(ws.scratch.Rpsi)
                     last_norm2 = n2
                     p = delta * (scaled_prefactor * transition(-w)) * n2
                     csum += p
                     if csum >= target
-                        copyto!(psi, ws.Rpsi)
+                        copyto!(psi, ws.scratch.Rpsi)
                         rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
                         chosen = true
                         break
@@ -956,15 +917,15 @@ function step_along_trajectory!(
         else
             for w in energy_labels
                 pref = _prefactor_view(oft_prefactors, w)
-                @. ws.jump_oft = jump.in_eigenbasis * pref
+                @. ws.scratch.jump_oft = jump.in_eigenbasis * pref
 
-                mul!(ws.Rpsi, ws.jump_oft, psi)
-                n2 = _norm2(ws.Rpsi)
+                mul!(ws.scratch.Rpsi, ws.scratch.jump_oft, psi)
+                n2 = _norm2(ws.scratch.Rpsi)
                 last_norm2 = n2
                 p = delta * (scaled_prefactor * transition(w)) * n2
                 csum += p
                 if csum >= target
-                    copyto!(psi, ws.Rpsi)
+                    copyto!(psi, ws.scratch.Rpsi)
                     rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
                     chosen = true
                     break
@@ -973,7 +934,7 @@ function step_along_trajectory!(
         end
 
         if !chosen
-            copyto!(psi, ws.Rpsi)
+            copyto!(psi, ws.scratch.Rpsi)
             rmul!(psi, 1.0 / sqrt(max(last_norm2, eps(Float64))))
         end
     end
@@ -981,52 +942,54 @@ function step_along_trajectory!(
 end
 
 """
-    step_along_trajectory!(psi, fw, ws, rng)  for D == EnergyDomain
+    step_along_trajectory!(psi, ws, rng)  for D == EnergyDomain
 
     Per-operator Lie-Trotter splitting for EnergyDomain.
-    Same logic as Time/Trotter variant but A_{a,ω} is generated by `oft!(...)`.
+    Same logic as Time/Trotter variant but A_{a,w} is generated by `oft!(...)`.
 """
 function step_along_trajectory!(
     psi::Vector{<:Complex},
-    fw::TrajectoryFramework{<:Complex,EnergyDomain},
-    ws::TrajectoryWorkspace{<:Complex},
+    ws::Workspace{Trajectory,EnergyDomain,C,T},
     rng::AbstractRNG,
-    )
+    ) where {C,T}
 
-    # All hot-path data lives in concrete-typed fields of fw (no abstract access)
-    delta = fw.delta
-    scaled_prefactor = fw.scaled_prefactor
-    sigma = fw.sigma
-    transition = fw.transition
-    energy_labels = fw.energy_labels
+    # All hot-path data lives in concrete-typed fields of ws (no abstract access)
+    delta = ws.delta
+    scaled_prefactor = ws.scaled_prefactor
+    sigma = ws.sigma
+    transition = ws.transition
+    energy_labels = ws.energy_labels
 
     # Select random operator (Vector elements are concrete-typed)
-    a = rand(rng, 1:fw.n_jumps)
-    @inbounds per_op = fw.per_operator[a]
-    @inbounds jump = fw.jumps[a]
+    a = rand(rng, 1:ws.n_jumps)
+    @inbounds R_a = ws.Rs[a]
+    @inbounds K0_a = ws.K0s[a]
+    @inbounds U_res_a = ws.U_residuals[a]
+    @inbounds U_B_a = ws.U_Bs[a]
+    @inbounds jump = ws.jumps[a]
 
     # ------------------------------------------------------------------
     # Apply per-operator coherent unitary FIRST
     # ------------------------------------------------------------------
-    if per_op.U_B !== nothing
-        mul!(ws.psi_tmp, per_op.U_B, psi)
-        copyto!(psi, ws.psi_tmp)
+    if U_B_a !== nothing
+        mul!(ws.scratch.psi_tmp, U_B_a, psi)
+        copyto!(psi, ws.scratch.psi_tmp)
         rmul!(psi, 1.0 / sqrt(max(_norm2(psi), eps(Float64))))
     end
 
     # ------------------------------------------------------------------
     # Compute probabilities from per-operator Kraus data
     # ------------------------------------------------------------------
-    mul!(ws.Rpsi, per_op.R, psi)
-    expR = max(real(dot(psi, ws.Rpsi)), 0.0)
+    mul!(ws.scratch.Rpsi, R_a, psi)
+    expR = max(real(dot(psi, ws.scratch.Rpsi)), 0.0)
 
-    mul!(ws.psi_tmp, per_op.K0, psi)
-    p_nojump = _norm2(ws.psi_tmp)
+    mul!(ws.scratch.psi_tmp, K0_a, psi)
+    p_nojump = _norm2(ws.scratch.psi_tmp)
 
-    p_jump_total = delta * expR                     # bare delta (R_a already scaled by n_jumps)
+    p_jump_total = delta * expR                         # bare delta (R_a already scaled by n_jumps)
 
-    mul!(ws.Rpsi, per_op.U_residual, psi)
-    p_res = _norm2(ws.Rpsi)
+    mul!(ws.scratch.Rpsi, U_res_a, psi)
+    p_res = _norm2(ws.scratch.Rpsi)
 
     total_weight = p_nojump + p_res + p_jump_total
     total_weight = max(total_weight, 0.0)
@@ -1041,11 +1004,11 @@ function step_along_trajectory!(
     # Branch: no-jump / residual / dissipative jump (for selected operator a only)
     # ------------------------------------------------------------------
     if r < p_nojump
-        copyto!(psi, ws.psi_tmp)
+        copyto!(psi, ws.scratch.psi_tmp)
         rmul!(psi, 1.0 / sqrt(max(p_nojump, eps(Float64))))
 
     elseif r < (p_nojump + p_res)
-        copyto!(psi, ws.Rpsi)
+        copyto!(psi, ws.scratch.Rpsi)
         rmul!(psi, 1.0 / sqrt(max(p_res, eps(Float64))))
 
     else
@@ -1054,7 +1017,7 @@ function step_along_trajectory!(
         chosen = false
         last_norm2 = 0.0
 
-        ham = fw.ham_or_trott
+        ham = ws.ham_or_trott
         @assert ham isa HamHam
         inv_4sigma2 = 1.0 / (4 * sigma^2)
 
@@ -1063,28 +1026,28 @@ function step_along_trajectory!(
                 w_raw > 1e-12 && continue
                 w = abs(w_raw)
 
-                oft!(ws.jump_oft, jump.in_eigenbasis, ham.bohr_freqs, w, inv_4sigma2)
+                oft!(ws.scratch.jump_oft, jump.in_eigenbasis, ham.bohr_freqs, w, inv_4sigma2)
 
-                mul!(ws.Rpsi, ws.jump_oft, psi)
-                n2 = _norm2(ws.Rpsi)
+                mul!(ws.scratch.Rpsi, ws.scratch.jump_oft, psi)
+                n2 = _norm2(ws.scratch.Rpsi)
                 last_norm2 = n2
                 p = delta * (scaled_prefactor * transition(w)) * n2
                 csum += p
                 if csum >= target
-                    copyto!(psi, ws.Rpsi)
+                    copyto!(psi, ws.scratch.Rpsi)
                     rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
                     chosen = true
                     break
                 end
 
                 if w > 1e-12
-                    mul!(ws.Rpsi, ws.jump_oft', psi)
-                    n2 = _norm2(ws.Rpsi)
+                    mul!(ws.scratch.Rpsi, ws.scratch.jump_oft', psi)
+                    n2 = _norm2(ws.scratch.Rpsi)
                     last_norm2 = n2
                     p = delta * (scaled_prefactor * transition(-w)) * n2
                     csum += p
                     if csum >= target
-                        copyto!(psi, ws.Rpsi)
+                        copyto!(psi, ws.scratch.Rpsi)
                         rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
                         chosen = true
                         break
@@ -1093,15 +1056,15 @@ function step_along_trajectory!(
             end
         else
             for w in energy_labels
-                oft!(ws.jump_oft, jump.in_eigenbasis, ham.bohr_freqs, w, inv_4sigma2)
+                oft!(ws.scratch.jump_oft, jump.in_eigenbasis, ham.bohr_freqs, w, inv_4sigma2)
 
-                mul!(ws.Rpsi, ws.jump_oft, psi)
-                n2 = _norm2(ws.Rpsi)
+                mul!(ws.scratch.Rpsi, ws.scratch.jump_oft, psi)
+                n2 = _norm2(ws.scratch.Rpsi)
                 last_norm2 = n2
                 p = delta * (scaled_prefactor * transition(w)) * n2
                 csum += p
                 if csum >= target
-                    copyto!(psi, ws.Rpsi)
+                    copyto!(psi, ws.scratch.Rpsi)
                     rmul!(psi, 1.0 / sqrt(max(n2, eps(Float64))))
                     chosen = true
                     break
@@ -1110,7 +1073,7 @@ function step_along_trajectory!(
         end
 
         if !chosen
-            copyto!(psi, ws.Rpsi)
+            copyto!(psi, ws.scratch.Rpsi)
             rmul!(psi, 1.0 / sqrt(max(last_norm2, eps(Float64))))
         end
     end

@@ -68,6 +68,7 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::Config{Lindbladian
         nothing, nothing, nothing, nothing,  # domain precomputed (transition, gnf, energy_labels, oft_domain_prefactor)
         nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # domain-specific (oft_nufft_prefactors, bohr_alpha, bohr_keys, bohr_is, bohr_js, b_minus, b_plus)
         nothing,  # coherent_unitaries
+        nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # trajectory fields
         sc,       # scratch
     )
 
