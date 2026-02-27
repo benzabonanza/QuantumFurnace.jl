@@ -16,7 +16,7 @@ Eliminated patterns that these tests guard against:
 using QuantumFurnace: B_bohr, B_time, B_trotter,
                       _precompute_data, _jump_contribution!,
                       ThermalizeScratch,
-                      TrajectoryWorkspace
+                      _build_trajectory_workspace
 using Random
 
 @testset "Allocation Regression" begin
@@ -133,13 +133,9 @@ using Random
         # Uses the 3-qubit SMALL system for fast execution.
         config = make_small_thermalize_config(TimeDomain();
             delta=0.01, mixing_time=1.0, construction=GNS())
-        precomputed = _precompute_data(config, SMALL_HAM)
         CT = ComplexF64
         dim = SMALL_DIM  # 8
-        scratch = ThermalizeScratch(CT, dim)
-        fw = build_trajectoryframework(SMALL_JUMPS, SMALL_HAM, config, precomputed, scratch, 0.01)
-
-        ws = TrajectoryWorkspace(CT, dim)
+        ws = QuantumFurnace._build_trajectory_workspace(config, SMALL_HAM, SMALL_JUMPS; delta=0.01)
 
         psi0 = zeros(CT, dim)
         psi0[1] = 1.0
@@ -147,22 +143,22 @@ using Random
         # Wrap in a function to avoid top-level scope allocation artifacts.
         # Julia's @allocated in global/testset scope can show spurious allocations
         # from boxing local variables; a function barrier ensures proper optimization.
-        function _measure_step_allocs(fw, ws, psi0)
+        function _measure_step_allocs(ws, psi0)
             psi = copy(psi0)
             rng = Xoshiro(999)
 
             # Warmup: JIT compile all code paths (no-jump, residual, dissipative-jump)
             for _ in 1:100
-                step_along_trajectory!(psi, fw, ws, rng)
+                step_along_trajectory!(psi, ws, rng)
             end
 
             # Reset and measure
             copyto!(psi, psi0)
             rng2 = Xoshiro(999)
-            return @allocated step_along_trajectory!(psi, fw, ws, rng2)
+            return @allocated step_along_trajectory!(psi, ws, rng2)
         end
 
-        allocs = _measure_step_allocs(fw, ws, psi0)
+        allocs = _measure_step_allocs(ws, psi0)
         @test allocs == 0
     end
 

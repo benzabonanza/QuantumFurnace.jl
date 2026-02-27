@@ -46,26 +46,22 @@ function convergence_ratio_test(domain; with_coherent::Bool=false, delta::Float6
     dim = SMALL_DIM  # 8
     psi0 = fill(ComplexF64(1.0), dim) / sqrt(dim)
 
-    # 1. Build trajectory framework
+    # 1. Build trajectory workspace
     therm_config = make_small_thermalize_config(domain;
         construction=with_coherent ? KMS() : GNS(), delta=delta, mixing_time=Float64(delta))
     ham_or_trott = domain isa TrotterDomain ? SMALL_TROTTER : SMALL_HAM
     jumps = domain isa TrotterDomain ? SMALL_TROTTER_JUMPS : SMALL_JUMPS
-    precomputed = QuantumFurnace._precompute_data(therm_config, ham_or_trott)
-    scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, dim)
-    fw = build_trajectoryframework(jumps, ham_or_trott, therm_config,
-        precomputed, scratch, delta)
+    trotter_arg = domain isa TrotterDomain ? SMALL_TROTTER : nothing
+    ws = QuantumFurnace._build_trajectory_workspace(therm_config, SMALL_HAM, jumps;
+        trotter=trotter_arg, delta=delta)
 
     # 2. Compute high-N reference with independent seed
-    #    This approximates the true mean of the trajectory channel,
-    #    avoiding Lie-Trotter splitting bias from DM comparison.
     N_ref = 500_000
-    ws = QuantumFurnace.TrajectoryWorkspace(fw)
     rng = Random.Xoshiro(999)
     rho_ref = zeros(ComplexF64, dim, dim)
     for _ in 1:N_ref
         psi = copy(psi0)
-        step_along_trajectory!(psi, fw, ws, rng)
+        step_along_trajectory!(psi, ws, rng)
         rho_ref .+= psi * psi'
     end
     rho_ref ./= N_ref
@@ -84,7 +80,7 @@ function convergence_ratio_test(domain; with_coherent::Bool=false, delta::Float6
 
             for _ in 1:ntraj
                 psi = copy(psi0)
-                step_along_trajectory!(psi, fw, ws, batch_rng)
+                step_along_trajectory!(psi, ws, batch_rng)
                 rho_traj .+= psi * psi'
             end
 

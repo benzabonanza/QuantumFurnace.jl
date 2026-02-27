@@ -9,16 +9,14 @@ using LinearAlgebra
     dim = size(SMALL_HAM.data, 1)
     CT = ComplexF64
 
-    # Build framework (shared, read-only)
+    # Build workspace (shared immutable data, independent scratch)
     therm_config = make_small_thermalize_config(TimeDomain();
         delta=0.01, mixing_time=1.0, construction=GNS())
-    precomputed = QuantumFurnace._precompute_data(therm_config, SMALL_HAM)
-    scratch = QuantumFurnace.ThermalizeScratch(CT, dim)
-    fw = build_trajectoryframework(SMALL_JUMPS, SMALL_HAM, therm_config, precomputed, scratch, 0.01)
+    ws_base = QuantumFurnace._build_trajectory_workspace(therm_config, SMALL_HAM, SMALL_JUMPS; delta=0.01)
 
     # Create two independent workspaces and RNGs
-    ws1 = QuantumFurnace.TrajectoryWorkspace(fw)
-    ws2 = QuantumFurnace.TrajectoryWorkspace(fw)
+    ws1 = QuantumFurnace._copy_workspace_for_thread(ws_base)
+    ws2 = QuantumFurnace._copy_workspace_for_thread(ws_base)
     rng1 = Random.Xoshiro(100)
     rng2 = Random.Xoshiro(200)
 
@@ -30,8 +28,8 @@ using LinearAlgebra
 
     # Step each workspace independently (10 steps)
     for _ in 1:10
-        step_along_trajectory!(psi1, fw, ws1, rng1)
-        step_along_trajectory!(psi2, fw, ws2, rng2)
+        step_along_trajectory!(psi1, ws1, rng1)
+        step_along_trajectory!(psi2, ws2, rng2)
     end
 
     # Different RNG seeds should produce different states (with very high probability)
@@ -41,22 +39,22 @@ using LinearAlgebra
     @test isapprox(norm(psi1), 1.0; atol=1e-10)
     @test isapprox(norm(psi2), 1.0; atol=1e-10)
 
-    # Workspace buffers should contain different data (they were used independently)
-    @test !isapprox(ws1.psi_tmp, ws2.psi_tmp; atol=1e-10)
+    # Workspace scratch buffers should contain different data (they were used independently)
+    @test !isapprox(ws1.scratch.psi_tmp, ws2.scratch.psi_tmp; atol=1e-10)
 
     # Verify determinism: re-run with same seed produces same result
-    ws3 = QuantumFurnace.TrajectoryWorkspace(fw)
+    ws3 = QuantumFurnace._copy_workspace_for_thread(ws_base)
     rng3 = Random.Xoshiro(100)  # same seed as rng1
     psi3 = copy(psi0)
     for _ in 1:10
-        step_along_trajectory!(psi3, fw, ws3, rng3)
+        step_along_trajectory!(psi3, ws3, rng3)
     end
     @test isapprox(psi1, psi3; atol=1e-14)  # deterministic replay
 
-    # Verify framework was not mutated (read-only)
-    # Re-check that we can build a workspace from fw (fw still valid)
-    ws4 = QuantumFurnace.TrajectoryWorkspace(fw)
-    @test size(ws4.jump_oft) == size(ws1.jump_oft)
+    # Verify immutable data is shared (read-only)
+    @test ws1.Rs === ws2.Rs  # same object reference
+    @test ws1.K0s === ws2.K0s
+    @test ws1.jumps === ws2.jumps
 end
 
 @testset "TrajectoryResult seed capture" begin

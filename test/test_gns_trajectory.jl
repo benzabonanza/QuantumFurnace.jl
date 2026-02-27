@@ -46,19 +46,16 @@ end
 
 @testset "GNS-01: CPTP completeness (TrotterDomain)" begin
     config = make_small_thermalize_config_gns(TrotterDomain(); delta=0.01)
-    precomputed = QuantumFurnace._precompute_data(config, SMALL_TROTTER)
-    scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, SMALL_DIM)
-    fw = build_trajectoryframework(
-        SMALL_TROTTER_JUMPS, SMALL_TROTTER, config, precomputed, scratch, config.delta
-    )
+    ws = QuantumFurnace._build_trajectory_workspace(config, SMALL_HAM, SMALL_TROTTER_JUMPS;
+        trotter=SMALL_TROTTER, delta=config.delta)
 
-    @test fw.n_jumps == length(SMALL_JUMPS)
+    @test ws.n_jumps == length(SMALL_JUMPS)
 
     identity = Matrix{ComplexF64}(I, SMALL_DIM, SMALL_DIM)
-    for (a, per_op) in enumerate(fw.per_operator)
-        completeness = per_op.K0' * per_op.K0 + fw.delta * per_op.R + per_op.U_residual' * per_op.U_residual
+    for a in 1:ws.n_jumps
+        completeness = ws.K0s[a]' * ws.K0s[a] + ws.delta * ws.Rs[a] + ws.U_residuals[a]' * ws.U_residuals[a]
         @test isapprox(completeness, identity; atol=1e-10)
-        @test per_op.U_B === nothing  # No coherent term for GNS
+        @test ws.U_Bs[a] === nothing  # No coherent term for GNS
     end
 end
 

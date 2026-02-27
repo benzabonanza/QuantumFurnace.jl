@@ -47,22 +47,20 @@ function single_step_crossval(domain, delta::Float64;
     rho_dm = reshape(exp(delta * L) * vec(rho0), dim, dim)
     rho_dm = (rho_dm + rho_dm') / 2
 
-    # 2. Build trajectory framework
+    # 2. Build trajectory workspace
     therm_config = make_small_thermalize_config(domain;
         construction=with_coherent ? KMS() : GNS(), delta=delta, mixing_time=Float64(delta))
     ham_or_trott = domain isa TrotterDomain ? SMALL_TROTTER : SMALL_HAM
-    precomputed = QuantumFurnace._precompute_data(therm_config, ham_or_trott)
-    scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, dim)
-    fw = build_trajectoryframework(jumps, ham_or_trott, therm_config,
-        precomputed, scratch, delta)
+    trotter_arg = domain isa TrotterDomain ? SMALL_TROTTER : nothing
+    ws = QuantumFurnace._build_trajectory_workspace(therm_config, SMALL_HAM, jumps;
+        trotter=trotter_arg, delta=delta)
 
     # 3. Run trajectories and accumulate rho
     rho_traj = zeros(ComplexF64, dim, dim)
-    ws = QuantumFurnace.TrajectoryWorkspace(fw)
     rng = Random.Xoshiro(seed)
     for _ in 1:ntraj
         psi = copy(psi0)
-        step_along_trajectory!(psi, fw, ws, rng)
+        step_along_trajectory!(psi, ws, rng)
         rho_traj .+= psi * psi'
     end
     rho_traj ./= ntraj
@@ -141,7 +139,7 @@ end
     errors = Float64[]
 
     for delta in deltas
-        dist = single_step_crossval(TrotterDomain(), delta; construction=KMS())
+        dist = single_step_crossval(TrotterDomain(), delta; with_coherent=true)
         @test dist < 0.01
         push!(errors, dist)
         println("  delta=$delta  trace_dist=$(round(dist; sigdigits=4))")
@@ -180,11 +178,6 @@ end
     gibbs_trott = Hermitian(SMALL_TROTTER.eigvecs' * gibbs_comp * SMALL_TROTTER.eigvecs)
 
     # Liouvillian fixed point (exact steady state of L).
-    # The TrotterDomain Liouvillian's fixed point has a negligible domain approximation
-    # offset (~1e-6) from the true Gibbs state after the Trotter basis transform fix.
-    # We compare against the fixed point for DM convergence (deterministic), and
-    # validate trajectory convergence toward the Gibbs state region with a threshold
-    # that accounts for statistical noise from finite trajectory count.
     eig = eigen(L)
     ss_idx = argmin(abs.(eig.values))
     ss_vec = eig.vectors[:, ss_idx]
@@ -226,20 +219,13 @@ end
     rho_traj = result.rho_mean
 
     # -- Assertions --
-    # DM converges to the Liouvillian fixed point within 1e-3
     dist_dm = trace_distance_h(
         Hermitian(reshape(copy(rho_dm_vec), dim, dim) |> m -> (m+m')/2), Hermitian(ss_dm))
     @test dist_dm < 1e-3     # DM converged to fixed point
 
-    # Trajectory-averaged rho converges toward the Gibbs state region.
-    # With 10,000 trajectories, the 1/sqrt(N) statistical noise floor is ~0.01.
-    # Domain approximation is now negligible (~1e-6), so the dominant error source is
-    # purely statistical noise. Total expected distance is ~0.01. We assert < 0.015 (safe margin).
     dist_traj_gibbs = trace_distance_h(Hermitian(rho_traj), gibbs_trott)
     @test dist_traj_gibbs < 0.015  # Trajectory near Gibbs (statistical noise dominant)
 
-    # Trajectory must also be closer to the fixed point than the initial state was
-    # (confirming thermalization happened, not just noise)
     rho0 = psi0 * psi0'
     dist_init = trace_distance_h(Hermitian(rho0), Hermitian(ss_dm))
     dist_traj = trace_distance_h(Hermitian(rho_traj), Hermitian(ss_dm))

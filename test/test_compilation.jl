@@ -3,29 +3,21 @@
         @test true  # If we got here, `using QuantumFurnace` succeeded
     end
 
-    @testset "build_trajectoryframework with coherent (KMS)" begin
+    @testset "_build_trajectory_workspace with coherent (KMS)" begin
         config = make_thermalize_config(EnergyDomain(); construction=KMS())
-        precomputed = QuantumFurnace._precompute_data(config, TEST_HAM)
-        scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, DIM)
-        fw = build_trajectoryframework(
-            TEST_JUMPS, TEST_HAM, config, precomputed, scratch, TEST_DELTA
-        )
-        @test fw isa TrajectoryFramework
-        @test fw.delta == TEST_DELTA
+        ws = QuantumFurnace._build_trajectory_workspace(config, TEST_HAM, TEST_JUMPS; delta=TEST_DELTA)
+        @test ws isa Workspace{Trajectory}
+        @test ws.delta == TEST_DELTA
         # Per-operator: each operator should have a coherent unitary
-        @test all(per_op -> per_op.U_B !== nothing, fw.per_operator)
+        @test all(u -> u !== nothing, ws.U_Bs)
     end
 
-    @testset "build_trajectoryframework without coherent (GNS)" begin
+    @testset "_build_trajectory_workspace without coherent (GNS)" begin
         config = make_thermalize_config(EnergyDomain(); construction=GNS())
-        precomputed = QuantumFurnace._precompute_data(config, TEST_HAM)
-        scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, DIM)
-        fw = build_trajectoryframework(
-            TEST_JUMPS, TEST_HAM, config, precomputed, scratch, TEST_DELTA
-        )
-        @test fw isa TrajectoryFramework
+        ws = QuantumFurnace._build_trajectory_workspace(config, TEST_HAM, TEST_JUMPS; delta=TEST_DELTA)
+        @test ws isa Workspace{Trajectory}
         # Per-operator: no coherent unitaries
-        @test all(per_op -> per_op.U_B === nothing, fw.per_operator)
+        @test all(u -> u === nothing, ws.U_Bs)
     end
 
     @testset "Fixtures available" begin

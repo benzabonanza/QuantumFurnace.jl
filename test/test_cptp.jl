@@ -18,48 +18,37 @@ using LinearAlgebra
 
     @testset "EnergyDomain" begin
         config = make_thermalize_config(EnergyDomain(); delta=TEST_DELTA)
-        precomputed = QuantumFurnace._precompute_data(config, TEST_HAM)
-        scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, DIM)
-        fw = build_trajectoryframework(
-            TEST_JUMPS, TEST_HAM, config, precomputed, scratch, TEST_DELTA
-        )
+        ws = QuantumFurnace._build_trajectory_workspace(config, TEST_HAM, TEST_JUMPS; delta=TEST_DELTA)
 
-        @test fw.n_jumps == length(TEST_JUMPS)
+        @test ws.n_jumps == length(TEST_JUMPS)
         identity = Matrix{ComplexF64}(I, DIM, DIM)
-        for (a, per_op) in enumerate(fw.per_operator)
-            completeness = per_op.K0' * per_op.K0 + fw.delta * per_op.R + per_op.U_residual' * per_op.U_residual
+        for a in 1:ws.n_jumps
+            completeness = ws.K0s[a]' * ws.K0s[a] + ws.delta * ws.Rs[a] + ws.U_residuals[a]' * ws.U_residuals[a]
             @test isapprox(completeness, identity; atol=1e-10)
         end
     end
 
     @testset "TimeDomain" begin
         config = make_thermalize_config(TimeDomain(); delta=TEST_DELTA)
-        precomputed = QuantumFurnace._precompute_data(config, TEST_HAM)
-        scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, DIM)
-        fw = build_trajectoryframework(
-            TEST_JUMPS, TEST_HAM, config, precomputed, scratch, TEST_DELTA
-        )
+        ws = QuantumFurnace._build_trajectory_workspace(config, TEST_HAM, TEST_JUMPS; delta=TEST_DELTA)
 
-        @test fw.n_jumps == length(TEST_JUMPS)
+        @test ws.n_jumps == length(TEST_JUMPS)
         identity = Matrix{ComplexF64}(I, DIM, DIM)
-        for (a, per_op) in enumerate(fw.per_operator)
-            completeness = per_op.K0' * per_op.K0 + fw.delta * per_op.R + per_op.U_residual' * per_op.U_residual
+        for a in 1:ws.n_jumps
+            completeness = ws.K0s[a]' * ws.K0s[a] + ws.delta * ws.Rs[a] + ws.U_residuals[a]' * ws.U_residuals[a]
             @test isapprox(completeness, identity; atol=1e-10)
         end
     end
 
     @testset "TrotterDomain" begin
         config = make_thermalize_config(TrotterDomain(); delta=TEST_DELTA)
-        precomputed = QuantumFurnace._precompute_data(config, TEST_TROTTER)
-        scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, DIM)
-        fw = build_trajectoryframework(
-            TEST_TROTTER_JUMPS, TEST_TROTTER, config, precomputed, scratch, TEST_DELTA
-        )
+        ws = QuantumFurnace._build_trajectory_workspace(config, TEST_HAM, TEST_TROTTER_JUMPS;
+            trotter=TEST_TROTTER, delta=TEST_DELTA)
 
-        @test fw.n_jumps == length(TEST_JUMPS)
+        @test ws.n_jumps == length(TEST_JUMPS)
         identity = Matrix{ComplexF64}(I, DIM, DIM)
-        for (a, per_op) in enumerate(fw.per_operator)
-            completeness = per_op.K0' * per_op.K0 + fw.delta * per_op.R + per_op.U_residual' * per_op.U_residual
+        for a in 1:ws.n_jumps
+            completeness = ws.K0s[a]' * ws.K0s[a] + ws.delta * ws.Rs[a] + ws.U_residuals[a]' * ws.U_residuals[a]
             @test isapprox(completeness, identity; atol=1e-10)
         end
     end

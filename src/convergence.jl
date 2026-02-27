@@ -174,8 +174,8 @@ function run_trajectories_convergence(
     total_time::Real = config.mixing_time,
     delta::Real = config.delta,
 )
-    # Build framework ONCE (not per batch)
-    fw, actual_seed = _build_framework_and_seed(
+    # Build workspace ONCE (not per batch)
+    ws, actual_seed = _build_framework_and_seed(
         jumps, config, psi0, hamiltonian;
         trotter=trotter, delta=delta, seed=seed,
     )
@@ -201,8 +201,8 @@ function run_trajectories_convergence(
         # Seed offset ensures non-overlapping trajectory seed sequences
         batch_seed = actual_seed + n_total
 
-        # Run batch using pre-built framework (no rebuild per batch)
-        rho_batch = _run_batch_no_obs!(fw, psi0, batch_size, batch_seed, total_time)
+        # Run batch using pre-built workspace (no rebuild per batch)
+        rho_batch = _run_batch_no_obs!(ws, psi0, batch_size, batch_seed, total_time)
 
         # Accumulate running sum (not average)
         rho_acc .+= rho_batch .* batch_size
@@ -305,8 +305,8 @@ function run_trajectories_adaptive(
     total_time::Real = config.mixing_time,
     delta::Real = config.delta,
 )
-    # Build framework ONCE (not per batch)
-    fw, actual_seed = _build_framework_and_seed(
+    # Build workspace ONCE (not per batch)
+    ws, actual_seed = _build_framework_and_seed(
         jumps, config, psi0, hamiltonian;
         trotter=trotter, delta=delta, seed=seed,
     )
@@ -341,8 +341,8 @@ function run_trajectories_adaptive(
         # Seed offset ensures non-overlapping trajectory seed sequences
         batch_seed = actual_seed + n_total
 
-        # Run batch using pre-built framework (no rebuild per batch)
-        rho_batch = _run_batch_no_obs!(fw, psi0, batch_size, batch_seed, total_time)
+        # Run batch using pre-built workspace (no rebuild per batch)
+        rho_batch = _run_batch_no_obs!(ws, psi0, batch_size, batch_seed, total_time)
 
         # Accumulate running sum (not average)
         rho_acc .+= rho_batch .* batch_size

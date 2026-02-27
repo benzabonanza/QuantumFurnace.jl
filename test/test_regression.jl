@@ -43,19 +43,6 @@ ref_dir = joinpath(source_root, "test", "reference")
     # ------------------------------------------------------------------
     # Trajectory regression: EnergyDomain
     # ------------------------------------------------------------------
-    # Trajectory averages are compared against DM evolution (not frozen BSON).
-    # This is platform-portable because DM evolution via exp(delta*L) is
-    # deterministic across all platforms and Julia versions.
-    #
-    # Uses delta=0.01 (not delta=0.1) to keep the Lie-Trotter splitting bias
-    # small: trajectories apply Kraus operators one-by-one (product formula)
-    # while DM uses exp(delta*L) (full Liouvillian), giving O(delta) systematic
-    # error. At delta=0.01 the splitting bias is ~0.01 and statistical noise
-    # from 1000 trajectories is also ~O(1/sqrt(1000)) ~ 0.03, so the combined
-    # error is well within atol=0.05.
-    #
-    # Real regressions (broken Kraus operators, wrong jump sampling) produce
-    # O(1) errors and will be caught easily by the 0.05 tolerance.
     @testset "Trajectory regression: EnergyDomain" begin
         delta = 0.01
         seed = 12345
@@ -70,17 +57,13 @@ ref_dir = joinpath(source_root, "test", "reference")
         # Compute trajectory average
         therm_config = make_small_thermalize_config(EnergyDomain();
             delta=delta, mixing_time=Float64(delta))
-        precomputed = QuantumFurnace._precompute_data(therm_config, SMALL_HAM)
-        scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, SMALL_DIM)
-        fw = build_trajectoryframework(SMALL_JUMPS, SMALL_HAM, therm_config,
-            precomputed, scratch, delta)
+        ws = QuantumFurnace._build_trajectory_workspace(therm_config, SMALL_HAM, SMALL_JUMPS; delta=delta)
 
-        ws = QuantumFurnace.TrajectoryWorkspace(fw)
         rng = Random.Xoshiro(seed)
         rho_traj = zeros(ComplexF64, SMALL_DIM, SMALL_DIM)
         for _ in 1:ntraj
             psi = copy(psi0)
-            step_along_trajectory!(psi, fw, ws, rng)
+            step_along_trajectory!(psi, ws, rng)
             rho_traj .+= psi * psi'
         end
         rho_traj ./= ntraj
@@ -108,19 +91,6 @@ ref_dir = joinpath(source_root, "test", "reference")
     # ------------------------------------------------------------------
     # Trajectory regression: TrotterDomain (coherent)
     # ------------------------------------------------------------------
-    # Trajectory averages are compared against DM evolution (not frozen BSON).
-    # This is platform-portable because DM evolution via exp(delta*L) is
-    # deterministic across all platforms and Julia versions.
-    #
-    # Uses delta=0.01 (not delta=0.1) to keep the Lie-Trotter splitting bias
-    # small: trajectories apply Kraus operators one-by-one (product formula)
-    # while DM uses exp(delta*L) (full Liouvillian), giving O(delta) systematic
-    # error. At delta=0.01 the splitting bias is ~0.009 and statistical noise
-    # from 1000 trajectories is also ~O(1/sqrt(1000)) ~ 0.03, so the combined
-    # error is well within atol=0.05.
-    #
-    # Real regressions (broken Kraus operators, wrong jump sampling) produce
-    # O(1) errors and will be caught easily by the 0.05 tolerance.
     @testset "Trajectory regression: TrotterDomain (coherent)" begin
         delta = 0.01
         seed = 12345
@@ -135,17 +105,14 @@ ref_dir = joinpath(source_root, "test", "reference")
         # Compute trajectory average
         therm_config = make_small_thermalize_config(TrotterDomain();
             construction=KMS(), delta=delta, mixing_time=Float64(delta))
-        precomputed = QuantumFurnace._precompute_data(therm_config, SMALL_TROTTER)
-        scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, SMALL_DIM)
-        fw = build_trajectoryframework(SMALL_TROTTER_JUMPS, SMALL_TROTTER, therm_config,
-            precomputed, scratch, delta)
+        ws = QuantumFurnace._build_trajectory_workspace(therm_config, SMALL_HAM, SMALL_TROTTER_JUMPS;
+            trotter=SMALL_TROTTER, delta=delta)
 
-        ws = QuantumFurnace.TrajectoryWorkspace(fw)
         rng = Random.Xoshiro(seed)
         rho_traj = zeros(ComplexF64, SMALL_DIM, SMALL_DIM)
         for _ in 1:ntraj
             psi = copy(psi0)
-            step_along_trajectory!(psi, fw, ws, rng)
+            step_along_trajectory!(psi, ws, rng)
             rho_traj .+= psi * psi'
         end
         rho_traj ./= ntraj
