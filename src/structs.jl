@@ -210,6 +210,81 @@ function ConvergenceData(
     )
 end
 
+# ---------------------------------------------------------------------------
+# New typed Result structs (Phase 36)
+# ---------------------------------------------------------------------------
+
+abstract type AbstractResults end
+
+"""
+    LindbladResults{T<:AbstractFloat} <: AbstractResults
+
+Results from dense Liouvillian spectral analysis (`run_lindblad`).
+Stores leading eigenvalues, fixed point, gap mode, and spectral gap.
+Does NOT store the full Liouvillian matrix (prohibitively large at scale).
+"""
+struct LindbladResults{T<:AbstractFloat} <: AbstractResults
+    config::Config
+    eigenvalues::Vector{Complex{T}}
+    fixed_point::Matrix{Complex{T}}
+    gap_mode::Matrix{Complex{T}}
+    spectral_gap::Complex{T}
+    metadata::Dict{Symbol, Any}
+end
+
+"""
+    ThermalizeResults{T<:AbstractFloat} <: AbstractResults
+
+Results from density-matrix Kraus evolution (`run_thermalize`).
+Includes trace distances to the Gibbs state over time for convergence plotting.
+"""
+struct ThermalizeResults{T<:AbstractFloat} <: AbstractResults
+    config::Config
+    final_dm::Matrix{Complex{T}}
+    trace_distances::Vector{T}
+    time_steps::Vector{T}
+    metadata::Dict{Symbol, Any}
+end
+
+"""
+    KrylovSpectrumResults{T<:AbstractFloat} <: AbstractResults
+
+Results from Krylov-based spectral gap estimation (`run_krylov_spectrum`).
+Stores eigenvalues, gap, fixed point, convergence info, and optional channel data.
+"""
+struct KrylovSpectrumResults{T<:AbstractFloat} <: AbstractResults
+    config::Config
+    eigenvalues::Vector{Complex{T}}
+    spectral_gap::T
+    fixed_point::Matrix{Complex{T}}
+    gap_mode::Matrix{Complex{T}}
+    converged::Int
+    matvec_count::Int
+    num_restarts::Int
+    normres::Vector{T}
+    channel_eigenvalues::Union{Nothing, Vector{Complex{T}}}
+    delta_used::Union{Nothing, T}
+    metadata::Dict{Symbol, Any}
+end
+
+"""
+    TrajectoryResults{T<:AbstractFloat} <: AbstractResults
+
+Results from trajectory-based quantum simulation (`run_trajectory`).
+Observable and convergence data are `Union{Nothing, ...}` -- only populated
+when those features were used.
+"""
+struct TrajectoryResults{T<:AbstractFloat} <: AbstractResults
+    config::Config
+    rho_mean::Matrix{Complex{T}}
+    n_trajectories::Int
+    seed::Int
+    times::Union{Nothing, Vector{Float64}}
+    measurements_mean::Union{Nothing, Matrix{Float64}}
+    convergence::Union{Nothing, ConvergenceData}
+    metadata::Dict{Symbol, Any}
+end
+
 struct LSIFramework{T}
     dim::Int
 
