@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-25)
 ## Current Position
 
 Phase: 38 of 38 (Test Cleanup)
-Plan: 1/5 complete
-Status: Completed 38-01: Test infrastructure consolidation
-Last activity: 2026-02-28 - Completed 38-01: Unified 8 config factories into make_config, renamed SMALL_* to N3_*, deleted old_tests, integrated trajectory_validation
+Plan: 3/5 complete
+Status: Completed 38-03: @info output and threshold rationale for scaling/convergence tests
+Last activity: 2026-02-28 - Completed 38-03: Added structured @info diagnostics to test_dm_scaling and test_gns_trajectory, documented policy for test_observable_trajectories and test_results
 
-Progress: [######░░░░] ~50% (v2.0, 16/~24 plans)
+Progress: [######░░░░] ~50% (v2.0, 18/~24 plans)
 
 ## Performance Metrics
 
@@ -78,6 +78,9 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [38-01] Unified make_config(sim, domain; kwargs...) uses Config(; ...) with leading semicolon for keyword-only NamedTuple splatting
 - [38-01] Default construction=KMS() in make_config; GNS callers pass construction=GNS() explicitly
 - [38-01] Trajectory validation gated at runtests.jl level (QUANTUMFURNACE_FULL_TESTS) to save compilation time
+- [38-03] All println() in test_dm_scaling.jl replaced with structured @info keyword args
+- [38-03] test_observable_trajectories.jl and test_results.jl get zero @info (all exact/structural checks)
+- [38-03] Per-iteration @info for ratio tests; summary @info for CPTP loop tests
 
 ### Key Constraints for v2.0
 
@@ -108,5 +111,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: Completed 38-01-PLAN.md (Test infrastructure consolidation). Ready for 38-02.
+Stopped at: Completed 38-03-PLAN.md (@info output and threshold rationale). Ready for 38-04.
 Resume file: None
