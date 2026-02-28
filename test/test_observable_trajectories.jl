@@ -2,6 +2,10 @@ using Test
 using Random
 using LinearAlgebra
 
+# All tests in this file are exact bitwise cross-validations (same seed, same results)
+# or structural checks (type, size, field existence). No numerical threshold comparisons,
+# so no @info additions needed per test output policy.
+
 @testset "Observable-Only Trajectory Runner" begin
     # Setup: 3-qubit test system (dim=8)
     dim = N3_DIM  # 8

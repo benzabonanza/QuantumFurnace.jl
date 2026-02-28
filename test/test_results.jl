@@ -1,6 +1,9 @@
 using Random
 using BSON
 
+# All tests in this file are exact round-trip checks (atol=0 or exact equality);
+# no @info needed per test output policy.
+
 @testset "New Result types serialization" begin
 
     # -----------------------------------------------------------------------
