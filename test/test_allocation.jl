@@ -29,13 +29,11 @@ using Random
         # Single-jump (wrapped as vector): warmup + measure
         B_ref = B_bohr(TEST_HAM, JumpOp[jump], config)
         allocs = @allocated B_bohr(TEST_HAM, JumpOp[jump], config)
-        # B_bohr allocates: return matrix B (dim x dim), scratch f_A_nu_1 (dim x dim),
-        # plus per-frequency broadcasting overhead from closure-based @. computation.
-        # It should NOT allocate sparse matrices per frequency (the eliminated pattern).
-        # Threshold: allow current baseline allocations (broadcasting + buffers) with headroom,
-        # but catch reintroduction of per-frequency sparse matrix allocations.
-        max_expected = num_freqs * DIM^2 * sizeof(ComplexF64)
-        @test allocs <= max_expected
+        # Budget: return matrix + scratch + per-frequency broadcasting overhead.
+        # Must NOT include per-frequency sparse matrix allocations (the eliminated O(num_freqs * dim^2) pattern).
+        max_expected = num_freqs * DIM^2 * sizeof(ComplexF64)  # generous upper bound for broadcasting
+        @test allocs <= max_expected  # B_bohr single-jump: allow buffers + broadcasting, catch sparse matrix reintroduction
+        @info "B_bohr allocations (single-jump)" allocs_bytes=allocs threshold=max_expected num_freqs=num_freqs
 
         # Multi-jump: warmup + measure
         B_ref_multi = B_bohr(TEST_HAM, TEST_JUMPS, config)
@@ -43,7 +41,8 @@ using Random
         # Multi-jump: overhead scales linearly with number of jumps.
         num_jumps = length(TEST_JUMPS)
         max_expected_multi = num_jumps * max_expected
-        @test allocs_multi <= max_expected_multi
+        @test allocs_multi <= max_expected_multi  # B_bohr multi-jump: linear scaling with n_jumps
+        @info "B_bohr allocations (multi-jump)" allocs_bytes=allocs_multi threshold=max_expected_multi num_jumps=num_jumps
     end
 
     @testset "B_time allocations" begin
@@ -55,24 +54,22 @@ using Random
         # Single-jump (wrapped as vector) warmup + measure
         B_ref = B_time(JumpOp[jump], TEST_HAM, b_minus, b_plus, T0, BETA, SIGMA)
         allocs = @allocated B_time(JumpOp[jump], TEST_HAM, b_minus, b_plus, T0, BETA, SIGMA)
-        # Expected allocations: pre-allocated buffers (diag_u, diag_u2 vectors; b_plus_summand,
-        # tmp, M, B matrices) and lazy adjoint views from mul! calls.
-        # It should NOT include per-iteration Diagonal wrapper allocations (the eliminated pattern).
-        # The old pattern would add ~(num_b_plus + num_b_minus) * (vector + Diagonal struct)
-        # allocations, easily exceeding 100 * d^2 bytes.
+        # Budget: pre-allocated buffers (diag_u, diag_u2 vectors; b_plus_summand, tmp, M, B matrices)
+        # and lazy adjoint views from mul! calls. Must NOT include per-iteration Diagonal wrapper allocations.
         d = DIM
-        max_expected = 25 * d^2 * sizeof(ComplexF64) + 4096
-        @test allocs <= max_expected
+        max_expected = 25 * d^2 * sizeof(ComplexF64) + 4096  # empirical: buffers + mul! adjoint wrappers + headroom
+        @test allocs <= max_expected  # B_time single-jump: allow buffers, catch Diagonal wrapper reintroduction
+        @info "B_time allocations (single-jump)" allocs_bytes=allocs threshold=max_expected
 
         # Multi-jump warmup + measure
         B_ref_m = B_time(TEST_JUMPS, TEST_HAM, b_minus, b_plus, T0, BETA, SIGMA)
         allocs_m = @allocated B_time(TEST_JUMPS, TEST_HAM, b_minus, b_plus, T0, BETA, SIGMA)
-        # Multi-jump has additional mul!(M, jump_eig', tmp) per jump per b_plus iteration.
-        # Each adjoint-mul may allocate a lazy wrapper. Allow proportional budget.
+        # Multi-jump: additional mul! per jump per b_plus iteration
         num_jumps = length(TEST_JUMPS)
         num_b_plus = length(b_plus)
-        max_expected_multi = max_expected + num_jumps * num_b_plus * d * sizeof(ComplexF64) + 4096
-        @test allocs_m <= max_expected_multi
+        max_expected_multi = max_expected + num_jumps * num_b_plus * d * sizeof(ComplexF64) + 4096  # empirical: per-jump adjoint overhead
+        @test allocs_m <= max_expected_multi  # B_time multi-jump: linear scaling with n_jumps * n_b_plus
+        @info "B_time allocations (multi-jump)" allocs_bytes=allocs_m threshold=max_expected_multi num_jumps=num_jumps
     end
 
     @testset "B_trotter allocations" begin
@@ -88,16 +85,18 @@ using Random
         B_ref = B_trotter(JumpOp[jump], TEST_TROTTER, b_minus, b_plus, BETA, SIGMA)
         allocs = @allocated B_trotter(JumpOp[jump], TEST_TROTTER, b_minus, b_plus, BETA, SIGMA)
         d = DIM
-        max_expected = 25 * d^2 * sizeof(ComplexF64) + 4096
-        @test allocs <= max_expected
+        max_expected = 25 * d^2 * sizeof(ComplexF64) + 4096  # empirical: same structure as B_time
+        @test allocs <= max_expected  # B_trotter single-jump: same budget rationale as B_time
+        @info "B_trotter allocations (single-jump)" allocs_bytes=allocs threshold=max_expected
 
         # Multi-jump warmup + measure
         B_ref_m = B_trotter(trotter_jumps, TEST_TROTTER, b_minus, b_plus, BETA, SIGMA)
         allocs_m = @allocated B_trotter(trotter_jumps, TEST_TROTTER, b_minus, b_plus, BETA, SIGMA)
         num_jumps = length(trotter_jumps)
         num_b_plus = length(b_plus)
-        max_expected_multi = max_expected + num_jumps * num_b_plus * d * sizeof(ComplexF64) + 4096
-        @test allocs_m <= max_expected_multi
+        max_expected_multi = max_expected + num_jumps * num_b_plus * d * sizeof(ComplexF64) + 4096  # empirical: per-jump adjoint overhead
+        @test allocs_m <= max_expected_multi  # B_trotter multi-jump: same scaling as B_time
+        @info "B_trotter allocations (multi-jump)" allocs_bytes=allocs_m threshold=max_expected_multi num_jumps=num_jumps
     end
 
     @testset "_jump_contribution! Time/Trotter filter allocation" begin
@@ -119,13 +118,11 @@ using Random
         evolving_dm .= Matrix{CT}(TEST_GIBBS)
         allocs = @allocated _jump_contribution!(evolving_dm, jump, TEST_HAM, config_therm, precomputed, scratch)
 
-        # _jump_contribution! should be mostly in-place. It still has mul! calls and
-        # the eigen() in _finalize_kraus_step! which allocates. The key test:
-        # allocations should NOT include the filter+abs vectors (2 * num_energies * sizeof(Float64)).
-        # Since _finalize_kraus_step! inherently allocates (eigen decomposition), we test
-        # that allocations are bounded and don't include the filter overhead.
-        # Allow generous budget for eigen + mul! temporaries, but NOT for filter.
-        @test allocs < 50 * d^2 * sizeof(CT)
+        # Budget: eigen() + mul! temporaries in _finalize_kraus_step!.
+        # Must NOT include filter+abs vector overhead (2 * num_energies * sizeof(Float64) per iteration).
+        max_expected = 50 * d^2 * sizeof(CT)  # generous for eigen decomposition + scratch
+        @test allocs < max_expected  # _jump_contribution! in-place: allow eigen, catch filter vector reintroduction
+        @info "_jump_contribution! allocations (TimeDomain)" allocs_bytes=allocs threshold=max_expected
     end
 
     @testset "step_along_trajectory! allocations" begin
@@ -159,7 +156,8 @@ using Random
         end
 
         allocs = _measure_step_allocs(ws, psi0)
-        @test allocs == 0
+        @test allocs == 0  # Hot path must be allocation-free for parallel scaling (Union{Nothing,Function} boxing handled by MATVEC_ALLOC_BUDGET elsewhere)
+        @info "step_along_trajectory! allocations" allocs_bytes=allocs threshold=0
     end
 
 end

@@ -85,7 +85,9 @@ end
         QuantumFurnace.hermitianize!(rho_ref)
 
         # Threaded accumulation order may differ, so use isapprox with tight tolerance
-        @test isapprox(result_threaded.rho_mean, rho_ref; atol=1e-13)
+        agreement_err = maximum(abs.(result_threaded.rho_mean - rho_ref))
+        @test isapprox(result_threaded.rho_mean, rho_ref; atol=1e-13)  # FP accumulation order difference between threaded and serial: O(ntraj * DIM^2 * eps) ~ 20 * 64 * 1e-16 ~ 1e-13
+        @info "Serial-threaded agreement" max_element_error=agreement_err threshold_atol=1e-13 ntraj=ntraj
     else
         @info "Skipping serial-threaded agreement test (nthreads=$(Threads.nthreads()))"
         @test true
@@ -183,7 +185,8 @@ end
         @info "Threading performance" nthreads=Threads.nthreads() t_serial t_threaded speedup=t_serial/t_threaded
 
         # Threaded should be faster than serial (no regression from threading overhead)
-        @test t_threaded < t_serial
+        @test t_threaded < t_serial  # Timing comparison: system-dependent, no fixed threshold -- just verifies threading doesn't regress
+        @info "Threading speedup test" t_threaded t_serial passed=(t_threaded < t_serial)
     else
         @info "Skipping threading speedup test (nthreads=$(Threads.nthreads()))"
         @test true

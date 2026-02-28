@@ -37,7 +37,9 @@ ref_dir = joinpath(source_root, "test", "reference")
         rho_fresh = reshape(exp(delta * L) * vec(rho0), N3_DIM, N3_DIM)
         rho_fresh = (rho_fresh + rho_fresh') / 2
 
-        @test isapprox(rho_fresh, rho_ref; atol=1e-10)
+        max_err = maximum(abs.(rho_fresh - rho_ref))
+        @test isapprox(rho_fresh, rho_ref; atol=1e-10)  # Deterministic DM: exp(delta*L) matches to machine precision; 1e-10 allows FP accumulation in matrix exponential (DIM^2 * eps ~ 64 * 1e-16 ~ 6e-15)
+        @info "TINF-02: DM regression (EnergyDomain)" max_element_error=max_err threshold_atol=1e-10
     end
 
     # ------------------------------------------------------------------
@@ -69,7 +71,9 @@ ref_dir = joinpath(source_root, "test", "reference")
         rho_traj ./= ntraj
         rho_traj = (rho_traj + rho_traj') / 2
 
-        @test isapprox(rho_traj, rho_dm; atol=0.05)
+        max_err = maximum(abs.(rho_traj - rho_dm))
+        @test isapprox(rho_traj, rho_dm; atol=0.05)  # Statistical: 1000 trajectories, expected error ~ 1/sqrt(1000) ~ 0.03, threshold 0.05 gives ~1.6x margin
+        @info "TINF-02: Trajectory regression (EnergyDomain)" max_element_error=max_err threshold_atol=0.05 n_trajectories=ntraj expected_noise="~1/sqrt(1000)≈0.03"
     end
 
     # ------------------------------------------------------------------
@@ -85,7 +89,9 @@ ref_dir = joinpath(source_root, "test", "reference")
         rho_fresh = reshape(exp(delta * L) * vec(rho0), N3_DIM, N3_DIM)
         rho_fresh = (rho_fresh + rho_fresh') / 2
 
-        @test isapprox(rho_fresh, rho_ref; atol=1e-10)
+        max_err = maximum(abs.(rho_fresh - rho_ref))
+        @test isapprox(rho_fresh, rho_ref; atol=1e-10)  # Deterministic DM with coherent term: same rationale as EnergyDomain DM regression
+        @info "TINF-02: DM regression (TrotterDomain, coherent)" max_element_error=max_err threshold_atol=1e-10
     end
 
     # ------------------------------------------------------------------
@@ -118,7 +124,9 @@ ref_dir = joinpath(source_root, "test", "reference")
         rho_traj ./= ntraj
         rho_traj = (rho_traj + rho_traj') / 2
 
-        @test isapprox(rho_traj, rho_dm; atol=0.05)
+        max_err = maximum(abs.(rho_traj - rho_dm))
+        @test isapprox(rho_traj, rho_dm; atol=0.05)  # Statistical: same rationale as EnergyDomain trajectory regression
+        @info "TINF-02: Trajectory regression (TrotterDomain, coherent)" max_element_error=max_err threshold_atol=0.05 n_trajectories=ntraj expected_noise="~1/sqrt(1000)≈0.03"
     end
 
 end

@@ -36,8 +36,12 @@ using LinearAlgebra
     @test !isapprox(psi1, psi2; atol=1e-10)
 
     # Both states should be normalized
-    @test isapprox(norm(psi1), 1.0; atol=1e-10)
-    @test isapprox(norm(psi2), 1.0; atol=1e-10)
+    norm1 = norm(psi1)
+    norm2 = norm(psi2)
+    @test isapprox(norm1, 1.0; atol=1e-10)  # Multi-step normalization: accumulated FP error over 10 unitary steps, N3_DIM * 10 * eps ~ 80 * 1e-16 ~ 8e-15
+    @info "Workspace independence: psi1 norm" norm=norm1 threshold_atol=1e-10
+    @test isapprox(norm2, 1.0; atol=1e-10)  # Same rationale as psi1
+    @info "Workspace independence: psi2 norm" norm=norm2 threshold_atol=1e-10
 
     # Workspace scratch buffers should contain different data (they were used independently)
     @test !isapprox(ws1.scratch.psi_tmp, ws2.scratch.psi_tmp; atol=1e-10)
@@ -49,7 +53,9 @@ using LinearAlgebra
     for _ in 1:10
         step_along_trajectory!(psi3, ws3, rng3)
     end
-    @test isapprox(psi1, psi3; atol=1e-14)  # deterministic replay
+    replay_err = norm(psi1 - psi3)
+    @test isapprox(psi1, psi3; atol=1e-14)  # Deterministic replay: same seed + same workspace -> bitwise identical (1e-14 allows tiny platform FP differences)
+    @info "Workspace independence: deterministic replay" error=replay_err threshold_atol=1e-14
 
     # Verify immutable data is shared (read-only)
     @test ws1.Rs === ws2.Rs  # same object reference
@@ -73,12 +79,16 @@ end
     @test result1.seed == 42
     @test result1.n_trajectories == 10
     @test size(result1.rho_mean) == (dim, dim)
-    @test isapprox(tr(result1.rho_mean), 1.0; atol=1e-10)
+    trace_val = real(tr(result1.rho_mean))
+    @test isapprox(trace_val, 1.0; atol=1e-10)  # Density matrix trace: normalization from trajectory average (10 trajectories, accumulated FP rounding)
+    @info "TrajectoryResult trace" value=trace_val threshold_atol=1e-10
 
     # Deterministic: same seed -> same result
     result2 = run_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
         delta=0.01, ntraj=10, seed=42)
-    @test isapprox(result1.rho_mean, result2.rho_mean; atol=1e-14)
+    determ_err = maximum(abs.(result1.rho_mean - result2.rho_mean))
+    @test isapprox(result1.rho_mean, result2.rho_mean; atol=1e-14)  # Deterministic: same seed + same code -> bitwise identical across runs
+    @info "TrajectoryResult determinism" max_element_error=determ_err threshold_atol=1e-14
 
     # Without seed: auto-generated, stored in result
     result3 = run_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
