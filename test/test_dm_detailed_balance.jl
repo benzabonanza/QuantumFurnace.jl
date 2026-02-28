@@ -28,8 +28,8 @@ errors: dist(Bohr) <= dist(Energy) <= dist(Time) <= dist(Trotter).
     ss_dm ./= tr(ss_dm)
 
     dist = trace_distance_h(Hermitian(ss_dm), N3_GIBBS)
-    @info "DMTST-01: Bohr fixed point trace distance to Gibbs" dist
-    @test dist < 1e-10
+    @test dist < 1e-10  # KMS detailed balance: Gibbs is exact fixed point, error is machine precision (N3_DIM * eps ~ 8 * 1e-16 ~ 1e-14)
+    @info "DMTST-01: Bohr fixed point trace distance to Gibbs" trace_distance=dist threshold=1e-10
 end
 
 @testset "DMTST-02: Domain error hierarchy (4-qubit)" begin
@@ -64,7 +64,11 @@ end
     @info "DMTST-02: Domain distances to Gibbs" bohr=distances[:bohr] energy=distances[:energy] time=distances[:time] trotter=distances[:trotter]
 
     # Verify monotonic hierarchy with small numerical tolerance
-    @test distances[:bohr] <= distances[:energy] + 1e-12
-    @test distances[:energy] <= distances[:time] + 1e-12
-    @test distances[:time] <= distances[:trotter] + 1e-12
+    # 1e-12 tolerance: eigendecomposition rounding may cause tiny ordering violations at machine precision
+    @test distances[:bohr] <= distances[:energy] + 1e-12  # Bohr is exact (KMS), Energy approximates filter function
+    @info "DMTST-02: Bohr <= Energy" bohr=distances[:bohr] energy=distances[:energy] tolerance=1e-12
+    @test distances[:energy] <= distances[:time] + 1e-12  # Energy uses analytic filter, Time uses quadrature
+    @info "DMTST-02: Energy <= Time" energy=distances[:energy] time=distances[:time] tolerance=1e-12
+    @test distances[:time] <= distances[:trotter] + 1e-12  # Time uses exact eigenbasis, Trotter uses approximate eigenbasis
+    @info "DMTST-02: Time <= Trotter" time=distances[:time] trotter=distances[:trotter] tolerance=1e-12
 end

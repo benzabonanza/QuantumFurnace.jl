@@ -24,7 +24,9 @@
         @test size(TEST_HAM.data) == (DIM, DIM)
         @test length(TEST_JUMPS) == 3 * NUM_QUBITS  # 12 jumps
         @test size(TEST_GIBBS) == (DIM, DIM)
-        @test isapprox(tr(TEST_GIBBS), 1.0; atol=TOL_EXACT)
+        gibbs_trace = real(tr(TEST_GIBBS))
+        @test isapprox(gibbs_trace, 1.0; atol=TOL_EXACT)  # Gibbs state trace: exact normalization to machine precision
+        @info "Gibbs trace" value=gibbs_trace threshold_atol=TOL_EXACT
     end
 
     @testset "Tolerance tiers defined" begin

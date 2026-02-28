@@ -12,7 +12,8 @@ using LinearAlgebra
 #   U_res_a'*U_res_a = S_a (by construction)
 #   K0_a'*K0_a + delta*R_a + S_a = I (same algebraic identity, per operator)
 #
-# Tolerance: 1e-10 (per user decision -- allows small numerical accumulation)
+# Tolerance: 1e-10 (algebraic identity; error scales as DIM^2 * eps ~ 16^2 * 1e-16 ~ 3e-13,
+#   so 1e-10 gives ~300x margin for FP accumulation across DIM^2 matrix entries)
 
 @testset "CPTP Per-Operator Completeness (TVAL-01)" begin
 
@@ -22,10 +23,14 @@ using LinearAlgebra
 
         @test ws.n_jumps == length(TEST_JUMPS)
         identity = Matrix{ComplexF64}(I, DIM, DIM)
+        max_err = 0.0
         for a in 1:ws.n_jumps
             completeness = ws.K0s[a]' * ws.K0s[a] + ws.delta * ws.Rs[a] + ws.U_residuals[a]' * ws.U_residuals[a]
-            @test isapprox(completeness, identity; atol=1e-10)
+            err = norm(completeness - identity)
+            max_err = max(max_err, err)
+            @test isapprox(completeness, identity; atol=1e-10)  # CPTP: K0'K0 + delta*R + U'U = I (algebraic identity)
         end
+        @info "CPTP completeness (EnergyDomain)" n_jumps=ws.n_jumps max_error=max_err threshold_atol=1e-10
     end
 
     @testset "TimeDomain" begin
@@ -34,10 +39,14 @@ using LinearAlgebra
 
         @test ws.n_jumps == length(TEST_JUMPS)
         identity = Matrix{ComplexF64}(I, DIM, DIM)
+        max_err = 0.0
         for a in 1:ws.n_jumps
             completeness = ws.K0s[a]' * ws.K0s[a] + ws.delta * ws.Rs[a] + ws.U_residuals[a]' * ws.U_residuals[a]
-            @test isapprox(completeness, identity; atol=1e-10)
+            err = norm(completeness - identity)
+            max_err = max(max_err, err)
+            @test isapprox(completeness, identity; atol=1e-10)  # CPTP: K0'K0 + delta*R + U'U = I (algebraic identity)
         end
+        @info "CPTP completeness (TimeDomain)" n_jumps=ws.n_jumps max_error=max_err threshold_atol=1e-10
     end
 
     @testset "TrotterDomain" begin
@@ -47,10 +56,14 @@ using LinearAlgebra
 
         @test ws.n_jumps == length(TEST_JUMPS)
         identity = Matrix{ComplexF64}(I, DIM, DIM)
+        max_err = 0.0
         for a in 1:ws.n_jumps
             completeness = ws.K0s[a]' * ws.K0s[a] + ws.delta * ws.Rs[a] + ws.U_residuals[a]' * ws.U_residuals[a]
-            @test isapprox(completeness, identity; atol=1e-10)
+            err = norm(completeness - identity)
+            max_err = max(max_err, err)
+            @test isapprox(completeness, identity; atol=1e-10)  # CPTP: K0'K0 + delta*R + U'U = I (algebraic identity)
         end
+        @info "CPTP completeness (TrotterDomain)" n_jumps=ws.n_jumps max_error=max_err threshold_atol=1e-10
     end
 
 end
