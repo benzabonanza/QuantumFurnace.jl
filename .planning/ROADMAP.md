@@ -184,8 +184,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 37-01-PLAN.md -- Dead code removal, staging file moves, placeholder deletion, Project.toml cleanup
-- [ ] 37-02-PLAN.md -- Module export reorganization, runtests.jl update, main_krylov.jl simulation script
+- [x] 37-01-PLAN.md -- Dead code removal, staging file moves, placeholder deletion, Project.toml cleanup
+- [x] 37-02-PLAN.md -- Module export reorganization, runtests.jl update, main_krylov.jl simulation script
 
 ### Phase 38: Test Cleanup
 **Goal**: Test infrastructure is consolidated with parametrized helpers, informative output, and validated thresholds so that tests are maintainable and trustworthy
@@ -196,11 +196,14 @@ Plans:
   2. Every `@testset` block prints `@info` showing what is being tested and key numerical results (trace distances, gaps, allocation counts)
   3. Previously dubious test thresholds are reviewed and either tightened with documented rationale or relaxed with explanation of why the original threshold was wrong
   4. All tests pass and the full test suite runs without regressions from the restructure
-**Plans**: TBD
+**Plans**: 5 plans
 
 Plans:
-- [ ] 38-01: TBD
-- [ ] 38-02: TBD
+- [ ] 38-01-PLAN.md -- Consolidate test helpers, rename SMALL_* to N3_*, delete old_tests, integrate trajectory_validation
+- [ ] 38-02-PLAN.md -- Add @info and threshold rationale to 8 shorter test files (compilation, cptp, dm_detailed_balance, trajectory_fixes, regression, allocation, workspace_independence, threading)
+- [ ] 38-03-PLAN.md -- Add @info and threshold rationale to dm_scaling, gns_trajectory, observable_trajectories, results
+- [ ] 38-04-PLAN.md -- Add @info and threshold rationale to test_diagnostics and test_convergence (largest files)
+- [ ] 38-05-PLAN.md -- Add @info and threshold rationale to 3 Krylov test files (matvec, eigsolve, crossvalidation)
 
 ## Progress
 
@@ -246,4 +249,4 @@ Phases execute in numeric order: 33 -> 34 -> 35 -> 36 -> 37 -> 38
 | 35. Workspace and Channel Consolidation | v2.0 | 2/2 | Complete | 2026-02-27 |
 | 36. API and Results | v2.0 | 4/4 | Complete | 2026-02-27 |
 | 37. File Organization and Dead Code | v2.0 | 2/2 | Complete | 2026-02-27 |
-| 38. Test Cleanup | v2.0 | 0/TBD | Not started | - |
+| 38. Test Cleanup | v2.0 | 0/5 | Not started | - |
