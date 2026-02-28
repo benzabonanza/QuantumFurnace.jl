@@ -24,4 +24,12 @@ include("test_helpers.jl")
     include("test_krylov_matvec.jl")
     include("test_krylov_eigsolve.jl")
     include("test_krylov_crossvalidation.jl")
+
+    # Trajectory validation (slow: ~minutes, gated behind env variable)
+    if get(ENV, "QUANTUMFURNACE_FULL_TESTS", "false") == "true"
+        include("trajectory_validation/run_trajectory_validation.jl")
+        include("trajectory_validation/run_convergence_tests.jl")
+    else
+        @info "Skipping trajectory validation tests (set QUANTUMFURNACE_FULL_TESTS=true to run)"
+    end
 end
