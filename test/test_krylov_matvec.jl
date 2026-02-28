@@ -54,12 +54,19 @@ end
         L_dense = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
         ws = Workspace(config, TEST_HAM, TEST_JUMPS)
 
+        # Threshold rationale: matvec is algebraically exact (same computation, different code path).
+        # Error is pure FP accumulation: O(n_jumps * DIM^2 * eps) ~ 12 * 256 * 1e-16 ~ 3e-13.
+        # Threshold 1e-12 gives ~3x safety margin.
+        max_err = 0.0
         for _ in 1:10
             rho = Matrix(random_density_matrix(NUM_QUBITS))
             v_dense = L_dense * vec(rho)
             L_rho = apply_lindbladian!(ws, rho, config, TEST_HAM)
-            @test norm(v_dense - vec(L_rho)) < 1e-12
+            err = norm(v_dense - vec(L_rho))
+            @test err < 1e-12
+            max_err = max(max_err, err)
         end
+        @info "Matvec round-trip (EnergyDomain GNS, no coherent)" max_error=max_err n_samples=10 threshold=1e-12
     end
 
     # ========================================================================
@@ -70,12 +77,17 @@ end
         L_dense = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
         ws = Workspace(config, TEST_HAM, TEST_JUMPS)
 
+        # Threshold rationale: same as testset 2 -- algebraically exact, FP accumulation only.
+        max_err = 0.0
         for _ in 1:10
             rho = Matrix(random_density_matrix(NUM_QUBITS))
             v_dense = L_dense * vec(rho)
             L_rho = apply_lindbladian!(ws, rho, config, TEST_HAM)
-            @test norm(v_dense - vec(L_rho)) < 1e-12
+            err = norm(v_dense - vec(L_rho))
+            @test err < 1e-12
+            max_err = max(max_err, err)
         end
+        @info "Matvec round-trip (EnergyDomain KMS, with coherent)" max_error=max_err n_samples=10 threshold=1e-12
     end
 
     # ========================================================================
@@ -86,12 +98,17 @@ end
         L_dense = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
         ws = Workspace(config, TEST_HAM, TEST_JUMPS)
 
+        # Threshold rationale: same as testset 2 -- algebraically exact, FP accumulation only.
+        max_err = 0.0
         for _ in 1:10
             rho = Matrix(random_density_matrix(NUM_QUBITS))
             v_dense = L_dense * vec(rho)
             L_rho = apply_lindbladian!(ws, rho, config, TEST_HAM)
-            @test norm(v_dense - vec(L_rho)) < 1e-12
+            err = norm(v_dense - vec(L_rho))
+            @test err < 1e-12
+            max_err = max(max_err, err)
         end
+        @info "Matvec round-trip (EnergyDomain GNS)" max_error=max_err n_samples=10 threshold=1e-12
     end
 
     # ========================================================================
@@ -102,12 +119,17 @@ end
         L_dense = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
         ws = Workspace(config, TEST_HAM, TEST_JUMPS)
 
+        # Threshold rationale: adjoint matvec has same FP accumulation as forward matvec.
+        max_err = 0.0
         for _ in 1:10
             rho = Matrix(random_density_matrix(NUM_QUBITS))
             v_adj_dense = L_dense' * vec(rho)
             L_adj_rho = apply_adjoint_lindbladian!(ws, rho, config, TEST_HAM)
-            @test norm(v_adj_dense - vec(L_adj_rho)) < 1e-12
+            err = norm(v_adj_dense - vec(L_adj_rho))
+            @test err < 1e-12
+            max_err = max(max_err, err)
         end
+        @info "Adjoint round-trip (EnergyDomain KMS)" max_error=max_err n_samples=10 threshold=1e-12
     end
 
     # ========================================================================
@@ -117,6 +139,10 @@ end
         config = make_config(Lindbladian(),EnergyDomain(); construction=KMS())
         ws = Workspace(config, TEST_HAM, TEST_JUMPS)
 
+        # Threshold rationale: duality identity tr(X'*L(Y)) == tr(L*(X)'*Y) is exact.
+        # Error is FP accumulation from two matvecs + two traces: O(DIM^2 * n_jumps * eps) * 2.
+        # 1e-11 gives ~30x margin over expected ~3e-13 per-sample error.
+        max_err = 0.0
         for _ in 1:5
             X = Matrix(random_density_matrix(NUM_QUBITS))
             Y = Matrix(random_density_matrix(NUM_QUBITS))
@@ -127,8 +153,11 @@ end
             Lstar_X = copy(apply_adjoint_lindbladian!(ws, X, config, TEST_HAM))
             rhs = tr(Lstar_X' * Y)
 
-            @test abs(lhs - rhs) < 1e-11
+            err = abs(lhs - rhs)
+            @test err < 1e-11
+            max_err = max(max_err, err)
         end
+        @info "Adjoint duality (EnergyDomain KMS)" max_error=max_err n_samples=5 threshold=1e-11
     end
 
     # ========================================================================
@@ -145,9 +174,12 @@ end
         ws = Workspace(config, TEST_HAM, TEST_JUMPS)
         rho = Matrix(random_density_matrix(NUM_QUBITS))
 
+        # Threshold rationale: hot-path matvec must be zero-allocation for Krylov iteration performance.
         allocs, allocs_adj = _measure_matvec_allocs(ws, rho, config, TEST_HAM)
         @test allocs <= MATVEC_ALLOC_BUDGET
+        @info "apply_lindbladian! allocations (EnergyDomain)" allocs_bytes=allocs threshold=MATVEC_ALLOC_BUDGET
         @test allocs_adj <= MATVEC_ALLOC_BUDGET
+        @info "apply_adjoint_lindbladian! allocations (EnergyDomain)" allocs_bytes=allocs_adj threshold=MATVEC_ALLOC_BUDGET
     end
 
     # ========================================================================
@@ -160,12 +192,18 @@ end
         L_dense = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
         ws = Workspace(config, TEST_HAM, TEST_JUMPS)
 
+        # Threshold rationale: TimeDomain uses NUFFT but dense reference uses same OFT path.
+        # Error is FP accumulation only. Same 1e-12 threshold as EnergyDomain.
+        max_err = 0.0
         for _ in 1:10
             rho = Matrix(random_density_matrix(NUM_QUBITS))
             v_dense = L_dense * vec(rho)
             L_rho = apply_lindbladian!(ws, rho, config, TEST_HAM)
-            @test norm(v_dense - vec(L_rho)) < 1e-12
+            err = norm(v_dense - vec(L_rho))
+            @test err < 1e-12
+            max_err = max(max_err, err)
         end
+        @info "Matvec round-trip (TimeDomain KMS, with coherent)" max_error=max_err n_samples=10 threshold=1e-12
     end
 
     # Testset 9: Round-trip matvec vs dense (TimeDomain GNS)
@@ -174,12 +212,17 @@ end
         L_dense = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
         ws = Workspace(config, TEST_HAM, TEST_JUMPS)
 
+        # Threshold rationale: same as testset 8 -- NUFFT path, FP accumulation only.
+        max_err = 0.0
         for _ in 1:10
             rho = Matrix(random_density_matrix(NUM_QUBITS))
             v_dense = L_dense * vec(rho)
             L_rho = apply_lindbladian!(ws, rho, config, TEST_HAM)
-            @test norm(v_dense - vec(L_rho)) < 1e-12
+            err = norm(v_dense - vec(L_rho))
+            @test err < 1e-12
+            max_err = max(max_err, err)
         end
+        @info "Matvec round-trip (TimeDomain GNS)" max_error=max_err n_samples=10 threshold=1e-12
     end
 
     # Testset 10: Round-trip adjoint matvec vs dense adjoint (TimeDomain KMS)
@@ -188,12 +231,17 @@ end
         L_dense = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
         ws = Workspace(config, TEST_HAM, TEST_JUMPS)
 
+        # Threshold rationale: adjoint NUFFT path, same FP accumulation as forward.
+        max_err = 0.0
         for _ in 1:10
             rho = Matrix(random_density_matrix(NUM_QUBITS))
             v_adj_dense = L_dense' * vec(rho)
             L_adj_rho = apply_adjoint_lindbladian!(ws, rho, config, TEST_HAM)
-            @test norm(v_adj_dense - vec(L_adj_rho)) < 1e-12
+            err = norm(v_adj_dense - vec(L_adj_rho))
+            @test err < 1e-12
+            max_err = max(max_err, err)
         end
+        @info "Adjoint round-trip (TimeDomain KMS)" max_error=max_err n_samples=10 threshold=1e-12
     end
 
     # Testset 11: Near-zero allocations in matvec hot path (TimeDomain)
@@ -201,9 +249,12 @@ end
         config = make_config(Lindbladian(),TimeDomain(); construction=KMS())
         ws = Workspace(config, TEST_HAM, TEST_JUMPS)
         rho = Matrix(random_density_matrix(NUM_QUBITS))
+        # Threshold rationale: NUFFT hot-path must also be zero-allocation for Krylov performance.
         allocs, allocs_adj = _measure_matvec_allocs(ws, rho, config, TEST_HAM)
         @test allocs <= MATVEC_ALLOC_BUDGET_NUFFT
+        @info "apply_lindbladian! allocations (TimeDomain)" allocs_bytes=allocs threshold=MATVEC_ALLOC_BUDGET_NUFFT
         @test allocs_adj <= MATVEC_ALLOC_BUDGET_NUFFT
+        @info "apply_adjoint_lindbladian! allocations (TimeDomain)" allocs_bytes=allocs_adj threshold=MATVEC_ALLOC_BUDGET_NUFFT
     end
 
     # ========================================================================
@@ -216,12 +267,18 @@ end
         L_dense = construct_lindbladian(TEST_TROTTER_JUMPS, config, TEST_HAM; trotter=TEST_TROTTER)
         ws = Workspace(config, TEST_HAM, TEST_TROTTER_JUMPS; trotter=TEST_TROTTER)
 
+        # Threshold rationale: TrotterDomain uses Trotter eigenbasis but same OFT arithmetic.
+        # FP accumulation only, same 1e-12 threshold.
+        max_err = 0.0
         for _ in 1:10
             rho = Matrix(random_density_matrix(NUM_QUBITS))
             v_dense = L_dense * vec(rho)
             L_rho = apply_lindbladian!(ws, rho, config, TEST_HAM)
-            @test norm(v_dense - vec(L_rho)) < 1e-12
+            err = norm(v_dense - vec(L_rho))
+            @test err < 1e-12
+            max_err = max(max_err, err)
         end
+        @info "Matvec round-trip (TrotterDomain KMS, with coherent)" max_error=max_err n_samples=10 threshold=1e-12
     end
 
     # Testset 13: Round-trip matvec vs dense (TrotterDomain GNS)
@@ -230,12 +287,17 @@ end
         L_dense = construct_lindbladian(TEST_TROTTER_JUMPS, config, TEST_HAM; trotter=TEST_TROTTER)
         ws = Workspace(config, TEST_HAM, TEST_TROTTER_JUMPS; trotter=TEST_TROTTER)
 
+        # Threshold rationale: same as testset 12 -- Trotter eigenbasis, FP accumulation only.
+        max_err = 0.0
         for _ in 1:10
             rho = Matrix(random_density_matrix(NUM_QUBITS))
             v_dense = L_dense * vec(rho)
             L_rho = apply_lindbladian!(ws, rho, config, TEST_HAM)
-            @test norm(v_dense - vec(L_rho)) < 1e-12
+            err = norm(v_dense - vec(L_rho))
+            @test err < 1e-12
+            max_err = max(max_err, err)
         end
+        @info "Matvec round-trip (TrotterDomain GNS)" max_error=max_err n_samples=10 threshold=1e-12
     end
 
     # Testset 14: Round-trip adjoint matvec vs dense adjoint (TrotterDomain KMS)
@@ -244,12 +306,17 @@ end
         L_dense = construct_lindbladian(TEST_TROTTER_JUMPS, config, TEST_HAM; trotter=TEST_TROTTER)
         ws = Workspace(config, TEST_HAM, TEST_TROTTER_JUMPS; trotter=TEST_TROTTER)
 
+        # Threshold rationale: adjoint Trotter path, same FP accumulation as forward.
+        max_err = 0.0
         for _ in 1:10
             rho = Matrix(random_density_matrix(NUM_QUBITS))
             v_adj_dense = L_dense' * vec(rho)
             L_adj_rho = apply_adjoint_lindbladian!(ws, rho, config, TEST_HAM)
-            @test norm(v_adj_dense - vec(L_adj_rho)) < 1e-12
+            err = norm(v_adj_dense - vec(L_adj_rho))
+            @test err < 1e-12
+            max_err = max(max_err, err)
         end
+        @info "Adjoint round-trip (TrotterDomain KMS)" max_error=max_err n_samples=10 threshold=1e-12
     end
 
     # Testset 15: Near-zero allocations in matvec hot path (TrotterDomain)
@@ -257,9 +324,12 @@ end
         config = make_config(Lindbladian(),TrotterDomain(); construction=KMS())
         ws = Workspace(config, TEST_HAM, TEST_TROTTER_JUMPS; trotter=TEST_TROTTER)
         rho = Matrix(random_density_matrix(NUM_QUBITS))
+        # Threshold rationale: Trotter NUFFT hot-path must also be zero-allocation.
         allocs, allocs_adj = _measure_matvec_allocs(ws, rho, config, TEST_HAM)
         @test allocs <= MATVEC_ALLOC_BUDGET_NUFFT
+        @info "apply_lindbladian! allocations (TrotterDomain)" allocs_bytes=allocs threshold=MATVEC_ALLOC_BUDGET_NUFFT
         @test allocs_adj <= MATVEC_ALLOC_BUDGET_NUFFT
+        @info "apply_adjoint_lindbladian! allocations (TrotterDomain)" allocs_bytes=allocs_adj threshold=MATVEC_ALLOC_BUDGET_NUFFT
     end
 
     # ========================================================================
@@ -272,12 +342,18 @@ end
         L_dense = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
         ws = Workspace(config, TEST_HAM, TEST_JUMPS)
 
+        # Threshold rationale: BohrDomain has different loop structure but same algebraic exactness.
+        # FP accumulation only, same 1e-12 threshold.
+        max_err = 0.0
         for _ in 1:10
             rho = Matrix(random_density_matrix(NUM_QUBITS))
             v_dense = L_dense * vec(rho)
             L_rho = apply_lindbladian!(ws, rho, config, TEST_HAM)
-            @test norm(v_dense - vec(L_rho)) < 1e-12
+            err = norm(v_dense - vec(L_rho))
+            @test err < 1e-12
+            max_err = max(max_err, err)
         end
+        @info "Matvec round-trip (BohrDomain KMS, with coherent)" max_error=max_err n_samples=10 threshold=1e-12
     end
 
     # Testset 17: Round-trip matvec vs dense (BohrDomain GNS)
@@ -286,12 +362,17 @@ end
         L_dense = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
         ws = Workspace(config, TEST_HAM, TEST_JUMPS)
 
+        # Threshold rationale: same as testset 16 -- BohrDomain, FP accumulation only.
+        max_err = 0.0
         for _ in 1:10
             rho = Matrix(random_density_matrix(NUM_QUBITS))
             v_dense = L_dense * vec(rho)
             L_rho = apply_lindbladian!(ws, rho, config, TEST_HAM)
-            @test norm(v_dense - vec(L_rho)) < 1e-12
+            err = norm(v_dense - vec(L_rho))
+            @test err < 1e-12
+            max_err = max(max_err, err)
         end
+        @info "Matvec round-trip (BohrDomain GNS)" max_error=max_err n_samples=10 threshold=1e-12
     end
 
     # Testset 18: Round-trip adjoint matvec vs dense adjoint (BohrDomain KMS)
@@ -300,12 +381,17 @@ end
         L_dense = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
         ws = Workspace(config, TEST_HAM, TEST_JUMPS)
 
+        # Threshold rationale: adjoint BohrDomain path, same FP accumulation as forward.
+        max_err = 0.0
         for _ in 1:10
             rho = Matrix(random_density_matrix(NUM_QUBITS))
             v_adj_dense = L_dense' * vec(rho)
             L_adj_rho = apply_adjoint_lindbladian!(ws, rho, config, TEST_HAM)
-            @test norm(v_adj_dense - vec(L_adj_rho)) < 1e-12
+            err = norm(v_adj_dense - vec(L_adj_rho))
+            @test err < 1e-12
+            max_err = max(max_err, err)
         end
+        @info "Adjoint round-trip (BohrDomain KMS)" max_error=max_err n_samples=10 threshold=1e-12
     end
 
     # Testset 19: Adjoint duality check (BohrDomain): tr(X' * L(Y)) == tr(L*(X)' * Y)
@@ -313,6 +399,9 @@ end
         config = make_config(Lindbladian(),BohrDomain(); construction=KMS())
         ws = Workspace(config, TEST_HAM, TEST_JUMPS)
 
+        # Threshold rationale: same duality identity as testset 6, BohrDomain loop structure.
+        # 1e-11 gives ~30x margin over expected per-sample FP accumulation.
+        max_err = 0.0
         for _ in 1:5
             X = Matrix(random_density_matrix(NUM_QUBITS))
             Y = Matrix(random_density_matrix(NUM_QUBITS))
@@ -323,8 +412,11 @@ end
             Lstar_X = copy(apply_adjoint_lindbladian!(ws, X, config, TEST_HAM))
             rhs = tr(Lstar_X' * Y)
 
-            @test abs(lhs - rhs) < 1e-11
+            err = abs(lhs - rhs)
+            @test err < 1e-11
+            max_err = max(max_err, err)
         end
+        @info "Adjoint duality (BohrDomain KMS)" max_error=max_err n_samples=5 threshold=1e-11
     end
 
     # ========================================================================
@@ -346,12 +438,18 @@ end
             config = make_config(Lindbladian(),EnergyDomain(); construction=KMS())
             L_dense = construct_lindbladian(complex_jumps, config, TEST_HAM)
             ws = Workspace(config, TEST_HAM, complex_jumps)
+            # Threshold rationale: complex non-Hermitian jump validates conj(J) convention.
+            # Same algebraic exactness as real jumps, FP accumulation only.
+            max_err = 0.0
             for _ in 1:10
                 rho = Matrix(random_density_matrix(NUM_QUBITS))
                 v_dense = L_dense * vec(rho)
                 L_rho = apply_lindbladian!(ws, rho, config, TEST_HAM)
-                @test norm(v_dense - vec(L_rho)) < 1e-12
+                err = norm(v_dense - vec(L_rho))
+                @test err < 1e-12
+                max_err = max(max_err, err)
             end
+            @info "Matvec round-trip (complex jump, EnergyDomain fwd)" max_error=max_err n_samples=10 threshold=1e-12
         end
 
         # Testset 21: Round-trip with complex jump (EnergyDomain adjoint)
@@ -359,18 +457,26 @@ end
             config = make_config(Lindbladian(),EnergyDomain(); construction=KMS())
             L_dense = construct_lindbladian(complex_jumps, config, TEST_HAM)
             ws = Workspace(config, TEST_HAM, complex_jumps)
+            # Threshold rationale: adjoint path for complex jumps, same FP accumulation.
+            max_err = 0.0
             for _ in 1:10
                 rho = Matrix(random_density_matrix(NUM_QUBITS))
                 v_adj_dense = L_dense' * vec(rho)
                 L_adj_rho = apply_adjoint_lindbladian!(ws, rho, config, TEST_HAM)
-                @test norm(v_adj_dense - vec(L_adj_rho)) < 1e-12
+                err = norm(v_adj_dense - vec(L_adj_rho))
+                @test err < 1e-12
+                max_err = max(max_err, err)
             end
+            @info "Adjoint round-trip (complex jump, EnergyDomain)" max_error=max_err n_samples=10 threshold=1e-12
         end
 
         # Testset 22: Adjoint duality with complex jump (EnergyDomain)
         @testset "Adjoint duality: complex jump (EnergyDomain)" begin
             config = make_config(Lindbladian(),EnergyDomain(); construction=KMS())
             ws = Workspace(config, TEST_HAM, complex_jumps)
+            # Threshold rationale: duality identity with complex non-Hermitian jumps.
+            # Same 1e-11 threshold as real-jump duality tests (testsets 6, 19).
+            max_err = 0.0
             for _ in 1:5
                 X = Matrix(random_density_matrix(NUM_QUBITS))
                 Y = Matrix(random_density_matrix(NUM_QUBITS))
@@ -378,8 +484,11 @@ end
                 lhs = tr(X' * L_Y)
                 Lstar_X = copy(apply_adjoint_lindbladian!(ws, X, config, TEST_HAM))
                 rhs = tr(Lstar_X' * Y)
-                @test abs(lhs - rhs) < 1e-11
+                err = abs(lhs - rhs)
+                @test err < 1e-11
+                max_err = max(max_err, err)
             end
+            @info "Adjoint duality (complex jump, EnergyDomain)" max_error=max_err n_samples=5 threshold=1e-11
         end
 
         # Testset 23: Round-trip with complex jump (TimeDomain forward + adjoint)
@@ -387,11 +496,20 @@ end
             config_td = make_config(Lindbladian(),TimeDomain(); construction=KMS())
             L_dense_td = construct_lindbladian(complex_jumps, config_td, TEST_HAM)
             ws_td = Workspace(config_td, TEST_HAM, complex_jumps)
+            # Threshold rationale: complex jump + TimeDomain NUFFT path, FP accumulation only.
+            max_err_fwd = 0.0
+            max_err_adj = 0.0
             for _ in 1:10
                 rho = Matrix(random_density_matrix(NUM_QUBITS))
-                @test norm(L_dense_td * vec(rho) - vec(apply_lindbladian!(ws_td, rho, config_td, TEST_HAM))) < 1e-12
-                @test norm(L_dense_td' * vec(rho) - vec(apply_adjoint_lindbladian!(ws_td, rho, config_td, TEST_HAM))) < 1e-12
+                err_fwd = norm(L_dense_td * vec(rho) - vec(apply_lindbladian!(ws_td, rho, config_td, TEST_HAM)))
+                @test err_fwd < 1e-12
+                max_err_fwd = max(max_err_fwd, err_fwd)
+                err_adj = norm(L_dense_td' * vec(rho) - vec(apply_adjoint_lindbladian!(ws_td, rho, config_td, TEST_HAM)))
+                @test err_adj < 1e-12
+                max_err_adj = max(max_err_adj, err_adj)
             end
+            @info "Matvec round-trip (complex jump, TimeDomain fwd)" max_error=max_err_fwd n_samples=10 threshold=1e-12
+            @info "Adjoint round-trip (complex jump, TimeDomain adj)" max_error=max_err_adj n_samples=10 threshold=1e-12
         end
     end
 
