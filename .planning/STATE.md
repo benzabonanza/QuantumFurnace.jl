@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-02-25)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v2.0 Restructure -- Phase 37 complete, ready for Phase 38
+**Current focus:** v2.0 Restructure -- Phase 38 in progress
 
 ## Current Position
 
-Phase: 37 of 38 (File Organization and Dead Code) -- COMPLETE
-Plan: 2/2 complete
-Status: Completed 37-02: Module definition and exports reorganization
-Last activity: 2026-02-27 - Completed 37-02: Reorganized exports into simulation-type sections, created main_krylov.jl, fixed nprocs/SharedArrays
+Phase: 38 of 38 (Test Cleanup)
+Plan: 1/5 complete
+Status: Completed 38-01: Test infrastructure consolidation
+Last activity: 2026-02-28 - Completed 38-01: Unified 8 config factories into make_config, renamed SMALL_* to N3_*, deleted old_tests, integrated trajectory_validation
 
-Progress: [######░░░░] ~48% (v2.0, 15/~24 plans)
+Progress: [######░░░░] ~50% (v2.0, 16/~24 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 104 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 14)
+- Total plans completed: 105 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 15)
 
 **By Milestone:**
 
@@ -31,7 +31,7 @@ Progress: [######░░░░] ~48% (v2.0, 15/~24 plans)
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
 | v1.5 Krylov Gap Estimation | 27-32 | 12 (+3 quick) | 2026-02-20 to 2026-02-25 |
-| v2.0 Restructure | 33-38 | 15/~24 | 2026-02-25 to ... |
+| v2.0 Restructure | 33-38 | 16/~24 | 2026-02-25 to ... |
 
 ## Accumulated Context
 
@@ -75,6 +75,9 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [37-02] Export list organized into Lindbladian/Thermalize/Krylov/Trajectory/Diagnostics/Common sections with Common at bottom
 - [37-02] Dormant exports kept as # STAGING: commented-out block (not deleted)
 - [37-02] Dead nprocs()/SharedArrays removed -- multi-process mode fully dead after Distributed removal
+- [38-01] Unified make_config(sim, domain; kwargs...) uses Config(; ...) with leading semicolon for keyword-only NamedTuple splatting
+- [38-01] Default construction=KMS() in make_config; GNS callers pass construction=GNS() explicitly
+- [38-01] Trajectory validation gated at runtests.jl level (QUANTUMFURNACE_FULL_TESTS) to save compilation time
 
 ### Key Constraints for v2.0
 
@@ -104,6 +107,6 @@ None
 
 ## Session Continuity
 
-Last session: 2026-02-27
-Stopped at: Completed 37-02-PLAN.md (Module definition and exports). Phase 37 complete. Ready for Phase 38.
+Last session: 2026-02-28
+Stopped at: Completed 38-01-PLAN.md (Test infrastructure consolidation). Ready for 38-02.
 Resume file: None
