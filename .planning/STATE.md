@@ -10,16 +10,16 @@ See: .planning/PROJECT.md (updated 2026-02-25)
 ## Current Position
 
 Phase: 38 of 38 (Test Cleanup)
-Plan: 4/5 complete
-Status: Completed 38-02: @info output and threshold rationale for 8 shorter test files (filling gap)
-Last activity: 2026-02-28 - Completed 38-02: Added 38 @info lines and threshold rationale to 8 shorter test files (compilation, cptp, dm_detailed_balance, trajectory_fixes, regression, allocation, workspace_independence, threading)
+Plan: 5/5 complete
+Status: Phase 38 complete -- all 5 plans executed
+Last activity: 2026-02-28 - Completed 38-05: Added 60+ @info and threshold rationale to 3 Krylov test files (matvec, eigsolve, crossvalidation)
 
-Progress: [######░░░░] ~50% (v2.0, 19/~24 plans)
+Progress: [########░░] ~50% (v2.0, 20/~24 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 108 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 18)
+- Total plans completed: 109 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 19)
 
 **By Milestone:**
 
@@ -31,7 +31,7 @@ Progress: [######░░░░] ~50% (v2.0, 19/~24 plans)
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
 | v1.5 Krylov Gap Estimation | 27-32 | 12 (+3 quick) | 2026-02-20 to 2026-02-25 |
-| v2.0 Restructure | 33-38 | 18/~24 | 2026-02-25 to ... |
+| v2.0 Restructure | 33-38 | 19/~24 | 2026-02-25 to ... |
 
 ## Accumulated Context
 
@@ -87,6 +87,9 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [38-02] CPTP threshold 1e-10 kept: algebraic identity error scales as DIM^2 * eps ~ 3e-13, giving ~300x margin
 - [38-02] Allocation @info includes both allocs_bytes and threshold for direct comparison in test output
 - [38-02] PSD guard eigenvalue threshold -1e-14 documented for FP rounding in Hermitian eigvals
+- [38-05] Matvec round-trip threshold 1e-12 confirmed: O(n_jumps*DIM^2*eps) ~ 3e-13, 3x margin
+- [38-05] Cross-validation atol=1e-8 (n=4) and atol=1e-6 (n=6) from KrylovKit tol=1e-10 relationship
+- [38-05] Printf tables in crossvalidation preserved per locked research pitfall 6 decision
 
 ### Key Constraints for v2.0
 
@@ -117,5 +120,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: Completed 38-02-PLAN.md (@info and threshold rationale for 8 shorter test files). 38-05 remaining.
+Stopped at: Completed 38-05-PLAN.md (Krylov test @info and threshold rationale). Phase 38 complete.
 Resume file: None
