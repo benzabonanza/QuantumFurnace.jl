@@ -163,7 +163,7 @@ using BSON
         # mixing_time=60.0 accounts for the corrected (slower) trajectory evolution rate
         # (the per-step CPTP channel uses bare delta, not delta*n_jumps).
         # Previous mixing_time=5.0 was sufficient when delta_eff=delta*n_jumps=0.12.
-        config = make_thermalize_config(EnergyDomain(); construction=KMS(), delta=0.01, mixing_time=60.0)
+        config = make_config(Thermalize(), EnergyDomain(); construction=KMS(), delta=0.01, mixing_time=60.0)
         observables, names = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS)
         obs_gibbs = QuantumFurnace._compute_gibbs_observable_values(TEST_GIBBS, observables)
 
@@ -219,7 +219,7 @@ using BSON
     # Testset 9: run_trajectories_convergence determinism
     # -----------------------------------------------------------------------
     @testset "run_trajectories_convergence determinism" begin
-        config = make_thermalize_config(EnergyDomain(); construction=KMS(), delta=0.01, mixing_time=5.0)
+        config = make_config(Thermalize(), EnergyDomain(); construction=KMS(), delta=0.01, mixing_time=5.0)
         observables, names = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS)
 
         psi0 = zeros(ComplexF64, DIM)
@@ -254,7 +254,7 @@ using BSON
     # Testset 10: Convergence data accessible programmatically (CONV-04)
     # -----------------------------------------------------------------------
     @testset "Convergence data accessible programmatically" begin
-        config = make_thermalize_config(EnergyDomain(); construction=KMS(), delta=0.01, mixing_time=5.0)
+        config = make_config(Thermalize(), EnergyDomain(); construction=KMS(), delta=0.01, mixing_time=5.0)
         observables, names = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS)
 
         psi0 = zeros(ComplexF64, DIM)
@@ -368,7 +368,7 @@ using BSON
     # Testset 13: run_trajectories_adaptive convergence (CONV-04)
     # -----------------------------------------------------------------------
     @testset "run_trajectories_adaptive convergence (CONV-04)" begin
-        config = make_thermalize_config(EnergyDomain(); construction=KMS(), delta=0.01, mixing_time=5.0)
+        config = make_config(Thermalize(), EnergyDomain(); construction=KMS(), delta=0.01, mixing_time=5.0)
         observables, names = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS)
 
         # Ground state in eigenbasis
@@ -422,7 +422,7 @@ using BSON
     # Testset 14: run_trajectories_adaptive hard cap (CONV-05)
     # -----------------------------------------------------------------------
     @testset "run_trajectories_adaptive hard cap (CONV-05)" begin
-        config = make_thermalize_config(EnergyDomain(); construction=KMS(), delta=0.01, mixing_time=5.0)
+        config = make_config(Thermalize(), EnergyDomain(); construction=KMS(), delta=0.01, mixing_time=5.0)
         observables, names = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS)
 
         psi0 = zeros(ComplexF64, DIM)
@@ -465,7 +465,7 @@ using BSON
     # Testset 15: run_trajectories_adaptive determinism
     # -----------------------------------------------------------------------
     @testset "run_trajectories_adaptive determinism" begin
-        config = make_thermalize_config(EnergyDomain(); construction=KMS(), delta=0.01, mixing_time=5.0)
+        config = make_config(Thermalize(), EnergyDomain(); construction=KMS(), delta=0.01, mixing_time=5.0)
         observables, names = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS)
 
         psi0 = zeros(ComplexF64, DIM)
@@ -600,7 +600,7 @@ using BSON
     # Testset 18: Adaptive result programmatic access (CONV-04 extended)
     # -----------------------------------------------------------------------
     @testset "Adaptive result programmatic access (CONV-04 extended)" begin
-        config = make_thermalize_config(EnergyDomain(); construction=KMS(), delta=0.01, mixing_time=5.0)
+        config = make_config(Thermalize(), EnergyDomain(); construction=KMS(), delta=0.01, mixing_time=5.0)
         observables, names = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS)
 
         psi0 = zeros(ComplexF64, DIM)

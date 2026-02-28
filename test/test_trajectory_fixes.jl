@@ -11,7 +11,7 @@ using Random
         # TimeDomain already had correct ordering but we test both to ensure consistency.
         for domain in [EnergyDomain(), TimeDomain()]
             @testset "$(typeof(domain))" begin
-                config = make_thermalize_config(domain; construction=KMS(), delta=TEST_DELTA)
+                config = make_config(Thermalize(),domain; construction=KMS(), delta=TEST_DELTA)
                 ws = QuantumFurnace._build_trajectory_workspace(config, TEST_HAM, TEST_JUMPS; delta=TEST_DELTA)
 
                 # Run a single step with a fixed RNG seed
@@ -33,7 +33,7 @@ using Random
         # The normalization check is a @warn that triggers when total_weight deviates from 1.0.
         # With a properly-built workspace and normalized input, total_weight should be ~1.0
         # and NO warning should fire. We verify the code path runs without error.
-        config = make_thermalize_config(EnergyDomain(); delta=TEST_DELTA)
+        config = make_config(Thermalize(),EnergyDomain(); delta=TEST_DELTA)
         ws = QuantumFurnace._build_trajectory_workspace(config, TEST_HAM, TEST_JUMPS; delta=TEST_DELTA)
 
         psi = zeros(ComplexF64, DIM)
@@ -57,7 +57,7 @@ using Random
         # Build workspace -- if PSD guard works, no NaN/Inf in U_residual
         for domain in [EnergyDomain(), TimeDomain()]
             @testset "$(typeof(domain))" begin
-                config = make_thermalize_config(domain; delta=TEST_DELTA)
+                config = make_config(Thermalize(),domain; delta=TEST_DELTA)
                 ws = QuantumFurnace._build_trajectory_workspace(config, TEST_HAM, TEST_JUMPS; delta=TEST_DELTA)
 
                 # Each per-operator U_residual must be all-finite (no NaN from failed decomposition)
@@ -76,7 +76,7 @@ using Random
     @testset "TFIX-05: Jump sampling matches paper construction" begin
         # Verify per-operator channel structure matches Chen 2023 Theorem III.1:
         # p_nojump + p_jump_total + p_res should sum to ~1.0 for any normalized psi
-        config = make_thermalize_config(EnergyDomain(); delta=TEST_DELTA)
+        config = make_config(Thermalize(),EnergyDomain(); delta=TEST_DELTA)
         ws = QuantumFurnace._build_trajectory_workspace(config, TEST_HAM, TEST_JUMPS; delta=TEST_DELTA)
 
         # Test with several random initial states

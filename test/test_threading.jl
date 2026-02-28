@@ -4,18 +4,18 @@ using LinearAlgebra
 
 @testset "Deterministic multi-threaded results" begin
     if Threads.nthreads() > 1
-        dim = size(SMALL_HAM.data, 1)
+        dim = size(N3_HAM.data, 1)
         CT = ComplexF64
         psi0 = zeros(CT, dim)
         psi0[1] = 1.0
 
-        therm_config = make_small_thermalize_config(TimeDomain();
+        therm_config = make_config(Thermalize(), TimeDomain(); num_qubits=3,
             delta=0.01, mixing_time=0.5, construction=GNS())
 
         # Run twice with same seed => bitwise identical
-        result1 = run_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+        result1 = run_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
             delta=0.01, ntraj=20, seed=42)
-        result2 = run_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+        result2 = run_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
             delta=0.01, ntraj=20, seed=42)
 
         @test result1.rho_mean == result2.rho_mean  # bitwise identical, NOT isapprox
@@ -23,7 +23,7 @@ using LinearAlgebra
         @test result1.n_trajectories == 20
 
         # Different seed => different result
-        result3 = run_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+        result3 = run_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
             delta=0.01, ntraj=20, seed=99)
         @test !(result1.rho_mean == result3.rho_mean)
     else
@@ -33,28 +33,28 @@ using LinearAlgebra
 end
 
 @testset "BLAS thread restoration" begin
-    dim = size(SMALL_HAM.data, 1)
+    dim = size(N3_HAM.data, 1)
     CT = ComplexF64
     psi0 = zeros(CT, dim)
     psi0[1] = 1.0
 
-    therm_config = make_small_thermalize_config(TimeDomain();
+    therm_config = make_config(Thermalize(), TimeDomain(); num_qubits=3,
         delta=0.01, mixing_time=0.1, construction=GNS())
 
     old_blas = BLAS.get_num_threads()
-    result = run_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+    result = run_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
         delta=0.01, ntraj=10, seed=42)
     @test BLAS.get_num_threads() == old_blas
 end
 
 @testset "Serial-threaded agreement" begin
     if Threads.nthreads() > 1
-        dim = size(SMALL_HAM.data, 1)
+        dim = size(N3_HAM.data, 1)
         CT = ComplexF64
         psi0 = zeros(CT, dim)
         psi0[1] = 1.0
 
-        therm_config = make_small_thermalize_config(TimeDomain();
+        therm_config = make_config(Thermalize(), TimeDomain(); num_qubits=3,
             delta=0.01, mixing_time=0.5, construction=GNS())
 
         # Force serial: use julia -t 1 semantics by running ntraj=1
@@ -63,11 +63,11 @@ end
         # We manually replicate the serial accumulation with the same per-trajectory seeds.
         seed = 42
         ntraj = 20
-        result_threaded = run_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+        result_threaded = run_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
             delta=0.01, ntraj=ntraj, seed=seed)
 
         # Manual serial reference: accumulate density matrices with same per-trajectory seeds
-        ws = QuantumFurnace._build_trajectory_workspace(therm_config, SMALL_HAM, SMALL_JUMPS; delta=0.01)
+        ws = QuantumFurnace._build_trajectory_workspace(therm_config, N3_HAM, N3_JUMPS; delta=0.01)
         num_steps = ceil(Int, 0.5 / ws.delta)
         rho_ref = zeros(CT, dim, dim)
         for traj_id in 1:ntraj
@@ -94,20 +94,20 @@ end
 
 @testset "Deterministic observable path" begin
     if Threads.nthreads() > 1
-        dim = size(SMALL_HAM.data, 1)
+        dim = size(N3_HAM.data, 1)
         CT = ComplexF64
         psi0 = zeros(CT, dim)
         psi0[1] = 1.0
 
-        therm_config = make_small_thermalize_config(TimeDomain();
+        therm_config = make_config(Thermalize(), TimeDomain(); num_qubits=3,
             delta=0.01, mixing_time=0.1, construction=GNS())
 
         # Create a simple observable (Z on first qubit)
         obs = [Matrix{CT}(kron(Z, Matrix{Float64}(I, div(dim, 2), div(dim, 2))))]
 
-        result1 = run_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+        result1 = run_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
             delta=0.01, ntraj=20, seed=42, observables=obs, save_every=5)
-        result2 = run_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+        result2 = run_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
             delta=0.01, ntraj=20, seed=42, observables=obs, save_every=5)
 
         @test result1.rho_mean == result2.rho_mean  # bitwise identical
@@ -121,26 +121,26 @@ end
 
 @testset "Threading speedup" begin
     if Threads.nthreads() >= 2
-        dim = size(SMALL_HAM.data, 1)
+        dim = size(N3_HAM.data, 1)
         CT = ComplexF64
         psi0 = zeros(CT, dim)
         psi0[1] = 1.0
 
         # Use longer mixing_time and more trajectories to amortize threading overhead.
         # At dim=8 each step is very fast, so we need enough total work to see speedup.
-        therm_config = make_small_thermalize_config(TimeDomain();
+        therm_config = make_config(Thermalize(), TimeDomain(); num_qubits=3,
             delta=0.01, mixing_time=10.0, construction=GNS())
 
         ntraj = 2000
 
         # Warmup both paths
-        run_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+        run_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
             delta=0.01, ntraj=ntraj, seed=1)
 
         # Measure threaded execution time (automatic with nthreads > 1)
         t_threaded = @elapsed begin
             for _ in 1:3  # average over 3 runs
-                run_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+                run_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
                     delta=0.01, ntraj=ntraj, seed=42)
             end
         end
@@ -149,7 +149,7 @@ end
         # Measure serial execution time: force single-thread behavior by running
         # trajectories one at a time in a loop, using inline step loop directly
         # This simulates serial execution regardless of thread count
-        ws = QuantumFurnace._build_trajectory_workspace(therm_config, SMALL_HAM, SMALL_JUMPS; delta=0.01)
+        ws = QuantumFurnace._build_trajectory_workspace(therm_config, N3_HAM, N3_JUMPS; delta=0.01)
         num_steps_perf = ceil(Int, 5.0 / ws.delta)
 
         # Warmup serial path

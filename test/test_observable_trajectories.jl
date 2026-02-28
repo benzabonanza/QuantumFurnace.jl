@@ -4,14 +4,14 @@ using LinearAlgebra
 
 @testset "Observable-Only Trajectory Runner" begin
     # Setup: 3-qubit test system (dim=8)
-    dim = SMALL_DIM  # 8
+    dim = N3_DIM  # 8
     CT = ComplexF64
     psi0 = zeros(CT, dim); psi0[1] = 1.0
-    therm_config = make_small_thermalize_config(TimeDomain(); delta=0.01, mixing_time=0.5, construction=GNS())
+    therm_config = make_config(Thermalize(), TimeDomain(); num_qubits=3, delta=0.01, mixing_time=0.5, construction=GNS())
 
     # Z on first qubit in eigenbasis
     Z1_comp = kron(Z, Matrix{Float64}(I, div(dim, 2), div(dim, 2)))
-    Z1_eigen = Matrix{CT}(SMALL_HAM.eigvecs' * Z1_comp * SMALL_HAM.eigvecs)
+    Z1_eigen = Matrix{CT}(N3_HAM.eigvecs' * Z1_comp * N3_HAM.eigvecs)
     obs = [Z1_eigen]
 
     # Precompute expected num_saves
@@ -20,7 +20,7 @@ using LinearAlgebra
     num_saves = div(num_steps, 5) + 1
 
     @testset "Basic observable-only run" begin
-        result = run_observable_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+        result = run_observable_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
             observables=obs, save_every=5, ntraj=10, seed=42)
 
         @test result isa ObservableTrajectoryResult
@@ -34,9 +34,9 @@ using LinearAlgebra
     end
 
     @testset "Cross-validation: bitwise match with run_trajectories" begin
-        result_old = run_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+        result_old = run_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
             observables=obs, save_every=5, ntraj=20, seed=42)
-        result_new = run_observable_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+        result_new = run_observable_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
             observables=obs, save_every=5, ntraj=20, seed=42)
 
         @test result_new.measurements_mean == result_old.measurements_mean
@@ -44,9 +44,9 @@ using LinearAlgebra
     end
 
     @testset "Cross-validation with reconstruct_dm=true" begin
-        result_old = run_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+        result_old = run_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
             observables=obs, save_every=5, ntraj=20, seed=42)
-        result_dm = run_observable_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+        result_dm = run_observable_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
             observables=obs, save_every=5, ntraj=20, seed=42, reconstruct_dm=true)
 
         @test result_dm.rho_mean !== nothing
@@ -56,9 +56,9 @@ using LinearAlgebra
     end
 
     @testset "Deterministic: same seed gives same results" begin
-        r1 = run_observable_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+        r1 = run_observable_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
             observables=obs, save_every=5, ntraj=20, seed=42)
-        r2 = run_observable_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+        r2 = run_observable_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
             observables=obs, save_every=5, ntraj=20, seed=42)
 
         @test r1.measurements_mean == r2.measurements_mean
@@ -66,18 +66,18 @@ using LinearAlgebra
     end
 
     @testset "Different seed gives different results" begin
-        r1 = run_observable_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+        r1 = run_observable_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
             observables=obs, save_every=5, ntraj=20, seed=42)
-        r2 = run_observable_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+        r2 = run_observable_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
             observables=obs, save_every=5, ntraj=20, seed=99)
 
         @test !(r1.measurements_mean == r2.measurements_mean)
     end
 
     @testset "Single trajectory (serial path)" begin
-        result_old = run_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+        result_old = run_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
             observables=obs, save_every=5, ntraj=1, seed=42)
-        result_new = run_observable_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+        result_new = run_observable_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
             observables=obs, save_every=5, ntraj=1, seed=42)
 
         @test result_new.measurements_mean == result_old.measurements_mean

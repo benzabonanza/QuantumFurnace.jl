@@ -22,7 +22,7 @@ using Random
 @testset "Allocation Regression" begin
 
     @testset "B_bohr allocations" begin
-        config = make_liouv_config(BohrDomain())
+        config = make_config(Lindbladian(), BohrDomain())
         jump = TEST_JUMPS[1]
         num_freqs = length(keys(TEST_HAM.bohr_dict))
 
@@ -47,7 +47,7 @@ using Random
     end
 
     @testset "B_time allocations" begin
-        config = make_liouv_config(TimeDomain())
+        config = make_config(Lindbladian(), TimeDomain())
         precomputed = _precompute_data(config, TEST_HAM)
         (; b_minus, b_plus) = precomputed
         jump = TEST_JUMPS[1]
@@ -76,7 +76,7 @@ using Random
     end
 
     @testset "B_trotter allocations" begin
-        config = make_liouv_config(TrotterDomain())
+        config = make_config(Lindbladian(), TrotterDomain())
         precomputed = _precompute_data(config, TEST_TROTTER)
         (; b_minus, b_plus) = precomputed
 
@@ -104,7 +104,7 @@ using Random
         # Verify that _jump_contribution! for Time/Trotter thermalize does not allocate
         # filter+abs vectors. This function operates in-place on scratch buffers,
         # so the only allocations should be from _finalize_kraus_step! (eigen decomposition).
-        config_therm = make_thermalize_config(TimeDomain(); delta=0.01)
+        config_therm = make_config(Thermalize(), TimeDomain(); delta=0.01)
         precomputed = _precompute_data(config_therm, TEST_HAM)
         CT = ComplexF64
         d = DIM
@@ -131,11 +131,11 @@ using Random
     @testset "step_along_trajectory! allocations" begin
         # Guards against GC pressure that would destroy parallel scaling.
         # Uses the 3-qubit SMALL system for fast execution.
-        config = make_small_thermalize_config(TimeDomain();
-            delta=0.01, mixing_time=1.0, construction=GNS())
+        config = make_config(Thermalize(), TimeDomain();
+            num_qubits=3, delta=0.01, mixing_time=1.0, construction=GNS())
         CT = ComplexF64
-        dim = SMALL_DIM  # 8
-        ws = QuantumFurnace._build_trajectory_workspace(config, SMALL_HAM, SMALL_JUMPS; delta=0.01)
+        dim = N3_DIM  # 8
+        ws = QuantumFurnace._build_trajectory_workspace(config, N3_HAM, N3_JUMPS; delta=0.01)
 
         psi0 = zeros(CT, dim)
         psi0[1] = 1.0

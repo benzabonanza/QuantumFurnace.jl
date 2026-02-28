@@ -10,7 +10,7 @@ using LinearAlgebra
 
 @testset "DMTST-03: Single-step Euler error O(delta^2)" begin
     # Build Liouvillian for EnergyDomain (simplest non-trivial domain)
-    config = make_liouv_config(EnergyDomain())
+    config = make_config(Lindbladian(),EnergyDomain())
     L = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
 
     # Initial state: maximally mixed
@@ -46,7 +46,7 @@ end
 
 @testset "DMTST-04: Multi-step accumulated error O(delta)" begin
     # Build Liouvillian for EnergyDomain
-    config = make_liouv_config(EnergyDomain())
+    config = make_config(Lindbladian(),EnergyDomain())
     L = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
 
     # Initial state: maximally mixed
@@ -94,13 +94,13 @@ end
     jump = TEST_JUMPS[1]  # X on site 1
 
     # B_bohr (exact, in Hamiltonian eigenbasis)
-    config_bohr = make_liouv_config(BohrDomain())
+    config_bohr = make_config(Lindbladian(),BohrDomain())
     precomputed_bohr = QuantumFurnace._precompute_data(config_bohr, TEST_HAM)
     B_bohr_val = B_bohr(TEST_HAM, JumpOp[jump], config_bohr)
     rmul!(B_bohr_val, precomputed_bohr.gamma_norm_factor)
 
     # B_time (time quadrature, in Hamiltonian eigenbasis)
-    config_time = make_liouv_config(TimeDomain())
+    config_time = make_config(Lindbladian(),TimeDomain())
     precomputed_time = QuantumFurnace._precompute_data(config_time, TEST_HAM)
     B_time_val = B_time(JumpOp[jump], TEST_HAM, precomputed_time.b_minus, precomputed_time.b_plus,
                         T0, BETA, SIGMA)
@@ -108,7 +108,7 @@ end
 
     # B_trotter (Trotter + time quadrature, in Trotter eigenbasis)
     # Use pre-built trotter-basis jump (TEST_TROTTER_JUMPS[1] corresponds to TEST_JUMPS[1])
-    config_trott = make_liouv_config(TrotterDomain())
+    config_trott = make_config(Lindbladian(),TrotterDomain())
     precomputed_trott = QuantumFurnace._precompute_data(config_trott, TEST_TROTTER)
     trotter_jump = TEST_TROTTER_JUMPS[1]
     B_trott = B_trotter(JumpOp[trotter_jump], TEST_TROTTER, precomputed_trott.b_minus, precomputed_trott.b_plus,
@@ -209,7 +209,7 @@ end
     caches = QuantumFurnace.OFTCaches{Float64}(DIM)
 
     # === Time NUFFT OFT ===
-    config_time = make_liouv_config(TimeDomain())
+    config_time = make_config(Lindbladian(),TimeDomain())
     precomputed_time = QuantumFurnace._precompute_data(config_time, TEST_HAM)
 
     # Sanity: test energy must be on the NUFFT grid
@@ -225,7 +225,7 @@ end
     A_time .*= time_oft_prefactor
 
     # === Trotter NUFFT OFT ===
-    config_trott = make_liouv_config(TrotterDomain())
+    config_trott = make_config(Lindbladian(),TrotterDomain())
     precomputed_trott = QuantumFurnace._precompute_data(config_trott, TEST_TROTTER)
 
     @test haskey(precomputed_trott.oft_nufft_prefactors.energy_to_index, w)

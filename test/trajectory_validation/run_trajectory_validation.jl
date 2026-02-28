@@ -34,13 +34,13 @@ function single_step_crossval(domain, delta::Float64;
     ntraj::Int = 50_000,
     seed::Int = 42,
 )
-    dim = SMALL_DIM  # 8
+    dim = N3_DIM  # 8
 
     # 1. Build Liouvillian and compute exact DM reference
-    liouv_config = make_small_liouv_config(domain; construction=with_coherent ? KMS() : GNS())
-    trotter_kw = domain isa TrotterDomain ? (; trotter=SMALL_TROTTER) : (;)
-    jumps = domain isa TrotterDomain ? SMALL_TROTTER_JUMPS : SMALL_JUMPS
-    L = construct_lindbladian(jumps, liouv_config, SMALL_HAM; trotter_kw...)
+    liouv_config = make_config(Lindbladian(), domain; num_qubits=3, construction=with_coherent ? KMS() : GNS())
+    trotter_kw = domain isa TrotterDomain ? (; trotter=N3_TROTTER) : (;)
+    jumps = domain isa TrotterDomain ? N3_TROTTER_JUMPS : N3_JUMPS
+    L = construct_lindbladian(jumps, liouv_config, N3_HAM; trotter_kw...)
 
     psi0 = fill(ComplexF64(1.0), dim) / sqrt(dim)
     rho0 = psi0 * psi0'
@@ -48,11 +48,11 @@ function single_step_crossval(domain, delta::Float64;
     rho_dm = (rho_dm + rho_dm') / 2
 
     # 2. Build trajectory workspace
-    therm_config = make_small_thermalize_config(domain;
-        construction=with_coherent ? KMS() : GNS(), delta=delta, mixing_time=Float64(delta))
-    ham_or_trott = domain isa TrotterDomain ? SMALL_TROTTER : SMALL_HAM
-    trotter_arg = domain isa TrotterDomain ? SMALL_TROTTER : nothing
-    ws = QuantumFurnace._build_trajectory_workspace(therm_config, SMALL_HAM, jumps;
+    therm_config = make_config(Thermalize(), domain;
+        num_qubits=3, construction=with_coherent ? KMS() : GNS(), delta=delta, mixing_time=Float64(delta))
+    ham_or_trott = domain isa TrotterDomain ? N3_TROTTER : N3_HAM
+    trotter_arg = domain isa TrotterDomain ? N3_TROTTER : nothing
+    ws = QuantumFurnace._build_trajectory_workspace(therm_config, N3_HAM, jumps;
         trotter=trotter_arg, delta=delta)
 
     # 3. Run trajectories and accumulate rho
@@ -165,17 +165,17 @@ end
 # TVAL-06: TrotterDomain coherent convergence to Gibbs state (multi-step)
 # ---------------------------------------------------------------------------
 @testset "TVAL-06: TrotterDomain coherent convergence to Gibbs state" begin
-    dim = SMALL_DIM  # 8
+    dim = N3_DIM  # 8
     delta = 0.01     # Small enough for convergence, large enough for speed
 
     # Liouvillian for TrotterDomain + coherent
-    liouv_config = make_small_liouv_config(TrotterDomain(); construction=KMS())
-    L = construct_lindbladian(SMALL_TROTTER_JUMPS, liouv_config, SMALL_HAM; trotter=SMALL_TROTTER)
+    liouv_config = make_config(Lindbladian(), TrotterDomain(); num_qubits=3, construction=KMS())
+    L = construct_lindbladian(N3_TROTTER_JUMPS, liouv_config, N3_HAM; trotter=N3_TROTTER)
     exp_L = exp(delta * L)  # Compute once, apply repeatedly
 
     # Gibbs state in Trotter eigenbasis (following DMTST-02 pattern)
-    gibbs_comp = SMALL_HAM.eigvecs * SMALL_GIBBS * SMALL_HAM.eigvecs'
-    gibbs_trott = Hermitian(SMALL_TROTTER.eigvecs' * gibbs_comp * SMALL_TROTTER.eigvecs)
+    gibbs_comp = N3_HAM.eigvecs * N3_GIBBS * N3_HAM.eigvecs'
+    gibbs_trott = Hermitian(N3_TROTTER.eigvecs' * gibbs_comp * N3_TROTTER.eigvecs)
 
     # Liouvillian fixed point (exact steady state of L).
     eig = eigen(L)
@@ -211,11 +211,11 @@ end
 
     # -- Trajectory evolution for the same total time --
     total_time = dm_converged_step * delta
-    therm_config = make_small_thermalize_config(TrotterDomain();
-        construction=KMS(), delta=delta, mixing_time=total_time)
+    therm_config = make_config(Thermalize(), TrotterDomain();
+        num_qubits=3, construction=KMS(), delta=delta, mixing_time=total_time)
 
-    result = run_trajectories(SMALL_TROTTER_JUMPS, therm_config, psi0, SMALL_HAM;
-        trotter=SMALL_TROTTER, total_time=total_time, delta=delta, ntraj=10_000, seed=42)
+    result = run_trajectories(N3_TROTTER_JUMPS, therm_config, psi0, N3_HAM;
+        trotter=N3_TROTTER, total_time=total_time, delta=delta, ntraj=10_000, seed=42)
     rho_traj = result.rho_mean
 
     # -- Assertions --

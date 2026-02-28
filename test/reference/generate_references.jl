@@ -16,7 +16,7 @@ platform-portable (no dependency on BLAS internals or RNG stream behavior).
 
 using QuantumFurnace, LinearAlgebra, BSON
 
-# Load shared test fixtures (SMALL system: 3-qubit)
+# Load shared test fixtures (N3 system: 3-qubit)
 include(joinpath(@__DIR__, "..", "test_helpers.jl"))
 
 # ---------------------------------------------------------------------------
@@ -34,14 +34,14 @@ const REF_DELTA = 0.1
 Compute a single-step density matrix evolution via exp(delta*L) and save as BSON.
 """
 function generate_dm_reference(domain; with_coherent::Bool, filename::String)
-    liouv_config = make_small_liouv_config(domain; construction=with_coherent ? KMS() : GNS())
-    trotter_kw = domain isa TrotterDomain ? (; trotter=SMALL_TROTTER) : (;)
-    jumps = domain isa TrotterDomain ? SMALL_TROTTER_JUMPS : SMALL_JUMPS
-    L = construct_lindbladian(jumps, liouv_config, SMALL_HAM; trotter_kw...)
+    liouv_config = make_config(Lindbladian(), domain; num_qubits=3, construction=with_coherent ? KMS() : GNS())
+    trotter_kw = domain isa TrotterDomain ? (; trotter=N3_TROTTER) : (;)
+    jumps = domain isa TrotterDomain ? N3_TROTTER_JUMPS : N3_JUMPS
+    L = construct_lindbladian(jumps, liouv_config, N3_HAM; trotter_kw...)
 
-    psi0 = fill(ComplexF64(1.0), SMALL_DIM) / sqrt(SMALL_DIM)
+    psi0 = fill(ComplexF64(1.0), N3_DIM) / sqrt(N3_DIM)
     rho0 = psi0 * psi0'
-    rho_dm = reshape(exp(REF_DELTA * L) * vec(rho0), SMALL_DIM, SMALL_DIM)
+    rho_dm = reshape(exp(REF_DELTA * L) * vec(rho0), N3_DIM, N3_DIM)
     rho_dm = (rho_dm + rho_dm') / 2  # Hermitianize
 
     BSON.bson(joinpath(REF_DIR, filename), Dict(

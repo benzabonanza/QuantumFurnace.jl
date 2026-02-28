@@ -8,8 +8,8 @@ using BSON
     # -----------------------------------------------------------------------
     @testset "LindbladResults round-trip" begin
         mktempdir() do tmpdir
-            config = make_small_liouv_config(EnergyDomain())
-            dim = SMALL_DIM
+            config = make_config(Lindbladian(), EnergyDomain(); num_qubits=3, construction=GNS())
+            dim = N3_DIM
             eigenvalues = [0.0 + 0.0im, -0.5 + 0.01im]
             fixed_point = Matrix(random_density_matrix(Int(log2(dim))))
             gap_mode = randn(ComplexF64, dim, dim)
@@ -46,8 +46,8 @@ using BSON
     # -----------------------------------------------------------------------
     @testset "ThermalizeResults round-trip" begin
         mktempdir() do tmpdir
-            config = make_small_thermalize_config(EnergyDomain())
-            dim = SMALL_DIM
+            config = make_config(Thermalize(), EnergyDomain(); num_qubits=3, construction=GNS())
+            dim = N3_DIM
             final_dm = Matrix(random_density_matrix(Int(log2(dim))))
             trace_distances = [0.5, 0.3, 0.1, 0.05]
             time_steps = [0.0, 0.01, 0.02, 0.03]
@@ -78,8 +78,8 @@ using BSON
     # -----------------------------------------------------------------------
     @testset "KrylovSpectrumResults round-trip" begin
         mktempdir() do tmpdir
-            config = make_small_liouv_config(EnergyDomain())
-            dim = SMALL_DIM
+            config = make_config(Lindbladian(), EnergyDomain(); num_qubits=3, construction=GNS())
+            dim = N3_DIM
             eigenvalues = [0.0+0.0im, -0.3+0.0im, -0.5+0.01im, -0.8+0.0im]
             spectral_gap = 0.3
             fixed_point = Matrix(random_density_matrix(Int(log2(dim))))
@@ -119,8 +119,8 @@ using BSON
     # -----------------------------------------------------------------------
     @testset "KrylovSpectrumResults channel path round-trip" begin
         mktempdir() do tmpdir
-            config = make_small_thermalize_config(EnergyDomain())
-            dim = SMALL_DIM
+            config = make_config(Thermalize(), EnergyDomain(); num_qubits=3, construction=GNS())
+            dim = N3_DIM
             eigenvalues = [0.0+0.0im, -0.3+0.0im]
             channel_eigs = [1.0+0.0im, 0.997+0.0im]
 
@@ -146,8 +146,8 @@ using BSON
     # -----------------------------------------------------------------------
     @testset "TrajectoryResults plain round-trip" begin
         mktempdir() do tmpdir
-            config = make_small_thermalize_config(EnergyDomain())
-            dim = SMALL_DIM
+            config = make_config(Thermalize(), EnergyDomain(); num_qubits=3, construction=GNS())
+            dim = N3_DIM
             rho_mean = Matrix(random_density_matrix(Int(log2(dim))))
             metadata = Dict{Symbol, Any}(:wall_time_seconds => 3.0, :n_threads => 1,
                 :timestamp => "2026-02-27", :git_hash => "jkl012")
@@ -177,8 +177,8 @@ using BSON
     # -----------------------------------------------------------------------
     @testset "TrajectoryResults convergence round-trip" begin
         mktempdir() do tmpdir
-            config = make_small_thermalize_config(EnergyDomain())
-            dim = SMALL_DIM
+            config = make_config(Thermalize(), EnergyDomain(); num_qubits=3, construction=GNS())
+            dim = N3_DIM
             rho_mean = Matrix(random_density_matrix(Int(log2(dim))))
             conv = ConvergenceData(
                 [100, 100], [100, 200], [0.3, 0.1],

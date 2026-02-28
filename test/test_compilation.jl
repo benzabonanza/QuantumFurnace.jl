@@ -4,7 +4,7 @@
     end
 
     @testset "_build_trajectory_workspace with coherent (KMS)" begin
-        config = make_thermalize_config(EnergyDomain(); construction=KMS())
+        config = make_config(Thermalize(), EnergyDomain(); construction=KMS())
         ws = QuantumFurnace._build_trajectory_workspace(config, TEST_HAM, TEST_JUMPS; delta=TEST_DELTA)
         @test ws isa Workspace{Trajectory}
         @test ws.delta == TEST_DELTA
@@ -13,7 +13,7 @@
     end
 
     @testset "_build_trajectory_workspace without coherent (GNS)" begin
-        config = make_thermalize_config(EnergyDomain(); construction=GNS())
+        config = make_config(Thermalize(), EnergyDomain(); construction=GNS())
         ws = QuantumFurnace._build_trajectory_workspace(config, TEST_HAM, TEST_JUMPS; delta=TEST_DELTA)
         @test ws isa Workspace{Trajectory}
         # Per-operator: no coherent unitaries
@@ -35,12 +35,12 @@
     end
 
     @testset "Config factories" begin
-        lc = make_liouv_config(EnergyDomain())
+        lc = make_config(Lindbladian(), EnergyDomain())
         @test lc isa Config{Lindbladian}
         @test with_coherent(lc.construction) == true
         @test lc.num_qubits == NUM_QUBITS
 
-        tc = make_thermalize_config(EnergyDomain(); construction=GNS(), delta=0.05)
+        tc = make_config(Thermalize(), EnergyDomain(); construction=GNS(), delta=0.05)
         @test tc isa Config{Thermalize}
         @test with_coherent(tc.construction) == false
         @test tc.delta == 0.05

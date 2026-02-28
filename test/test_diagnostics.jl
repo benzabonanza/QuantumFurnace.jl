@@ -1,8 +1,8 @@
 @testset "Diagnostics (Phase 26)" begin
 
     # Build the 3-qubit Lindbladian (BohrDomain for exact Gibbs fixed point)
-    config = make_small_liouv_config(BohrDomain(); construction=KMS())
-    L_sparse = construct_lindbladian(SMALL_JUMPS, config, SMALL_HAM)
+    config = make_config(Lindbladian(), BohrDomain(); num_qubits=3, construction=KMS())
+    L_sparse = construct_lindbladian(N3_JUMPS, config, N3_HAM)
     L_dense = Matrix{ComplexF64}(L_sparse)
 
     # -----------------------------------------------------------------------
@@ -27,8 +27,8 @@
         @test result.spectral_gap > 0.0
 
         # Right/left eigenvector dimensions
-        @test size(result.right_eigenvectors) == (SMALL_DIM^2, 10)
-        @test size(result.left_eigenvectors) == (SMALL_DIM^2, 10)
+        @test size(result.right_eigenvectors) == (N3_DIM^2, 10)
+        @test size(result.left_eigenvectors) == (N3_DIM^2, 10)
 
         # Biorthonormality: V_left' * V_right approx I
         biorth = result.left_eigenvectors' * result.right_eigenvectors
@@ -54,7 +54,7 @@
     # DIAG-02: Fixed point distance
     # -----------------------------------------------------------------------
     @testset "DIAG-02: compute_fixed_point_distance" begin
-        fp = compute_fixed_point_distance(eigen_result, SMALL_GIBBS)
+        fp = compute_fixed_point_distance(eigen_result, N3_GIBBS)
 
         @test fp isa FixedPointResult
 
@@ -69,7 +69,7 @@
         @test isapprox(fp.fixed_point, fp.fixed_point'; atol=1e-12)
 
         # Fixed point has correct dimension
-        @test size(fp.fixed_point) == (SMALL_DIM, SMALL_DIM)
+        @test size(fp.fixed_point) == (N3_DIM, N3_DIM)
 
         # Fixed point eigenvalues are non-negative (it's a valid density matrix)
         fp_eigvals = eigvals(Hermitian(fp.fixed_point))
@@ -80,7 +80,7 @@
     # DIAG-03/04: Anti-Hermitian defect
     # -----------------------------------------------------------------------
     @testset "DIAG-03/04: compute_anti_hermitian_defect" begin
-        defect = compute_anti_hermitian_defect(L_dense, SMALL_GIBBS)
+        defect = compute_anti_hermitian_defect(L_dense, N3_GIBBS)
 
         @test defect isa DefectResult
 
@@ -108,7 +108,7 @@
     # -----------------------------------------------------------------------
     @testset "DIAG-05: compute_overlap_coefficients" begin
         # Build observables in eigenbasis
-        V = SMALL_HAM.eigvecs
+        V = N3_HAM.eigvecs
         n_qubits = 3
 
         # Z1 in eigenbasis
@@ -116,17 +116,17 @@
         Z1_eigen = Matrix{ComplexF64}(V' * Z1_comp * V)
 
         # H diagonal in eigenbasis
-        H_eigen = Matrix{ComplexF64}(diagm(ComplexF64.(SMALL_HAM.eigvals)))
+        H_eigen = Matrix{ComplexF64}(diagm(ComplexF64.(N3_HAM.eigvals)))
 
         observables = Matrix{ComplexF64}[Z1_eigen, H_eigen]
         observable_names = String["Z1", "H"]
 
         # Initial state: maximally mixed (same in any basis)
-        dim = SMALL_DIM
+        dim = N3_DIM
         rho0 = Matrix{ComplexF64}(I(dim) / dim)
 
         overlap = compute_overlap_coefficients(
-            eigen_result, observables, observable_names, rho0, SMALL_GIBBS;
+            eigen_result, observables, observable_names, rho0, N3_GIBBS;
             n_modes=10, initial_state_name="maximally_mixed"
         )
 
@@ -155,7 +155,7 @@
         rho_up = psi0_eigen * psi0_eigen'
 
         overlap_up = compute_overlap_coefficients(
-            eigen_result, observables, observable_names, rho_up, SMALL_GIBBS;
+            eigen_result, observables, observable_names, rho_up, N3_GIBBS;
             n_modes=10, initial_state_name="all_up"
         )
         @test size(overlap_up.coefficients) == (2, 10)
@@ -169,7 +169,7 @@
     # DIAG-06: Symmetry labels
     # -----------------------------------------------------------------------
     @testset "DIAG-06: compute_sz_labels" begin
-        labels = compute_sz_labels(eigen_result, SMALL_HAM; n_modes=10)
+        labels = compute_sz_labels(eigen_result, N3_HAM; n_modes=10)
 
         @test length(labels) == 10
 
@@ -230,7 +230,7 @@
     # -----------------------------------------------------------------------
     @testset "run_exact_diagnostics bundle" begin
         result = run_exact_diagnostics(
-            L_dense, SMALL_HAM, SMALL_GIBBS;
+            L_dense, N3_HAM, N3_GIBBS;
             n_modes=10
         )
 
@@ -276,9 +276,9 @@
     # Bundle: custom observables and initial states
     # -----------------------------------------------------------------------
     @testset "run_exact_diagnostics custom inputs" begin
-        V = SMALL_HAM.eigvecs
+        V = N3_HAM.eigvecs
         n_qubits = 3
-        dim = SMALL_DIM
+        dim = N3_DIM
 
         # Custom observable: just Z1
         Z1_comp = Matrix{ComplexF64}(pad_term([Z], n_qubits, 1))
@@ -288,7 +288,7 @@
         rho_mixed = Matrix{ComplexF64}(I(dim) / dim)
 
         result = run_exact_diagnostics(
-            L_dense, SMALL_HAM, SMALL_GIBBS;
+            L_dense, N3_HAM, N3_GIBBS;
             observables=Matrix{ComplexF64}[Z1_eigen],
             observable_names=String["Z1"],
             initial_states=Matrix{ComplexF64}[rho_mixed],
@@ -309,16 +309,16 @@ end
 @testset "Diagnostics TrotterDomain" begin
 
     # Build TrotterDomain Lindbladian (3-qubit)
-    config_trott = make_small_liouv_config(TrotterDomain(); construction=KMS())
-    L_trott_sparse = construct_lindbladian(SMALL_TROTTER_JUMPS, config_trott, SMALL_HAM; trotter=SMALL_TROTTER)
+    config_trott = make_config(Lindbladian(), TrotterDomain(); num_qubits=3, construction=KMS())
+    L_trott_sparse = construct_lindbladian(N3_TROTTER_JUMPS, config_trott, N3_HAM; trotter=N3_TROTTER)
     L_trott = Matrix{ComplexF64}(L_trott_sparse)
 
     # Gibbs state in Trotter basis (matching furnace.jl pattern)
-    gibbs_trott = Hermitian(SMALL_TROTTER.eigvecs' * SMALL_HAM.eigvecs *
-                            Matrix(SMALL_GIBBS) * SMALL_HAM.eigvecs' * SMALL_TROTTER.eigvecs)
+    gibbs_trott = Hermitian(N3_TROTTER.eigvecs' * N3_HAM.eigvecs *
+                            Matrix(N3_GIBBS) * N3_HAM.eigvecs' * N3_TROTTER.eigvecs)
 
     n_qubits = 3
-    dim = SMALL_DIM
+    dim = N3_DIM
 
     # -------------------------------------------------------------------
     # DIAG-01: Eigendata extraction on TrotterDomain L
@@ -380,11 +380,11 @@ end
         # Compare to BohrDomain fixed point distance -- both should be similar magnitude
         # (for 3-qubit with 10 Trotter steps, Trotter error is very small so distances
         # are nearly equal; we just verify they're in the same ballpark)
-        config_bohr = make_small_liouv_config(BohrDomain(); construction=KMS())
-        L_bohr_sparse = construct_lindbladian(SMALL_JUMPS, config_bohr, SMALL_HAM)
+        config_bohr = make_config(Lindbladian(), BohrDomain(); num_qubits=3, construction=KMS())
+        L_bohr_sparse = construct_lindbladian(N3_JUMPS, config_bohr, N3_HAM)
         L_bohr = Matrix{ComplexF64}(L_bohr_sparse)
         eigen_bohr = extract_leading_eigendata(L_bohr; n_modes=10)
-        fp_bohr = compute_fixed_point_distance(eigen_bohr, SMALL_GIBBS)
+        fp_bohr = compute_fixed_point_distance(eigen_bohr, N3_GIBBS)
         # Both distances are small with KMS (exact detailed balance)
         # Trotter has tiny residual error; Bohr is near machine precision
         @test fp.trace_distance < 0.01
@@ -417,7 +417,7 @@ end
     # DIAG-05: Overlap coefficients with Trotter-basis observables
     # -------------------------------------------------------------------
     @testset "DIAG-05: TrotterDomain overlap coefficients" begin
-        Vt = SMALL_TROTTER.eigvecs
+        Vt = N3_TROTTER.eigvecs
 
         # Z1 in Trotter basis
         Z1_comp = Matrix{ComplexF64}(pad_term([Z], n_qubits, 1))
@@ -447,7 +447,7 @@ end
     # DIAG-06: Sz labels with Trotter eigenvectors
     # -------------------------------------------------------------------
     @testset "DIAG-06: TrotterDomain Sz labels" begin
-        labels = compute_sz_labels(eigen_trott, SMALL_TROTTER.eigvecs, n_qubits; n_modes=10)
+        labels = compute_sz_labels(eigen_trott, N3_TROTTER.eigvecs, n_qubits; n_modes=10)
 
         @test length(labels) == 10
 
@@ -466,8 +466,8 @@ end
     # Bundle: run_exact_diagnostics with basis_eigvecs
     # -------------------------------------------------------------------
     @testset "run_exact_diagnostics TrotterDomain bundle" begin
-        result = run_exact_diagnostics(L_trott, SMALL_HAM, gibbs_trott;
-            n_modes=10, basis_eigvecs=SMALL_TROTTER.eigvecs)
+        result = run_exact_diagnostics(L_trott, N3_HAM, gibbs_trott;
+            n_modes=10, basis_eigvecs=N3_TROTTER.eigvecs)
 
         @test result isa ExactDiagnosticsResult
 
@@ -511,10 +511,10 @@ end
     # Backward compatibility: BohrDomain without basis_eigvecs
     # -------------------------------------------------------------------
     @testset "backward compatibility: no basis_eigvecs" begin
-        config_bohr = make_small_liouv_config(BohrDomain(); construction=KMS())
-        L_bohr = Matrix{ComplexF64}(construct_lindbladian(SMALL_JUMPS, config_bohr, SMALL_HAM))
+        config_bohr = make_config(Lindbladian(), BohrDomain(); num_qubits=3, construction=KMS())
+        L_bohr = Matrix{ComplexF64}(construct_lindbladian(N3_JUMPS, config_bohr, N3_HAM))
 
-        result = run_exact_diagnostics(L_bohr, SMALL_HAM, SMALL_GIBBS; n_modes=10)
+        result = run_exact_diagnostics(L_bohr, N3_HAM, N3_GIBBS; n_modes=10)
 
         @test result isa ExactDiagnosticsResult
         @test result.fixed_point.trace_distance < 0.01

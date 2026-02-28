@@ -14,8 +14,8 @@ exact Gibbs state -- the approximation gap is documented here as a Phase 18 base
 using Random
 
 @testset "GNS-01: Lindbladian fixed point (TrotterDomain)" begin
-    config = make_small_liouv_config_gns(TrotterDomain())
-    liouv = construct_lindbladian(SMALL_TROTTER_JUMPS, config, SMALL_HAM; trotter=SMALL_TROTTER)
+    config = make_config(Lindbladian(), TrotterDomain(); num_qubits=3, construction=GNS())
+    liouv = construct_lindbladian(N3_TROTTER_JUMPS, config, N3_HAM; trotter=N3_TROTTER)
 
     # Full eigendecomposition (64x64 dense matrix)
     eig = eigen(liouv)
@@ -23,7 +23,7 @@ using Random
     # Extract fixed point: eigenvalue with smallest |Re(lambda)|
     ss_idx = argmin(abs.(real.(eig.values)))
     ss_vec = eig.vectors[:, ss_idx]
-    ss_dm = reshape(ss_vec, SMALL_DIM, SMALL_DIM)
+    ss_dm = reshape(ss_vec, N3_DIM, N3_DIM)
     ss_dm = (ss_dm + ss_dm') / 2   # Hermitianize
     ss_dm ./= tr(ss_dm)            # Normalize
 
@@ -34,24 +34,24 @@ using Random
 
     # GNS fixed point is NOT the exact Gibbs state -- measure the approximation gap.
     # The Lindbladian is built in the Trotter eigenbasis, so transform the fixed point
-    # to the energy eigenbasis before comparing with SMALL_GIBBS.
-    U_t2e = SMALL_HAM.eigvecs' * SMALL_TROTTER.eigvecs  # Trotter-to-energy change of basis
+    # to the energy eigenbasis before comparing with N3_GIBBS.
+    U_t2e = N3_HAM.eigvecs' * N3_TROTTER.eigvecs  # Trotter-to-energy change of basis
     ss_dm_energy = U_t2e * ss_dm * U_t2e'
     ss_dm_energy = (ss_dm_energy + ss_dm_energy') / 2  # re-Hermitianize after basis change
-    gap = trace_distance_h(Hermitian(ss_dm_energy), SMALL_GIBBS)
+    gap = trace_distance_h(Hermitian(ss_dm_energy), N3_GIBBS)
     @info "GNS-01: GNS fixed point to Gibbs trace distance (approximation gap)" gap
     @test gap > 1e-6     # Strictly positive (GNS does not reproduce exact Gibbs)
     @test gap < 0.5      # Sanity bound (should be ~0.08, close to EnergyDomain)
 end
 
 @testset "GNS-01: CPTP completeness (TrotterDomain)" begin
-    config = make_small_thermalize_config_gns(TrotterDomain(); delta=0.01)
-    ws = QuantumFurnace._build_trajectory_workspace(config, SMALL_HAM, SMALL_TROTTER_JUMPS;
-        trotter=SMALL_TROTTER, delta=config.delta)
+    config = make_config(Thermalize(), TrotterDomain(); num_qubits=3, construction=GNS(), delta=0.01)
+    ws = QuantumFurnace._build_trajectory_workspace(config, N3_HAM, N3_TROTTER_JUMPS;
+        trotter=N3_TROTTER, delta=config.delta)
 
-    @test ws.n_jumps == length(SMALL_JUMPS)
+    @test ws.n_jumps == length(N3_JUMPS)
 
-    identity = Matrix{ComplexF64}(I, SMALL_DIM, SMALL_DIM)
+    identity = Matrix{ComplexF64}(I, N3_DIM, N3_DIM)
     for a in 1:ws.n_jumps
         completeness = ws.K0s[a]' * ws.K0s[a] + ws.delta * ws.Rs[a] + ws.U_residuals[a]' * ws.U_residuals[a]
         @test isapprox(completeness, identity; atol=1e-10)
@@ -61,23 +61,23 @@ end
 
 @testset "GNS-02: Trajectory convergence to GNS fixed point (TrotterDomain)" begin
     # Compute the GNS reference fixed point
-    liouv_config = make_small_liouv_config_gns(TrotterDomain())
-    liouv = construct_lindbladian(SMALL_TROTTER_JUMPS, liouv_config, SMALL_HAM; trotter=SMALL_TROTTER)
+    liouv_config = make_config(Lindbladian(), TrotterDomain(); num_qubits=3, construction=GNS())
+    liouv = construct_lindbladian(N3_TROTTER_JUMPS, liouv_config, N3_HAM; trotter=N3_TROTTER)
     eig = eigen(liouv)
     ss_idx = argmin(abs.(real.(eig.values)))
     ss_vec = eig.vectors[:, ss_idx]
-    gns_fp = reshape(ss_vec, SMALL_DIM, SMALL_DIM)
+    gns_fp = reshape(ss_vec, N3_DIM, N3_DIM)
     gns_fp = (gns_fp + gns_fp') / 2
     gns_fp ./= tr(gns_fp)
 
     # Run trajectories with Config{Thermalize, <:Any, GNS}
     # mixing_time=100.0 accounts for the corrected (slower) trajectory evolution rate
     # (the per-step CPTP channel uses bare delta, not delta*n_jumps)
-    config = make_small_thermalize_config_gns(TrotterDomain(); delta=0.01, mixing_time=100.0)
-    psi0 = zeros(ComplexF64, SMALL_DIM)
+    config = make_config(Thermalize(), TrotterDomain(); num_qubits=3, construction=GNS(), delta=0.01, mixing_time=100.0)
+    psi0 = zeros(ComplexF64, N3_DIM)
     psi0[1] = 1.0  # computational basis |0>
 
-    result = run_trajectories(SMALL_TROTTER_JUMPS, config, psi0, SMALL_HAM; trotter=SMALL_TROTTER, ntraj=1000, seed=42)
+    result = run_trajectories(N3_TROTTER_JUMPS, config, psi0, N3_HAM; trotter=N3_TROTTER, ntraj=1000, seed=42)
 
     # Convergence to GNS fixed point (NOT Gibbs)
     dist = trace_distance_h(Hermitian(result.rho_mean), Hermitian(gns_fp))
@@ -91,22 +91,22 @@ end
 
     # Log the GNS-to-Gibbs gap for Phase 18 baseline.
     # Transform gns_fp from Trotter eigenbasis to energy eigenbasis for comparison.
-    U_t2e = SMALL_HAM.eigvecs' * SMALL_TROTTER.eigvecs
+    U_t2e = N3_HAM.eigvecs' * N3_TROTTER.eigvecs
     gns_fp_energy = U_t2e * gns_fp * U_t2e'
     gns_fp_energy = (gns_fp_energy + gns_fp_energy') / 2
-    gibbs_dist = trace_distance_h(Hermitian(gns_fp_energy), SMALL_GIBBS)
+    gibbs_dist = trace_distance_h(Hermitian(gns_fp_energy), N3_GIBBS)
     @info "GNS-02: GNS fixed point to Gibbs distance (Phase 18 baseline)" gibbs_dist
 end
 
 @testset "GNS-01: BohrDomain detailed balance" begin
-    config = make_small_liouv_config_gns(BohrDomain())
-    liouv = construct_lindbladian(SMALL_JUMPS, config, SMALL_HAM)
+    config = make_config(Lindbladian(), BohrDomain(); num_qubits=3, construction=GNS())
+    liouv = construct_lindbladian(N3_JUMPS, config, N3_HAM)
 
     # Full eigendecomposition
     eig = eigen(liouv)
     ss_idx = argmin(abs.(real.(eig.values)))
     ss_vec = eig.vectors[:, ss_idx]
-    ss_dm_bohr = reshape(ss_vec, SMALL_DIM, SMALL_DIM)
+    ss_dm_bohr = reshape(ss_vec, N3_DIM, N3_DIM)
     ss_dm_bohr = (ss_dm_bohr + ss_dm_bohr') / 2
     ss_dm_bohr ./= tr(ss_dm_bohr)
 
@@ -116,7 +116,7 @@ end
     @test all(eigvals(Hermitian(ss_dm_bohr)) .>= -1e-12)   # PSD
 
     # GNS fixed point should be distinct from Gibbs
-    gap_bohr = trace_distance_h(Hermitian(ss_dm_bohr), SMALL_GIBBS)
+    gap_bohr = trace_distance_h(Hermitian(ss_dm_bohr), N3_GIBBS)
     @info "GNS-01 Bohr: GNS fixed point to Gibbs distance" gap_bohr
     @test gap_bohr > 1e-6  # Strictly positive
 end

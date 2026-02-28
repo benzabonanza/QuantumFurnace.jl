@@ -21,7 +21,7 @@ ref_dir = joinpath(source_root, "test", "reference")
 @testset "TINF-02: Regression tests" begin
 
     # Shared initial state for all regression tests
-    psi0 = fill(ComplexF64(1.0), SMALL_DIM) / sqrt(SMALL_DIM)
+    psi0 = fill(ComplexF64(1.0), N3_DIM) / sqrt(N3_DIM)
     rho0 = psi0 * psi0'
 
     # ------------------------------------------------------------------
@@ -32,9 +32,9 @@ ref_dir = joinpath(source_root, "test", "reference")
         rho_ref = ref_data[:rho]
         delta = ref_data[:delta]
 
-        liouv_config = make_small_liouv_config(EnergyDomain())
-        L = construct_lindbladian(SMALL_JUMPS, liouv_config, SMALL_HAM)
-        rho_fresh = reshape(exp(delta * L) * vec(rho0), SMALL_DIM, SMALL_DIM)
+        liouv_config = make_config(Lindbladian(), EnergyDomain(); num_qubits=3, construction=GNS())
+        L = construct_lindbladian(N3_JUMPS, liouv_config, N3_HAM)
+        rho_fresh = reshape(exp(delta * L) * vec(rho0), N3_DIM, N3_DIM)
         rho_fresh = (rho_fresh + rho_fresh') / 2
 
         @test isapprox(rho_fresh, rho_ref; atol=1e-10)
@@ -49,18 +49,18 @@ ref_dir = joinpath(source_root, "test", "reference")
         ntraj = 1000
 
         # Compute DM reference fresh (deterministic, platform-portable)
-        liouv_config = make_small_liouv_config(EnergyDomain())
-        L = construct_lindbladian(SMALL_JUMPS, liouv_config, SMALL_HAM)
-        rho_dm = reshape(exp(delta * L) * vec(rho0), SMALL_DIM, SMALL_DIM)
+        liouv_config = make_config(Lindbladian(), EnergyDomain(); num_qubits=3, construction=GNS())
+        L = construct_lindbladian(N3_JUMPS, liouv_config, N3_HAM)
+        rho_dm = reshape(exp(delta * L) * vec(rho0), N3_DIM, N3_DIM)
         rho_dm = (rho_dm + rho_dm') / 2
 
         # Compute trajectory average
-        therm_config = make_small_thermalize_config(EnergyDomain();
-            delta=delta, mixing_time=Float64(delta))
-        ws = QuantumFurnace._build_trajectory_workspace(therm_config, SMALL_HAM, SMALL_JUMPS; delta=delta)
+        therm_config = make_config(Thermalize(), EnergyDomain();
+            num_qubits=3, construction=GNS(), delta=delta, mixing_time=Float64(delta))
+        ws = QuantumFurnace._build_trajectory_workspace(therm_config, N3_HAM, N3_JUMPS; delta=delta)
 
         rng = Random.Xoshiro(seed)
-        rho_traj = zeros(ComplexF64, SMALL_DIM, SMALL_DIM)
+        rho_traj = zeros(ComplexF64, N3_DIM, N3_DIM)
         for _ in 1:ntraj
             psi = copy(psi0)
             step_along_trajectory!(psi, ws, rng)
@@ -80,9 +80,9 @@ ref_dir = joinpath(source_root, "test", "reference")
         rho_ref = ref_data[:rho]
         delta = ref_data[:delta]
 
-        liouv_config = make_small_liouv_config(TrotterDomain(); construction=KMS())
-        L = construct_lindbladian(SMALL_TROTTER_JUMPS, liouv_config, SMALL_HAM; trotter=SMALL_TROTTER)
-        rho_fresh = reshape(exp(delta * L) * vec(rho0), SMALL_DIM, SMALL_DIM)
+        liouv_config = make_config(Lindbladian(), TrotterDomain(); num_qubits=3, construction=KMS())
+        L = construct_lindbladian(N3_TROTTER_JUMPS, liouv_config, N3_HAM; trotter=N3_TROTTER)
+        rho_fresh = reshape(exp(delta * L) * vec(rho0), N3_DIM, N3_DIM)
         rho_fresh = (rho_fresh + rho_fresh') / 2
 
         @test isapprox(rho_fresh, rho_ref; atol=1e-10)
@@ -97,19 +97,19 @@ ref_dir = joinpath(source_root, "test", "reference")
         ntraj = 1000
 
         # Compute DM reference fresh (deterministic, platform-portable)
-        liouv_config = make_small_liouv_config(TrotterDomain(); construction=KMS())
-        L = construct_lindbladian(SMALL_TROTTER_JUMPS, liouv_config, SMALL_HAM; trotter=SMALL_TROTTER)
-        rho_dm = reshape(exp(delta * L) * vec(rho0), SMALL_DIM, SMALL_DIM)
+        liouv_config = make_config(Lindbladian(), TrotterDomain(); num_qubits=3, construction=KMS())
+        L = construct_lindbladian(N3_TROTTER_JUMPS, liouv_config, N3_HAM; trotter=N3_TROTTER)
+        rho_dm = reshape(exp(delta * L) * vec(rho0), N3_DIM, N3_DIM)
         rho_dm = (rho_dm + rho_dm') / 2
 
         # Compute trajectory average
-        therm_config = make_small_thermalize_config(TrotterDomain();
-            construction=KMS(), delta=delta, mixing_time=Float64(delta))
-        ws = QuantumFurnace._build_trajectory_workspace(therm_config, SMALL_HAM, SMALL_TROTTER_JUMPS;
-            trotter=SMALL_TROTTER, delta=delta)
+        therm_config = make_config(Thermalize(), TrotterDomain();
+            num_qubits=3, construction=KMS(), delta=delta, mixing_time=Float64(delta))
+        ws = QuantumFurnace._build_trajectory_workspace(therm_config, N3_HAM, N3_TROTTER_JUMPS;
+            trotter=N3_TROTTER, delta=delta)
 
         rng = Random.Xoshiro(seed)
-        rho_traj = zeros(ComplexF64, SMALL_DIM, SMALL_DIM)
+        rho_traj = zeros(ComplexF64, N3_DIM, N3_DIM)
         for _ in 1:ntraj
             psi = copy(psi0)
             step_along_trajectory!(psi, ws, rng)

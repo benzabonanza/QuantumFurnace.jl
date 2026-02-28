@@ -4,15 +4,15 @@ using LinearAlgebra
 
 @testset "Workspace Independence" begin
     # Use 3-qubit test fixtures from test_helpers.jl
-    # (SMALL_HAM, SMALL_JUMPS already loaded by runtests.jl include order)
+    # (N3_HAM, N3_JUMPS already loaded by runtests.jl include order)
 
-    dim = size(SMALL_HAM.data, 1)
+    dim = size(N3_HAM.data, 1)
     CT = ComplexF64
 
     # Build workspace (shared immutable data, independent scratch)
-    therm_config = make_small_thermalize_config(TimeDomain();
+    therm_config = make_config(Thermalize(), TimeDomain(); num_qubits=3,
         delta=0.01, mixing_time=1.0, construction=GNS())
-    ws_base = QuantumFurnace._build_trajectory_workspace(therm_config, SMALL_HAM, SMALL_JUMPS; delta=0.01)
+    ws_base = QuantumFurnace._build_trajectory_workspace(therm_config, N3_HAM, N3_JUMPS; delta=0.01)
 
     # Create two independent workspaces and RNGs
     ws1 = QuantumFurnace._copy_workspace_for_thread(ws_base)
@@ -58,16 +58,16 @@ using LinearAlgebra
 end
 
 @testset "TrajectoryResult seed capture" begin
-    dim = size(SMALL_HAM.data, 1)
+    dim = size(N3_HAM.data, 1)
     CT = ComplexF64
     psi0 = zeros(CT, dim)
     psi0[1] = 1.0
 
-    therm_config = make_small_thermalize_config(TimeDomain();
+    therm_config = make_config(Thermalize(), TimeDomain(); num_qubits=3,
         delta=0.01, mixing_time=0.1, construction=GNS())
 
     # With explicit seed
-    result1 = run_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+    result1 = run_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
         delta=0.01, ntraj=10, seed=42)
     @test result1 isa QuantumFurnace.TrajectoryResult
     @test result1.seed == 42
@@ -76,12 +76,12 @@ end
     @test isapprox(tr(result1.rho_mean), 1.0; atol=1e-10)
 
     # Deterministic: same seed -> same result
-    result2 = run_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+    result2 = run_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
         delta=0.01, ntraj=10, seed=42)
     @test isapprox(result1.rho_mean, result2.rho_mean; atol=1e-14)
 
     # Without seed: auto-generated, stored in result
-    result3 = run_trajectories(SMALL_JUMPS, therm_config, psi0, SMALL_HAM;
+    result3 = run_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
         delta=0.01, ntraj=10)
     @test result3.seed != 0  # seed was auto-generated
     @test result3.times === nothing  # no observables

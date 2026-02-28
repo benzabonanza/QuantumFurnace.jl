@@ -11,15 +11,15 @@ using LinearAlgebra
 @testset "Gap Estimation" begin
 
     # Shared setup: 3-qubit initial state and config
-    psi0 = zeros(ComplexF64, SMALL_DIM)
+    psi0 = zeros(ComplexF64, N3_DIM)
     psi0[1] = 1.0
-    config = make_small_thermalize_config(TimeDomain();
+    config = make_config(Thermalize(), TimeDomain(); num_qubits=3,
         delta=0.01, mixing_time=10.0, construction=GNS())
 
     # -----------------------------------------------------------------
     @testset "Basic estimate_spectral_gap returns NamedTuple" begin
         result = estimate_spectral_gap(
-            SMALL_JUMPS, config, psi0, SMALL_HAM;
+            N3_JUMPS, config, psi0, N3_HAM;
             ntraj=500, save_every=5, seed=42,
         )
 
@@ -41,7 +41,7 @@ using LinearAlgebra
     # -----------------------------------------------------------------
     @testset "Per-observable results are accessible" begin
         result = estimate_spectral_gap(
-            SMALL_JUMPS, config, psi0, SMALL_HAM;
+            N3_JUMPS, config, psi0, N3_HAM;
             ntraj=500, save_every=5, seed=42,
         )
 
@@ -59,11 +59,11 @@ using LinearAlgebra
     # -----------------------------------------------------------------
     @testset "Deterministic seeding produces identical results" begin
         r1 = estimate_spectral_gap(
-            SMALL_JUMPS, config, psi0, SMALL_HAM;
+            N3_JUMPS, config, psi0, N3_HAM;
             ntraj=500, save_every=5, seed=123,
         )
         r2 = estimate_spectral_gap(
-            SMALL_JUMPS, config, psi0, SMALL_HAM;
+            N3_JUMPS, config, psi0, N3_HAM;
             ntraj=500, save_every=5, seed=123,
         )
 
@@ -77,11 +77,11 @@ using LinearAlgebra
     # -----------------------------------------------------------------
     @testset "skip_initial affects fit" begin
         r1 = estimate_spectral_gap(
-            SMALL_JUMPS, config, psi0, SMALL_HAM;
+            N3_JUMPS, config, psi0, N3_HAM;
             ntraj=500, save_every=5, seed=42, skip_initial=0.0,
         )
         r2 = estimate_spectral_gap(
-            SMALL_JUMPS, config, psi0, SMALL_HAM;
+            N3_JUMPS, config, psi0, N3_HAM;
             ntraj=500, save_every=5, seed=42, skip_initial=0.2,
         )
 
@@ -92,10 +92,10 @@ using LinearAlgebra
 
     # -----------------------------------------------------------------
     @testset "Custom observables with names" begin
-        obs, names = build_preset_trajectory_observables(SMALL_HAM, 3)
+        obs, names = build_preset_trajectory_observables(N3_HAM, 3)
         @test length(obs) == 6
         result = estimate_spectral_gap(
-            SMALL_JUMPS, config, psi0, SMALL_HAM;
+            N3_JUMPS, config, psi0, N3_HAM;
             observables=obs, observable_names=names,
             ntraj=200, save_every=5, seed=42,
         )
@@ -107,9 +107,9 @@ using LinearAlgebra
 
     # -----------------------------------------------------------------
     @testset "ArgumentError on observables without names" begin
-        obs, _ = build_preset_trajectory_observables(SMALL_HAM, 3)
+        obs, _ = build_preset_trajectory_observables(N3_HAM, 3)
         @test_throws ArgumentError estimate_spectral_gap(
-            SMALL_JUMPS, config, psi0, SMALL_HAM;
+            N3_JUMPS, config, psi0, N3_HAM;
             observables=[obs[1]],
         )
     end
@@ -197,15 +197,15 @@ using LinearAlgebra
     @testset "Eigenbasis Overlap Analysis" begin
 
         # Shared setup: construct Liouvillian for the 3-qubit SMALL system
-        config_l = make_small_liouv_config(TimeDomain(); construction=GNS())
-        liouv_result = run_lindbladian(SMALL_JUMPS, config_l, SMALL_HAM)
+        config_l = make_config(Lindbladian(), TimeDomain(); num_qubits=3, construction=GNS())
+        liouv_result = run_lindbladian(N3_JUMPS, config_l, N3_HAM)
         L = liouv_result.liouvillian
 
         # Build observables
-        obs, names = build_preset_trajectory_observables(SMALL_HAM, 3)
+        obs, names = build_preset_trajectory_observables(N3_HAM, 3)
 
         # Initial state: excited state (far from Gibbs at high beta)
-        psi0 = zeros(ComplexF64, SMALL_DIM)
+        psi0 = zeros(ComplexF64, N3_DIM)
         psi0[end] = 1.0
         rho0 = psi0 * psi0'
 
@@ -214,11 +214,11 @@ using LinearAlgebra
 
         @testset "Basic return type and structure" begin
             @test result isa OverlapAnalysisResult
-            @test length(result.eigenvalues) == SMALL_DIM^2
+            @test length(result.eigenvalues) == N3_DIM^2
             @test result.exact_gap > 0.0
             @test length(result.observable_names) == 6
             @test result.observable_names == names
-            @test size(result.overlap_coefficients) == (6, SMALL_DIM^2)
+            @test size(result.overlap_coefficients) == (6, N3_DIM^2)
             @test length(result.gap_mode_overlap) == 6
             @test length(result.relative_gap_overlap) == 6
             @test all(x -> x >= 0.0, result.gap_mode_overlap)
@@ -244,12 +244,12 @@ using LinearAlgebra
 
         @testset "eigenbasis_overlap_analysis with rho_beta subtraction" begin
             # Call with rho_beta: uses exact biorthogonal formula
-            result_beta = eigenbasis_overlap_analysis(L, obs, names, rho0; rho_beta=SMALL_GIBBS)
+            result_beta = eigenbasis_overlap_analysis(L, obs, names, rho0; rho_beta=N3_GIBBS)
 
             @test result_beta isa OverlapAnalysisResult
             @test result_beta.exact_gap > 0.0
             @test length(result_beta.observable_names) == 6
-            @test size(result_beta.overlap_coefficients) == (6, SMALL_DIM^2)
+            @test size(result_beta.overlap_coefficients) == (6, N3_DIM^2)
 
             # c_1 should be near zero with rho_beta subtraction (steady state removed)
             for i in 1:length(obs)
@@ -262,7 +262,7 @@ using LinearAlgebra
             # At t=0: sum_k c_k should equal tr(O * (rho0 - rho_beta))
             for i in 1:length(obs)
                 c_sum = sum(result_beta.overlap_coefficients[i, :])
-                tr_O_diff = tr(obs[i] * (rho0 - Matrix(SMALL_GIBBS)))
+                tr_O_diff = tr(obs[i] * (rho0 - Matrix(N3_GIBBS)))
                 @test isapprox(real(c_sum), real(tr_O_diff); atol=1e-8)
             end
         end

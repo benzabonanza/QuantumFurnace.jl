@@ -43,16 +43,16 @@ of consecutive mean errors reliably reflect the 1/sqrt(N) scaling.
 Expected: ratios close to 2.0 (since N increases by 4x, sqrt(4) = 2).
 """
 function convergence_ratio_test(domain; with_coherent::Bool=false, delta::Float64=0.1, n_batches::Int=10)
-    dim = SMALL_DIM  # 8
+    dim = N3_DIM  # 8
     psi0 = fill(ComplexF64(1.0), dim) / sqrt(dim)
 
     # 1. Build trajectory workspace
-    therm_config = make_small_thermalize_config(domain;
+    therm_config = make_config(Thermalize(), domain; num_qubits=3,
         construction=with_coherent ? KMS() : GNS(), delta=delta, mixing_time=Float64(delta))
-    ham_or_trott = domain isa TrotterDomain ? SMALL_TROTTER : SMALL_HAM
-    jumps = domain isa TrotterDomain ? SMALL_TROTTER_JUMPS : SMALL_JUMPS
-    trotter_arg = domain isa TrotterDomain ? SMALL_TROTTER : nothing
-    ws = QuantumFurnace._build_trajectory_workspace(therm_config, SMALL_HAM, jumps;
+    ham_or_trott = domain isa TrotterDomain ? N3_TROTTER : N3_HAM
+    jumps = domain isa TrotterDomain ? N3_TROTTER_JUMPS : N3_JUMPS
+    trotter_arg = domain isa TrotterDomain ? N3_TROTTER : nothing
+    ws = QuantumFurnace._build_trajectory_workspace(therm_config, N3_HAM, jumps;
         trotter=trotter_arg, delta=delta)
 
     # 2. Compute high-N reference with independent seed
