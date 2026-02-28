@@ -56,6 +56,23 @@ end
 _pick_alpha(config::Config{<:Any, <:Any, KMS}) = _pick_alpha_kms(config)
 _pick_alpha(config::Config{<:Any, <:Any, GNS}) = _pick_alpha_gns(config)
 
+# 2-arg forms: compute alpha directly via dispatch (zero allocation on hot path)
+function _pick_alpha(config::Config{<:Any, <:Any, KMS}, nu_1::Real, nu_2::Real)
+    if config.with_linear_combination
+        return create_alpha(nu_1, nu_2, config.beta, config.sigma, config.a, config.b)
+    else
+        return create_alpha_gauss(nu_1, nu_2, config.sigma, config.gaussian_parameters)
+    end
+end
+
+function _pick_alpha(config::Config{<:Any, <:Any, GNS}, nu_1::Real, nu_2::Real)
+    if config.with_linear_combination
+        return create_alpha_gns(nu_1, nu_2, config.beta, config.sigma, config.a, config.b)
+    else
+        return create_alpha_gauss(nu_1, nu_2, config.sigma, config.gaussian_parameters)
+    end
+end
+
 function _pick_alpha_kms(config::Config{<:Any, <:Any, KMS})
 
     sigma = config.sigma

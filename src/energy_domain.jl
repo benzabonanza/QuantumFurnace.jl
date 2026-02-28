@@ -3,6 +3,44 @@
 pick_transition(config::Config{<:Any, <:Any, KMS}) = _pick_transition_kms(config)
 pick_transition(config::Config{<:Any, <:Any, GNS}) = _pick_transition_gns(config)
 
+# 2-arg forms: compute transition value directly via dispatch (zero allocation on hot path)
+function pick_transition(config::Config{<:Any, <:Any, KMS}, w::Real)
+    if !(config.with_linear_combination)
+        return exp(-(w + config.gaussian_parameters[1])^2 / (2 * config.gaussian_parameters[2]^2))
+    end
+    sqrtA = sqrt(config.beta / 4) * sqrt(4 * config.a + 1)
+    sqrtB = sqrt(config.beta / 4) * abs(w + config.beta * config.sigma^2 / 2)
+    if config.b == 0 && config.a != 0
+        return exp(-2 * sqrtA * sqrtB - config.beta * w / 2 - config.beta^2 * config.sigma^2 / 4)
+    elseif config.b != 0 && config.a != 0
+        u_min = sqrt(config.beta * config.sigma^2 * config.b / 2)
+        transition_b0 = exp(-2 * sqrtA * sqrtB - config.beta * w / 2 - config.beta^2 * config.sigma^2 / 4)
+        return transition_b0 * (erfc(sqrtA * u_min - sqrtB / u_min) + exp(4 * sqrtA * sqrtB) * erfc(sqrtA * u_min + sqrtB / u_min)) / 2
+    elseif config.a == 0
+        return exp(-config.beta * max(w + config.beta * config.sigma^2 / 2, 0.0))
+    end
+end
+
+function pick_transition(config::Config{<:Any, <:Any, GNS}, w::Real)
+    if !(config.with_linear_combination)
+        w_gamma = config.gaussian_parameters[1]
+        sigma_gamma = config.gaussian_parameters[2]
+        return exp(-(w + w_gamma)^2 / (2 * sigma_gamma^2))
+    end
+    sqrtA = sqrt(config.beta / 4) * sqrt(4 * config.a + 1)
+    if config.b == 0 && config.a != 0
+        sqrtB = sqrt(config.beta / 4) * abs(w)
+        return exp(-2 * sqrtA * sqrtB - config.beta * w / 2)
+    elseif config.b != 0 && config.a != 0
+        sqrtB = sqrt(config.beta / 4) * abs(w)
+        u_min = sqrt(config.beta * config.sigma^2 * config.b / 2)
+        transition_b0 = exp(-2 * sqrtA * sqrtB - config.beta * w / 2)
+        return transition_b0 * (erfc(sqrtA * u_min - sqrtB / u_min) + exp(4 * sqrtA * sqrtB) * erfc(sqrtA * u_min + sqrtB / u_min)) / 2
+    elseif config.a == 0
+        return exp(-config.beta * max(w, 0.0))
+    end
+end
+
 
 function _pick_transition_kms(config::Config{<:Any, <:Any, KMS})
 
