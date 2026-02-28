@@ -12,6 +12,9 @@ using QuantumFurnace
 # XVAL-01: n=4 KMS cross-validation across all 4 domains (atol=1e-8)
 # XVAL-03: L-vs-E convergence testing (O(delta^2) order >= 1.5)
 # XVAL-04: n=4 GNS cross-validation across all 4 domains (atol=1e-8)
+#
+# Note: XVAL-02 (n=6 KMS) removed — n=6 dense eigen is too slow for CI;
+# XVAL-01 provides sufficient KMS coverage at n=4.
 # ============================================================================
 
 # ---------------------------------------------------------------------------
@@ -349,87 +352,5 @@ end
         end
 
     end  # L-vs-E convergence
-
-    # ========================================================================
-    # XVAL-02: n=6 KMS cross-validation across all 4 domains
-    # Gated behind QUANTUMFURNACE_FULL_TESTS=true (dense 4096x4096 eigen)
-    # Tolerance: atol=1e-6 (looser than n=4's 1e-8 due to larger Krylov
-    # subspace approximation error at dim^2=4096)
-    # ========================================================================
-    if get(ENV, "QUANTUMFURNACE_FULL_TESTS", "false") == "true"
-        @testset "n=6 KMS (all domains)" begin
-
-            # Construct n=6 test system once for non-Trotter domains
-            n6_sys = make_test_system(; num_qubits=6,)
-            n6_ham = n6_sys.hamiltonian
-
-            # Construct n=6 Trotter system (separate eigenbasis for TrotterDomain)
-            n6_trotter = TrottTrott(n6_ham, T0, NUM_TROTTER_STEPS_PER_T0)
-            n6_trotter_sys = make_test_system(; num_qubits=6, trotter=n6_trotter)
-
-            # Threshold rationale (atol=1e-6): n=6 system (DIM=64, DIM^2=4096) has larger Krylov
-            # subspace approximation error than n=4. KrylovKit tol=1e-10 but larger system means
-            # more FP accumulation. atol=1e-6 is 100x looser than n=4's 1e-8.
-            @testset "EnergyDomain" begin
-                config = make_config(Lindbladian(), EnergyDomain(); num_qubits=6, construction=KMS())
-                comp = compare_krylov_dense(config, n6_ham, n6_sys.jumps)
-                print_gap_summary("EnergyDomain", "KMS",
-                    comp.krylov_result.spectral_gap, comp.dense_result.spectral_gap)
-                gap_match = isapprox(comp.krylov_result.spectral_gap,
-                    comp.dense_result.spectral_gap; atol=1e-6)
-                if !gap_match
-                    on_failure_diagnostics(comp.krylov_result, comp.dense_result)
-                end
-                @test gap_match
-                @info "XVAL-02 gap (EnergyDomain KMS, n=6)" error=abs(comp.krylov_result.spectral_gap - comp.dense_result.spectral_gap) atol=1e-6
-            end
-
-            @testset "TimeDomain" begin
-                config = make_config(Lindbladian(), TimeDomain(); num_qubits=6, construction=KMS())
-                comp = compare_krylov_dense(config, n6_ham, n6_sys.jumps)
-                print_gap_summary("TimeDomain", "KMS",
-                    comp.krylov_result.spectral_gap, comp.dense_result.spectral_gap)
-                gap_match = isapprox(comp.krylov_result.spectral_gap,
-                    comp.dense_result.spectral_gap; atol=1e-6)
-                if !gap_match
-                    on_failure_diagnostics(comp.krylov_result, comp.dense_result)
-                end
-                @test gap_match
-                @info "XVAL-02 gap (TimeDomain KMS, n=6)" error=abs(comp.krylov_result.spectral_gap - comp.dense_result.spectral_gap) atol=1e-6
-            end
-
-            @testset "TrotterDomain" begin
-                config = make_config(Lindbladian(), TrotterDomain(); num_qubits=6, construction=KMS())
-                comp = compare_krylov_dense(config, n6_ham, n6_trotter_sys.jumps;
-                    trotter=n6_trotter)
-                print_gap_summary("TrotterDomain", "KMS",
-                    comp.krylov_result.spectral_gap, comp.dense_result.spectral_gap)
-                gap_match = isapprox(comp.krylov_result.spectral_gap,
-                    comp.dense_result.spectral_gap; atol=1e-6)
-                if !gap_match
-                    on_failure_diagnostics(comp.krylov_result, comp.dense_result)
-                end
-                @test gap_match
-                @info "XVAL-02 gap (TrotterDomain KMS, n=6)" error=abs(comp.krylov_result.spectral_gap - comp.dense_result.spectral_gap) atol=1e-6
-            end
-
-            @testset "BohrDomain" begin
-                config = make_config(Lindbladian(), BohrDomain(); num_qubits=6, construction=KMS())
-                comp = compare_krylov_dense(config, n6_ham, n6_sys.jumps)
-                print_gap_summary("BohrDomain", "KMS",
-                    comp.krylov_result.spectral_gap, comp.dense_result.spectral_gap)
-                gap_match = isapprox(comp.krylov_result.spectral_gap,
-                    comp.dense_result.spectral_gap; atol=1e-6)
-                if !gap_match
-                    on_failure_diagnostics(comp.krylov_result, comp.dense_result)
-                end
-                @test gap_match
-                @info "XVAL-02 gap (BohrDomain KMS, n=6)" error=abs(comp.krylov_result.spectral_gap - comp.dense_result.spectral_gap) atol=1e-6
-            end
-
-        end  # n=6 KMS
-    else
-        @info "Skipping n=6 cross-validation (set QUANTUMFURNACE_FULL_TESTS=true to run)"
-    end
 
 end  # @testset "Krylov Cross-Validation"

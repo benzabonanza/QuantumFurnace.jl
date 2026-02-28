@@ -2,7 +2,7 @@
 
 ## What This Is
 
-A Julia package for simulating quantum Gibbs sampling via Lindbladian evolution. It implements multiple Lindbladian constructions (GNS and KMS detailed balance) across a hierarchy of approximation domains (Bohr, Energy, Time, Trotter), enabling density matrix simulation, trajectory-based sampling, and matrix-free Krylov spectral gap estimation. The package features multi-threaded trajectory sampling with adaptive convergence-driven batching, spectral gap estimation from both trajectory-based observable decay and matrix-free KrylovKit eigsolve, exact Lindbladian diagnostics with biorthogonal eigenvector analysis, BSON experiment serialization, and validated KMS-vs-GNS comparison capabilities. Core structs are parameterized on element type `{T<:AbstractFloat}` for precision flexibility. The package targets researchers and students working on quantum Gibbs sampling, providing both fast numerical simulations and pedagogic documentation grounded in the theoretical literature.
+A Julia package for simulating quantum Gibbs sampling via Lindbladian evolution. It implements multiple Lindbladian constructions (GNS and KMS detailed balance) across a hierarchy of approximation domains (Bohr, Energy, Time, Trotter), with a unified `Config{S,D,C,T}` type system dispatching on simulation type, domain, construction, and element type. Four clean entry points (`run_lindblad`, `run_thermalize`, `run_krylov_spectrum`, `run_trajectory`) return typed Result structs with BSON save/load capability. The package features multi-threaded trajectory sampling with adaptive convergence-driven batching, spectral gap estimation from both trajectory-based observable decay and matrix-free KrylovKit eigsolve, exact Lindbladian diagnostics with biorthogonal eigenvector analysis, and validated KMS-vs-GNS comparison capabilities. The architecture is designed for extensibility to future construction types (DLL) via singleton type dispatch. The package targets researchers and students working on quantum Gibbs sampling, providing both fast numerical simulations and pedagogic documentation grounded in the theoretical literature.
 
 ## Core Value
 
@@ -74,24 +74,26 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 - ✓ L-vs-E convergence order verification across 3 deltas for all domains -- v1.5
 - ✓ Scaling benchmarks at n=3-7 confirming ~4^10 (Energy) and ~4^7.5 (Trotter) power-law with n=10/12 extrapolation -- v1.5
 - ✓ G_left/G_right precomputation reducing per-matvec GEMM from 5N to 2+2N -- v1.5
+- ✓ Unified Config{S,D,C,T} type hierarchy replacing 4 separate config types (LiouvConfig, ThermalizeConfig, LiouvConfigGNS, ThermalizeConfigGNS) -- v2.0
+- ✓ with_coherent derived from construction type (KMS->true, GNS->false) via trait, not stored as field -- v2.0
+- ✓ domain_prefactor() single-source function replacing 16 copy-pasted formulas across 5 files -- v2.0
+- ✓ Unified oft!() replacing dual oft!/\_krylov_oft! pair; time_oft!/trotter_oft! kept as test utilities -- v2.0
+- ✓ Consolidated sandwich helpers (4->2) and extracted _build_cptp_channel shared CPTP formula -- v2.0
+- ✓ Consolidated Workspace{S,D,C,T} replacing KrylovWorkspace + KrausScratch + LindbladianWorkspace -- v2.0
+- ✓ Unified R/K0/U_residual computation: per-jump for DM/Trajectory, summed for Krylov -- v2.0
+- ✓ 4 clean run_* entry points (run_lindblad, run_thermalize, run_krylov_spectrum, run_trajectory) -- v2.0
+- ✓ 4 typed Result structs with BSON save/load and metadata (git hash, timestamp) -- v2.0
+- ✓ Gap/fitting/convergence code moved to src/staging/ separated from active source -- v2.0
+- ✓ @distributed dead code and SharedArrays removed -- v2.0
+- ✓ Consolidated test helpers: make_config/make_test_system parametrized factories -- v2.0
+- ✓ @info output in all test blocks with key numerical results -- v2.0
+- ✓ Threshold review with inline rationale comments for all numerical assertions -- v2.0
+- ✓ 4 simulation scripts in simulations/ matching run_* entry points -- v2.0
+- ✓ Module exports organized by simulation type (Lindbladian/Thermalize/Krylov/Trajectory/Diagnostics/Common) -- v2.0
+- ✓ Diagnostics maintained as separate analysis module -- v2.0
 
 ### Active
 
-## Current Milestone: v2.0 Restructure
-
-**Goal:** Major codebase restructure — redesign Config type hierarchy for extensibility (KMS/GNS/DLL), eliminate code duplication across simulation paths, consolidate workspaces, reorganize files, and slim down tests. Prepare architecture for DLL construction, error estimation, and gate complexity features.
-
-**Target features:**
-- Config{S,D,DB} type hierarchy redesign (Simulation × Domain × DetailedBalance)
-- Code deduplication: prefactors, OFT, R/K0/U_residual, sandwich ops, hermitian branching
-- Workspace consolidation and naming homogenization
-- File renaming to match PRE/MID/POST architecture
-- 4 clean run_* entry points with matching Result structs and save capability
-- Test deduplication, @info printout, threshold review
-- Move unfinished gap-from-trajectory code to staging area
-- Dead code cleanup (@distributed, OFTCaches, deprecated OFT functions)
-
-**Future milestones:**
 - [ ] DLL config (Ding et al. 2024 construction)
 - [ ] 1D Ising model Hamiltonian generation
 - [ ] 2D Heisenberg Hamiltonian generation (lattice graph support)
@@ -124,18 +126,19 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 
 ## Context
 
-**Current State (v1.5 shipped, Phase 32 complete):**
-- 8,312 LOC src + 5,071 LOC test (Julia)
+**Current State (v2.0 shipped, Phase 38 complete):**
+- 8,299 LOC src + 4,559 LOC test (Julia)
 - Tech stack: Julia, LinearAlgebra, KrylovKit, FINUFFT, Arpack, LsqFit, BSON, StableRNGs, LibGit2, Dates
+- Unified `Config{S,D,C,T}` type hierarchy with 4 simulation types, 4 domains, 2 constructions (KMS/GNS), extensible to DLL
+- 4 clean entry points: `run_lindblad`, `run_thermalize`, `run_krylov_spectrum`, `run_trajectory` with typed Result structs
+- Consolidated `Workspace{S,D,C,T}` replacing 6 separate workspace types; `_build_cptp_channel` shared CPTP formula
 - Three gap estimation methods: (1) trajectory-based observable decay fitting, (2) dense eigendecomposition, (3) matrix-free Krylov eigsolve
 - Matrix-free Krylov eigsolve for all 4 domains with zero-allocation BLAS hot path and G_left/G_right precomputation
 - Cross-validated at n=4 (<1e-8) and n=6 (<1e-6) against dense reference; scaling benchmarks at n=3-7
-- EnergyDomain n=10 feasible on cluster (~111h, ~1.3 GB); n=12 infeasible (~12000h); TrotterDomain n=10+ needs on-the-fly NUFFT
-- Both DM and trajectory simulation validated and cross-checked
 - Multi-threaded trajectory engine with per-thread workspace/RNG, BLAS control, deterministic seeding
 - Exact Lindbladian diagnostics: eigendata, fixed point, KMS defect, overlap coefficients, Sz sectors
-- Core structs parameterized on `{T<:AbstractFloat}` (Float64 default, Float32-ready)
-- API organized: physics building blocks exported, implementation details `_`-prefixed
+- Module exports organized by simulation type; gap/fitting code in src/staging/
+- Test infrastructure: make_config/make_test_system factories, 204+ @info outputs, 163 threshold rationale comments
 
 **Known Limitations:**
 - n=6 periodic Heisenberg chain: gap mode has translational + discrete symmetry protection (diagnosed via Sz sector labeling)
@@ -143,6 +146,8 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 - BENCH-04 partial: total time and matvec count recorded but no isolated per-component timing breakdown
 - Memory guard pre-flight estimate underestimates by 28-298x (calibration data available but formula not updated)
 - Two-exponential fitting, bootstrap uncertainty, and Richardson extrapolation deferred from v1.4
+- run_* entry points lack direct automated test coverage (exercised via simulation scripts and result round-trip tests)
+- foreach_frequency() iterator deferred (explicit for-loops kept by user decision)
 
 **Theoretical Foundation:**
 The package implements quantum Gibbs samplers from three key papers:
@@ -212,6 +217,16 @@ Results needed for publication: convergence curves (trace distance vs. steps), m
 | 4 separate G matrices for BohrDomain adjoint (v1.5) | R_total is non-Hermitian for Bohr, so G_left_adj != G_right^T | ✓ Good -- correct adjoint verified via duality test |
 | EnergyDomain scaling ~4^10, TrotterDomain ~4^7.5 (v1.5) | Empirical power-law fit at n=3-7; n=10 feasible for Energy, not for Trotter | ✓ Good -- calibrated extrapolation |
 | Qiskit for circuit generation (Python interop) | Qiskit is the standard for quantum circuit representation; Julia quantum circuit ecosystem less mature | -- Pending |
+| Config{S,D,C,T} 4-parameter type hierarchy (v2.0) | Simulation × Domain × Construction × Element enables full multiple dispatch without separate config types | ✓ Good -- 37+ files migrated, DLL extensibility confirmed |
+| with_coherent as construction type trait (v2.0) | Compile-time derivation (KMS->true, GNS->false) replaces runtime Bool field | ✓ Good -- type system enforces correctness, no validation needed |
+| domain_prefactor as domain-only scalar (v2.0) | Callers compose with gamma_norm_factor/jump_weight_scaling; single source for 16 formulas | ✓ Good -- zero numerical regression across all domains |
+| _build_cptp_channel returning NamedTuple (v2.0) | (; K0, U_residual, alpha) pattern; callers destructure what they need | ✓ Good -- shared by DM, Krylov, and trajectory paths |
+| Workspace{S,D,C,T,SC} with 5th type param (v2.0) | SC captures concrete scratch type for zero-overhead hot-path access | ✓ Good -- allocation tests pass with 0 bytes |
+| _build_trajectory_workspace factory (v2.0) | Avoids dispatch conflict with Workspace(Config{Thermalize}) constructor | ✓ Good -- clean separation of DM and trajectory workspace construction |
+| src/staging/ for dormant code (v2.0) | Excludes gap/fitting code from module includes and test suite without deleting | ✓ Good -- clean active codebase, code preserved for future reactivation |
+| Export list organized by simulation type (v2.0) | Lindbladian/Thermalize/Krylov/Trajectory/Diagnostics/Common sections | ✓ Good -- easy to find exports, dormant exports commented as STAGING |
+| make_config(sim, domain; kwargs...) test factory (v2.0) | Unified factory with keyword-only splatting replaces per-type factory functions | ✓ Good -- eliminates duplicate test setup patterns |
+| Keep explicit for-loops over foreach_frequency() (v2.0) | User decision: iterator abstraction adds complexity without clear benefit for current patterns | ✓ Good -- deferred, code remains readable |
 
 ---
-*Last updated: 2026-02-25 after v2.0 milestone started*
+*Last updated: 2026-02-28 after v2.0 milestone*

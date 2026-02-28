@@ -139,3 +139,31 @@
 
 ---
 
+
+## v2.0 Restructure (Shipped: 2026-02-28)
+
+**Started:** 2026-02-25 | **Shipped:** 2026-02-28
+**Phases:** 33-38 (19 plans + 2 quick tasks) | **Tests:** ~1199 | **Commits:** 91
+**Julia LOC:** 8,299 src + 4,559 test | **Files changed:** 139 (+16,664 / -4,572)
+**Git range:** `docs(33): capture phase context`..`docs(38-05): complete Krylov test @info`
+
+**Delivered:** Major codebase restructure — unified Config{S,D,C,T} type hierarchy replacing 4 separate config types, eliminated code duplication (domain_prefactor, unified oft!, shared CPTP channel helper), consolidated 6 workspace types into 2, defined 4 clean run_* entry points with typed Result structs and BSON save/load, reorganized exports and removed dead code, and instrumented all tests with @info output and threshold rationale. Architecture now ready for DLL construction, error estimation, and gate complexity features.
+
+**Key accomplishments:**
+1. Unified Config{S,D,C,T} type hierarchy migrating 37+ files from 4 separate config types, enabling future DLL construction extensibility
+2. Code deduplication: domain_prefactor() replacing 16 formula copies, unified oft!(), consolidated sandwich helpers, extracted _build_cptp_channel
+3. Workspace consolidation: merged KrylovWorkspace + KrausScratch + LindbladianWorkspace into Workspace{S,D,C,T}; flattened trajectory per-operator Kraus data
+4. Clean API: 4 run_* entry points (run_lindblad, run_thermalize, run_krylov_spectrum, run_trajectory) with typed Result structs and BSON save/load
+5. File organization: dead code removed (@distributed, SharedArrays), staging directory created, exports reorganized by simulation type
+6. Test infrastructure: consolidated helpers (make_config/make_test_system), 204+ @info outputs, 163 threshold rationale comments across all test files
+
+**Tech debt (from audit):**
+- DEDUP-02 deferred by user (keep explicit for-loops)
+- ORG-01 descoped by user (file renaming handled manually)
+- Phase 35 missing formal VERIFICATION.md (UAT conducted, all issues resolved)
+- run_* entry points lack direct automated test coverage (exercised via simulation scripts and result round-trip tests)
+
+**Archives:** [v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md) | [v2.0-REQUIREMENTS.md](milestones/v2.0-REQUIREMENTS.md)
+
+---
+
