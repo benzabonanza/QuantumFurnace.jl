@@ -34,14 +34,13 @@ using LinearAlgebra
     # Compute ratios of consecutive errors
     ratios = [errors[i] / errors[i+1] for i in 1:length(errors)-1]
 
-    # Diagnostics
-    println("DMTST-03 Single-step errors: ", errors)
-    println("DMTST-03 Ratios (expect ~4 for O(delta^2)): ", ratios)
-
     # For O(delta^2), when delta halves the error should decrease by factor ~4
+    # Bounds [3.0, 5.0] allow for sub-leading O(delta^3) terms at finite delta
     for (i, ratio) in enumerate(ratios)
         @test 3.0 <= ratio <= 5.0
+        @info "DMTST-03: Euler single-step ratio" i ratio expected=4.0 lower=3.0 upper=5.0
     end
+    @info "DMTST-03: Single-step errors" deltas errors
 end
 
 @testset "DMTST-04: Multi-step accumulated error O(delta)" begin
@@ -76,14 +75,13 @@ end
     # Compute ratios
     ratios = [errors[i] / errors[i+1] for i in 1:length(errors)-1]
 
-    # Diagnostics
-    println("DMTST-04 Multi-step errors: ", errors)
-    println("DMTST-04 Ratios (expect ~2 for O(delta)): ", ratios)
-
     # For O(delta), when delta halves the error should decrease by factor ~2
+    # Bounds [1.5, 2.5] allow for sub-leading terms at finite delta
     for (i, ratio) in enumerate(ratios)
         @test 1.5 <= ratio <= 2.5
+        @info "DMTST-04: Multi-step accumulated ratio" i ratio expected=2.0 lower=1.5 upper=2.5
     end
+    @info "DMTST-04: Multi-step errors" T deltas errors
 end
 
 # DMTST-05: Coherent term B consistency across domains
@@ -118,21 +116,27 @@ end
     U_t2e = TEST_TROTTER.eigvecs' * TEST_HAM.eigvecs  # Trotter eigenbasis <- H eigenbasis
     B_trott_in_eigen = U_t2e' * B_trott * U_t2e
 
-    # Diagnostics
+    # Compute distances
     dist_bohr_time = norm(B_bohr_val - B_time_val)
     dist_bohr_trott = norm(B_bohr_val - B_trott_in_eigen)
-    println("DMTST-05 norm(B_bohr - B_time): ", dist_bohr_time)
-    println("DMTST-05 norm(B_bohr - B_trott): ", dist_bohr_trott)
-    println("DMTST-05 norm(B_time - B_trott): ", norm(B_time_val - B_trott_in_eigen))
+    dist_time_trott = norm(B_time_val - B_trott_in_eigen)
 
     # B_bohr and B_time agree up to time quadrature tolerance
+    # Time quadrature error: O(1/N_time_points) with N=4096, well below 1e-6
     @test dist_bohr_time < TOL_QUADRATURE
+    @info "DMTST-05: B_bohr vs B_time" distance=dist_bohr_time threshold=TOL_QUADRATURE
 
     # Trotter error is at least as large as time quadrature error (with small numerical margin)
+    # This is a monotonicity check: Trotter approximation adds error on top of quadrature
     @test dist_bohr_trott >= dist_bohr_time - 1e-10
+    @info "DMTST-05: Trotter error >= quadrature error" dist_bohr_trott dist_bohr_time margin=1e-10
 
     # Trotter error on B term (tightened after basis fix in B_trotter)
+    # Measured ~1e-8; threshold 1e-5 gives 1000x margin for system-size variation
     @test dist_bohr_trott < 1e-5
+    @info "DMTST-05: B Trotter total error" distance=dist_bohr_trott threshold=1e-5
+
+    @info "DMTST-05: Cross-domain distances" dist_bohr_time dist_bohr_trott dist_time_trott
 end
 
 # DMTST-06: OFT consistency across domains
@@ -170,21 +174,27 @@ end
     U_t2e = TEST_TROTTER.eigvecs' * TEST_HAM.eigvecs
     A_trott_in_eigen = U_t2e' * A_trott * U_t2e
 
-    # Diagnostics
+    # Compute distances
     dist_energy_time = norm(A_energy - A_time)
     dist_energy_trott = norm(A_energy - A_trott_in_eigen)
-    println("DMTST-06 norm(A_energy - A_time): ", dist_energy_time)
-    println("DMTST-06 norm(A_energy - A_trott): ", dist_energy_trott)
-    println("DMTST-06 norm(A_time - A_trott): ", norm(A_time - A_trott_in_eigen))
+    dist_time_trott = norm(A_time - A_trott_in_eigen)
 
     # Energy and time OFT agree up to quadrature tolerance
+    # Time quadrature error: O(1/N_time_points) with N=4096, well below 1e-6
     @test dist_energy_time < TOL_QUADRATURE
+    @info "DMTST-06: A_energy vs A_time" distance=dist_energy_time threshold=TOL_QUADRATURE
 
     # Trotter error is at least as large as time quadrature error (with small numerical margin)
+    # Monotonicity: Trotter approximation adds error on top of quadrature
     @test dist_energy_trott >= dist_energy_time - 1e-10
+    @info "DMTST-06: Trotter error >= quadrature error" dist_energy_trott dist_energy_time margin=1e-10
 
     # Trotter OFT error (measured ~1.5e-8, tight threshold)
+    # Threshold 1e-5 gives ~1000x margin for system-size variation
     @test dist_energy_trott < 1e-5
+    @info "DMTST-06: OFT Trotter total error" distance=dist_energy_trott threshold=1e-5
+
+    @info "DMTST-06: Cross-domain distances" dist_energy_time dist_energy_trott dist_time_trott
 end
 
 # DMTST-06b: NUFFT OFT consistency
@@ -212,7 +222,7 @@ end
     config_time = make_config(Lindbladian(),TimeDomain())
     precomputed_time = QuantumFurnace._precompute_data(config_time, TEST_HAM)
 
-    # Sanity: test energy must be on the NUFFT grid
+    # Sanity: test energy must be on the NUFFT grid (structural check, no @info)
     @test haskey(precomputed_time.oft_nufft_prefactors.energy_to_index, w)
 
     nufft_pf_time = QuantumFurnace._prefactor_view(precomputed_time.oft_nufft_prefactors, w)
@@ -228,6 +238,7 @@ end
     config_trott = make_config(Lindbladian(),TrotterDomain())
     precomputed_trott = QuantumFurnace._precompute_data(config_trott, TEST_TROTTER)
 
+    # Sanity: test energy must be on the NUFFT grid (structural check, no @info)
     @test haskey(precomputed_trott.oft_nufft_prefactors.energy_to_index, w)
 
     jump_trott = TEST_TROTTER_JUMPS[1]
@@ -244,25 +255,29 @@ end
     A_trott .*= time_oft_prefactor
     A_trott_in_eigen = U_t2e' * A_trott * U_t2e
 
-    # === Diagnostics ===
+    # Compute distances
     dist_nufft_time_vs_time = norm(A_nufft_time - A_time)
     dist_nufft_trott_vs_trott = norm(A_nufft_trott_in_eigen - A_trott_in_eigen)
     dist_nufft_time_vs_energy = norm(A_nufft_time - A_energy)
     dist_nufft_trott_vs_energy = norm(A_nufft_trott_in_eigen - A_energy)
-    println("DMTST-06b norm(A_nufft_time - A_time): ", dist_nufft_time_vs_time)
-    println("DMTST-06b norm(A_nufft_trott - A_trott): ", dist_nufft_trott_vs_trott)
-    println("DMTST-06b norm(A_nufft_time - A_energy): ", dist_nufft_time_vs_energy)
-    println("DMTST-06b norm(A_nufft_trott - A_energy): ", dist_nufft_trott_vs_energy)
 
     # NUFFT time OFT matches direct time_oft! (both compute same sum, NUFFT uses FFT with eps=1e-12)
+    # Threshold 1e-10 allows for floating-point reordering differences between FFT and direct sum
     @test dist_nufft_time_vs_time < 1e-10
+    @info "DMTST-06b: NUFFT time vs direct time" distance=dist_nufft_time_vs_time threshold=1e-10
 
     # NUFFT trotter OFT matches direct trotter_oft!
+    # Same reasoning: FFT vs direct sum reordering, threshold 1e-10
     @test dist_nufft_trott_vs_trott < 1e-10
+    @info "DMTST-06b: NUFFT trotter vs direct trotter" distance=dist_nufft_trott_vs_trott threshold=1e-10
 
     # NUFFT time OFT matches analytical (same tolerance as DMTST-06 time vs energy)
+    # Time quadrature error: O(1/N_time_points), well below TOL_QUADRATURE
     @test dist_nufft_time_vs_energy < TOL_QUADRATURE
+    @info "DMTST-06b: NUFFT time vs analytical" distance=dist_nufft_time_vs_energy threshold=TOL_QUADRATURE
 
     # NUFFT Trotter OFT error (measured ~1.5e-8, tight threshold)
+    # Threshold 1e-5 gives ~1000x margin for system-size variation
     @test dist_nufft_trott_vs_energy < 1e-5
+    @info "DMTST-06b: NUFFT trotter vs analytical" distance=dist_nufft_trott_vs_energy threshold=1e-5
 end
