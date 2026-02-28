@@ -10,16 +10,16 @@ See: .planning/PROJECT.md (updated 2026-02-25)
 ## Current Position
 
 Phase: 38 of 38 (Test Cleanup)
-Plan: 3/5 complete
-Status: Completed 38-03: @info output and threshold rationale for scaling/convergence tests
-Last activity: 2026-02-28 - Completed 38-03: Added structured @info diagnostics to test_dm_scaling and test_gns_trajectory, documented policy for test_observable_trajectories and test_results
+Plan: 4/5 complete
+Status: Completed 38-04: @info output and threshold rationale for diagnostics/convergence tests
+Last activity: 2026-02-28 - Completed 38-04: Added 74 @info lines and threshold rationale to test_diagnostics.jl and test_convergence.jl
 
-Progress: [######░░░░] ~50% (v2.0, 18/~24 plans)
+Progress: [######░░░░] ~50% (v2.0, 19/~24 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 105 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 15)
+- Total plans completed: 107 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 17)
 
 **By Milestone:**
 
@@ -81,6 +81,9 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [38-03] All println() in test_dm_scaling.jl replaced with structured @info keyword args
 - [38-03] test_observable_trajectories.jl and test_results.jl get zero @info (all exact/structural checks)
 - [38-03] Per-iteration @info for ratio tests; summary @info for CPTP loop tests
+- [38-04] Classify tests as structural vs numerical: isapprox/abs/norm -> @info; isa/==/haskey -> skip
+- [38-04] Loop-summary @info pattern: track max_err across iterations, emit single @info after loop
+- [38-04] All existing thresholds confirmed appropriate with O(DIM^n * eps) error analysis -- no changes needed
 
 ### Key Constraints for v2.0
 
@@ -111,5 +114,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: Completed 38-03-PLAN.md (@info output and threshold rationale). Ready for 38-04.
+Stopped at: Completed 38-04-PLAN.md (diagnostics and convergence test instrumentation). Ready for 38-05.
 Resume file: None
