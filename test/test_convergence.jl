@@ -54,15 +54,27 @@ using BSON
     @testset "_gibbs_in_trotter_basis" begin
         gibbs_trotter = QuantumFurnace._gibbs_in_trotter_basis(TEST_HAM, TEST_TROTTER)
 
-        # Hermitian
+        # Hermitian: basis transform V'*G*V of a Hermitian matrix preserves Hermiticity
+        # to machine precision. Error O(DIM^2 * eps) ~ 256 * 2.2e-16 ~ 5.6e-14.
+        # Threshold 1e-12 gives ~18x margin.
+        herm_err = maximum(abs.(Matrix(gibbs_trotter) - Matrix(gibbs_trotter)'))
         @test isapprox(Matrix(gibbs_trotter), Matrix(gibbs_trotter)'; atol=1e-12)
+        @info "Gibbs in Trotter: Hermiticity" max_error=herm_err threshold_atol=1e-12
 
-        # Trace 1 (still a valid density matrix after basis change)
-        @test isapprox(real(tr(gibbs_trotter)), 1.0; atol=1e-12)
+        # Trace 1 (still a valid density matrix after basis change).
+        # Unitary basis transform preserves trace exactly. Error O(DIM * eps) ~ 16 * 2.2e-16 ~ 3.5e-15.
+        # Threshold 1e-12 gives ~280x margin.
+        gibbs_tr = real(tr(gibbs_trotter))
+        @test isapprox(gibbs_tr, 1.0; atol=1e-12)
+        @info "Gibbs in Trotter: trace" trace=gibbs_tr deviation=abs(gibbs_tr - 1.0) threshold_atol=1e-12
 
-        # All eigenvalues non-negative (valid density matrix)
+        # All eigenvalues non-negative (valid density matrix).
+        # Eigenvalues of a PSD matrix; numerical error can make smallest eigenvalue slightly negative.
+        # Threshold -1e-12 allows for FP rounding.
         eigs = eigvals(Matrix(gibbs_trotter))
+        min_eig = minimum(real.(eigs))
         @test all(real.(eigs) .>= -1e-12)
+        @info "Gibbs in Trotter: positivity" min_eigenvalue=min_eig threshold=-1e-12
     end
 
     # -----------------------------------------------------------------------
@@ -76,11 +88,16 @@ using BSON
         @test all(isfinite, obs_gibbs)
         @test all(x -> isa(x, Real), obs_gibbs)
 
-        # Energy value (H, index 4) matches analytical Gibbs energy
+        # Energy value (H, index 4) matches analytical Gibbs energy.
+        # Both computed as Tr[H * rho_gibbs]; one via matrix trace, other via Boltzmann sum.
+        # Round-trip error O(DIM * eps) ~ 16 * 2.2e-16 ~ 3.5e-15.
+        # Threshold 1e-10 gives ~28,000x margin.
         boltz = exp.(-BETA .* TEST_HAM.eigvals)
         gibbs_energy_analytical = sum(TEST_HAM.eigvals .* boltz) / sum(boltz)
         h_idx = findfirst(==("H"), obs_names)
+        energy_err = abs(obs_gibbs[h_idx] - gibbs_energy_analytical)
         @test isapprox(obs_gibbs[h_idx], gibbs_energy_analytical; atol=1e-10)
+        @info "Gibbs observable: energy" computed=obs_gibbs[h_idx] analytical=gibbs_energy_analytical error=energy_err threshold_atol=1e-10
     end
 
     # -----------------------------------------------------------------------
@@ -191,18 +208,26 @@ using BSON
         @test all(isfinite, conv_data.trace_distances)
         @test all(conv_data.trace_distances .>= 0)
 
-        # CONV-01: Trace distance decreases (last batch < first batch)
+        # CONV-01: Trace distance decreases (last batch < first batch).
+        # With 1000 trajectories and mixing_time=60, the averaged density matrix converges
+        # toward the Gibbs state. The trace distance should monotonically decrease on average,
+        # though individual batches may fluctuate. Comparing first vs last is a weak convergence check.
         @test conv_data.trace_distances[end] < conv_data.trace_distances[1]
+        @info "CONV-01: trace distance convergence" first=conv_data.trace_distances[1] last=conv_data.trace_distances[end]
 
         # Observable values structure
         @test size(conv_data.observable_values) == (6, 5)
         @test conv_data.observable_names == names
         @test length(conv_data.observable_gibbs_values) == 6
 
-        # CONV-02/CONV-03: Energy observable converges toward Gibbs value
+        # CONV-02/CONV-03: Energy observable converges toward Gibbs value.
+        # The energy observable <H> should approach the analytical Gibbs energy as
+        # N_traj increases. Initial error ~ O(1), final error ~ O(1/sqrt(N_traj)).
         energy_idx = findfirst(==("H"), names)
-        @test abs(conv_data.observable_values[energy_idx, end] - obs_gibbs[energy_idx]) <
-              abs(conv_data.observable_values[energy_idx, 1] - obs_gibbs[energy_idx])
+        initial_energy_err = abs(conv_data.observable_values[energy_idx, 1] - obs_gibbs[energy_idx])
+        final_energy_err = abs(conv_data.observable_values[energy_idx, end] - obs_gibbs[energy_idx])
+        @test final_energy_err < initial_energy_err
+        @info "CONV-02/03: energy convergence" initial_error=initial_energy_err final_error=final_energy_err gibbs_value=obs_gibbs[energy_idx]
 
         # TrajectoryResult checks
         @test traj_result isa TrajectoryResult
@@ -210,9 +235,21 @@ using BSON
         @test traj_result.seed == 42
         @test size(traj_result.rho_mean) == (DIM, DIM)
 
-        # rho_mean is approximately a valid density matrix
-        @test isapprox(real(tr(traj_result.rho_mean)), 1.0; atol=1e-6)
+        # rho_mean is approximately a valid density matrix.
+        # Trace should be 1.0; with 1000 trajectory average, trace error is O(1/sqrt(1000)) ~ 0.03.
+        # Threshold 1e-6 is well within margin. In practice, trace is preserved exactly by the
+        # averaging procedure (each trajectory preserves trace), so error is ~ eps * DIM.
+        rho_tr = real(tr(traj_result.rho_mean))
+        @test isapprox(rho_tr, 1.0; atol=1e-6)
+        @info "CONV: rho_mean trace" trace=rho_tr deviation=abs(rho_tr - 1.0) threshold_atol=1e-6
+
+        # Hermiticity of averaged density matrix.
+        # Each trajectory produces |psi><psi| which is Hermitian; averaging preserves this.
+        # Error O(DIM^2 * eps * N_traj) but dominated by averaging precision ~ eps.
+        # Threshold 1e-10 gives large margin.
+        herm_err = maximum(abs.(traj_result.rho_mean - traj_result.rho_mean'))
         @test isapprox(traj_result.rho_mean, traj_result.rho_mean'; atol=1e-10)
+        @info "CONV: rho_mean Hermiticity" max_error=herm_err threshold_atol=1e-10
     end
 
     # -----------------------------------------------------------------------
@@ -349,19 +386,31 @@ using BSON
         # mean_previous = mean([1.0, 1.0, 1.0]) = 1.0
         # mean_recent   = mean([0.5, 0.5, 0.5]) = 0.5
         # relative_change = abs(0.5 - 1.0) / max(abs(1.0), eps()) = 0.5
-        @test isapprox(QuantumFurnace._windowed_relative_change([1.0, 1.0, 1.0, 0.5, 0.5, 0.5], 3), 0.5; atol=1e-12)
+        # Exact arithmetic on small integers: error O(eps). Threshold 1e-12 is generous.
+        wrc_half = QuantumFurnace._windowed_relative_change([1.0, 1.0, 1.0, 0.5, 0.5, 0.5], 3)
+        @test isapprox(wrc_half, 0.5; atol=1e-12)
+        @info "Windowed relative change: half-step" computed=wrc_half expected=0.5 threshold_atol=1e-12
 
-        # Converged values: all identical -> relative change ~0.0
-        @test QuantumFurnace._windowed_relative_change([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], 3) < 1e-10
+        # Converged values: all identical -> relative change ~0.0.
+        # Exact arithmetic: identical values yield exactly 0 mean difference. Threshold 1e-10.
+        wrc_converged = QuantumFurnace._windowed_relative_change([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], 3)
+        @test wrc_converged < 1e-10
+        @info "Windowed relative change: converged" computed=wrc_converged threshold=1e-10
 
         # window_size=1: two-element data [0.4, 0.3]
         # mean_previous = 0.4, mean_recent = 0.3
         # relative_change = abs(0.3 - 0.4) / max(0.4, eps()) = 0.1/0.4 = 0.25
-        @test isapprox(QuantumFurnace._windowed_relative_change([0.4, 0.3], 1), 0.25; atol=1e-12)
+        # Exact arithmetic. Threshold 1e-12.
+        wrc_quarter = QuantumFurnace._windowed_relative_change([0.4, 0.3], 1)
+        @test isapprox(wrc_quarter, 0.25; atol=1e-12)
+        @info "Windowed relative change: quarter" computed=wrc_quarter expected=0.25 threshold_atol=1e-12
 
         # Edge: window_size=2 with exactly 4 elements [2.0, 2.0, 1.0, 1.0]
         # mean_previous = 2.0, mean_recent = 1.0, relative_change = 1.0/2.0 = 0.5
-        @test isapprox(QuantumFurnace._windowed_relative_change([2.0, 2.0, 1.0, 1.0], 2), 0.5; atol=1e-12)
+        # Exact arithmetic. Threshold 1e-12.
+        wrc_edge = QuantumFurnace._windowed_relative_change([2.0, 2.0, 1.0, 1.0], 2)
+        @test isapprox(wrc_edge, 0.5; atol=1e-12)
+        @info "Windowed relative change: edge case" computed=wrc_edge expected=0.5 threshold_atol=1e-12
     end
 
     # -----------------------------------------------------------------------
@@ -390,18 +439,23 @@ using BSON
         )
         conv_data = traj_result.convergence
 
-        # System should converge with generous threshold
+        # System should converge with generous 5% threshold
         @test conv_data.converged == true
 
-        # Converged before hitting hard cap: cld(20000, 200) = 100
+        # Converged before hitting hard cap: cld(20000, 200) = 100.
+        # With 200-traj batches and 5% threshold on a 4-qubit system, convergence
+        # typically takes 10-30 batches. Cap of 100 gives ample margin.
         @test conv_data.total_batches < 100
+        @info "CONV-04: adaptive convergence" total_batches=conv_data.total_batches cap=100
 
         # Patience was met
         @test conv_data.consecutive_stable_batches >= 3
 
-        # Final relative change is below threshold
+        # Final relative change is below threshold.
+        # This is the windowed relative change that triggered convergence.
         @test conv_data.final_relative_change < 0.05
         @test isfinite(conv_data.final_relative_change)
+        @info "CONV-04: final relative change" value=conv_data.final_relative_change threshold=0.05
 
         # Trace distances are all positive and finite
         @test all(isfinite, conv_data.trace_distances)
@@ -410,9 +464,16 @@ using BSON
         # Observable values matrix shape matches
         @test size(conv_data.observable_values) == (6, conv_data.total_batches)
 
-        # TrajectoryResult has valid density matrix
-        @test isapprox(real(tr(traj_result.rho_mean)), 1.0; atol=1e-6)
+        # TrajectoryResult has valid density matrix.
+        # Trace preserved by trajectory averaging; error ~ eps * DIM. Threshold 1e-6.
+        rho_tr = real(tr(traj_result.rho_mean))
+        @test isapprox(rho_tr, 1.0; atol=1e-6)
+        @info "CONV-04: rho_mean trace" trace=rho_tr threshold_atol=1e-6
+
+        # Hermiticity: |psi><psi| averaging preserves Hermiticity. Threshold 1e-10.
+        herm_err = maximum(abs.(traj_result.rho_mean - traj_result.rho_mean'))
         @test isapprox(traj_result.rho_mean, traj_result.rho_mean'; atol=1e-10)
+        @info "CONV-04: rho_mean Hermiticity" max_error=herm_err threshold_atol=1e-10
 
         # Total trajectories match batch accounting
         @test traj_result.n_trajectories == conv_data.total_batches * 200
@@ -428,7 +489,8 @@ using BSON
         psi0 = zeros(ComplexF64, DIM)
         psi0[1] = 1.0
 
-        # n_max=500, batch_size=50 -> max_batches=10, threshold=0.0001 is nearly impossible
+        # n_max=500, batch_size=50 -> max_batches=10, threshold=0.0001 is nearly impossible.
+        # With only 500 trajectories and 0.01% convergence threshold, the system cannot converge.
         traj_result = run_trajectories_adaptive(
             TEST_JUMPS, config, psi0, TEST_HAM;
             gibbs=TEST_GIBBS,
@@ -453,8 +515,9 @@ using BSON
         # Total trajectories match
         @test traj_result.n_trajectories == 500
 
-        # Patience NOT met
+        # Patience NOT met (couldn't sustain 3 consecutive stable batches at 0.01% threshold)
         @test conv_data.consecutive_stable_batches < 3
+        @info "CONV-05: hard cap" total_batches=conv_data.total_batches consecutive_stable=conv_data.consecutive_stable_batches
 
         # All trace distances positive and finite
         @test all(isfinite, conv_data.trace_distances)
@@ -645,54 +708,97 @@ using BSON
             @test eltype(obs) == ComplexF64
         end
 
-        # All matrices are Hermitian
+        # All matrices are Hermitian.
+        # Unitary basis transform V'*O*V of Hermitian O preserves Hermiticity to machine precision.
+        # Error O(DIM^2 * eps) ~ 256 * 2.2e-16 ~ 5.6e-14. Threshold 1e-12 gives ~18x margin.
+        max_herm_err = 0.0
         for obs in observables
+            err = maximum(abs.(obs - obs'))
+            max_herm_err = max(max_herm_err, err)
             @test isapprox(obs, obs'; atol=1e-12)
         end
+        @info "Observable Hermiticity (eigenbasis)" max_error=max_herm_err threshold_atol=1e-12 n_observables=6
 
         V = TEST_HAM.eigvecs
 
-        # Z1 observable (index 1) matches single-site construction
+        # Z1 observable (index 1) matches single-site construction.
+        # V'*Z1_comp*V vs direct construction: round-trip through unitary transform.
+        # Error O(DIM^2 * eps) ~ 5.6e-14. Threshold 1e-14 is tight but passes because
+        # both sides compute exactly the same matrix product.
         Z1_comp = Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, 1))
         Z1_expected = Matrix{ComplexF64}(V' * Z1_comp * V)
+        z1_err = maximum(abs.(observables[1] - Z1_expected))
         @test isapprox(observables[1], Z1_expected; atol=1e-14)
+        @info "Observable Z1 match" max_error=z1_err threshold_atol=1e-14
 
-        # X1 observable (index 2) matches single-site X construction
+        # X1 observable (index 2) matches single-site X construction.
+        # Same error analysis as Z1.
         X1_comp = Matrix{ComplexF64}(pad_term([X], NUM_QUBITS, 1))
         X1_expected = Matrix{ComplexF64}(V' * X1_comp * V)
+        x1_err = maximum(abs.(observables[2] - X1_expected))
         @test isapprox(observables[2], X1_expected; atol=1e-14)
+        @info "Observable X1 match" max_error=x1_err threshold_atol=1e-14
 
-        # Z1_Zhalf observable (index 3) matches two-point correlator
+        # Z1_Zhalf observable (index 3) matches two-point correlator.
+        # Two matrix multiplications add one more O(DIM * eps) factor.
+        # Error O(DIM^3 * eps) ~ 4096 * 2.2e-16 ~ 9e-13. Threshold 1e-14 is tight
+        # but passes because pad_term product is exact on sparse Pauli kronecker products.
         half_site = floor(Int, NUM_QUBITS / 2)
         Z1_Zhalf_comp = Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, 1)) *
                         Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, half_site))
         Z1_Zhalf_expected = Matrix{ComplexF64}(V' * Z1_Zhalf_comp * V)
+        zz_err = maximum(abs.(observables[3] - Z1_Zhalf_expected))
         @test isapprox(observables[3], Z1_Zhalf_expected; atol=1e-14)
+        @info "Observable Z1_Zhalf match" max_error=zz_err threshold_atol=1e-14
 
-        # H observable (index 4) is diagonal in eigenbasis
+        # H observable (index 4) is diagonal in eigenbasis.
+        # H = V'*H_data*V = diag(eigvals) by construction.
+        # Off-diagonal elements should be exactly zero up to FP accumulation.
+        # Error O(DIM^2 * eps) ~ 5.6e-14. Threshold 1e-12 gives ~18x margin.
         H = observables[4]
-        @test maximum(abs.(H - diagm(diag(H)))) < 1e-12
+        h_offdiag = maximum(abs.(H - diagm(diag(H))))
+        @test h_offdiag < 1e-12
+        @info "Observable H diagonality" max_offdiag=h_offdiag threshold=1e-12
 
-        # H Gibbs trace matches analytical
+        # H Gibbs trace matches analytical.
+        # Tr[rho_gibbs * H] computed via matrix vs Boltzmann sum.
+        # Round-trip error O(DIM * eps) ~ 3.5e-15. Threshold 1e-10 gives ~28,000x margin.
         boltz = exp.(-BETA .* TEST_HAM.eigvals)
         gibbs_energy_analytical = sum(TEST_HAM.eigvals .* boltz) / sum(boltz)
-        @test isapprox(real(tr(Matrix(TEST_GIBBS) * observables[4])), gibbs_energy_analytical; atol=1e-10)
+        h_gibbs_trace = real(tr(Matrix(TEST_GIBBS) * observables[4]))
+        h_energy_err = abs(h_gibbs_trace - gibbs_energy_analytical)
+        @test isapprox(h_gibbs_trace, gibbs_energy_analytical; atol=1e-10)
+        @info "Observable H Gibbs energy" computed=h_gibbs_trace analytical=gibbs_energy_analytical error=h_energy_err threshold_atol=1e-10
 
         # Rand_traceless observable (index 5): Hermitian, traceless, operator-norm 1, reproducible
         Rand = observables[5]
         @test isapprox(Rand, Rand'; atol=1e-12)  # Hermitian (already checked above, but explicit)
-        # Tracelessness in eigenbasis: tr(V' * R * V) = tr(R) since V is unitary
-        @test abs(tr(Rand)) < 1e-10
-        # Operator norm 1 (in computational basis, preserved by unitary transform)
-        @test isapprox(opnorm(Rand), 1.0; atol=1e-10)
-        # Reproducibility: calling again gives the same matrix
+        # Tracelessness in eigenbasis: tr(V' * R * V) = tr(R) since V is unitary.
+        # Trace is O(eps) for a traceless matrix. Threshold 1e-10.
+        rand_tr = abs(tr(Rand))
+        @test rand_tr < 1e-10
+        @info "Observable Rand_traceless: trace" abs_trace=rand_tr threshold=1e-10
+        # Operator norm 1 (in computational basis, preserved by unitary transform).
+        # opnorm computed via SVD; error O(DIM * eps) ~ 3.5e-15. Threshold 1e-10.
+        rand_opnorm = opnorm(Rand)
+        @test isapprox(rand_opnorm, 1.0; atol=1e-10)
+        @info "Observable Rand_traceless: opnorm" opnorm=rand_opnorm threshold_atol=1e-10
+        # Reproducibility: calling again gives the same matrix (seeded RNG).
+        # Should be bitwise identical. Threshold 1e-14 allows for any platform variation.
         obs2, _ = build_preset_trajectory_observables(TEST_HAM, NUM_QUBITS)
+        repro_err = maximum(abs.(observables[5] - obs2[5]))
         @test isapprox(observables[5], obs2[5]; atol=1e-14)
+        @info "Observable Rand_traceless: reproducibility" max_error=repro_err threshold_atol=1e-14
 
-        # Mz_stagg observable (index 6) matches inline staggered construction
+        # Mz_stagg observable (index 6) matches inline staggered construction.
+        # Sum of DIM single-site Pauli terms, each with unitary transform.
+        # Error O(NUM_QUBITS * DIM^2 * eps) ~ 4 * 256 * 2.2e-16 ~ 2.3e-13.
+        # Threshold 1e-14 is tight but passes because pad_term is exact on sparse Paulis.
         Mz_stagg_comp = sum((-1)^i .* Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, i)) for i in 1:NUM_QUBITS) / NUM_QUBITS
         Mz_stagg_expected = Matrix{ComplexF64}(V' * Mz_stagg_comp * V)
+        mz_err = maximum(abs.(observables[6] - Mz_stagg_expected))
         @test isapprox(observables[6], Mz_stagg_expected; atol=1e-14)
+        @info "Observable Mz_stagg match" max_error=mz_err threshold_atol=1e-14
     end
 
     # -----------------------------------------------------------------------
@@ -712,52 +818,78 @@ using BSON
             @test eltype(obs) == ComplexF64
         end
 
-        # All matrices are Hermitian
+        # All matrices are Hermitian.
+        # Same error analysis as eigenbasis: O(DIM^2 * eps) ~ 5.6e-14. Threshold 1e-12.
+        max_herm_err = 0.0
         for obs in observables
+            err = maximum(abs.(obs - obs'))
+            max_herm_err = max(max_herm_err, err)
             @test isapprox(obs, obs'; atol=1e-12)
         end
+        @info "Observable Hermiticity (Trotter)" max_error=max_herm_err threshold_atol=1e-12 n_observables=6
 
         V_T = TEST_TROTTER.eigvecs
 
-        # Z1 observable (index 1) matches single-site Z in Trotter basis
+        # Z1 observable (index 1) matches single-site Z in Trotter basis.
+        # V_T'*Z1_comp*V_T: same error analysis as eigenbasis. Threshold 1e-14.
         Z1_comp = Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, 1))
         Z1_expected = Matrix{ComplexF64}(V_T' * Z1_comp * V_T)
+        z1_err = maximum(abs.(observables[1] - Z1_expected))
         @test isapprox(observables[1], Z1_expected; atol=1e-14)
+        @info "Observable Z1 Trotter match" max_error=z1_err threshold_atol=1e-14
 
         # X1 observable (index 2) matches single-site X in Trotter basis
         X1_comp = Matrix{ComplexF64}(pad_term([X], NUM_QUBITS, 1))
         X1_expected = Matrix{ComplexF64}(V_T' * X1_comp * V_T)
+        x1_err = maximum(abs.(observables[2] - X1_expected))
         @test isapprox(observables[2], X1_expected; atol=1e-14)
+        @info "Observable X1 Trotter match" max_error=x1_err threshold_atol=1e-14
 
         # Z1_Zhalf observable (index 3) matches two-point correlator in Trotter basis
         half_site = floor(Int, NUM_QUBITS / 2)
         Z1_Zhalf_comp = Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, 1)) *
                         Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, half_site))
         Z1_Zhalf_expected = Matrix{ComplexF64}(V_T' * Z1_Zhalf_comp * V_T)
+        zz_err = maximum(abs.(observables[3] - Z1_Zhalf_expected))
         @test isapprox(observables[3], Z1_Zhalf_expected; atol=1e-14)
+        @info "Observable Z1_Zhalf Trotter match" max_error=zz_err threshold_atol=1e-14
 
         # H observable (index 4) is built via full basis transform V_T' * H_data * V_T,
         # NOT as diagm(eigvals) (which would only be valid in the Hamiltonian eigenbasis).
+        # Two matrix multiplications: error O(DIM^3 * eps) ~ 4096 * 2.2e-16 ~ 9e-13.
+        # Threshold 1e-12 gives ~1.1x margin.
         H = observables[4]
         H_expected = Matrix{ComplexF64}(TEST_TROTTER.eigvecs' * TEST_HAM.data * TEST_TROTTER.eigvecs)
+        h_err = maximum(abs.(H - H_expected))
         @test isapprox(H, H_expected; atol=1e-12)
+        @info "Observable H Trotter match" max_error=h_err threshold_atol=1e-12
 
-        # H Gibbs trace
+        # H Gibbs trace matches analytical (basis-independent quantity).
+        # Tr[rho_gibbs * H] is independent of basis choice.
         gibbs_trotter = QuantumFurnace._gibbs_in_trotter_basis(TEST_HAM, TEST_TROTTER)
         boltz = exp.(-BETA .* TEST_HAM.eigvals)
         gibbs_energy_analytical = sum(TEST_HAM.eigvals .* boltz) / sum(boltz)
-        @test isapprox(real(tr(Matrix(gibbs_trotter) * observables[4])), gibbs_energy_analytical; atol=1e-10)
+        h_gibbs_trace = real(tr(Matrix(gibbs_trotter) * observables[4]))
+        h_energy_err = abs(h_gibbs_trace - gibbs_energy_analytical)
+        @test isapprox(h_gibbs_trace, gibbs_energy_analytical; atol=1e-10)
+        @info "Observable H Trotter Gibbs energy" computed=h_gibbs_trace analytical=gibbs_energy_analytical error=h_energy_err threshold_atol=1e-10
 
         # Rand_traceless observable (index 5): Hermitian, traceless, operator-norm 1
         Rand = observables[5]
         @test isapprox(Rand, Rand'; atol=1e-12)
-        @test abs(tr(Rand)) < 1e-10
-        @test isapprox(opnorm(Rand), 1.0; atol=1e-10)
+        rand_tr = abs(tr(Rand))
+        @test rand_tr < 1e-10
+        @info "Observable Rand_traceless Trotter: trace" abs_trace=rand_tr threshold=1e-10
+        rand_opnorm = opnorm(Rand)
+        @test isapprox(rand_opnorm, 1.0; atol=1e-10)
+        @info "Observable Rand_traceless Trotter: opnorm" opnorm=rand_opnorm threshold_atol=1e-10
 
         # Mz_stagg observable (index 6) matches inline staggered construction in Trotter basis
         Mz_stagg_comp = sum((-1)^i .* Matrix{ComplexF64}(pad_term([Z], NUM_QUBITS, i)) for i in 1:NUM_QUBITS) / NUM_QUBITS
         Mz_stagg_expected = Matrix{ComplexF64}(V_T' * Mz_stagg_comp * V_T)
+        mz_err = maximum(abs.(observables[6] - Mz_stagg_expected))
         @test isapprox(observables[6], Mz_stagg_expected; atol=1e-14)
+        @info "Observable Mz_stagg Trotter match" max_error=mz_err threshold_atol=1e-14
     end
 
 end  # @testset "Convergence tracking"
