@@ -95,30 +95,35 @@ const T0 = 2pi / (2^NUM_ENERGY_BITS * W0)
 const NUM_TROTTER_STEPS_PER_T0 = 10
 
 # ---------------------------------------------------------------------------
-# Test system: Hamiltonian, jump operators, Gibbs state
+# All domain singletons
+# ---------------------------------------------------------------------------
+const ALL_DOMAINS = [EnergyDomain(), TimeDomain(), TrotterDomain(), BohrDomain()]
+
+# ---------------------------------------------------------------------------
+# Unified test system factory
 # ---------------------------------------------------------------------------
 """
-    make_test_system() -> (; hamiltonian, jumps, gibbs)
+    make_test_system(; num_qubits=NUM_QUBITS, trotter=nothing) -> (; hamiltonian, jumps, gibbs)
 
-Loads the 4-qubit disordered Heisenberg Hamiltonian at inverse temperature BETA
-and creates 12 single-site Pauli jump operators (X, Y, Z on each of 4 sites),
-normalized by sqrt(3 * NUM_QUBITS).
+Load the `num_qubits`-qubit disordered Heisenberg Hamiltonian at inverse temperature BETA
+and create `3 * num_qubits` single-site Pauli jump operators (X, Y, Z on each site),
+normalized by sqrt(3 * num_qubits).
 
 Returns a named tuple with:
 - `hamiltonian`: fully-initialized HamHam with bohr_dict and gibbs populated
-- `jumps`: Vector{JumpOp} of 12 jump operators
+- `jumps`: Vector{JumpOp} of jump operators
 - `gibbs`: the Gibbs state matrix (Hermitian, trace 1)
 """
-function make_test_system(; trotter::Union{Nothing, TrottTrott}=nothing)
+function make_test_system(; num_qubits::Int=NUM_QUBITS, trotter::Union{Nothing, TrottTrott}=nothing)
     # Load Hamiltonian directly using the source tree path
     # (load_hamiltonian uses Pkg.project().path which points to a temp dir during Pkg.test())
     source_root = dirname(@__DIR__)
-    ham_path = joinpath(source_root, "hamiltonians", "heis_disordered_periodic_n$(NUM_QUBITS).bson")
+    ham_path = joinpath(source_root, "hamiltonians", "heis_disordered_periodic_n$(num_qubits).bson")
     hamiltonian = _load_test_hamiltonian(ham_path, BETA)
 
     # Create jump operators: single-site Paulis (X, Y, Z) on each site
     jump_paulis = [[X], [Y], [Z]]
-    jump_sites = 1:NUM_QUBITS
+    jump_sites = 1:num_qubits
     num_of_jumps = length(jump_paulis) * length(jump_sites)
     jump_normalization = sqrt(num_of_jumps)
 
@@ -128,7 +133,7 @@ function make_test_system(; trotter::Union{Nothing, TrottTrott}=nothing)
     jumps = JumpOp[]
     for pauli in jump_paulis
         for site in jump_sites
-            jump_op = Matrix(pad_term(pauli, NUM_QUBITS, site)) ./ jump_normalization
+            jump_op = Matrix(pad_term(pauli, num_qubits, site)) ./ jump_normalization
 
             jump_in_eigen = basis_unitary' * jump_op * basis_unitary
             orthogonal = (jump_op == transpose(jump_op))
@@ -142,145 +147,53 @@ function make_test_system(; trotter::Union{Nothing, TrottTrott}=nothing)
     return (; hamiltonian, jumps, gibbs)
 end
 
-# Compute once at include time
+# Compute once at include time (4-qubit)
 const TEST_SYSTEM = make_test_system()
 const TEST_HAM = TEST_SYSTEM.hamiltonian
 const TEST_JUMPS = TEST_SYSTEM.jumps
 const TEST_GIBBS = TEST_SYSTEM.gibbs
 
 # ---------------------------------------------------------------------------
-# Small test system: 3-qubit Hamiltonian, jump operators, Gibbs state
+# 3-qubit test system (N3_* globals)
 # ---------------------------------------------------------------------------
-"""
-    make_small_test_system() -> (; hamiltonian, jumps, gibbs)
-
-Loads the 3-qubit disordered Heisenberg Hamiltonian at inverse temperature BETA
-and creates 9 single-site Pauli jump operators (X, Y, Z on each of 3 sites),
-normalized by sqrt(9).
-
-Returns a named tuple with:
-- `hamiltonian`: fully-initialized HamHam with bohr_dict and gibbs populated
-- `jumps`: Vector{JumpOp} of 9 jump operators
-- `gibbs`: the Gibbs state matrix (Hermitian, trace 1)
-"""
-function make_small_test_system(; trotter::Union{Nothing, TrottTrott}=nothing)
-    small_num_qubits = 3
-    source_root = dirname(@__DIR__)
-    ham_path = joinpath(source_root, "hamiltonians", "heis_disordered_periodic_n$(small_num_qubits).bson")
-    hamiltonian = _load_test_hamiltonian(ham_path, BETA)
-
-    # Create jump operators: single-site Paulis (X, Y, Z) on each site
-    jump_paulis = [[X], [Y], [Z]]
-    jump_sites = 1:small_num_qubits
-    num_of_jumps = length(jump_paulis) * length(jump_sites)
-    jump_normalization = sqrt(num_of_jumps)
-
-    # Select basis: trotter.eigvecs for TrotterDomain, hamiltonian.eigvecs otherwise
-    basis_unitary = trotter !== nothing ? trotter.eigvecs : hamiltonian.eigvecs
-
-    jumps = JumpOp[]
-    for pauli in jump_paulis
-        for site in jump_sites
-            jump_op = Matrix(pad_term(pauli, small_num_qubits, site)) ./ jump_normalization
-
-            jump_in_eigen = basis_unitary' * jump_op * basis_unitary
-            orthogonal = (jump_op == transpose(jump_op))
-            herm = (jump_op == jump_op')
-            push!(jumps, JumpOp(jump_op, jump_in_eigen, orthogonal, herm))
-        end
-    end
-
-    gibbs = hamiltonian.gibbs
-
-    return (; hamiltonian, jumps, gibbs)
-end
-
-const SMALL_SYSTEM = make_small_test_system()
-const SMALL_HAM = SMALL_SYSTEM.hamiltonian
-const SMALL_JUMPS = SMALL_SYSTEM.jumps
-const SMALL_GIBBS = SMALL_SYSTEM.gibbs
-const SMALL_DIM = 2^3  # 8
+const N3_SYSTEM = make_test_system(; num_qubits=3)
+const N3_HAM = N3_SYSTEM.hamiltonian
+const N3_JUMPS = N3_SYSTEM.jumps
+const N3_GIBBS = N3_SYSTEM.gibbs
+const N3_DIM = 2^3  # 8
 
 # ---------------------------------------------------------------------------
-# Trotter helper
+# Trotter helpers
 # ---------------------------------------------------------------------------
-"""
-    make_test_trotter() -> TrottTrott
-
-Create a TrottTrott object for TrotterDomain tests using the shared test Hamiltonian.
-"""
-function make_test_trotter()
-    TrottTrott(TEST_HAM, T0, NUM_TROTTER_STEPS_PER_T0)
-end
-
-const TEST_TROTTER = make_test_trotter()
+const TEST_TROTTER = TrottTrott(TEST_HAM, T0, NUM_TROTTER_STEPS_PER_T0)
 const TEST_TROTTER_JUMPS = make_test_system(; trotter=TEST_TROTTER).jumps
 
+const N3_TROTTER = TrottTrott(N3_HAM, T0, NUM_TROTTER_STEPS_PER_T0)
+const N3_TROTTER_JUMPS = make_test_system(; num_qubits=3, trotter=N3_TROTTER).jumps
+
 # ---------------------------------------------------------------------------
-# Factory functions for configs
+# Unified config factory
 # ---------------------------------------------------------------------------
 """
-    make_liouv_config(domain; construction=KMS()) -> Config{Lindbladian}
+    make_config(sim, domain; num_qubits=NUM_QUBITS, construction=KMS(), delta=TEST_DELTA, mixing_time=1.0) -> Config
 
-Create a Config{Lindbladian} with locked test parameters.
-"""
-function make_liouv_config(domain; construction=KMS())
-    Config(
-        sim = Lindbladian(),
-        domain = domain,
-        construction = construction,
-        num_qubits = NUM_QUBITS,
-        with_linear_combination = true,
-        beta = BETA,
-        sigma = SIGMA,
-        a = BETA / 30.0,
-        b = 0.4,
-        num_energy_bits = NUM_ENERGY_BITS,
-        w0 = W0,
-        t0 = T0,
-        num_trotter_steps_per_t0 = NUM_TROTTER_STEPS_PER_T0,
-    )
-end
+Create a Config with locked test parameters.
 
+For `Lindbladian()` sim: creates `Config{Lindbladian}` (no mixing_time/delta).
+For `Thermalize()` sim: creates `Config{Thermalize}` with mixing_time and delta.
 """
-    make_liouv_config_gns(domain) -> Config{Lindbladian, <:Any, GNS}
-
-Create a Config{Lindbladian} with GNS construction for the standard 4-qubit test system.
-Uses Smooth Metro transition matching KMS test parameter choices.
-"""
-function make_liouv_config_gns(domain)
-    Config(
-        sim = Lindbladian(),
-        domain = domain,
-        construction = GNS(),
-        num_qubits = NUM_QUBITS,
-        with_linear_combination = true,
-        beta = BETA,
-        sigma = SIGMA,
-        a = BETA / 30.0,
-        b = 0.4,
-        num_energy_bits = NUM_ENERGY_BITS,
-        w0 = W0,
-        t0 = T0,
-        num_trotter_steps_per_t0 = NUM_TROTTER_STEPS_PER_T0,
-    )
-end
-
-"""
-    make_thermalize_config(domain; construction=KMS(), delta=TEST_DELTA, mixing_time=1.0) -> Config{Thermalize}
-
-Create a Config{Thermalize} with locked test parameters.
-"""
-function make_thermalize_config(domain;
+function make_config(sim, domain;
+    num_qubits::Int=NUM_QUBITS,
     construction=KMS(),
     delta::Float64=TEST_DELTA,
     mixing_time::Float64=1.0,
 )
-    Config(
-        sim = Thermalize(),
+    therm_kw = sim isa Thermalize ? (; mixing_time=mixing_time, delta=delta) : (;)
+    Config(;
+        sim = sim,
         domain = domain,
         construction = construction,
-        num_qubits = NUM_QUBITS,
+        num_qubits = num_qubits,
         with_linear_combination = true,
         beta = BETA,
         sigma = SIGMA,
@@ -290,130 +203,6 @@ function make_thermalize_config(domain;
         w0 = W0,
         t0 = T0,
         num_trotter_steps_per_t0 = NUM_TROTTER_STEPS_PER_T0,
-        mixing_time = mixing_time,
-        delta = delta,
-    )
-end
-
-# ---------------------------------------------------------------------------
-# Small Trotter helper (3-qubit)
-# ---------------------------------------------------------------------------
-function make_small_test_trotter()
-    TrottTrott(SMALL_HAM, T0, NUM_TROTTER_STEPS_PER_T0)
-end
-
-const SMALL_TROTTER = make_small_test_trotter()
-const SMALL_TROTTER_JUMPS = make_small_test_system(; trotter=SMALL_TROTTER).jumps
-
-# ---------------------------------------------------------------------------
-# Small config factories (3-qubit)
-# ---------------------------------------------------------------------------
-"""
-    make_small_thermalize_config(domain; construction=GNS(), delta=TEST_DELTA, mixing_time=1.0) -> Config{Thermalize}
-
-Create a Config{Thermalize} for the 3-qubit SMALL system.
-Default construction is GNS (matching the old default of with_coherent=false).
-"""
-function make_small_thermalize_config(domain;
-    construction=GNS(),
-    delta::Float64=TEST_DELTA,
-    mixing_time::Float64=1.0,
-)
-    Config(
-        sim = Thermalize(),
-        domain = domain,
-        construction = construction,
-        num_qubits = 3,
-        with_linear_combination = true,
-        beta = BETA,
-        sigma = SIGMA,
-        a = BETA / 30.0,
-        b = 0.4,
-        num_energy_bits = NUM_ENERGY_BITS,
-        w0 = W0,
-        t0 = T0,
-        num_trotter_steps_per_t0 = NUM_TROTTER_STEPS_PER_T0,
-        mixing_time = mixing_time,
-        delta = delta,
-    )
-end
-
-"""
-    make_small_liouv_config(domain; construction=GNS()) -> Config{Lindbladian}
-
-Create a Config{Lindbladian} for the 3-qubit SMALL system.
-Default construction is GNS (matching the old default of with_coherent=false).
-"""
-function make_small_liouv_config(domain; construction=GNS())
-    Config(
-        sim = Lindbladian(),
-        domain = domain,
-        construction = construction,
-        num_qubits = 3,
-        with_linear_combination = true,
-        beta = BETA,
-        sigma = SIGMA,
-        a = BETA / 30.0,
-        b = 0.4,
-        num_energy_bits = NUM_ENERGY_BITS,
-        w0 = W0,
-        t0 = T0,
-        num_trotter_steps_per_t0 = NUM_TROTTER_STEPS_PER_T0,
-    )
-end
-
-# ---------------------------------------------------------------------------
-# Small GNS config factories (3-qubit, approximate detailed balance)
-# ---------------------------------------------------------------------------
-"""
-    make_small_liouv_config_gns(domain) -> Config{Lindbladian, <:Any, GNS}
-
-Create a Config{Lindbladian} with GNS construction for the 3-qubit SMALL system.
-Uses Smooth Metro transition (with_linear_combination=true, a=beta/30, b=0.4)
-matching the KMS test parameter choices.
-"""
-function make_small_liouv_config_gns(domain)
-    Config(
-        sim = Lindbladian(),
-        domain = domain,
-        construction = GNS(),
-        num_qubits = 3,
-        with_linear_combination = true,
-        beta = BETA,
-        sigma = SIGMA,
-        a = BETA / 30.0,
-        b = 0.4,
-        num_energy_bits = NUM_ENERGY_BITS,
-        w0 = W0,
-        t0 = T0,
-        num_trotter_steps_per_t0 = NUM_TROTTER_STEPS_PER_T0,
-    )
-end
-
-"""
-    make_small_thermalize_config_gns(domain; delta=TEST_DELTA, mixing_time=1.0) -> Config{Thermalize, <:Any, GNS}
-
-Create a Config{Thermalize} with GNS construction for the 3-qubit SMALL system.
-"""
-function make_small_thermalize_config_gns(domain;
-    delta::Float64=TEST_DELTA,
-    mixing_time::Float64=1.0,
-)
-    Config(
-        sim = Thermalize(),
-        domain = domain,
-        construction = GNS(),
-        num_qubits = 3,
-        with_linear_combination = true,
-        beta = BETA,
-        sigma = SIGMA,
-        a = BETA / 30.0,
-        b = 0.4,
-        num_energy_bits = NUM_ENERGY_BITS,
-        w0 = W0,
-        t0 = T0,
-        num_trotter_steps_per_t0 = NUM_TROTTER_STEPS_PER_T0,
-        mixing_time = mixing_time,
-        delta = delta,
+        therm_kw...,
     )
 end
