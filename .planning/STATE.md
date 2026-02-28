@@ -11,15 +11,15 @@ See: .planning/PROJECT.md (updated 2026-02-25)
 
 Phase: 38 of 38 (Test Cleanup)
 Plan: 4/5 complete
-Status: Completed 38-04: @info output and threshold rationale for diagnostics/convergence tests
-Last activity: 2026-02-28 - Completed 38-04: Added 74 @info lines and threshold rationale to test_diagnostics.jl and test_convergence.jl
+Status: Completed 38-02: @info output and threshold rationale for 8 shorter test files (filling gap)
+Last activity: 2026-02-28 - Completed 38-02: Added 38 @info lines and threshold rationale to 8 shorter test files (compilation, cptp, dm_detailed_balance, trajectory_fixes, regression, allocation, workspace_independence, threading)
 
 Progress: [######░░░░] ~50% (v2.0, 19/~24 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 107 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 17)
+- Total plans completed: 108 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 18)
 
 **By Milestone:**
 
@@ -31,7 +31,7 @@ Progress: [######░░░░] ~50% (v2.0, 19/~24 plans)
 | v1.3 Mixing Time | 20-25 | 10 (+11 quick) | 2026-02-17 to 2026-02-18 |
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
 | v1.5 Krylov Gap Estimation | 27-32 | 12 (+3 quick) | 2026-02-20 to 2026-02-25 |
-| v2.0 Restructure | 33-38 | 16/~24 | 2026-02-25 to ... |
+| v2.0 Restructure | 33-38 | 18/~24 | 2026-02-25 to ... |
 
 ## Accumulated Context
 
@@ -84,6 +84,9 @@ All decisions logged in PROJECT.md Key Decisions table.
 - [38-04] Classify tests as structural vs numerical: isapprox/abs/norm -> @info; isa/==/haskey -> skip
 - [38-04] Loop-summary @info pattern: track max_err across iterations, emit single @info after loop
 - [38-04] All existing thresholds confirmed appropriate with O(DIM^n * eps) error analysis -- no changes needed
+- [38-02] CPTP threshold 1e-10 kept: algebraic identity error scales as DIM^2 * eps ~ 3e-13, giving ~300x margin
+- [38-02] Allocation @info includes both allocs_bytes and threshold for direct comparison in test output
+- [38-02] PSD guard eigenvalue threshold -1e-14 documented for FP rounding in Hermitian eigvals
 
 ### Key Constraints for v2.0
 
@@ -114,5 +117,5 @@ None
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: Completed 38-04-PLAN.md (diagnostics and convergence test instrumentation). Ready for 38-05.
+Stopped at: Completed 38-02-PLAN.md (@info and threshold rationale for 8 shorter test files). 38-05 remaining.
 Resume file: None
