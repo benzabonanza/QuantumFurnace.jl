@@ -27,6 +27,19 @@ using QuantumFurnace
         L_dense = construct_lindbladian(TEST_JUMPS, config_liouv, TEST_HAM)
         I_d2 = Matrix{ComplexF64}(LinearAlgebra.I(DIM^2))
 
+        # Threshold rationale (trace preservation): tr(E(rho)) should equal tr(rho) exactly
+        # for a CPTP map. Error is FP accumulation from channel application: O(DIM^2 * eps) ~ 3e-14.
+        # Threshold 1e-10 gives >1000x margin.
+        #
+        # Threshold rationale (positivity): eigenvalues of E(rho) should be >= 0 for CPTP.
+        # FP rounding can produce tiny negatives: O(eps * ||rho||) ~ 1e-16. Threshold -1e-10 is generous.
+        #
+        # Threshold rationale (Euler closeness): faithful Chen channel differs from Euler by O(delta^2).
+        # Prefactor C=50 accounts for Lindbladian operator norm * DIM scaling.
+        max_trace_err = 0.0
+        min_eigenvalue = Inf
+        max_euler_err = 0.0
+        euler_threshold = 50 * delta^2
         for _ in 1:5
             rho = Matrix(random_density_matrix(NUM_QUBITS))
 
@@ -35,16 +48,24 @@ using QuantumFurnace
             rho_chen = copy(ws.scratch.rho_out)
 
             # Trace preservation: tr(E(rho)) == tr(rho)
+            trace_err = abs(real(tr(rho_chen)) - real(tr(rho)))
             @test isapprox(real(tr(rho_chen)), real(tr(rho)); atol=1e-10)
+            max_trace_err = max(max_trace_err, trace_err)
 
             # Positivity: eigenvalues of E(rho) >= -eps for valid density matrix input
             eigs = eigvals(Hermitian(rho_chen))
             @test all(eigs .> -1e-10)
+            min_eigenvalue = min(min_eigenvalue, minimum(eigs))
 
             # O(delta^2) close to Euler: |E_chen(rho) - E_euler(rho)| < C * delta^2
             v_euler = (I_d2 + delta * L_dense) * vec(rho)
-            @test norm(vec(rho_chen) - v_euler) < 50 * delta^2
+            euler_err = norm(vec(rho_chen) - v_euler)
+            @test euler_err < euler_threshold
+            max_euler_err = max(max_euler_err, euler_err)
         end
+        @info "Chen channel trace preservation" max_trace_error=max_trace_err threshold=1e-10
+        @info "Chen channel positivity" min_eigenvalue=min_eigenvalue threshold=-1e-10
+        @info "Chen channel Euler closeness" max_euler_error=max_euler_err threshold=euler_threshold delta=delta
     end
 
     # ========================================================================
@@ -64,6 +85,7 @@ using QuantumFurnace
         @test result.matvec_count > 0
         @test result.channel_eigenvalues === nothing
         @test result.delta_used === nothing
+        @info "krylov_spectral_gap result fields" spectral_gap=result.spectral_gap n_eigenvalues=length(result.eigenvalues) converged=result.converged matvec_count=result.matvec_count
     end
 
     # ========================================================================
@@ -77,14 +99,23 @@ using QuantumFurnace
         result = krylov_spectral_gap(config, TEST_HAM, TEST_JUMPS;
             krylovdim=30, howmany=4)
 
-        # Spectral gap matches dense reference
+        # Threshold rationale (gap rtol=1e-6): KrylovKit tol=1e-10 (default) bounds eigenvalue error.
+        # rtol=1e-6 gives 10000x margin for iterative convergence variability.
+        gap_err = abs(result.spectral_gap - dense_result.spectral_gap) / dense_result.spectral_gap
         @test isapprox(result.spectral_gap, dense_result.spectral_gap; rtol=1e-6)
+        @info "Eigsolve gap accuracy (EnergyDomain KMS)" krylov_gap=result.spectral_gap dense_gap=dense_result.spectral_gap relative_error=gap_err rtol=1e-6
 
-        # Fixed point is close to Gibbs state
-        @test trace_distance_h(Hermitian(result.fixed_point), TEST_GIBBS) < 1e-4
+        # Threshold rationale (trace distance < 1e-4): KMS fixed point should converge to Gibbs.
+        # KrylovKit eigenvector accuracy bounded by tol * condition_number. 1e-4 is conservative.
+        td = trace_distance_h(Hermitian(result.fixed_point), TEST_GIBBS)
+        @test td < 1e-4
+        @info "Fixed point trace distance to Gibbs" trace_distance=td threshold=1e-4
 
-        # Steady-state eigenvalue near zero
-        @test abs(real(result.eigenvalues[1])) < 1e-8
+        # Threshold rationale (|Re(lambda_1)| < 1e-8): steady-state eigenvalue is exactly 0.
+        # KrylovKit residual bounded by tol. 1e-8 gives 100x margin over tol=1e-10.
+        ss_err = abs(real(result.eigenvalues[1]))
+        @test ss_err < 1e-8
+        @info "Steady-state eigenvalue magnitude" abs_real_lambda1=ss_err threshold=1e-8
     end
 
     # ========================================================================
@@ -98,13 +129,22 @@ using QuantumFurnace
         result = krylov_spectral_gap(config, TEST_HAM, TEST_JUMPS;
             krylovdim=30, howmany=4)
 
-        # Spectral gap matches dense reference
+        # Threshold rationale: same as KMS testset -- KrylovKit tol=1e-10, rtol=1e-6 gives 10000x margin.
+        gap_err = abs(result.spectral_gap - dense_result.spectral_gap) / dense_result.spectral_gap
         @test isapprox(result.spectral_gap, dense_result.spectral_gap; rtol=1e-6)
+        @info "Eigsolve gap accuracy (EnergyDomain GNS)" krylov_gap=result.spectral_gap dense_gap=dense_result.spectral_gap relative_error=gap_err rtol=1e-6
 
         # GNS fixed point differs from exact Gibbs -- skip trace distance check
-        # Just verify the fixed point is a valid density matrix
+        # Threshold rationale (trace=1 atol=1e-6): valid density matrix has tr(rho)=1.
+        # KrylovKit eigenvector normalization should preserve this. 1e-6 is conservative.
+        trace_err = abs(tr(result.fixed_point) - 1.0)
         @test isapprox(tr(result.fixed_point), 1.0; atol=1e-6)
-        @test abs(real(result.eigenvalues[1])) < 1e-8
+        @info "GNS fixed point trace" trace=real(tr(result.fixed_point)) trace_error=trace_err atol=1e-6
+
+        # Threshold rationale: same as KMS -- steady-state eigenvalue is exactly 0.
+        ss_err = abs(real(result.eigenvalues[1]))
+        @test ss_err < 1e-8
+        @info "Steady-state eigenvalue magnitude (GNS)" abs_real_lambda1=ss_err threshold=1e-8
     end
 
     # ========================================================================
@@ -121,17 +161,22 @@ using QuantumFurnace
         result = krylov_spectral_gap(config_therm, TEST_HAM, TEST_JUMPS;
             krylovdim=30, howmany=4)
 
-        # Channel path has O(delta^2) error from eigenvalue conversion formula
-        # lambda_L = (mu-1)/delta is exact for linear channel but approximate for
-        # faithful Chen channel whose eigenvalues differ from 1+delta*lambda by O(delta^2)
+        # Threshold rationale (gap rtol=2e-3): channel path has O(delta^2) error from eigenvalue
+        # conversion lambda_L = (mu-1)/delta. For delta=0.01, O(delta) ~ 0.01 error in gap.
+        # rtol=2e-3 gives ~5x margin. Looser than Lindbladian path due to channel approximation.
+        gap_err = abs(result.spectral_gap - dense_result.spectral_gap) / dense_result.spectral_gap
         @test isapprox(result.spectral_gap, dense_result.spectral_gap; rtol=2e-3)
+        @info "Channel eigsolve gap accuracy" krylov_gap=result.spectral_gap dense_gap=dense_result.spectral_gap relative_error=gap_err rtol=2e-3
 
         # Channel-specific fields are populated
         @test result.channel_eigenvalues !== nothing
         @test result.delta_used == 0.01
 
-        # Channel eigenvalue near 1 for steady state
+        # Threshold rationale (channel eigenvalue ~1, atol=0.01): steady-state channel eigenvalue
+        # is exactly 1.0 for a CPTP map. KrylovKit convergence + delta discretization give O(delta) error.
+        chan_ss_err = abs(abs(result.channel_eigenvalues[1]) - 1.0)
         @test isapprox(abs(result.channel_eigenvalues[1]), 1.0; atol=0.01)
+        @info "Channel steady-state eigenvalue" abs_mu1=abs(result.channel_eigenvalues[1]) error=chan_ss_err atol=0.01
     end
 
     # ========================================================================
@@ -143,6 +188,7 @@ using QuantumFurnace
             result = krylov_spectral_gap(config, TEST_HAM, TEST_JUMPS;
                 krylovdim=30, howmany=2)
             @test result.spectral_gap > 0
+            @info "Domain coverage (EnergyDomain)" spectral_gap=result.spectral_gap
         end
 
         @testset "TimeDomain" begin
@@ -150,6 +196,7 @@ using QuantumFurnace
             result = krylov_spectral_gap(config, TEST_HAM, TEST_JUMPS;
                 krylovdim=30, howmany=2)
             @test result.spectral_gap > 0
+            @info "Domain coverage (TimeDomain)" spectral_gap=result.spectral_gap
         end
 
         @testset "TrotterDomain" begin
@@ -157,6 +204,7 @@ using QuantumFurnace
             result = krylov_spectral_gap(config, TEST_HAM, TEST_TROTTER_JUMPS;
                 trotter=TEST_TROTTER, krylovdim=30, howmany=2)
             @test result.spectral_gap > 0
+            @info "Domain coverage (TrotterDomain)" spectral_gap=result.spectral_gap
         end
 
         @testset "BohrDomain" begin
@@ -164,6 +212,7 @@ using QuantumFurnace
             result = krylov_spectral_gap(config, TEST_HAM, TEST_JUMPS;
                 krylovdim=30, howmany=2)
             @test result.spectral_gap > 0
+            @info "Domain coverage (BohrDomain)" spectral_gap=result.spectral_gap
         end
     end
 
@@ -187,12 +236,13 @@ using QuantumFurnace
     # Testset 8: Eigenvalue sorting and conversion
     # ========================================================================
     @testset "Eigenvalue sorting and conversion" begin
-        # Lindbladian path: eigenvalues sorted by |Re(lambda)| ascending
+        # Lindbladian path: eigenvalues sorted by |Re(lambda)| ascending (structural check)
         config = make_config(Lindbladian(),EnergyDomain(); construction=KMS())
         result_liouv = krylov_spectral_gap(config, TEST_HAM, TEST_JUMPS;
             krylovdim=30, howmany=4)
 
         @test abs(real(result_liouv.eigenvalues[1])) <= abs(real(result_liouv.eigenvalues[2]))
+        @info "Eigenvalue sorting" abs_Re_lambda1=abs(real(result_liouv.eigenvalues[1])) abs_Re_lambda2=abs(real(result_liouv.eigenvalues[2]))
 
         # Channel path: verify eigenvalue conversion formula
         config_therm = make_config(Thermalize(),EnergyDomain();
@@ -200,11 +250,13 @@ using QuantumFurnace
         result_chan = krylov_spectral_gap(config_therm, TEST_HAM, TEST_JUMPS;
             krylovdim=30, howmany=4)
 
-        # Converted Lindbladian eigenvalues should satisfy: lambda_L = (mu - 1) / delta
-        # The result.eigenvalues are already the converted values.
-        # Verify by back-computing: mu = 1 + delta * lambda_L
+        # Threshold rationale (atol=1e-10): conversion mu = 1 + delta * lambda_L is algebraically
+        # exact (just arithmetic). Error is FP rounding only: O(eps * |mu|) ~ 1e-16.
+        # Threshold 1e-10 gives >1e6 margin.
         reconstructed_mu = 1.0 .+ result_chan.delta_used .* result_chan.eigenvalues
+        conversion_err = maximum(abs.(reconstructed_mu .- result_chan.channel_eigenvalues))
         @test isapprox(reconstructed_mu, result_chan.channel_eigenvalues; atol=1e-10)
+        @info "Eigenvalue conversion consistency" max_conversion_error=conversion_err atol=1e-10
     end
 
 end  # @testset "Krylov Eigsolve"

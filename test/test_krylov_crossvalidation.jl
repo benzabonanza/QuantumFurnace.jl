@@ -167,6 +167,8 @@ end
     # ========================================================================
     @testset "n=4 KMS (all domains)" begin
 
+        # Threshold rationale (atol=1e-8): KrylovKit tol=1e-10 bounds eigenvalue error.
+        # atol=1e-8 gives 100x margin for iterative convergence variability on n=4 (DIM=16).
         @testset "EnergyDomain" begin
             comp = compare_krylov_dense(
                 make_config(Lindbladian(),EnergyDomain(); construction=KMS()),
@@ -179,6 +181,7 @@ end
                 on_failure_diagnostics(comp.krylov_result, comp.dense_result)
             end
             @test gap_match
+            @info "XVAL-01 gap (EnergyDomain KMS)" error=abs(comp.krylov_result.spectral_gap - comp.dense_result.spectral_gap) atol=1e-8
         end
 
         @testset "TimeDomain" begin
@@ -193,6 +196,7 @@ end
                 on_failure_diagnostics(comp.krylov_result, comp.dense_result)
             end
             @test gap_match
+            @info "XVAL-01 gap (TimeDomain KMS)" error=abs(comp.krylov_result.spectral_gap - comp.dense_result.spectral_gap) atol=1e-8
         end
 
         @testset "TrotterDomain" begin
@@ -208,6 +212,7 @@ end
                 on_failure_diagnostics(comp.krylov_result, comp.dense_result)
             end
             @test gap_match
+            @info "XVAL-01 gap (TrotterDomain KMS)" error=abs(comp.krylov_result.spectral_gap - comp.dense_result.spectral_gap) atol=1e-8
         end
 
         @testset "BohrDomain" begin
@@ -222,6 +227,7 @@ end
                 on_failure_diagnostics(comp.krylov_result, comp.dense_result)
             end
             @test gap_match
+            @info "XVAL-01 gap (BohrDomain KMS)" error=abs(comp.krylov_result.spectral_gap - comp.dense_result.spectral_gap) atol=1e-8
         end
 
     end  # n=4 KMS
@@ -233,6 +239,7 @@ end
     # ========================================================================
     @testset "n=4 GNS (all domains)" begin
 
+        # Threshold rationale (atol=1e-8): same as XVAL-01 KMS -- KrylovKit tol=1e-10, 100x margin.
         @testset "EnergyDomain" begin
             comp = compare_krylov_dense(
                 make_config(Lindbladian(), EnergyDomain(); construction=GNS()),
@@ -245,6 +252,7 @@ end
                 on_failure_diagnostics(comp.krylov_result, comp.dense_result)
             end
             @test gap_match
+            @info "XVAL-04 gap (EnergyDomain GNS)" error=abs(comp.krylov_result.spectral_gap - comp.dense_result.spectral_gap) atol=1e-8
         end
 
         @testset "TimeDomain" begin
@@ -259,6 +267,7 @@ end
                 on_failure_diagnostics(comp.krylov_result, comp.dense_result)
             end
             @test gap_match
+            @info "XVAL-04 gap (TimeDomain GNS)" error=abs(comp.krylov_result.spectral_gap - comp.dense_result.spectral_gap) atol=1e-8
         end
 
         @testset "TrotterDomain" begin
@@ -274,6 +283,7 @@ end
                 on_failure_diagnostics(comp.krylov_result, comp.dense_result)
             end
             @test gap_match
+            @info "XVAL-04 gap (TrotterDomain GNS)" error=abs(comp.krylov_result.spectral_gap - comp.dense_result.spectral_gap) atol=1e-8
         end
 
         @testset "BohrDomain" begin
@@ -288,6 +298,7 @@ end
                 on_failure_diagnostics(comp.krylov_result, comp.dense_result)
             end
             @test gap_match
+            @info "XVAL-04 gap (BohrDomain GNS)" error=abs(comp.krylov_result.spectral_gap - comp.dense_result.spectral_gap) atol=1e-8
         end
 
     end  # n=4 GNS
@@ -299,6 +310,9 @@ end
     # so (mu-1)/delta has first-order error. Deltas: [0.1, 0.01, 0.001]
     # Hard assertion: convergence order >= 0.9 for each consecutive pair
     # ========================================================================
+    # Threshold rationale (order >= 0.9): faithful Chen channel gives mu = exp(delta*lambda_L) + O(delta^2),
+    # so first-order conversion (mu-1)/delta introduces O(delta) error. Expected convergence order ~1.0.
+    # Threshold 0.9 gives margin for sub-leading terms and numerical noise.
     @testset "L-vs-E convergence (KMS)" begin
 
         @testset "EnergyDomain" begin
@@ -306,6 +320,7 @@ end
             for (i, order) in enumerate(result.orders)
                 @test order >= 0.9
             end
+            @info "XVAL-03 convergence (EnergyDomain)" orders=result.orders threshold=0.9
         end
 
         @testset "TimeDomain" begin
@@ -313,6 +328,7 @@ end
             for (i, order) in enumerate(result.orders)
                 @test order >= 0.9
             end
+            @info "XVAL-03 convergence (TimeDomain)" orders=result.orders threshold=0.9
         end
 
         @testset "TrotterDomain" begin
@@ -321,6 +337,7 @@ end
             for (i, order) in enumerate(result.orders)
                 @test order >= 0.9
             end
+            @info "XVAL-03 convergence (TrotterDomain)" orders=result.orders threshold=0.9
         end
 
         @testset "BohrDomain" begin
@@ -328,6 +345,7 @@ end
             for (i, order) in enumerate(result.orders)
                 @test order >= 0.9
             end
+            @info "XVAL-03 convergence (BohrDomain)" orders=result.orders threshold=0.9
         end
 
     end  # L-vs-E convergence
@@ -349,6 +367,9 @@ end
             n6_trotter = TrottTrott(n6_ham, T0, NUM_TROTTER_STEPS_PER_T0)
             n6_trotter_sys = make_test_system(; num_qubits=6, trotter=n6_trotter)
 
+            # Threshold rationale (atol=1e-6): n=6 system (DIM=64, DIM^2=4096) has larger Krylov
+            # subspace approximation error than n=4. KrylovKit tol=1e-10 but larger system means
+            # more FP accumulation. atol=1e-6 is 100x looser than n=4's 1e-8.
             @testset "EnergyDomain" begin
                 config = make_config(Lindbladian(), EnergyDomain(); num_qubits=6, construction=KMS())
                 comp = compare_krylov_dense(config, n6_ham, n6_sys.jumps)
@@ -360,6 +381,7 @@ end
                     on_failure_diagnostics(comp.krylov_result, comp.dense_result)
                 end
                 @test gap_match
+                @info "XVAL-02 gap (EnergyDomain KMS, n=6)" error=abs(comp.krylov_result.spectral_gap - comp.dense_result.spectral_gap) atol=1e-6
             end
 
             @testset "TimeDomain" begin
@@ -373,6 +395,7 @@ end
                     on_failure_diagnostics(comp.krylov_result, comp.dense_result)
                 end
                 @test gap_match
+                @info "XVAL-02 gap (TimeDomain KMS, n=6)" error=abs(comp.krylov_result.spectral_gap - comp.dense_result.spectral_gap) atol=1e-6
             end
 
             @testset "TrotterDomain" begin
@@ -387,6 +410,7 @@ end
                     on_failure_diagnostics(comp.krylov_result, comp.dense_result)
                 end
                 @test gap_match
+                @info "XVAL-02 gap (TrotterDomain KMS, n=6)" error=abs(comp.krylov_result.spectral_gap - comp.dense_result.spectral_gap) atol=1e-6
             end
 
             @testset "BohrDomain" begin
@@ -400,6 +424,7 @@ end
                     on_failure_diagnostics(comp.krylov_result, comp.dense_result)
                 end
                 @test gap_match
+                @info "XVAL-02 gap (BohrDomain KMS, n=6)" error=abs(comp.krylov_result.spectral_gap - comp.dense_result.spectral_gap) atol=1e-6
             end
 
         end  # n=6 KMS
