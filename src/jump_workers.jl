@@ -438,3 +438,186 @@ function _jump_contribution!(
     _finalize_kraus_step!(evolving_dm, config.delta, scratch)
     return evolving_dm
 end
+
+#* Per-jump rho_jump-only accumulation (precomputed channel path) ----------------------------------------
+
+"""
+    _accumulate_rho_jump!(scratch, evolving_dm, jump, hamiltonian, config::Config{Thermalize, EnergyDomain},
+                          precomputed_data; jump_weight_scaling)
+
+Accumulate rho_jump = delta * sum_w rate^2(w) * L_{a,w} * rho * L_{a,w}^dagger for EnergyDomain.
+
+Extracts ONLY the rho_jump accumulation from the EnergyDomain `_jump_contribution!`,
+with no R or LdagL computation. Used with precomputed K0/U_residual channels.
+"""
+function _accumulate_rho_jump!(
+    scratch::ThermalizeScratch{<:Complex},
+    evolving_dm::Matrix{<:Complex},
+    jump::JumpOp,
+    hamiltonian::HamHam,
+    config::Config{Thermalize, EnergyDomain},
+    precomputed_data;
+    jump_weight_scaling::Real,
+)
+    (; transition, energy_labels) = precomputed_data
+
+    base_prefactor = precomputed_data.oft_domain_prefactor * jump_weight_scaling
+    inv_4sigma2 = 1.0 / (4 * config.sigma^2)
+
+    fill!(scratch.rho_jump, 0)
+
+    if jump.hermitian
+        @inbounds for w_raw in energy_labels
+            w_raw > 1e-12 && continue
+            w = abs(w_raw)
+
+            oft!(scratch.jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
+
+            rate2_pos = base_prefactor * transition(w)
+
+            # rho_jump += delta * rate^2 * (Aw rho Aw_dag)
+            mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft')
+            mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp, config.delta * rate2_pos, 1.0)
+
+            if w > 1e-12
+                rate2_neg = base_prefactor * transition(-w)
+
+                # Negative-frequency partner uses (Aw)_dag as Lindblad operator.
+                mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft)
+                mul!(scratch.rho_jump, scratch.jump_oft', scratch.sandwich_tmp, config.delta * rate2_neg, 1.0)
+            end
+        end
+    else
+        @inbounds for w in energy_labels
+            oft!(scratch.jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
+
+            rate2 = base_prefactor * transition(w)
+
+            mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft')
+            mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp, config.delta * rate2, 1.0)
+        end
+    end
+
+    return nothing
+end
+
+"""
+    _accumulate_rho_jump!(scratch, evolving_dm, jump, ham_or_trott, config::Config{Thermalize, D},
+                          precomputed_data; jump_weight_scaling) where D<:Union{TimeDomain, TrotterDomain}
+
+Accumulate rho_jump for TimeDomain/TrotterDomain. Uses NUFFT prefactors for jump_oft
+computation. No R or LdagL accumulation.
+"""
+function _accumulate_rho_jump!(
+    scratch::ThermalizeScratch{<:Complex},
+    evolving_dm::Matrix{<:Complex},
+    jump::JumpOp,
+    ham_or_trott,
+    config::Config{Thermalize, D},
+    precomputed_data;
+    jump_weight_scaling::Real,
+) where {D<:Union{TimeDomain, TrotterDomain}}
+    (; transition, energy_labels, oft_nufft_prefactors) = precomputed_data
+
+    base_prefactor = precomputed_data.oft_domain_prefactor * jump_weight_scaling
+
+    fill!(scratch.rho_jump, 0)
+
+    if jump.hermitian
+        @inbounds for w_raw in energy_labels
+            w_raw > 1e-12 && continue
+            w = abs(w_raw)
+
+            nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
+            @. scratch.jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
+
+            rate2_pos = base_prefactor * transition(w)
+
+            mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft')
+            mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp, config.delta * rate2_pos, 1.0)
+
+            if w > 1e-12
+                rate2_neg = base_prefactor * transition(-w)
+
+                mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft)
+                mul!(scratch.rho_jump, scratch.jump_oft', scratch.sandwich_tmp, config.delta * rate2_neg, 1.0)
+            end
+        end
+    else
+        for w in energy_labels
+            nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
+            @. scratch.jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
+
+            rate2_pos = base_prefactor * transition(w)
+
+            mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft')
+            mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp, config.delta * rate2_pos, 1.0)
+        end
+    end
+
+    return nothing
+end
+
+"""
+    _accumulate_rho_jump!(scratch, evolving_dm, jump, hamiltonian, config::Config{Thermalize, BohrDomain},
+                          precomputed_data; jump_weight_scaling)
+
+Accumulate rho_jump for BohrDomain. Iterates over Bohr frequency buckets, computing
+rho_jump += scaled_delta * B_{nu_2} * (rho * A_{nu_2}^dagger) for each bucket.
+No R accumulation.
+"""
+function _accumulate_rho_jump!(
+    scratch::ThermalizeScratch{<:Complex},
+    evolving_dm::Matrix{<:Complex},
+    jump::JumpOp,
+    hamiltonian::HamHam,
+    config::Config{Thermalize, BohrDomain},
+    precomputed_data;
+    jump_weight_scaling::Real,
+)
+    dim = size(evolving_dm, 1)
+    (; alpha) = precomputed_data
+
+    bohr_keys = hasproperty(precomputed_data, :bohr_keys) ? precomputed_data.bohr_keys : collect(keys(hamiltonian.bohr_dict))
+    bohr_is   = hasproperty(precomputed_data, :bohr_is)   ? precomputed_data.bohr_is   : nothing
+    bohr_js   = hasproperty(precomputed_data, :bohr_js)   ? precomputed_data.bohr_js   : nothing
+
+    scaled_delta = config.delta * jump_weight_scaling
+
+    fill!(scratch.rho_jump, 0)
+
+    @inbounds for (k, nu_2) in pairs(bohr_keys)
+        # B_{v2} = sum_{v1} alpha(v1, v2) * A
+        @. scratch.jump_oft = alpha(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
+
+        # sandwich_tmp := rho A_{v2}dag
+        fill!(scratch.sandwich_tmp, 0)
+        if bohr_is !== nothing
+            is = bohr_is[k]
+            js = bohr_js[k]
+            @inbounds for t in eachindex(is)
+                i = is[t]
+                j = js[t]
+                v = conj(jump.in_eigenbasis[i, j])
+                @inbounds for p in 1:dim
+                    scratch.sandwich_tmp[p, i] += evolving_dm[p, j] * v
+                end
+            end
+        else
+            indices = hamiltonian.bohr_dict[nu_2]
+            @inbounds for idx in indices
+                i = idx[1]
+                j = idx[2]
+                v = conj(jump.in_eigenbasis[i, j])
+                @inbounds for p in 1:dim
+                    scratch.sandwich_tmp[p, i] += evolving_dm[p, j] * v
+                end
+            end
+        end
+
+        # rho_jump += scaled_delta * B_{v2} * (rho A_{v2}dag)
+        mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp, scaled_delta, 1.0)
+    end
+
+    return nothing
+end

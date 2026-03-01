@@ -201,6 +201,38 @@ function _build_cptp_channel(R::Matrix{T}, delta::Real) where {T<:Complex}
 end
 
 """
+    _apply_precomputed_channel!(evolving_dm, K0, U_residual, scratch)
+
+Apply precomputed CPTP channel to evolving density matrix. Uses pre-stored K0
+and U_residual (no eigendecomposition). `scratch.rho_jump` must be pre-filled
+by `_accumulate_rho_jump!`.
+
+Computes: rho_next = K0 * rho * K0' + rho_jump + U_residual * rho * U_residual'
+"""
+function _apply_precomputed_channel!(
+    evolving_dm::Matrix{<:Complex},
+    K0::Matrix{<:Complex},
+    U_residual::Matrix{<:Complex},
+    scratch::ThermalizeScratch{<:Complex},
+)
+    # rho_next = K0 * rho * K0'
+    mul!(scratch.sandwich_tmp, K0, evolving_dm)
+    mul!(scratch.rho_next, scratch.sandwich_tmp, K0')
+
+    # + rho_jump (pre-filled by _accumulate_rho_jump!)
+    scratch.rho_next .+= scratch.rho_jump
+
+    # + U_residual * rho * U_residual'
+    mul!(scratch.sandwich_tmp, U_residual, evolving_dm)
+    mul!(scratch.rho_next, scratch.sandwich_tmp, U_residual', 1.0, 1.0)
+
+    # Keep it a density matrix numerically
+    hermitianize!(scratch.rho_next)
+    copyto!(evolving_dm, scratch.rho_next)
+    return evolving_dm
+end
+
+"""
     _precompute_per_jump_channels(jumps, ham_or_trott, config, precomputed_data; rescale_by_inv_prob=true)
 
 Precompute per-jump CPTP channel matrices (K0, U_residual) for all jumps.
