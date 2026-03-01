@@ -115,7 +115,7 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 
 - [x] **Phase 39: Per-Jump Precomputation** - Eliminate per-step eigendecomposition by precomputing K0, U_residual, and U_coherent per jump at simulation start -- completed 2026-03-01
 - [x] **Phase 40: Save Every** - Control trace distance computation frequency to decouple observation cost from step cost -- completed 2026-03-01
-- [ ] **Phase 41: Threading** - Multi-threaded BLAS and optional omega-loop parallelism for DM thermalization
+- [x] **Phase 41: Threading** - Multi-threaded BLAS and optional omega-loop parallelism for DM thermalization -- completed 2026-03-01
 - [ ] **Phase 42: Mixing Time Estimation** - Exponential fit on trace distance convergence curve with extrapolation and quality gates
 
 ## Phase Details
@@ -161,8 +161,8 @@ Plans:
 **Plans:** 2 plans
 
 Plans:
-- [ ] 41-01-PLAN.md -- BLAS thread management for run_thermalize (try/finally save/restore, DM threading tests)
-- [ ] 41-02-PLAN.md -- Omega-loop parallelism with per-task accumulators (_accumulate_rho_jump!, _precompute_R for all 4 domains)
+- [x] 41-01-PLAN.md -- BLAS thread management for run_thermalize (try/finally save/restore, DM threading tests)
+- [x] 41-02-PLAN.md -- Omega-loop parallelism with per-task accumulators (_accumulate_rho_jump!, _precompute_R for all 4 domains)
 
 ### Phase 42: Mixing Time Estimation
 **Goal**: Users can estimate mixing time from a run_thermalize trace distance curve via exponential fit, with optional early stopping via extrapolation, quality gates on fit reliability, and LsqFit.jl re-integrated as an active dependency
@@ -197,5 +197,5 @@ Phases execute in numeric order: 39 -> 40 -> 41 -> 42
 | 33-38 | v2.0 | 19/19 | Complete | 2026-02-28 |
 | 39. Precomputation | v2.1 | 2/2 | Complete | 2026-03-01 |
 | 40. Save Every | v2.1 | 1/1 | Complete | 2026-03-01 |
-| 41. Threading | v2.1 | 0/2 | Not started | - |
+| 41. Threading | v2.1 | 2/2 | Complete | 2026-03-01 |
 | 42. Mixing Time | v2.1 | 0/TBD | Not started | - |
