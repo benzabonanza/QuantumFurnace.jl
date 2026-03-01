@@ -118,13 +118,13 @@ function run_lindblad(
 end
 
 """
-    run_thermalize(jumps, config, hamiltonian, trotter=nothing; initial_dm=nothing, rng, rescale_by_inv_prob) -> ThermalizeResults
+    run_thermalize(jumps, config, hamiltonian, trotter=nothing; initial_dm=nothing, rng, rescale_by_inv_prob, save_every) -> ThermalizeResults
 
 Density-matrix Kraus evolution toward the Gibbs state.
 
 Evolves an initial density matrix via random jump channels, recording trace distance
-to the Gibbs state at each step. Returns the final state and convergence history
-in a `ThermalizeResults` struct.
+to the Gibbs state at configurable intervals. Returns the final state and convergence
+history in a `ThermalizeResults` struct.
 
 # Arguments
 - `jumps::Vector{JumpOp}`: Jump operators
@@ -136,6 +136,7 @@ in a `ThermalizeResults` struct.
 - `initial_dm::Union{Nothing, Matrix{<:Complex}}=nothing`: Initial density matrix (defaults to maximally mixed I/d)
 - `rng::AbstractRNG=Random.default_rng()`: Random number generator
 - `rescale_by_inv_prob::Bool=true`: Rescale delta by 1/p_jump for physical mixing time
+- `save_every::Int=1`: Record trace distance every `save_every` steps. Default 1 preserves per-step recording. Convergence cutoff is only checked at save points.
 
 # Returns
 `ThermalizeResults` with final density matrix, trace distances, time steps, and metadata.
@@ -148,6 +149,7 @@ function run_thermalize(
     initial_dm::Union{Nothing, Matrix{<:Complex}}=nothing,
     rng::AbstractRNG = Random.default_rng(),
     rescale_by_inv_prob::Bool = true,
+    save_every::Int = 1,
 ) where {D, C, T<:AbstractFloat}
 
     dim = size(hamiltonian.data, 1)
@@ -162,6 +164,7 @@ function run_thermalize(
     t_start = time()
 
     validate_config!(config)
+    @assert save_every >= 1 "save_every must be >= 1"
     _print_press(config)
 
     if config.domain isa TrotterDomain
@@ -196,6 +199,7 @@ function run_thermalize(
 
     convergence_cutoff = 1e-5
     trace_distances = [trace_distance_h(Hermitian(evolving_dm), gibbs)]
+    recorded_steps = Int[0]
 
     for step in 1:num_steps
         idx = rand(rng, 1:length(jumps))
@@ -219,19 +223,22 @@ function run_thermalize(
             evolving_dm, K0s[idx], U_residuals[idx], scratch,
         )
 
-        dist = trace_distance_h(Hermitian(evolving_dm), gibbs)
-        push!(trace_distances, dist)
-        @printf("Dist to Gibbs: %s\n", dist)
-        if dist < convergence_cutoff
-            num_steps = step
-            break
+        if step % save_every == 0
+            dist = trace_distance_h(Hermitian(evolving_dm), gibbs)
+            push!(trace_distances, dist)
+            push!(recorded_steps, step)
+            @printf("Dist to Gibbs: %s\n", dist)
+            if dist < convergence_cutoff
+                break
+            end
         end
     end
 
-    time_steps = collect(0.0:config.delta:(num_steps * config.delta))
+    time_steps = T.(recorded_steps .* config.delta)
 
     wall_time = time() - t_start
     metadata = _capture_metadata(wall_time_seconds=wall_time)
+    metadata[:save_every] = save_every
 
     return ThermalizeResults{T}(
         config,
