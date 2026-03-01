@@ -174,12 +174,11 @@ Plans:
   3. With extrapolate=true, simulation stops early when the exponential fit is reliable, and the returned mixing_time is the extrapolated number of steps to target epsilon
   4. Quality gate warnings fire when R^2 < 0.95 or when offset C is large relative to target epsilon
   5. LsqFit.jl is restored as an active dependency in Project.toml and fitting.jl is promoted from src/staging/ to active source
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 42-01: TBD
-- [ ] 42-02: TBD
-- [ ] 42-03: TBD
+- [ ] 42-01-PLAN.md -- LsqFit.jl promotion + MixingTimeEstimate implementation (fitting.jl promoted, mixing.jl created)
+- [ ] 42-02-PLAN.md -- Comprehensive tests and full validation (fitting tests promoted, mixing tests created)
 
 ## Progress
 
@@ -198,4 +197,4 @@ Phases execute in numeric order: 39 -> 40 -> 41 -> 42
 | 39. Precomputation | v2.1 | 2/2 | Complete | 2026-03-01 |
 | 40. Save Every | v2.1 | 1/1 | Complete | 2026-03-01 |
 | 41. Threading | v2.1 | 2/2 | Complete | 2026-03-01 |
-| 42. Mixing Time | v2.1 | 0/TBD | Not started | - |
+| 42. Mixing Time | v2.1 | 0/2 | Not started | - |
