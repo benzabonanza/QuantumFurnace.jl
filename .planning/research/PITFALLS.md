@@ -1,512 +1,557 @@
-# Domain Pitfalls: Major Codebase Restructure of QuantumFurnace.jl
+# Domain Pitfalls: v2.1 Speedup & Mixing Time Features
 
-**Domain:** Refactoring a Julia numerical simulation package (8,312 LOC src + 5,071 LOC test, 600+ tests)
-**Researched:** 2026-02-25
-**Confidence:** HIGH (grounded in direct codebase analysis + Julia documentation + known Julia compiler issues)
+**Domain:** Adding per-jump precomputation, multi-threaded frequency loops, multi-threaded BLAS control, mixing time extrapolation, and save_every to an existing Lindbladian simulator (QuantumFurnace.jl)
+**Researched:** 2026-03-01
+**Confidence:** HIGH (grounded in direct codebase analysis + Julia threading documentation + numerical analysis literature)
 
-**Relationship to prior research:** This document supersedes the v1.5 PITFALLS.md (2026-02-20) which covered Krylov eigensolving pitfalls. This document covers pitfalls specific to the major codebase restructure: type hierarchy redesign, workspace consolidation, code deduplication, test restructuring, and file reorganization.
+**Relationship to prior research:** This document covers pitfalls specific to the v2.1 milestone. The v2.0 PITFALLS.md covered codebase restructure risks (abstract type boxing, BSON serialization, closure capture). Those pitfalls remain relevant but are not repeated here. This document covers NEW pitfalls introduced by adding performance and mixing time features to the existing v2.0 system.
 
 ---
 
 ## Critical Pitfalls
 
-Mistakes that cause silent numerical errors, allocation regressions, or test suite invalidation.
+Mistakes that cause silent numerical errors, race conditions, or fundamentally wrong results.
 
 ---
 
-### CRIT-01: Abstract Type Field Boxing During Workspace Consolidation
+### CRIT-01: BLAS.set_num_threads Is Global State -- Cannot Be Scoped Per Code Path
 
 **What goes wrong:**
-When consolidating `KrausScratch`, `KrylovWorkspace`, `TrajectoryWorkspace`, and `LindbladianWorkspace` into fewer structs, it is tempting to use abstract types for fields that vary across use cases. For example, replacing the concrete `jump_eigenbases::Vector{Matrix{T}}` in `KrylovWorkspace` with a field typed `::Vector{Matrix{<:Complex}}` (the same abstract type that `JumpOp.in_eigenbasis` uses). In Julia, a struct field with an abstract type parameter causes the compiler to heap-allocate (box) every access to that field. The existing codebase already discovered this -- see `krylov_workspace.jl` lines 49-51:
+The existing trajectory engine calls `BLAS.set_num_threads(1)` before spawning Julia threads and restores it after (see `trajectories.jl` lines 500-508). This works because trajectory sampling is the ONLY code path running at that time. The v2.1 milestone introduces a second threading pattern: parallelizing the omega-loop within `run_thermalize` (DM evolution). The problem is that `BLAS.set_num_threads()` sets a **process-global** variable -- there is ONE OpenBLAS thread pool shared by all Julia threads. You cannot have "BLAS uses 8 threads for the DM engine" and "BLAS uses 1 thread for trajectory tasks" simultaneously in the same Julia process.
 
-```julia
-# Concrete-typed jump data for zero-allocation hot path
-# (JumpOp.in_eigenbasis is Matrix{<:Complex} -- abstract element type causes boxing)
-jump_eigenbases::Vector{Matrix{T}}
-```
+**Why it matters for v2.1:**
+The design calls for three different BLAS threading strategies in the same codebase:
+1. **Trajectory engine**: `BLAS.set_num_threads(1)` -- Julia threads handle parallelism, each doing small BLAS calls (existing, works)
+2. **DM thermalize (no omega threading)**: `BLAS.set_num_threads(N)` -- single Julia thread, let BLAS handle parallelism (new feature)
+3. **DM thermalize (with omega threading)**: `BLAS.set_num_threads(1)` -- Julia threads parallelize the omega loop, each doing small BLAS calls (new feature)
 
-Consolidating workspaces risks reintroducing exactly this pattern if the unified struct tries to hold matrices of different element types via abstract field types.
+The danger: if a user calls `run_thermalize` and then `run_trajectories` in the same session, the BLAS thread count from one call persists into the next unless explicitly reset. The existing try/finally pattern in trajectories.jl handles this correctly for that path, but the NEW DM thermalize code must follow the same discipline.
 
-**How to detect:**
-- `@allocated` tests in `test_allocation.jl` and `test_krylov_matvec.jl` will catch this: `@test allocs == 0` for `apply_lindbladian!` and `step_along_trajectory!`.
-- Run `@code_warntype` on hot-path functions after consolidation. Any field access showing `Any` or `Matrix{<:Complex}` (red in REPL) instead of `Matrix{ComplexF64}` indicates boxing.
-- AllocCheck.jl (`@check_allocs`) provides static analysis: annotate `apply_lindbladian!` and `step_along_trajectory!` to catch boxing at compile time, not just at runtime.
+**Consequences:**
+- If DM thermalize sets `BLAS.set_num_threads(8)` and an error occurs before restore, subsequent trajectory calls with Julia threading will oversubscribe by 8x, causing ~10x slowdown.
+- If omega-loop threading forgets to set `BLAS.set_num_threads(1)`, each Julia thread's `mul!` call will internally spawn BLAS threads, causing thread oversubscription (N_julia * N_blas threads competing).
+- OpenBLAS with thread contention can produce **wrong numerical results** (not just slowness) in versions before 0.3.7 without USE_LOCKING=1. Julia ships OpenBLAS with locking enabled, but this is still a serialization bottleneck.
 
-**How to prevent:**
-- Every workspace struct that participates in a hot path must be parameterized on its concrete element type: `struct UnifiedWorkspace{T<:Complex} ... fields::Matrix{T} ... end`.
-- When extracting data from abstractly-typed sources (`JumpOp.in_eigenbasis::Matrix{<:Complex}`), convert to the concrete type at construction time (as `KrylovWorkspace` already does), never in the hot loop.
-- Use `@assert isconcretetype(T)` in workspace inner constructors during development to enforce this invariant.
-- Write a `_verify_concrete_types(ws)` test helper that walks struct fields with `fieldtype()` and asserts concreteness.
-
-**Which phase:** Workspace consolidation phase. Must be the gate criterion for merging workspace changes.
-
-**Detection priority:** Run `@code_warntype apply_lindbladian!(ws, rho, config, ham)` after every workspace struct modification.
-
----
-
-### CRIT-02: Union{T, Nothing} Fields Defeating Constant Propagation in Hot Paths
-
-**What goes wrong:**
-The existing config structs (`LiouvConfig`, `ThermalizeConfig`) have many `Union{T, Nothing}` fields (e.g., `a::Union{T, Nothing}`, `t0::Union{T, Nothing}`). Julia's compiler treats `Union{T, Nothing}` as a small union and handles it efficiently with "union splitting" -- but only when the access pattern is simple. In a hot path, accessing a `Union{T, Nothing}` field forces a branch on every access even if the value is always `T` at runtime. The `TrajectoryFramework` struct already works around this by extracting values into concrete-typed copies:
-
-```julia
-# Hot-path fields with concrete types (avoid accessing abstract-typed config/precomputed_data in step loop)
-scaled_prefactor::Float64
-sigma::Float64
-transition::F
-energy_labels::Vector{Float64}
-```
-
-When redesigning the config hierarchy (e.g., introducing `Config{S,D,DB,T}`), if these extraction patterns are not preserved, every `config.t0` access in a hot loop becomes a union-split branch.
-
-**How to detect:**
-- `@code_warntype` on `step_along_trajectory!` -- look for `Union{Float64, Nothing}` in inferred types.
-- Allocation tests: `@test allocs == 0` for `step_along_trajectory!` will fail if union splitting causes boxing (happens when the union has more than 4 variants or when the compiler gives up).
-- Performance regression: benchmark `step_along_trajectory!` before and after config redesign.
-
-**How to prevent:**
-- Maintain the "framework extraction" pattern: hot-path structs (`TrajectoryFramework`, `KrylovWorkspace`) copy values from config into concrete-typed fields at construction time.
-- In the new config hierarchy, either (a) eliminate `Union{T, Nothing}` entirely by using required fields per domain variant, or (b) ensure no hot-path function ever reads a `Union{T, Nothing}` field directly.
-- Consider using domain-specific config subtypes that only have the fields relevant to that domain (no Nothing fields needed).
-
-**Which phase:** Type hierarchy redesign phase. This is a design decision, not a bug fix -- the new hierarchy must encode this rule.
-
----
-
-### CRIT-03: Breaking Zero-Allocation Guarantees via Lazy Wrappers in mul!/BLAS Calls
-
-**What goes wrong:**
-The hot paths use `BLAS.gemm!('N', 'N', ...)` and `mul!` for zero-allocation matrix multiply. When deduplicating code (e.g., merging similar sandwich computations from `krylov_matvec.jl`), it is tempting to write:
-
-```julia
-# WRONG: creates lazy Adjoint wrapper, may allocate in BLAS path
-mul!(out, A', B)  # A' creates Adjoint(A) wrapper
-```
-
-While `mul!(C, A', B)` *usually* dispatches to `gemm!('C', 'N', ...)` without allocation in recent Julia versions, the behavior depends on the exact types involved. The existing code carefully avoids this by using explicit BLAS.gemm! with character flags:
-
-```julia
-# CORRECT: zero allocation, explicit transpose flag
-BLAS.gemm!('T', 'N', CT, L_op, rho, ZT, ws.tmp1)
-```
-
-During deduplication, replacing the 4 near-identical `_accumulate_sandwich*` functions (`_accumulate_sandwich!`, `_accumulate_sandwich_adj_L!`, `_accumulate_adjoint_sandwich!`, `_accumulate_adjoint_sandwich_adj_L!`) with a single parametric function risks introducing adjoint wrappers in the generic path.
-
-**How to detect:**
-- `test_krylov_matvec.jl` has `@test allocs == 0` for `apply_lindbladian!` across all domains (EnergyDomain, TimeDomain, TrotterDomain). These tests are the primary firewall.
-- `test_allocation.jl` has `@test allocs == 0` for `step_along_trajectory!`.
-- `@allocated` inside a function barrier (the codebase already uses this pattern -- see `test_allocation.jl` line 152).
-
-**How to prevent:**
-- When deduplicating sandwich functions, parameterize on the BLAS transpose character ('N', 'T', 'C') rather than using Julia `adjoint()` or `transpose()` wrappers:
+**Prevention:**
+- Wrap ALL threading entry points in a `try/finally` that saves and restores `BLAS.get_num_threads()`. The existing pattern in trajectories.jl (lines 500-508) is the model:
   ```julia
-  function _accumulate_sandwich!(out, L, rho, scalar, ws; transA='N', transB='T')
-      BLAS.gemm!(transA, 'N', CT, L, rho, ZT, ws.tmp1)
-      BLAS.gemm!('N', transB, CT, ws.tmp1, L, ZT, ws.tmp2)
-      BLAS.axpy!(T(scalar), ws.tmp2, out)
+  old_blas = BLAS.get_num_threads()
+  BLAS.set_num_threads(1)
+  try
+      @sync for ...
+          Threads.@spawn ...
+      end
+  finally
+      BLAS.set_num_threads(old_blas)
   end
   ```
-- Run allocation tests after every deduplication step, not just at the end.
-- Use `@code_llvm` on the BLAS call to verify it maps to a single `ccall` without intermediate allocation.
+- For the "let BLAS handle parallelism" path (no Julia threading), do NOT change `BLAS.set_num_threads` at all -- just let the user's default apply. Only set it when Julia threads are active.
+- Add a test: run trajectory engine, check `BLAS.get_num_threads()` is restored. Then run DM engine, check again. The existing `test_threading.jl` "BLAS thread restoration" testset is the model.
+- Document clearly: "The omega-loop threaded DM path requires BLAS single-threaded, same as trajectories."
 
-**Which phase:** Deduplication phase. Must run allocation regression tests as a gate after each function merge.
+**Detection:**
+- The existing `test_threading.jl` "BLAS thread restoration" test catches leaked BLAS state for trajectories. Write the equivalent for the DM engine.
+- Performance benchmark: if `run_thermalize` is slower than expected despite having multiple Julia threads, suspect BLAS oversubscription.
 
----
-
-### CRIT-04: BSON Deserialization Breakage from Struct Field Reordering
-
-**What goes wrong:**
-BSON.jl serializes Julia structs by field order. The existing codebase already handles one instance of this: `test_helpers.jl` has a custom `_load_test_hamiltonian` that manually parses legacy HamHam BSON files because the field layout changed. The `results.jl` module converts to Dicts for BSON safety specifically to avoid this problem.
-
-During the refactor, if you:
-1. Reorder fields in `LiouvConfig`, `ThermalizeConfig`, `HamHam`, `ConvergenceData`, or `ExperimentResult`
-2. Add/remove fields from any BSON-serialized struct
-3. Change type parameters (e.g., `LiouvConfig{D,T}` to `Config{S,D,DB,T}`)
-
-...any existing `.bson` files (reference data in `test/reference/`, hamiltonians in `hamiltonians/`, saved experiment results) become unloadable.
-
-**How to detect:**
-- `test_results.jl` tests save/load round-trips.
-- `test_regression.jl` loads frozen BSON reference data (`energy_dm_reference.bson`, `trotter_coherent_dm_reference.bson`).
-- `test_helpers.jl` loads hamiltonian BSON files via `_load_test_hamiltonian`.
-- All three will fail if struct layouts change without migration.
-
-**How to prevent:**
-- The Dict-based serialization in `results.jl` (already present via `_config_to_dict` / `_dict_to_experiment`) is the correct pattern. Extend it: never BSON-serialize parametric structs directly.
-- For `HamHam`: the `_load_test_hamiltonian` function in `test_helpers.jl` already uses `BSON.parse` (raw bytes) + manual reconstruction. This must be updated when fields change. Keep the migration code versioned.
-- For the new config hierarchy: write `_config_to_dict` for the new types FIRST, then migrate old configs by loading via the old dict path and saving via the new one.
-- If renaming `LiouvConfig{D,T}` to `Config{S,D,DB,T}`, add a compatibility `_reconstruct_config` path that handles both old and new dict formats. The existing code in `results.jl` already uses `get()` with defaults for forward compatibility -- extend this pattern.
-
-**Which phase:** Type hierarchy redesign phase. Must update serialization BEFORE changing struct definitions.
+**Which phase:** Must be addressed in the omega-loop threading phase. Design decision at the start.
 
 ---
 
-### CRIT-05: Closure Capture Causing Heap Allocation in Transition Functions
+### CRIT-02: Per-Jump Precomputed Eigendecomposition Becomes Stale Under Numerical Drift
 
 **What goes wrong:**
-The `transition` function stored in `precomputed_data` is a closure that captures config parameters (beta, sigma, a, b). This closure is called inside the innermost loop of every hot path (`step_along_trajectory!`, `apply_lindbladian!`). Julia closures that capture mutable variables or variables whose types are not inferrable at compile time will allocate on each call.
+The existing code computes `_build_cptp_channel(R_a, delta)` per-jump at trajectory workspace construction time (trajectories.jl lines 112-122). This calls `eigen(Hermitian(S))` to perform the PSD guard: negative eigenvalues of the residual matrix S are clamped to zero, then `U_residual = sqrt(diag(clamped_eigenvalues)) * eigvecs'` is computed. This precomputation is correct for the trajectory engine because delta is fixed and R is state-independent.
 
-The existing code handles this well -- `TrajectoryFramework` stores `transition::F` as a parametric type parameter, so the compiler knows the exact closure type and can inline. But during deduplication, if you extract a common "iterate over frequencies and apply weights" function that takes `transition` as a plain `Function` argument:
+For the DM thermalize engine, the situation is different. The current `_finalize_kraus_step!` in jump_workers.jl (lines 172-192) calls `_build_cptp_channel(scratch.R, delta)` **every step**, recomputing the eigendecomposition of S from the current accumulated R. If v2.1 precomputes the eigendecomposition once (like the trajectory engine does), the key question is: does R depend on the evolving state?
+
+**Analysis of the existing code:**
+Looking at `_jump_contribution!` for `Config{Thermalize, ...}` (jump_workers.jl lines 194-290, 292-367, 369-440): the R accumulation uses `scratch.R` which is **reset to zero** at the start of each jump contribution (`fill!(scratch.R, 0)` at lines 219, 316, 395). The R matrix is built from `rate^2 * L'L` terms where L depends on jump operators and transition rates -- NOT on the evolving density matrix. This means R IS state-independent and CAN be precomputed.
+
+**However**, there is a subtlety: in the BohrDomain path (lines 194-290), the inner loop builds `scratch.jump_oft = alpha(...) * jump.in_eigenbasis` and uses it for both R and rho_jump. The `rho_jump` part DOES depend on the evolving state, but R does not. These two computations are interleaved in the current code. Precomputing R requires untangling R from rho_jump.
+
+**The real danger:**
+The PSD guard (`max.(eig.values, 0.0)`) handles numerical noise where S should theoretically be PSD but has eigenvalues at -1e-16 due to floating-point arithmetic. If R is precomputed once and used for many steps:
+1. The clamping is correct for the precomputed R.
+2. But if delta changes between steps (e.g., adaptive delta), the precomputed U_residual is WRONG because `S = (2*alpha - delta)*R - alpha^2*R^2` depends on delta through `alpha = 1 - sqrt(1 - delta)`.
+3. Even with fixed delta, if there are multiple jump operators and the code changes from "one R per step" to "per-jump R precomputed", the residual S per-jump might have different numerical properties than the summed R over all jumps in the current code.
+
+**Prevention:**
+- Verify that delta is truly fixed for the entire DM thermalize run (it is -- `config.delta` is a const field). This makes precomputation safe.
+- When precomputing per-jump, verify that `S_a = (2*alpha - delta)*R_a - alpha^2*R_a^2` has eigenvalues >= -eps for each individual R_a. Add an assertion: `@assert minimum(eigen(Hermitian(S_a)).values) > -1e-10 "Per-jump S_a has unexpectedly negative eigenvalues"` during workspace construction.
+- After precomputing, validate with a regression test: run one step with precomputed vs. recomputed channel and verify bitwise-identical results (or within machine epsilon).
+- The memory cost of storing per-jump precomputed data is `N_jumps * (3 * dim^2)` complex matrices (K0, U_residual, R). For 3 qubits (dim=8) with 6 jumps: 6 * 3 * 64 * 16 bytes = 18 KB. For 6 qubits (dim=64) with 12 jumps: 12 * 3 * 4096 * 16 bytes = 2.4 MB. Manageable. For 10+ qubits this starts to matter.
+
+**Detection:**
+- Trace distance to Gibbs state diverging instead of converging after switching to precomputed channels.
+- CPTP violation: `tr(rho) != 1.0` or `eigvals(rho)` having negative values beyond numerical noise after many steps.
+- The existing `test_cptp.jl` should catch CPTP violations.
+
+**Which phase:** Per-jump precomputation phase. Must include a regression test comparing precomputed vs. recomputed results.
+
+---
+
+### CRIT-03: Race Conditions in Omega-Loop Accumulator Matrices
+
+**What goes wrong:**
+The omega-loop in `_jump_contribution!` for the Thermalize path accumulates into `scratch.R` and `scratch.rho_jump` across frequency iterations. If this loop is parallelized with `Threads.@threads` or `@sync/@spawn`:
 
 ```julia
-# WRONG: Function is abstract, kills inlining and causes allocation
-function _iterate_frequencies(transition::Function, ...)
-
-# CORRECT: parametric, compiler knows exact closure type
-function _iterate_frequencies(transition::F, ...) where {F}
+# WRONG: concurrent writes to shared scratch.R
+@threads for w in energy_labels
+    # ... compute L(w), rate(w) ...
+    scratch.R .+= rate^2 * LdagL   # RACE CONDITION
+    mul!(scratch.rho_jump, ...)     # RACE CONDITION
+end
 ```
 
-**How to detect:**
-- `@code_warntype` on the extracted function -- `transition` should show as a concrete closure type, not `Function` or `Any`.
-- `@allocated` tests catch the resulting allocations.
-- Performance benchmark: closure boxing in the inner loop causes 10-100x slowdown because every call triggers dynamic dispatch.
+Matrix `.+=` is NOT atomic. Each element addition is a separate read-modify-write operation. Two threads writing to the same matrix element will lose one update.
 
-**How to prevent:**
-- Every function that receives a callable in a hot path must use `where {F}` parameterization: `function foo(f::F, ...) where {F}`.
-- Never type-annotate callbacks as `::Function` in performance-critical code.
-- The deduplication extracting shared iteration logic must preserve the parametric typing that `TrajectoryFramework{T,D,F,P}` already uses for the `transition` field.
+**This is different from the trajectory threading:**
+The trajectory engine avoids this by giving each thread its OWN workspace (`_copy_workspace_for_thread`). Each thread accumulates into its own `rho_acc`, then results are summed after all threads complete. The omega-loop threading is different because all frequency iterations contribute to the SAME R and rho_jump matrices within a single DM step.
 
-**Which phase:** Deduplication phase. Applies to every shared function extracted from hot paths.
+**Prevention strategy -- per-thread partial accumulators:**
+```julia
+# CORRECT: each task accumulates into its own R, then merge
+R_per_task = [zeros(CT, dim, dim) for _ in 1:ntasks]
+rho_jump_per_task = [zeros(CT, dim, dim) for _ in 1:ntasks]
+
+@sync for (task_idx, freq_chunk) in enumerate(chunks)
+    Threads.@spawn begin
+        for w in freq_chunk
+            # accumulate into R_per_task[task_idx], rho_jump_per_task[task_idx]
+        end
+    end
+end
+
+# Merge (single-threaded, safe)
+R_total = sum(R_per_task)
+rho_jump_total = sum(rho_jump_per_task)
+```
+
+**Do NOT use Threads.threadid() for indexing:**
+Julia tasks can migrate between OS threads. Using `threadid()` to index into pre-allocated buffers is wrong because two tasks could observe the same `threadid()` simultaneously. Julia's own PSA (July 2023) explicitly warns against this pattern. Use task-local storage or indexed by task identity instead.
+
+**Memory cost of per-task accumulators:**
+For `ntasks` tasks with dim-by-dim complex matrices: `ntasks * 2 * dim^2 * 16` bytes (R and rho_jump). With 8 tasks and dim=64: 8 * 2 * 4096 * 16 = 1 MB. With dim=256: 8 * 2 * 65536 * 16 = 16 MB. Acceptable for typical problem sizes.
+
+**Additional subtlety -- scratch.jump_oft:**
+The current code reuses `scratch.jump_oft` across frequency iterations: `@. scratch.jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix`. Each thread needs its OWN `jump_oft` buffer too, plus any other scratch matrices used within the loop body (`LdagL`, `sandwich_tmp`). Essentially, each task needs a full `ThermalizeScratch` worth of buffers.
+
+**Detection:**
+- Non-deterministic trace distance results across runs with the same seed (race condition symptom).
+- Trace distance plateauing at a non-zero value (lost accumulation updates).
+- Compare threaded omega-loop result against serial loop result with `isapprox(..., atol=1e-14)`. Any disagreement beyond FP accumulation order differences indicates a race.
+
+**Which phase:** Omega-loop threading phase. Must be the core design pattern.
 
 ---
 
-### CRIT-06: Thread Safety Regression from Shared Workspace Mutation
+### CRIT-04: False Sharing When Per-Task Accumulators Are Contiguous in Memory
 
 **What goes wrong:**
-The multi-threaded trajectory execution (see `trajectories.jl` lines 538-567) creates per-thread workspaces (`ws_per_task`) and uses `BLAS.set_num_threads(1)` to prevent OpenBLAS internal threading from conflicting with Julia tasks. The `TrajectoryFramework` is immutable and shared across threads, while `TrajectoryWorkspace` is per-thread mutable.
+If per-task accumulator matrices are allocated as views into a single large array (e.g., `big_buffer = zeros(dim, dim, ntasks)` with `R_per_task[i] = @view big_buffer[:, :, i]`), adjacent matrices share cache lines. When thread 1 writes to the last elements of its R matrix and thread 2 writes to the first elements of its R matrix, the CPU invalidates the shared cache line for both cores, causing cache thrashing.
 
-During workspace consolidation, if the "read-only shared data" and "per-thread mutable scratch" are merged into a single struct, or if a "consolidate workspaces" step accidentally makes `TrajectoryFramework` mutable (e.g., adding a scratch buffer to it for "convenience"), the per-thread isolation breaks. This causes:
-1. Data races (silent numerical corruption, non-deterministic results)
-2. BLAS threading conflicts (segfaults or wrong results from concurrent gemm! calls on shared buffers)
+On modern CPUs, cache lines are 64 bytes (Intel/AMD x86) or 128 bytes (Apple M-series). A ComplexF64 is 16 bytes, so 4 elements fit in an x86 cache line and 8 in an M-series cache line. The last row of one matrix and the first row of the next are almost certainly in the same cache line.
 
-**How to detect:**
-- `test_threading.jl` tests bitwise determinism: `@test result1.rho_mean == result2.rho_mean` (not `isapprox` -- actual bitwise equality with `==`).
-- `test_threading.jl` tests serial-threaded agreement: `@test isapprox(result_threaded.rho_mean, rho_ref; atol=1e-13)`.
-- `test_workspace_independence.jl` tests workspace isolation.
-- Run with `julia --check-bounds=yes -t 4` and verify determinism.
+**This is specific to the omega-loop accumulator pattern:**
+The trajectory engine does not have this problem because per-thread workspaces are independently allocated Julia Arrays (each has its own heap allocation, naturally cache-line-separated).
 
-**How to prevent:**
-- Maintain strict separation: framework/config structs are immutable (`struct`, not `mutable struct`) and shared. Workspace structs are mutable and per-thread.
-- After consolidation, grep for any `mutable struct` that is shared across `Threads.@spawn` boundaries.
-- The `BLAS.set_num_threads(1)` / restore pattern in `trajectories.jl` must survive any refactoring. Wrap it in a `_with_serial_blas(f)` helper that is used consistently.
-- Add a threading stress test: 10,000 trajectories with 4+ threads, assert bitwise determinism.
+**Prevention:**
+- Allocate each per-task matrix independently: `[zeros(CT, dim, dim) for _ in 1:ntasks]`. Julia's allocator naturally aligns to 16-byte boundaries, and individual heap allocations are typically cache-line-separated.
+- Do NOT use a single 3D array with views into slices. The independent allocation pattern used by `_copy_workspace_for_thread` (trajectories.jl line 164) is correct.
+- For very small matrices (dim <= 4), the entire matrix fits in 1-2 cache lines and false sharing is unavoidable. At these sizes, the omega-loop has too few iterations to benefit from threading anyway, so disable threading below a size threshold.
 
-**Which phase:** Workspace consolidation phase. Thread safety tests must be the merge gate.
+**Detection:**
+- Threading speedup is less than expected (e.g., 1.5x with 8 threads instead of 4x+).
+- Performance profiling shows high L1/L2 cache miss rates.
+- Empirically: benchmark threaded vs. serial, compare against roofline.
+
+**Which phase:** Omega-loop threading phase. An implementation detail, not a design decision.
+
+---
+
+### CRIT-05: Nested mul!/BLAS Calls Within Julia Threads Without BLAS Single-Threading
+
+**What goes wrong:**
+The omega-loop body contains `mul!` calls (BLAS GEMM):
+```julia
+mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)     # L'L
+mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft')    # rho * L'
+mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp, ...)  # L * (rho * L')
+```
+
+If Julia threads are used for the omega-loop and `BLAS.set_num_threads` is NOT set to 1, each `mul!` call will internally launch BLAS threads. With N Julia threads each launching M BLAS threads, you get N*M total threads competing for CPU resources. This is called "oversubscription" and causes severe performance degradation (worse than serial due to context switching overhead).
+
+**Specific danger for small matrices:**
+For typical QuantumFurnace problem sizes (dim = 8 to 64), BLAS GEMM on matrices this small is actually SLOWER with multi-threading because the overhead of thread creation/synchronization dominates the computation. OpenBLAS has an internal threshold below which it runs single-threaded anyway, but this threshold varies by OpenBLAS version and is not guaranteed.
+
+**Prevention:**
+- Before the omega-loop's threaded section, call `BLAS.set_num_threads(1)`.
+- After the threaded section, restore the original count.
+- This is the SAME pattern as the trajectory engine (trajectories.jl lines 500-508). Extract it into a shared helper:
+  ```julia
+  function with_serial_blas(f)
+      old = BLAS.get_num_threads()
+      BLAS.set_num_threads(1)
+      try
+          return f()
+      finally
+          BLAS.set_num_threads(old)
+      end
+  end
+  ```
+- Add a threshold: only use Julia threading for the omega-loop when `length(energy_labels) >= min_freqs_for_threading` (suggest min_freqs_for_threading = 16-32). Below this, the serial loop is faster due to threading overhead.
+
+**Detection:**
+- The new DM thermalize threaded path is slower than the serial path despite having multiple threads.
+- CPU utilization is 100% across all cores but throughput is low (oversubscription symptom).
+- `perf stat` or similar shows high context switch counts.
+
+**Which phase:** Omega-loop threading phase. Must be implemented together with the threading itself.
+
+---
+
+### CRIT-06: Hermitianize Happening Before vs After Merge Changes Numerical Result
+
+**What goes wrong:**
+The current code calls `hermitianize!(scratch.R)` after the omega-loop completes (jump_workers.jl line 285 for Bohr, line 362 for Energy, line 435 for Time/Trotter). This enforces Hermiticity of the accumulated R matrix. When threading the omega-loop:
+
+- **Option A: Hermitianize each per-task R, then sum.** Result: `sum(hermitianize.(R_task_i))`
+- **Option B: Sum per-task R, then hermitianize.** Result: `hermitianize(sum(R_task_i))`
+
+These give the same mathematical result but different floating-point results due to rounding. Hermitianizing before summation rounds each partial accumulator independently, then sums rounded values. Hermitianizing after summation sums the raw values, then rounds once. The difference is O(ntasks * dim^2 * eps), which for ntasks=8, dim=64, eps=1e-16 gives ~3e-12 -- above the 1e-13 tolerance used in the serial-threaded agreement test.
+
+**Prevention:**
+- Use Option B (hermitianize after merge). This matches the serial code's behavior where hermitianize happens once after the full omega-loop.
+- Update the serial-threaded agreement test to use a tolerance that accounts for floating-point accumulation order differences: `atol = ntasks * dim^2 * eps(Float64)`. The existing trajectory threading test uses `atol=1e-13` for this reason (test_threading.jl line 89).
+- Do NOT aim for bitwise identical serial/threaded results -- FP addition is not associative. Aim for `isapprox` with a tight but realistic tolerance.
+
+**Detection:**
+- Serial-threaded agreement tests failing with small errors (1e-13 to 1e-11 range).
+- Non-reproducible trace distance differences between serial and threaded DM evolution.
+
+**Which phase:** Omega-loop threading phase. Must decide the hermitianize placement as part of the merge strategy.
 
 ---
 
 ## Moderate Pitfalls
 
-Issues that cause test failures or performance regression but not silent data corruption.
+Issues that cause performance problems or incorrect mixing time estimates but not silent data corruption.
 
 ---
 
-### MOD-01: @allocated Tests Breaking from Testset-Lambda Interaction (Julia Bug #50796)
+### MOD-01: Exponential Fit to Trace Distance Curve Has Structural Model Mismatch
 
 **What goes wrong:**
-Julia has a known bug ([GitHub issue #50796](https://github.com/JuliaLang/julia/issues/50796)) where `@allocated` inside a `@testset` reports spurious allocations if any lambda function is defined elsewhere in the same testset scope. The existing codebase already works around this with function barriers:
+The fitting code (staging/fitting.jl) fits `y(t) = A * exp(-gap * t) + C` to trace distance time series. The underlying assumption is that trace distance decays as a single exponential governed by the spectral gap. This is only true asymptotically (after initial transients die out). The actual trace distance dynamics is:
 
+`d(rho(t), rho_gibbs) ~ sum_k |c_k| * exp(Re(lambda_k) * t)`
+
+where lambda_k are Liouvillian eigenvalues and c_k are overlap coefficients (the code already analyzes these in gap_estimation.jl's `eigenbasis_overlap_analysis`).
+
+**When the single-exponential model breaks:**
+1. **Burn-in period:** Early transients from multiple eigenmode contributions make the initial data points follow a DIFFERENT exponential (or sum of exponentials). The `skip_initial` parameter handles this, but choosing it wrong biases the gap estimate.
+2. **Nearly degenerate eigenvalues:** If lambda_2 and lambda_3 have similar real parts, the trace distance follows a SUM of two exponentials. A single-exponential fit will return an average of the two rates, which is wrong.
+3. **Plateau misidentification:** The `C` parameter captures the asymptotic plateau. If the simulation has not run long enough, the fit interprets the still-decaying curve as a plateau plus fast exponential, overestimating the gap.
+4. **Non-monotone trace distance:** For some initial states, trace distance can temporarily INCREASE before decaying (the "initial slip" phenomenon in open quantum systems). The fitting code does not handle this.
+
+**Prevention:**
+- The existing `skip_initial` parameter is critical. Default should be at least 0.1 (skip first 10% of data). For mixing time estimation where the goal is extrapolation, skip_initial = 0.2-0.3 is safer.
+- Add a diagnostic: compute R-squared for the fit. The existing code does this (`_compute_r_squared`). Set a hard threshold: if R^2 < 0.9, flag the fit as unreliable and do not use it for mixing time extrapolation.
+- For mixing time estimation specifically, consider fitting to the LOG of trace distance instead: `log(d(t)) ~ -gap * t + const`. This is a LINEAR fit (no iterative solver needed) and is more numerically stable. The existing `_log_linear_initial_guess` already does this for the initial guess -- consider making it an alternative fitting mode.
+- Validate the gap estimate against the Krylov spectral gap when available (`run_krylov_spectrum` gives the exact gap for small systems). The existing `eigenbasis_overlap_analysis` provides this cross-validation.
+
+**Detection:**
+- Gap estimate varies significantly with `skip_initial` (sensitivity analysis).
+- R-squared < 0.9 indicates model mismatch.
+- Gap estimate is negative or much larger than expected from Krylov results.
+- The existing `FitResult.converged` flag catches Levenberg-Marquardt non-convergence.
+
+**Which phase:** Mixing time extrapolation phase. Must include validation against known spectral gaps.
+
+---
+
+### MOD-02: Extrapolation Beyond the Fitted Range Produces Meaningless Mixing Time
+
+**What goes wrong:**
+Mixing time estimation requires extrapolating the fitted exponential to find when `d(rho(t), rho_gibbs) < epsilon`. If the simulation only ran for time T_sim and the fitted curve predicts convergence at T_mix >> T_sim, the extrapolation is unreliable because:
+1. The fit was trained on data in [0, T_sim] but is being evaluated at T_mix which may be 10-100x larger.
+2. Small errors in the gap estimate are amplified exponentially: if gap_true = 0.1 and gap_fit = 0.11 (10% error), the mixing time estimate is off by `log(1/eps) * (1/0.1 - 1/0.11)` which for eps=1e-5 is `11.5 * 0.91 = 10.5` time units -- a significant error.
+3. The single-exponential model may be valid in [0, T_sim] but the actual dynamics at T_mix could be dominated by a different eigenmode.
+
+**Prevention:**
+- Compute the extrapolation ratio: `T_mix / T_sim`. Flag results where this exceeds a threshold (suggest: 5x). At >10x, the extrapolation is essentially meaningless.
+- Report confidence intervals on the mixing time using the gap uncertainty: `T_mix = log(A/epsilon) / gap`, so `dT_mix/dgap = -log(A/epsilon) / gap^2`. With `gap_se` from the fit, the mixing time uncertainty is approximately `T_mix_se = gap_se * |dT_mix/dgap|`.
+- Require that the fitted trace distance at the END of the simulation is at least 10x smaller than at the START. If the curve has barely decayed, the gap estimate is poorly constrained.
+- The existing `FitResult.gap_ci` (confidence interval) provides the raw statistical uncertainty. Propagate this through to mixing time.
+
+**Detection:**
+- Mixing time estimates that vary wildly with small changes to `skip_initial` or `total_time`.
+- Mixing time confidence interval spanning more than an order of magnitude.
+- Extrapolation ratio > 10.
+
+**Which phase:** Mixing time extrapolation phase.
+
+---
+
+### MOD-03: save_every Off-by-One Corrupts Downstream Time Grid
+
+**What goes wrong:**
+The trajectory engine computes the number of saves as `num_saves = div(num_steps, save_every) + 1` (trajectories.jl line 604). The +1 is for the initial state (step 0). The time grid is `times[s] = (s - 1) * save_every * delta_step` (line 609). The DM thermalize code does NOT currently have save_every -- it records every step:
 ```julia
-# From test_allocation.jl line 150-164:
-# Julia's @allocated in global/testset scope can show spurious allocations
-# from boxing local variables; a function barrier ensures proper optimization.
-function _measure_step_allocs(fw, ws, psi0)
-    psi = copy(psi0)
-    rng = Xoshiro(999)
-    for _ in 1:100  # warmup
-        step_along_trajectory!(psi, fw, ws, rng)
-    end
-    copyto!(psi, psi0)
-    rng2 = Xoshiro(999)
-    return @allocated step_along_trajectory!(psi, fw, ws, rng2)
+trace_distances = [trace_distance_h(Hermitian(evolving_dm), gibbs)]  # initial
+for step in 1:num_steps
+    ...
+    push!(trace_distances, dist)  # after each step
 end
-allocs = _measure_step_allocs(fw, ws, psi0)
-@test allocs == 0
+time_steps = collect(0.0:config.delta:(num_steps * config.delta))
 ```
 
-During test restructuring, if allocation tests are moved into testsets that also contain lambda expressions, or if the function barrier pattern is lost, previously passing `@test allocs == 0` tests will spuriously fail.
+Adding save_every to the DM thermalize code creates several off-by-one risks:
 
-**How to detect:**
-- Tests that intermittently fail with small non-zero allocations (typically 16-80 bytes) in `@allocated` checks.
-- Failures only when run as part of the full test suite, not in isolation.
+1. **Mismatched lengths:** If `num_steps` is not divisible by `save_every`, the last partial interval may or may not be saved, creating a mismatch between `trace_distances` and `time_steps`.
+2. **Initial state inclusion:** The trajectory code saves the initial measurement at step 0. If the DM code skips the initial step, the arrays are shifted by one.
+3. **Time grid construction:** `times = collect(0.0 : save_every*delta : num_steps*delta)` vs `times = [(s-1) * save_every * delta for s in 1:num_saves]` produce different results when `num_steps % save_every != 0`.
 
-**How to prevent:**
-- Preserve the function barrier pattern for ALL `@allocated` tests: wrap the warmup+measure in a plain function, call it from testset.
-- Never put `@allocated` in the same function scope as anonymous functions, `map(x -> ..., ...)`, or generator expressions.
-- Consider migrating critical allocation tests to use [AllocCheck.jl](https://github.com/JuliaLang/AllocCheck.jl) (`@check_allocs`) for static analysis. This eliminates the flakiness entirely because it analyzes LLVM IR, not runtime behavior.
-- Document this rule: "All allocation tests must use function barriers."
+**Downstream impact:**
+The fitting code (`fit_exponential_decay`) takes `times` and `values` vectors that must have matching lengths. The gap estimation code (`estimate_spectral_gap`) constructs these from trajectory results. If DM thermalize produces arrays with different length semantics, the fitting will either error (length mismatch) or silently use misaligned time-value pairs.
 
-**Which phase:** Test restructure phase. Add as a review checklist item.
+**Prevention:**
+- Copy the EXACT formula from trajectories.jl: `num_saves = div(num_steps, save_every) + 1`. Always include the initial state. Always use `times[s] = (s - 1) * save_every * delta`.
+- Add an assertion: `@assert length(trace_distances) == length(time_steps) "save_every off-by-one: got $(length(trace_distances)) trace distances but $(length(time_steps)) time steps"`.
+- Write a dedicated test: set `save_every = 7, num_steps = 20`. Expected `num_saves = div(20, 7) + 1 = 3` (saves at steps 0, 7, 14). The step 20 result is NOT saved because 20 % 7 != 0.
+- Consider also saving the FINAL step regardless of save_every (save at steps 0, 7, 14, 20). This avoids losing the last ~6 steps of data. But document this clearly and ensure the time grid matches.
+
+**Detection:**
+- `ArgumentError: times and values must have the same length` from `fit_exponential_decay`.
+- Fitting produces a gap that does not match the visual slope of the trace distance plot (misaligned time grid).
+- Test that constructs trace_distances with save_every and verifies array sizes.
+
+**Which phase:** save_every implementation phase. Must be tested before mixing time extrapolation depends on it.
 
 ---
 
-### MOD-02: Tolerance Drift When Sharing Numerical Fixtures Across Restructured Test Files
+### MOD-04: GC Pauses Disrupting Threaded Omega-Loop Performance
 
 **What goes wrong:**
-The current test suite uses shared fixtures from `test_helpers.jl` computed once at include time (line 146-149):
+Julia's garbage collector (GC) is stop-the-world: when a GC event triggers, ALL threads are paused. In the trajectory engine, this is mitigated by the zero-allocation hot path (`step_along_trajectory!` allocates exactly 0 bytes per step, verified in test_allocation.jl). The omega-loop threading is different because:
 
+1. The omega-loop body calls `mul!` which is allocation-free, but also does `@. scratch.jump_oft = ...` broadcasting which MAY allocate depending on the broadcast fusion.
+2. The `_finalize_kraus_step!` at the end of each DM step calls `_build_cptp_channel` which calls `eigen(Hermitian(S))` -- this allocates (eigenvalue/eigenvector arrays). With precomputation, this allocation moves to construction time.
+3. Even if the omega-loop body is allocation-free, other Julia code running concurrently (logging, GC of previous allocations) can trigger a GC pause.
+
+**Impact on omega-loop threading:**
+A GC pause during the omega-loop stalls ALL threads, including the ones doing useful frequency computation. If threads are unbalanced (some finish their chunk before others), idle threads could trigger GC from their own unrelated work, pausing the still-busy threads.
+
+**Prevention:**
+- Precompute the eigendecomposition (CRIT-02) to move the `eigen()` allocation out of the hot path.
+- Verify that the omega-loop body is allocation-free using `@allocated` in a function barrier (same pattern as test_allocation.jl).
+- Use `GC.enable(false)` around the threaded section if GC pauses are problematic, but ONLY if the allocation within the section is bounded and small. Re-enable immediately after. This is a last resort.
+- Prefer `Threads.@spawn` with `@sync` over `Threads.@threads` -- the `@spawn` pattern gives better control over task granularity and avoids the scheduler overhead of `@threads :dynamic`.
+
+**Detection:**
+- Inconsistent timing for the same workload across runs (GC timing is non-deterministic).
+- `@time` shows non-zero GC percentage.
+- Threading speedup is below expected (1.5x with 4 threads instead of 3x+).
+
+**Which phase:** Omega-loop threading phase. Profile before optimizing.
+
+---
+
+### MOD-05: Per-Jump Precomputation Changes Test Expectations for DM Thermalize
+
+**What goes wrong:**
+The existing `run_thermalize` recomputes the CPTP channel (R, K0, U_residual) from scratch at every step inside `_jump_contribution!` -> `_finalize_kraus_step!` -> `_build_cptp_channel`. Moving to per-jump precomputed channels changes the computation path:
+
+**Before (current):**
+```
+For each DM step:
+  pick random jump a
+  accumulate R from all frequencies using current jump a
+  hermitianize R
+  S = f(R, delta)
+  eigen(S) -> clamp -> sqrt -> U_residual  # recomputed
+  apply K0 * rho * K0' + rho_jump + U_residual * rho * U_residual'
+```
+
+**After (precomputed):**
+```
+At construction time:
+  For each jump a:
+    accumulate R_a from all frequencies
+    hermitianize R_a
+    S_a = f(R_a, delta)
+    eigen(S_a) -> clamp -> sqrt -> U_residual_a  # precomputed
+
+For each DM step:
+  pick random jump a
+  accumulate rho_jump from all frequencies using jump a (needs evolving_dm)
+  apply K0_a * rho * K0_a' + rho_jump + U_residual_a * rho * U_residual_a'
+```
+
+The numerical results will differ at machine precision because:
+1. Eigendecomposition is numerically sensitive: two eigendecompositions of the "same" matrix constructed through different floating-point computation paths produce eigenvectors that differ by O(kappa * eps) where kappa is the condition number.
+2. The R matrix in the current code accumulates within a scratch buffer that may have different rounding than a freshly-allocated matrix.
+
+**Prevention:**
+- Do NOT try to maintain bitwise identical results between precomputed and recomputed paths. Instead:
+  - Verify trace distance convergence is equivalent (final trace distance within 2x of each other).
+  - Verify the CPTP property is maintained (trace preservation, complete positivity).
+  - Compare at a meaningful tolerance: `isapprox(result_precomp.final_dm, result_recomp.final_dm, atol=1e-8)` for a long run.
+- Existing regression tests (test_regression.jl) store reference BSON outputs from the CURRENT (recomputed) code. These must be regenerated after switching to precomputed channels, or tests must be updated with looser tolerances.
+- Keep the recomputed path available (behind a flag or separate method) for validation.
+
+**Detection:**
+- Regression tests failing with small numerical differences (1e-14 to 1e-10 range).
+- CPTP test failures after precomputation.
+
+**Which phase:** Per-jump precomputation phase.
+
+---
+
+### MOD-06: LsqFit SingularException from Flat or Noisy Trace Distance Data
+
+**What goes wrong:**
+The existing fitting code (staging/fitting.jl, lines 199-208) already handles `SingularException` from `stderror(fit)` and `confint(fit)`:
 ```julia
-const TEST_SYSTEM = make_test_system()
-const TEST_HAM = TEST_SYSTEM.hamiltonian
-const TEST_JUMPS = TEST_SYSTEM.jumps
-const TEST_GIBBS = TEST_SYSTEM.gibbs
+gap_se, gap_ci = try
+    se = stderror(fit)
+    ci = confint(fit; level=level)
+    se[_IDX_GAP], (ci[_IDX_GAP][1], ci[_IDX_GAP][2])
+catch e
+    e isa LinearAlgebra.SingularException || rethrow(e)
+    Inf, (-Inf, Inf)
+end
 ```
 
-Tolerance constants are also shared (line 80-82):
+This is good. But the SingularException occurs when the Jacobian is rank-deficient at the solution. For mixing time estimation, several common scenarios produce rank-deficient Jacobians:
 
-```julia
-const TOL_EXACT = 1e-12          # machine precision identities
-const TOL_QUADRATURE = 1e-6      # quadrature / discretization errors
-TOL_DELTA(delta) = 5.0 * delta   # unraveling error, C = 5.0
-```
+1. **Already converged:** If `skip_initial` removes the transient and the remaining data is essentially flat at the plateau value, all three parameters (A, gap, C) are poorly determined. The Jacobian for A and gap becomes nearly zero.
+2. **Too few data points after skip_initial:** The code requires >= 4 points (fitting.jl line 174), but with save_every the actual number of data points could be small.
+3. **Very noisy data:** DM evolution trace distances can be noisy for small systems where the CPTP approximation error (O(delta^2) per step) accumulates.
 
-When restructuring tests:
-1. If fixtures are recomputed per-file instead of shared, floating-point non-associativity means the "same" Gibbs state may differ by ULP. Tests comparing against `TEST_GIBBS` with `atol=1e-12` will fail.
-2. If tolerance constants are copied into individual test files instead of centralized, they will drift as developers adjust thresholds locally.
-3. If `NUM_ENERGY_BITS`, `W0`, `T0` are changed in some test files but not others, cross-validation tests become meaningless.
+**Downstream impact for mixing time estimation:**
+If `gap_se = Inf` and `gap_ci = (-Inf, Inf)`, the mixing time uncertainty is also infinite, making the estimate useless. The code needs a graceful fallback.
 
-**How to detect:**
-- Tests that pass individually but fail when run together (fixture recomputation order matters).
-- Tests that pass on one platform but fail on another (floating-point non-determinism from recomputation).
-- Grep for hardcoded tolerance values: `grep -rn "atol=1e-" test/ | grep -v "TOL_"` should return zero hits (or only justified exceptions).
+**Prevention:**
+- Before fitting, check data quality: if `max(values) - min(values) < 1e-6`, skip fitting and report "already converged."
+- After fitting, check `FitResult.converged && FitResult.gap > 0 && FitResult.r_squared > 0.8`. The existing `_select_best_observable` (gap_estimation.jl line 31-59) already does this for trajectory-based gap estimation. The DM mixing time path should use the same quality gates.
+- If gap_se = Inf, report the gap estimate as "unreliable" in the result struct rather than silently using it for mixing time computation.
+- Consider implementing a fallback: if single-exponential fit fails, use the log-linear estimate from `_log_linear_initial_guess` directly as a rough gap. It is less accurate but does not require a converged Levenberg-Marquardt solve.
 
-**How to prevent:**
-- Keep ONE `test_helpers.jl` (or rename to `test_fixtures.jl`) that is included exactly once from `runtests.jl`. Never re-include it.
-- All tolerance constants must be defined in the shared fixture file and referenced by name.
-- Pin random seeds in fixture generation (already done: fixtures are deterministic from BSON-loaded Hamiltonians).
-- The 146 instances of `isapprox|atol|rtol|TOL` across 16 test files should all reference named constants.
+**Detection:**
+- `FitResult.gap_se == Inf` or `FitResult.gap_ci == (-Inf, Inf)`.
+- `FitResult.converged == false`.
+- `FitResult.r_squared < 0` (model worse than horizontal line).
 
-**Which phase:** Test restructure phase. Run full test suite after every restructuring step, not just the modified file.
-
----
-
-### MOD-03: Include Order Breakage from File Reorganization
-
-**What goes wrong:**
-Julia's `include()` is textual inclusion -- files are evaluated in order in `QuantumFurnace.jl` (lines 102-129). The current include chain has implicit dependencies:
-
-```
-constants.jl        -> (no deps)
-hamiltonian.jl      -> constants.jl (HamHam uses X, Y, Z from constants)
-trotter_domain.jl   -> hamiltonian.jl (TrottTrott uses HamHam)
-structs.jl          -> (defines AbstractDomain, configs, workspaces)
-qi_tools.jl         -> (standalone utilities)
-...
-krylov_workspace.jl -> jump_workers.jl, coherent.jl (uses _precompute_data, _precompute_coherent_total_B)
-krylov_matvec.jl    -> krylov_workspace.jl (uses KrylovWorkspace)
-krylov_eigsolve.jl  -> krylov_matvec.jl (uses apply_lindbladian!)
-...
-results.jl          -> (uses everything, must be last)
-```
-
-Renaming or splitting files (e.g., extracting a shared `workspace.jl` from `krylov_workspace.jl` + `trajectories.jl`) will fail if the new file is included before its dependencies. Julia will not error on an undefined function reference at include time -- it only errors when the function is *called*. This means `using QuantumFurnace` succeeds but tests crash at runtime.
-
-**How to detect:**
-- `test_compilation.jl` catches some load-order failures (exists in the test suite).
-- Run `using QuantumFurnace` in a fresh Julia session after every file rename/move.
-- Add a smoke test that calls `methods(apply_lindbladian!)` to verify method tables are populated.
-
-**How to prevent:**
-- Draw the dependency graph before reorganizing. Map every function/type to the file that defines it and every file to the functions/types it references.
-- Move files in topological order: first rename files that have no dependents, then rename files whose dependents have already been updated.
-- After every file move, run `using QuantumFurnace` in a fresh Julia REPL.
-- Consider adding an "all modules load" smoke test:
-  ```julia
-  @testset "All exports defined" begin
-      for name in names(QuantumFurnace)
-          @test isdefined(QuantumFurnace, name)
-      end
-  end
-  ```
-
-**Which phase:** File reorganization phase. Do in small, testable increments -- one file rename per commit.
-
----
-
-### MOD-04: precomputed_data::Any Defeating Type Inference When Consolidating Workspaces
-
-**What goes wrong:**
-The `TrajectoryFramework` has `precomputed_data::Any` (line 84 of `trajectories.jl`). This was an intentional choice because the `NamedTuple` type varies by domain (different fields for Energy vs Time vs Trotter). The hot path works around this by extracting needed values into concrete-typed fields at construction time.
-
-During consolidation, if a unified workspace struct tries to store precomputed data for multiple domains in the same field, the `::Any` typing pattern spreads. If hot-path code starts accessing `ws.precomputed_data.transition` instead of `ws.transition`, the compiler cannot infer the return type, causing dynamic dispatch on every frequency iteration.
-
-The `KrylovWorkspace{T, PD}` already has the correct pattern -- parameterized on the precomputed data type `PD<:NamedTuple`. The `PD` type parameter lets the compiler know the exact NamedTuple layout.
-
-**How to detect:**
-- `@code_warntype` on `step_along_trajectory!` or `apply_lindbladian!` -- red `Any` annotations on precomputed_data access.
-- Allocation regression in the hot path.
-
-**How to prevent:**
-- When consolidating, either (a) keep the `PD` parametrization: `struct UnifiedWorkspace{T, PD<:NamedTuple}`, or (b) extract all hot-path values into concrete fields at construction time (the `TrajectoryFramework` pattern).
-- Never access `precomputed_data` fields inside a loop that runs per-frequency or per-trajectory-step.
-- The `KrylovWorkspace{T,PD}` pattern is the model to follow.
-
-**Which phase:** Workspace consolidation phase. Design decision at the start, verified by `@code_warntype` after.
-
----
-
-### MOD-05: Over-Parameterization Making the Config Hierarchy Unusable
-
-**What goes wrong:**
-The proposed new config type `Config{S,D,DB,T}` has 4 type parameters: Simulation, Domain, DetailedBalance variant, and Float type. This is already borderline for Julia ergonomics. If additional parameters are added (e.g., `Config{S,D,DB,T,LC}` for linear combination variant), the type becomes unwieldy:
-1. Every function signature must carry `where {S,D,DB,T}` constraints.
-2. Method specialization explodes: 4 simulations x 4 domains x 2 DB variants x 1 float type = 32 potential specializations per method.
-3. Error messages become incomprehensible: `MethodError: no method matching foo(::Config{ThermalizeSimulation, TimeDomain, KMS, Float64})`.
-4. Construction becomes verbose.
-
-**How to detect:**
-- User frustration at the API level.
-- Method ambiguity errors when new methods are added.
-- Compile time increases from excessive specialization.
-
-**How to prevent:**
-- Limit to 2-3 type parameters maximum. Use the domain singleton for dispatch (already a type parameter). Use DB as a type tag only if GNS vs KMS affects hot-path method selection; otherwise, make it a runtime field.
-- The current pattern of 4 separate structs (`LiouvConfig`, `LiouvConfigGNS`, `ThermalizeConfig`, `ThermalizeConfigGNS`) is verbose but has no parametric complexity. The new hierarchy should reduce struct count without adding more than one new type parameter.
-- Consider trait-based dispatch (e.g., `is_gns(config)::Bool` or `detailed_balance_type(config)::Symbol`) instead of type-parameterization for the DB variant. Reserve type parameters for things that affect compilation (element type, domain).
-- Prototype the API before implementing -- write the function signatures first, then design the types.
-
-**Which phase:** Type hierarchy redesign phase.
-
----
-
-### MOD-06: Losing @inline Annotations During Function Extraction
-
-**What goes wrong:**
-Several hot-path functions have explicit `@inline` annotations:
-- `_krylov_oft!` (krylov_matvec.jl:11)
-- `_norm2` (trajectories.jl:344)
-- `_accumulate_density_matrix!` (trajectories.jl:346)
-- `_prefactor_view` (nufft.jl:93)
-- `_apply_coherent_unitary!` (jump_workers.jl:145)
-
-When extracting these into shared utility files or deduplicating them, if the `@inline` annotation is lost, the compiler may choose not to inline them. For small functions called millions of times in the inner loop (like `_norm2`), this adds function call overhead and prevents SIMD and constant propagation across the call boundary.
-
-**How to detect:**
-- `@code_native` on the hot-path caller -- if the small function is not inlined, you will see a `call` instruction to it.
-- Benchmark regression.
-
-**How to prevent:**
-- When moving a function, copy the `@inline` annotation with it.
-- Add a comment `# @inline: required for hot path` to every `@inline`-annotated function so reviewers know it is intentional.
-- After deduplication, verify inlining with `@code_native` on the callers.
-
-**Which phase:** Deduplication phase. Trivial to prevent with attention; hard to debug if missed.
+**Which phase:** Mixing time extrapolation phase.
 
 ---
 
 ## Minor Pitfalls
 
-Issues that cause inconvenience or technical debt but not correctness problems.
+Issues that cause inconvenience or suboptimal performance but not incorrect results.
 
 ---
 
-### MIN-01: Export List Staleness After File Reorganization
+### MIN-01: Threading Threshold Too Low -- Overhead Dominates for Small Systems
 
 **What goes wrong:**
-`QuantumFurnace.jl` has a large export list (lines 29-100) organized by functional area. After reorganizing files, exported symbols may be defined in different files than expected, or new symbols from consolidated code may not be exported. Downstream code using `using QuantumFurnace` will silently lose access to symbols that were previously exported.
+For 2-3 qubit systems (dim = 4-8), the omega-loop has `2^num_energy_bits` frequency points (typically 16-64). Spawning Julia tasks, distributing work, and merging accumulators has overhead (microseconds). The per-frequency computation is a few small matrix multiplies (dim x dim, so 4x4 or 8x8) which take nanoseconds. Threading overhead exceeds computation time, making the threaded path slower than serial.
 
-**How to prevent:**
-- After every file reorganization, run `test_aqua.jl` (which checks for unbound exports).
-- Maintain the export list grouped by functional area with comments indicating which file defines each group.
+**Prevention:**
+- Add a minimum work threshold: `use_threading = length(energy_labels) * dim^2 >= THREADING_THRESHOLD`. Suggested threshold: `dim^2 >= 32^2 = 1024` (i.e., dim >= 32, or 5+ qubits). Below this, run the omega-loop serially.
+- Make the threshold configurable via a keyword argument with a sensible default.
+- The trajectory engine does not have this problem because each trajectory takes many steps (thousands of matrix multiplies), so the per-trajectory work always exceeds threading overhead.
 
-**Which phase:** File reorganization phase.
+**Which phase:** Omega-loop threading phase.
 
 ---
 
-### MIN-02: Git History Loss from File Renames
+### MIN-02: save_every Breaks Existing Plotting and Analysis Scripts
 
 **What goes wrong:**
-If files are renamed AND modified in the same commit, `git log --follow` cannot track the rename. This makes it impossible to trace the history of performance-critical code back to when allocation optimizations were introduced.
+The existing `ThermalizeResults` stores `trace_distances::Vector{T}` and `time_steps::Vector{T}` with one entry per DM step. Downstream analysis code (plotting, convergence diagnostics) may assume `length(trace_distances) == num_steps + 1`. Introducing save_every changes this to `length(trace_distances) == div(num_steps, save_every) + 1`, breaking any code that indexes by step number.
 
-**How to prevent:**
-- Rename files in pure-rename commits (no content changes). Then modify content in subsequent commits.
-- Use `git mv old.jl new.jl` explicitly.
-- Verify with `git diff --stat` that the rename commit shows `rename` not `delete+add`.
+**Prevention:**
+- Default save_every to 1 for backward compatibility. Users opt-in to reduced saving.
+- Store `save_every` in the results struct so downstream code can reconstruct the step-to-save mapping.
+- Update the results BSON serialization (results.jl) to include the new field.
+- Add the `save_every` field as a Union{Nothing, Int} defaulting to nothing (meaning 1) for backward compatibility with old BSON files.
 
-**Which phase:** File reorganization phase. One commit per rename.
+**Which phase:** save_every implementation phase.
 
 ---
 
-### MIN-03: Test Runtime Blowup from Fixture Duplication
+### MIN-03: Memory Spike from Per-Jump Precomputed Matrices at Large Scale
 
 **What goes wrong:**
-The test suite computes expensive fixtures once at `include("test_helpers.jl")` time: `make_test_system()` builds full 4-qubit and 3-qubit Hamiltonians, computes eigenstates, creates jump operators, builds Trotter objects. This takes several seconds. If test restructuring causes fixtures to be recomputed per-file or per-testset, the test suite runtime could increase dramatically.
+Per-jump precomputation stores 3 dim-by-dim matrices (K0, U_residual, R) per jump operator. The number of jump operators scales linearly with the number of qubits (typically `n_qubits` Pauli operators). Memory usage:
 
-**How to prevent:**
-- Keep the "compute once, share everywhere" pattern via module-level `const` values.
-- If splitting into sub-test-modules, pass fixtures as arguments rather than recomputing.
-- Time the full test suite before and after restructuring; flag changes that increase runtime by >20%.
+| n_qubits | dim | n_jumps | Memory per jump | Total |
+|----------|-----|---------|-----------------|-------|
+| 3 | 8 | 6 | 3 KB | 18 KB |
+| 4 | 16 | 8 | 12 KB | 96 KB |
+| 6 | 64 | 12 | 192 KB | 2.3 MB |
+| 8 | 256 | 16 | 3 MB | 48 MB |
+| 10 | 1024 | 20 | 48 MB | 960 MB |
 
-**Which phase:** Test restructure phase.
+At 10 qubits, storing per-jump precomputed data approaches 1 GB. This is borderline acceptable but surprising for users who do not expect the precomputation to use more memory than the density matrix itself (16 MB at dim=1024).
+
+**Prevention:**
+- Add a warning when total precomputed memory exceeds a threshold (100 MB): `@warn "Per-jump precomputation allocating $(total_mb) MB. Consider using lazy recomputation for systems this large."`.
+- Optionally provide a `precompute_jumps::Bool` flag in the API. When false, fall back to per-step recomputation (current behavior).
+- For large systems, consider precomputing only K0 and R, and computing U_residual lazily if the memory cost is dominated by the three matrices.
+
+**Which phase:** Per-jump precomputation phase.
 
 ---
 
 ## Phase-Specific Warning Summary
 
-| Phase | Likely Pitfall | Severity | Key Mitigation |
-|-------|---------------|----------|----------------|
-| Type hierarchy redesign | CRIT-04: BSON breakage from struct changes | Critical | Update serialization layer FIRST, before changing any struct |
-| Type hierarchy redesign | CRIT-02: Union{T,Nothing} in hot paths | Critical | Maintain framework extraction pattern for hot-path values |
-| Type hierarchy redesign | MOD-05: Over-parameterization | Moderate | Cap at 2-3 type params; prototype signatures first |
-| Workspace consolidation | CRIT-01: Abstract field boxing | Critical | Parameterize on concrete element type; test with @allocated |
-| Workspace consolidation | CRIT-06: Thread safety regression | Critical | Immutable shared data, mutable per-thread scratch |
-| Workspace consolidation | MOD-04: precomputed_data::Any spreading | Moderate | Parameterize on NamedTuple type OR extract to concrete fields |
-| Deduplication | CRIT-03: Lazy wrapper allocations in BLAS | Critical | Use BLAS.gemm! with char flags, not adjoint wrappers |
-| Deduplication | CRIT-05: Closure capture allocation | Critical | Always use `where {F}` for callable parameters |
-| Deduplication | MOD-06: Lost @inline annotations | Moderate | Copy annotations; verify with @code_native |
-| Test restructure | MOD-01: @allocated + testset interaction | Moderate | Function barrier pattern; consider AllocCheck.jl |
-| Test restructure | MOD-02: Tolerance drift from split fixtures | Moderate | Single fixture file; named constants; never hardcode atol |
-| Test restructure | MIN-03: Runtime blowup from re-fixture | Minor | Compute once, share everywhere |
-| File reorganization | MOD-03: Include order breakage | Moderate | Draw dependency graph; one rename per commit; smoke test |
-| File reorganization | MIN-01: Stale export list | Minor | Run Aqua.jl after every reorganization |
-| File reorganization | MIN-02: Git history loss | Minor | Pure rename commits; use git mv |
+| Phase | Pitfall | Severity | Key Mitigation |
+|-------|---------|----------|----------------|
+| Per-jump precomputation | CRIT-02: Stale eigendecomposition | Critical | Verify R is state-independent; assert S eigenvalues > -eps |
+| Per-jump precomputation | MOD-05: Changed numerical results | Moderate | Regression test with loose tolerance; keep recomputed path for validation |
+| Per-jump precomputation | MIN-03: Memory at large scale | Minor | Warning + optional lazy fallback |
+| Omega-loop threading | CRIT-01: BLAS global thread state | Critical | try/finally save/restore pattern; never mix BLAS threading strategies |
+| Omega-loop threading | CRIT-03: Race conditions in accumulators | Critical | Per-task accumulator pattern; do NOT use threadid() |
+| Omega-loop threading | CRIT-04: False sharing | Critical | Independently allocated matrices, not 3D array views |
+| Omega-loop threading | CRIT-05: BLAS oversubscription | Critical | set_num_threads(1) before threading; min_freqs threshold |
+| Omega-loop threading | CRIT-06: Hermitianize placement | Critical | Hermitianize after merge, matching serial semantics |
+| Omega-loop threading | MOD-04: GC pauses | Moderate | Zero-allocation hot path; precompute eigen |
+| Omega-loop threading | MIN-01: Threading threshold | Minor | Skip threading for dim < 32 |
+| save_every | MOD-03: Off-by-one errors | Moderate | Copy trajectory formula; assertion on array lengths |
+| save_every | MIN-02: Breaking downstream code | Minor | Default save_every=1; store in results |
+| Mixing time extrapolation | MOD-01: Model mismatch | Moderate | R^2 threshold; skip_initial; cross-validate with Krylov |
+| Mixing time extrapolation | MOD-02: Extrapolation reliability | Moderate | Extrapolation ratio limit; propagate gap_se to T_mix |
+| Mixing time extrapolation | MOD-06: Singular Jacobian | Moderate | Quality gates; fallback to log-linear estimate |
 
 ---
 
-## Recommended Verification Gates Per Phase
+## Recommended Phase Ordering Based on Pitfall Dependencies
 
-### After Type Hierarchy Redesign
-1. `test_results.jl` passes (BSON round-trip for both old and new format)
-2. `test_regression.jl` passes (frozen reference data loads)
-3. `_load_test_hamiltonian` in `test_helpers.jl` still loads hamiltonian BSON files
-4. `@code_warntype` on `step_along_trajectory!` shows no red annotations
-5. All 600+ existing tests pass with no tolerance changes
+1. **Per-jump precomputation** first: This is the foundation. It eliminates the per-step `eigen()` call, which is needed before threading the omega-loop (otherwise each thread's eigen call would allocate and trigger GC). Also provides the biggest single-threaded speedup.
 
-### After Workspace Consolidation
-6. `test_allocation.jl` passes (all allocation bounds)
-7. `test_krylov_matvec.jl` passes (`@test allocs == 0` for all domains)
-8. `test_threading.jl` passes (bitwise determinism with `==`)
-9. `test_workspace_independence.jl` passes
-10. No `mutable struct` shared across `Threads.@spawn` boundaries
+2. **save_every** second: Simple feature, independent of threading. Produces the time series data needed for mixing time extrapolation. Off-by-one bugs are easier to debug in serial code.
 
-### After Deduplication
-11. `test_allocation.jl` passes (unchanged thresholds)
-12. `test_krylov_matvec.jl` passes (unchanged `allocs == 0`)
-13. Benchmark: no >5% regression in `step_along_trajectory!` or `apply_lindbladian!`
-14. `@code_warntype` on all extracted functions shows concrete types
-15. All `@inline` annotations preserved (grep count matches pre-dedup)
+3. **Omega-loop threading** third: Builds on precomputed channels (no eigen in hot path = allocation-free threading body). BLAS thread management pattern is well-established from trajectory engine.
 
-### After File Reorganization
-16. `using QuantumFurnace` succeeds in fresh Julia REPL
-17. `test_aqua.jl` passes (no unbound exports)
-18. All 600+ tests pass
-19. `git log --follow` works for renamed files (verify for 3+ key files)
-
-### After Test Restructure
-20. All 600+ tests pass
-21. Test suite runtime within 20% of pre-refactor baseline
-22. No hardcoded tolerances outside `test_helpers.jl` (grep verification)
-23. All `@allocated` tests wrapped in function barriers (grep verification)
+4. **Mixing time extrapolation** last: Depends on save_every for efficient data collection. Depends on understanding the DM convergence behavior, which benefits from having the threaded DM engine for faster iteration.
 
 ---
 
 ## Sources
 
-- [Julia Performance Tips -- Abstract Type Fields and Parametric Types](https://docs.julialang.org/en/v1/manual/performance-tips/) (HIGH confidence)
-- [Julia Issue #50796 -- @allocated Spurious Allocations in @testset](https://github.com/JuliaLang/julia/issues/50796) (HIGH confidence)
-- [AllocCheck.jl -- Static Allocation Analysis](https://github.com/JuliaLang/AllocCheck.jl) (HIGH confidence)
-- [Julia Discourse -- Abstract Type Field Boxing Allocations](https://discourse.julialang.org/t/approach-to-avoid-memory-allocation-with-struct-with-abstract-type-fields/24822) (MEDIUM confidence)
-- [Julia Discourse -- Allocations for Abstract Field of Struct](https://discourse.julialang.org/t/allocations-for-abstract-field-of-struct/96088) (MEDIUM confidence)
-- [BSON.jl -- Serialization by Field Order](https://github.com/JuliaIO/BSON.jl) (MEDIUM confidence)
-- [Julia Discourse -- Circular Dependencies in include()](https://discourse.julialang.org/t/circular-dependency/35571) (MEDIUM confidence)
-- Direct codebase analysis of QuantumFurnace.jl src/ and test/ directories (HIGH confidence)
+- [Julia Multi-Threading Documentation](https://docs.julialang.org/en/v1/manual/multi-threading/) (HIGH confidence -- official docs)
+- [Julia PSA: Don't Use threadid()](https://julialang.org/blog/2023/07/PSA-dont-use-threadid/) (HIGH confidence -- official Julia blog)
+- [Julia for HPC: Multithreading](https://enccs.github.io/julia-for-hpc/multithreading/) (MEDIUM confidence -- ENCCS/community resource)
+- [BLAS Thread Count vs Julia Thread Count](https://discourse.julialang.org/t/blas-thread-count-vs-julia-thread-count/57197) (MEDIUM confidence -- Discourse discussion)
+- [Document the interaction of Julia and BLAS threads, Issue #44201](https://github.com/JuliaLang/julia/issues/44201) (MEDIUM confidence -- open issue with developer discussion)
+- [MKL.jl Issue #106: Warn about NUM_THREADS behavior](https://github.com/JuliaLinearAlgebra/MKL.jl/issues/106) (MEDIUM confidence -- MKL-specific but pattern applies)
+- [Threads.threadid() and Task Migration -- Sharp Edge](https://discourse.julialang.org/t/sharp-edge-with-threads-threadid-and-task-migration/124550) (MEDIUM confidence -- community report)
+- [OhMyThreads.jl: Thread-Safe Storage](https://juliafolds2.github.io/OhMyThreads.jl/stable/literate/tls/tls/) (MEDIUM confidence -- alternative threading library docs)
+- [False Sharing in Multi-threading](https://blog.jling.dev/blog/false_share/) (MEDIUM confidence -- Julia-specific blog post)
+- [Exponential Data Fitting, SDSU Research Report](https://www.csrc.sdsu.edu/research_reports/CSRSR2009-04.pdf) (MEDIUM confidence -- academic reference)
+- [LsqFit.jl Tutorial](https://julianlsolvers.github.io/LsqFit.jl/latest/tutorial/) (MEDIUM confidence -- official LsqFit docs)
+- Direct codebase analysis of QuantumFurnace.jl v2.0 src/ and test/ directories (HIGH confidence)

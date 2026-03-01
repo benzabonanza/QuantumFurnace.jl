@@ -1,835 +1,644 @@
-# Feature Landscape: QuantumFurnace.jl Codebase Restructure
+# Feature Landscape: v2.1 Speedup & Mixing Time
 
-**Domain:** Refactoring a Julia quantum Gibbs sampling simulation package
-**Researched:** 2026-02-25
-**Confidence:** HIGH (based on exhaustive reading of all 28 source files, all structs, all duplication sites)
+**Domain:** Performance optimization and mixing time estimation for quantum Gibbs sampling simulator
+**Researched:** 2026-03-01
+**Confidence:** HIGH (based on exhaustive reading of all source files, staging code, supplementary papers, and error catalogue)
 
 ---
 
 ## Scope
 
-This document defines the **concrete architectural features** for restructuring QuantumFurnace.jl. Every recommendation below is grounded in exact field names, function signatures, and line counts from the current codebase. The restructure touches:
+This document defines the concrete features for the v2.1 milestone, which has two pillars:
 
-1. **Config type hierarchy** -- 4 structs to 1 parametric struct
-2. **Workspace consolidation** -- 5 workspace types to 2-3
-3. **Prefactor/OFT/channel deduplication** -- 16+ copy-pasted code blocks to single-source functions
-4. **Result struct cleanup** -- 4+ result types with uniform save capability
-5. **File renaming** -- PRE/MID/POST logical grouping in flat `src/`
-6. **Test deduplication** -- factory patterns replacing ad-hoc setup code
+1. **Performance:** Per-jump CPTP channel precomputation, multi-threaded frequency summation, BLAS thread management, and `save_every` for trace distance computation in `run_thermalize`.
+2. **Mixing Time Estimation:** Fit the trace distance convergence curve `d(t) ~ A*exp(-gap*t) + C` to estimate mixing time, with optional extrapolation to a target epsilon without running full convergence.
+
+All recommendations are grounded in the existing codebase (`src/furnace.jl`, `src/jump_workers.jl`, `src/trajectories.jl`, `src/staging/fitting.jl`), the theoretical papers (Chen et al. 2023 Theorem III.1, Proposition II.3; Ramkumar & Soleimanifar 2024), and the comprehensive error catalogue (`supplementary-informations/error_catalogue_spectral_gap_estimation.md`).
 
 ---
 
-## Current State: What Exists
+## Current State: What Exists and What's Missing
 
-### Config Structs (4 structs, 90% identical fields)
+### The Hot Loop Problem in `run_thermalize`
 
-| Struct | Lines | Unique Fields | Purpose |
-|--------|-------|---------------|---------|
-| `LiouvConfig{D,T}` | 73-88 | none (base) | Lindbladian spectral analysis |
-| `LiouvConfigGNS{D,T}` | 99-114 | `with_coherent=false` enforced | GNS variant of above |
-| `ThermalizeConfig{D,T}` | 143-162 | `mixing_time`, `delta` | DM thermalization simulation |
-| `ThermalizeConfigGNS{D,T}` | 174-192 | `with_coherent=false` + `mixing_time`, `delta` | GNS variant of above |
+The current `_jump_contribution!` for DM thermalization (jump_workers.jl, lines 194-440) recomputes everything from scratch **every single delta-step**:
 
-All 4 share these 14 fields verbatim: `num_qubits`, `with_coherent`, `with_linear_combination`, `domain`, `beta`, `sigma`, `gaussian_parameters`, `a`, `b`, `num_energy_bits`, `t0`, `w0`, `eta`, `num_trotter_steps_per_t0`.
+1. Iterates over all Bohr frequencies (or energy labels) for the selected jump
+2. Computes OFT: `scratch.jump_oft = eigenbasis .* gaussian_filter`
+3. Accumulates `scratch.R += rate^2 * L'L` (sum over all frequencies)
+4. Accumulates `scratch.rho_jump += delta * rate^2 * L * rho * L'` (sum over all frequencies)
+5. Calls `_finalize_kraus_step!` which does eigendecomposition of S for PSD guard
 
-The abstract hierarchy is: `AbstractConfig{D,T}` > `AbstractLiouvConfig{D,T}` / `AbstractThermalizeConfig{D,T}`.
+Steps 1-3 are **independent of the current density matrix** -- they depend only on the jump operator and static parameters. Yet they are recomputed at every step. The trajectory simulator already solved this in `_build_trajectory_workspace` (trajectories.jl, lines 61-152) where `Rs`, `K0s`, and `U_residuals` are precomputed once per jump and reused.
 
-### Workspace Types (5 types)
+### The `save_every` Gap
 
-| Workspace | Location | Fields | Used By |
-|-----------|----------|--------|---------|
-| `LindbladianWorkspace{T}` | structs.jl:21 | Id, jump_tmp, jump_conj, jump_dag_jump, jump2_jump1 (5 matrices) | `construct_lindbladian` vectorized Liouvillian |
-| `KrausScratch{T}` | kraus.jl:1 | jump_oft, LdagL, R, rho_jump, K0, tmp1, tmp2, rho_next (8 matrices) | `_jump_contribution!` for DM thermalization |
-| `KrylovWorkspace{T,PD}` | krylov_workspace.jl:43 | precomputed_data, B_total, jumps, jump_eigenbases, jump_hermitian, jump_oft, tmp1, tmp2, LdagL, rho_out + 9 channel/G fields (23 fields) | `apply_lindbladian!`, `apply_delta_channel!` |
-| `TrajectoryWorkspace{T}` | trajectories.jl:4 | jump_oft, psi_tmp, Rpsi, rho_acc (3 matrices + 1 vector) | `step_along_trajectory!` |
-| `OFTCaches{T}` | structs.jl:347 | prefactors, U, temp_op (deprecated) | Legacy OFT functions only |
+The trajectory simulator already has `save_every` (trajectories.jl, line 576+) controlling how often observable measurements are saved. But `run_thermalize` (furnace.jl, lines 143-223) computes trace distance at **every single step** via:
 
-### Result Types (5+ types)
+```julia
+dist = trace_distance_h(Hermitian(evolving_dm), gibbs)
+push!(trace_distances, dist)
+@printf("Dist to Gibbs: %s\n", dist)
+```
 
-| Result | Location | Fields | Serializable |
-|--------|----------|--------|-------------|
-| `LindbladianResult{T}` | structs.jl:259 | liouvillian, fixed_point, gap_mode, spectral_gap | No (manual) |
-| `DMSimulationResult{T}` | structs.jl:239 | final_dm, trace_distances, time_steps | No (manual) |
-| `KrylovGapResult{T}` | krylov_eigsolve.jl:40 | eigenvalues, spectral_gap, fixed_point, gap_mode, converged, matvec_count, num_restarts, normres, channel_eigenvalues, delta_used | No |
-| `TrajectoryResult{T}` | trajectories.jl:23 | rho_mean, n_trajectories, seed, times, measurements_mean, convergence | Via ExperimentResult |
-| `ObservableTrajectoryResult{T}` | trajectories.jl:37 | times, measurements_mean, n_trajectories, seed, rho_mean | No |
-| `ExperimentResult{C,T}` | results.jl:18 | config, trajectory_result, hamiltonian_params, metadata | Yes (BSON) |
-| `SpectralGapResult` | gap_estimation.jl:37 | gap, gap_ci, gap_se, best_observable, per_observable, ... | No |
+The `trace_distance_h` call involves eigendecomposition (O(d^3)) which is expensive relative to the CPTP channel application for large d.
 
-### Duplication Sites (measured)
+### Existing Fitting Infrastructure
 
-| Pattern | Occurrences | Files |
-|---------|-------------|-------|
-| EnergyDomain prefactor formula | 8 | jump_workers, krylov_workspace, krylov_matvec, krylov_eigsolve, trajectories |
-| Time/TrotterDomain prefactor formula | 8 | same 5 files |
-| Hermitian half-grid branch (`w_raw > 1e-12 && continue`) | 16 | 5 files |
-| `hermitianize!(scratch.R)` after R accumulation | 5 | jump_workers, trajectories |
-| R accumulation loop (Energy) | 3 | jump_workers (2x), krylov_workspace |
-| R accumulation loop (Time/Trotter) | 3 | jump_workers (2x), krylov_workspace |
-| `_thermalize_to_liouv_config` field-by-field copy | 2 | krylov_workspace.jl |
-| Sandwich function variants | 6 | krylov_matvec.jl (4 are just transposes of 2) |
-| `_precompute_coherent_*` near-identical domain branches | 3 functions | coherent.jl |
-| `_select_b_plus_calculator` (KMS-only, no GNS guard) | 1 | furnace_utensils.jl |
+`src/staging/fitting.jl` already contains:
+- `fit_exponential_decay(times, values; skip_initial, p0, level)` -- single-exponential A*exp(-gap*t)+C via LsqFit.jl
+- `_log_linear_initial_guess` -- auto-initialization from data
+- `FitResult` struct with gap, amplitude, offset, CIs, R-squared, convergence status
+
+This is currently in `src/staging/` (dormant), not included in the active module. It was built for trajectory-based spectral gap estimation (fitting observable decay curves). The mixing time estimation feature needs to **reactivate and adapt** this for DM trace distance curves.
+
+### What the Papers Say About Mixing Time
+
+**Chen et al. 2023, Proposition II.3:** If the anti-Hermitian defect ratio is small (lambda_1(H)/lambda_gap(H) <= 1/100), then:
+
+```
+t_mix(L) <= 3 * ln(3 * ||rho^{-1/2}||) / lambda_gap(H)
+```
+
+This gives the theoretical mixing time bound in terms of the spectral gap and the Gibbs state condition number.
+
+**Operational definition:** The mixing time to precision epsilon is `t_mix(epsilon) = inf{t : ||e^{tL}[rho_0] - rho_beta||_1 <= epsilon}`. For exponential convergence, `d(t) = d(0) * exp(-lambda_gap * t)`, so:
+
+```
+t_mix(epsilon) = (1/lambda_gap) * ln(d(0)/epsilon)
+```
+
+This is exactly what fitting gives us: extract `lambda_gap` from the trace distance curve, then extrapolate.
+
+**Ramkumar & Soleimanifar 2024:** The mixing time bound is:
+
+```
+t_mix(L_beta) <= O(beta*||H|| + log(n)) / lambda_gap(L_beta)
+```
+
+The spectral gap `lambda_gap` depends on the jump operators, energy resolution, and temperature. For graph-local jumps on cyclic graphs, `lambda_gap = Theta(n^{-3})` (Theorem 2.1). For unitary design jumps on bounded-degree systems, `lambda_gap = Omega(1)` (Theorem 2.2).
+
+**Key insight for feature design:** The trace distance `d(t) = ||rho(t) - rho_beta||_1` does NOT perfectly follow a single exponential in practice because:
+
+1. **Multiple modes:** The exact decay is a sum of exponentials from all Lindbladian eigenvalues (error catalogue, Error 6)
+2. **Burn-in transient:** Early steps may not follow exponential decay if the initial state has strong overlap with fast-decaying modes
+3. **Delta-step Trotterization bias:** The effective decay rate has O(delta) systematic bias (error catalogue, Error 1)
+4. **DM vs trajectory:** For DM evolution, there is no trajectory noise -- the trace distance is deterministic. This eliminates Errors 2, 3 from the error catalogue (those affect trajectory-based estimation only)
+
+The DM trace distance curve is a **clean, deterministic signal** -- much better suited for exponential fitting than noisy trajectory-averaged observables. This is a key advantage of doing mixing time estimation from `run_thermalize` rather than from trajectories.
 
 ---
 
 ## Table Stakes
 
-Features that MUST be in this restructure. Without these, the refactor is incomplete and the codebase remains duplicated.
+Features users expect. Missing = milestone feels incomplete.
 
-### TS-01: Unified Config Struct -- `SimConfig{S,D,DB,T}`
+### TS-01: Per-Jump CPTP Channel Precomputation
 
 | Aspect | Detail |
 |--------|--------|
-| **Why Expected** | 4 structs with 14 identical fields is the #1 maintenance burden. Adding DLL variant would require 2 more structs (6 total). |
-| **Complexity** | HIGH -- touches every function signature, all dispatch, serialization, tests |
-| **Notes** | This is the keystone feature; everything else depends on it |
+| **Why Expected** | Trajectory simulator already does this. DM simulator recomputing R, K0, U_residual every step is an obvious inefficiency. |
+| **Complexity** | MEDIUM |
+| **Notes** | Most impactful single optimization for run_thermalize |
 
-**Concrete design:**
+**What to build:**
+
+Precompute `R^a`, `K0^a`, `U_residual^a`, and `U_B^a` (coherent unitary) once per jump operator before the main loop, following the exact pattern from `_build_trajectory_workspace` (trajectories.jl, lines 104-122):
 
 ```julia
-# --- Simulation type tags ---
-abstract type AbstractSimType end
-struct Lindblad <: AbstractSimType end    # was "Liouv"
-struct Thermalize <: AbstractSimType end
-struct KrylovSpectrum <: AbstractSimType end
-struct Trajectory <: AbstractSimType end
+# Precompute per-operator CPTP channel parts
+Rs = Vector{Matrix{CT}}(undef, n_jumps)
+K0s = Vector{Matrix{CT}}(undef, n_jumps)
+U_residuals = Vector{Matrix{CT}}(undef, n_jumps)
 
-# --- Detailed balance type tags ---
-abstract type AbstractDBType end
-struct KMS <: AbstractDBType end
-struct GNS <: AbstractDBType end
-# future: struct DLL <: AbstractDBType end
+for a in 1:n_jumps
+    _precompute_R([jumps[a]], ham_or_trott, config, precomputed_data, scratch)
+    R_a = copy(scratch.R)
+    R_a .*= (1.0 / p_jump)  # rescale_by_inv_prob
 
-# --- Single config struct ---
-@kwdef struct SimConfig{S<:AbstractSimType, D<:AbstractDomain, DB<:AbstractDBType, T<:AbstractFloat}
-    # === Physics (shared by ALL configs) ===
-    num_qubits::Int
-    beta::T
-    sigma::T
-    domain::D
+    (; K0, U_residual) = _build_cptp_channel(R_a, config.delta)
 
-    # === Linear combination parameters ===
-    with_linear_combination::Bool
-    gaussian_parameters::Tuple{Union{T,Nothing}, Union{T,Nothing}} = (nothing, nothing)
-    a::Union{T, Nothing} = nothing
-    b::Union{T, Nothing} = nothing
-
-    # === Discretization (required for Energy/Time/Trotter, nothing for Bohr) ===
-    num_energy_bits::Union{Int, Nothing} = nothing
-    t0::Union{T, Nothing} = nothing
-    w0::Union{T, Nothing} = nothing
-    eta::Union{T, Nothing} = nothing
-    num_trotter_steps_per_t0::Union{Int, Nothing} = nothing
-
-    # === Thermalization-specific (only for S <: Union{Thermalize, Trajectory}) ===
-    mixing_time::Union{T, Nothing} = nothing
-    delta::Union{T, Nothing} = nothing
+    Rs[a] = R_a
+    K0s[a] = K0
+    U_residuals[a] = U_residual
 end
 ```
 
-**Key decisions:**
-- `with_coherent` is **removed as a field**. It is derived: `has_coherent(::SimConfig{S,D,KMS}) = true`, `has_coherent(::SimConfig{S,D,GNS}) = false`. This eliminates the "GNS configs must have with_coherent=false" runtime guard entirely.
-- `mixing_time` and `delta` become optional fields (Union with Nothing). They are required for `Thermalize`/`Trajectory` simulation types and validated at construction via an inner constructor or `validate_config!`.
-- Four type parameters because: `S` selects simulation runner, `D` selects domain dispatch, `DB` selects detailed balance physics (alpha, transition, coherent), `T` is numeric precision.
+**What changes in the hot loop:**
 
-**Dispatch implications:**
-- `run_lindblad(config::SimConfig{Lindblad})` replaces `run_lindbladian(config::AbstractLiouvConfig)`
-- `run_thermalize(config::SimConfig{Thermalize})` replaces `run_thermalization(config::AbstractThermalizeConfig)`
-- `pick_transition(config::SimConfig{S,D,KMS})` replaces `pick_transition(config::LiouvConfig)` and `pick_transition(config::ThermalizeConfig)`
-- `pick_transition(config::SimConfig{S,D,GNS})` replaces `pick_transition(config::LiouvConfigGNS)` and `pick_transition(config::ThermalizeConfigGNS)`
-- `_precompute_data(config::SimConfig{S,EnergyDomain})` unifies all energy domain precomputation regardless of sim type
-- `has_coherent(::SimConfig{S,D,KMS}) where {S,D}` = true, eliminates the `with_coherent` flag
+The current `_jump_contribution!` for `Config{Thermalize}` does three things:
+1. Apply coherent unitary (already cached as `coherent_unitary_cache`)
+2. Compute R and rho_jump via frequency summation (the expensive part)
+3. Call `_finalize_kraus_step!` which builds K0/U_residual from R and applies the channel
 
-**DLL extensibility:** Adding DLL requires only `struct DLL <: AbstractDBType end` plus new `pick_transition(::SimConfig{S,D,DLL})` and `_pick_alpha(::SimConfig{S,D,DLL})` methods. Zero changes to existing code.
+With precomputation, step 2 reduces to looking up `Rs[idx]` and step 3 uses precomputed `K0s[idx]` and `U_residuals[idx]`. The **only per-step work** that depends on rho is:
+- `rho_jump = delta * sum_w rate^2(w) * L_w * rho * L_w'` (the dissipative sandwich)
+- `rho_next = K0 * rho * K0' + rho_jump + U_res * rho * U_res'` (the CPTP application)
 
-**Backward compatibility for serialization:** The `_config_to_dict` / `_reconstruct_config` in results.jl already uses string tags `"KMS"/"GNS"` and `"liouv"/"thermalize"`. Extend with `"lindblad"/"krylov_spectrum"/"trajectory"` for `S`, add `"DLL"` for `DB`.
+The R and eigendecomposition (most expensive parts) become one-time costs.
 
----
+**Critical subtlety -- rho_jump still needs frequency loop:**
 
-### TS-02: Prefactor Deduplication -- `domain_prefactor(config, gamma_norm_factor)`
+The rho_jump term `sum_w L_w * rho * L_w'` depends on rho, so it cannot be fully precomputed. However, R can be precomputed since `R = sum_w L_w' * L_w` is rho-independent. So we need:
 
-| Aspect | Detail |
-|--------|--------|
-| **Why Expected** | 16 occurrences of 2 formulas across 5 files. Bug in one = silent divergence. |
-| **Complexity** | LOW -- pure extraction, no logic changes |
-| **Notes** | Must be done BEFORE any other inner-loop refactoring |
+Option A: Keep the frequency loop for rho_jump, skip R accumulation, use precomputed K0/U_residual.
+Option B: Precompute the individual `L_w` operators and store them, then the frequency loop becomes BLAS sandwiches only.
 
-**Concrete design:**
+Option A is simpler and already captures the biggest win (eliminating the per-step eigendecomposition in `_finalize_kraus_step!`). Option B requires storing O(n_freq) matrices per jump, which may be memory-prohibitive.
 
-```julia
-# In a new file: src/prefactors.jl (PRE layer)
+**Recommendation: Option A.** Keep frequency loop for rho_jump only; precompute R, K0, U_residual. The eigendecomposition in `_build_cptp_channel` (the PSD square root of S) is the dominant cost being eliminated.
 
-"""
-    domain_prefactor(config::SimConfig{S,EnergyDomain}, gamma_norm_factor) -> Float64
+**Dependencies on existing code:**
+- `_precompute_R` already exists for Energy and Time/Trotter domains (jump_workers.jl, lines 193-300+)
+- `_build_cptp_channel` already exists (furnace_utensils.jl, lines 183-200)
+- Coherent unitary precomputation already exists via `_precompute_coherent_unitary` (furnace.jl, lines 180-181)
+- Pattern already proven in trajectory workspace construction
 
-Energy domain: w0 / (sigma * sqrt(2pi)) * gamma_norm_factor
-"""
-@inline function domain_prefactor(
-    config::SimConfig{S,EnergyDomain}, gamma_norm_factor::Real
-) where {S}
-    return config.w0 / (config.sigma * sqrt(2 * pi)) * gamma_norm_factor
-end
-
-"""
-    domain_prefactor(config::SimConfig{S,D}, gamma_norm_factor) -> Float64
-
-Time/Trotter domain: w0 * t0^2 * sigma * sqrt(2/pi) / (2pi) * gamma_norm_factor
-"""
-@inline function domain_prefactor(
-    config::SimConfig{S,D}, gamma_norm_factor::Real
-) where {S, D<:Union{TimeDomain, TrotterDomain}}
-    return config.w0 * config.t0^2 * (config.sigma * sqrt(2 / pi)) / (2 * pi) * gamma_norm_factor
-end
-```
-
-Every site that currently computes the prefactor inline becomes a call to `domain_prefactor(config, gamma_norm_factor)`. For trajectory framework hot paths where config access is avoided, the value is precomputed once at framework construction and stored as `scaled_prefactor::Float64` (already the pattern in `TrajectoryFramework`).
+**Edge case:** BohrDomain has a different R accumulation pattern using `alpha(bohr_freqs, nu_2)` Kossakowski matrices. The precomputation needs separate handling for BohrDomain but follows the same principle.
 
 ---
 
-### TS-03: Hermitian Half-Grid Iterator -- `foreach_energy_pair`
+### TS-02: Precomputed CPTP Application (Eliminate Per-Step Eigendecomposition)
 
 | Aspect | Detail |
 |--------|--------|
-| **Why Expected** | 16 copies of the hermitian branching pattern with half-grid iteration |
-| **Complexity** | MEDIUM -- needs careful closure design for zero allocations |
-| **Notes** | The biggest single source of code duplication |
+| **Why Expected** | `_finalize_kraus_step!` calls `_build_cptp_channel` which does `eigen(Hermitian(S))` every step. This O(d^3) eigendecomposition is the single most expensive per-step operation for d >= 32. |
+| **Complexity** | LOW (follows directly from TS-01) |
+| **Notes** | Once R is precomputed, K0 and U_residual are constants |
 
-**Concrete design:**
+**What changes:**
+
+Replace `_finalize_kraus_step!(evolving_dm, config.delta, scratch)` with a simpler function that uses precomputed K0 and U_residual:
 
 ```julia
-"""
-    foreach_energy_pair(f_pos, f_neg, energy_labels, is_hermitian)
-
-Iterate energy labels with hermitian half-grid optimization.
-- If is_hermitian: iterate w <= 0 only, call f_pos(w) and f_neg(w) for w > 0.
-- If !is_hermitian: iterate all w, call f_pos(w) only.
-
-Replaces 16 copies of the `if jump.hermitian ... for w_raw ... w_raw > 1e-12 && continue` pattern.
-"""
-@inline function foreach_energy_pair(
-    f_pos, f_neg, energy_labels::AbstractVector{<:Real}, is_hermitian::Bool
+function _apply_precomputed_channel!(
+    evolving_dm::Matrix{<:Complex},
+    K0::Matrix{<:Complex},
+    U_residual::Matrix{<:Complex},
+    rho_jump::Matrix{<:Complex},
+    scratch::ThermalizeScratch{<:Complex},
 )
-    if is_hermitian
-        @inbounds for w_raw in energy_labels
-            w_raw > 1e-12 && continue
-            w = abs(w_raw)
-            f_pos(w)
-            if w > 1e-12
-                f_neg(w)
+    # rho_next = K0 * rho * K0' + rho_jump + U_res * rho * U_res'
+    mul!(scratch.sandwich_tmp, K0, evolving_dm)
+    mul!(scratch.rho_next, scratch.sandwich_tmp, K0')
+    scratch.rho_next .+= rho_jump
+
+    mul!(scratch.sandwich_tmp, U_residual, evolving_dm)
+    mul!(scratch.rho_next, scratch.sandwich_tmp, U_residual', 1.0, 1.0)
+
+    hermitianize!(scratch.rho_next)
+    copyto!(evolving_dm, scratch.rho_next)
+    return evolving_dm
+end
+```
+
+This is 4 BLAS gemm calls (O(d^3) each) vs the current path which does those 4 calls PLUS an eigendecomposition. Net savings: one full eigendecomposition per step.
+
+---
+
+### TS-03: save_every for Trace Distance in run_thermalize
+
+| Aspect | Detail |
+|--------|--------|
+| **Why Expected** | Trajectory simulator already has this pattern. DM simulator computing trace_distance_h every step is wasteful for long runs. |
+| **Complexity** | LOW |
+| **Notes** | Direct pattern reuse from trajectory simulator |
+
+**What to build:**
+
+Add a `save_every::Int=1` parameter to `run_thermalize`. The trace distance computation and printf only execute when `step % save_every == 0`:
+
+```julia
+function run_thermalize(
+    jumps, config, hamiltonian, trotter=nothing;
+    initial_dm=nothing, rng=Random.default_rng(),
+    rescale_by_inv_prob=true,
+    save_every::Int=1,              # NEW
+)
+    # ... setup ...
+    num_steps = Int(ceil(config.mixing_time / config.delta))
+
+    # Pre-allocate with correct size
+    num_saves = div(num_steps, save_every) + 1
+    trace_distances = Vector{T}(undef, num_saves)
+    time_steps = Vector{T}(undef, num_saves)
+
+    save_idx = 1
+    trace_distances[1] = trace_distance_h(Hermitian(evolving_dm), gibbs)
+    time_steps[1] = 0.0
+    save_idx = 2
+
+    for step in 1:num_steps
+        # ... apply channel ...
+
+        if step % save_every == 0
+            dist = trace_distance_h(Hermitian(evolving_dm), gibbs)
+            trace_distances[save_idx] = dist
+            time_steps[save_idx] = step * config.delta
+            save_idx += 1
+            @printf("Step %d/%d, dist to Gibbs: %.6e\n", step, num_steps, dist)
+            if dist < convergence_cutoff
+                resize!(trace_distances, save_idx - 1)
+                resize!(time_steps, save_idx - 1)
+                break
             end
         end
-    else
-        @inbounds for w in energy_labels
-            f_pos(w)
-        end
     end
-    return nothing
+
+    # Trim to actual size
+    resize!(trace_distances, save_idx - 1)
+    resize!(time_steps, save_idx - 1)
+    # ...
 end
 ```
 
-This is a **do-block pattern** -- callers pass closures that capture their local variables. The closures must be typed (not `Any`) for zero-allocation. Julia's compiler specializes on closure types, so this is allocation-free when the closures are non-boxing.
+**Time steps alignment:** The returned `time_steps` vector should correspond to the saved trace distances. With `save_every=k`, time_steps are `[0, k*delta, 2k*delta, ...]`. This matches the trajectory simulator convention.
 
-**Example migration (from krylov_matvec.jl EnergyDomain `apply_lindbladian!`):**
+**Impact:** For n=6 (dim=64), `trace_distance_h` involves an eigendecomposition of a 64x64 matrix, roughly 0.1ms. With save_every=10, this reduces from (say) 10000 calls to 1000 calls, saving ~1 second. For n=8 (dim=256), the savings become significant.
+
+---
+
+### TS-04: Mixing Time Estimation via Exponential Fit
+
+| Aspect | Detail |
+|--------|--------|
+| **Why Expected** | This is the primary scientific deliverable of the milestone. Without it, the speedup features are optimization-only with no new capability. |
+| **Complexity** | MEDIUM |
+| **Notes** | Reactivates and adapts staging/fitting.jl |
+
+**What to build:**
+
+A function that takes the output of `run_thermalize` (trace distances and time steps) and fits `d(t) = A*exp(-gap*t) + C` to extract the effective spectral gap, then optionally extrapolates to a target epsilon.
 
 ```julia
-# BEFORE (17 lines per jump):
-for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
-    is_herm = ws.jump_hermitian[k]
-    if is_herm
-        for w_raw in energy_labels
-            w_raw > 1e-12 && continue
-            w = abs(w_raw)
-            _krylov_oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
-            scalar_w = prefactor * transition(w)
-            _accumulate_sandwich!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
-            if w > 1e-12
-                scalar_neg = prefactor * transition(-w)
-                _accumulate_sandwich_adj_L!(ws.rho_out, ws.jump_oft, rho, scalar_neg, ws)
-            end
-        end
-    else
-        for w in energy_labels
-            _krylov_oft!(ws.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
-            scalar_w = prefactor * transition(w)
-            _accumulate_sandwich!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
-        end
+struct MixingTimeEstimate
+    gap::Float64                          # fitted effective spectral gap
+    amplitude::Float64                    # A in A*exp(-gap*t)+C
+    offset::Float64                       # C (should be ~0 for trace distance to fixed point)
+    gap_ci::Tuple{Float64, Float64}       # confidence interval on gap
+    gap_se::Float64                       # standard error on gap
+    r_squared::Float64                    # goodness of fit
+    converged::Bool                       # LM convergence
+    t_mix_fitted::Float64                 # mixing time to offset C from fitted data
+    t_mix_extrapolated::Union{Nothing, Float64}  # extrapolated t_mix to target epsilon
+    target_epsilon::Union{Nothing, Float64}       # the target epsilon
+    fit_window::Tuple{Float64, Float64}           # (t_min, t_max) used for fitting
+end
+```
+
+**The fitting function:**
+
+```julia
+function estimate_mixing_time(
+    result::ThermalizeResults;
+    skip_initial::Float64 = 0.2,    # skip first 20% as burn-in
+    target_epsilon::Union{Nothing, Float64} = nothing,
+    extrapolate::Bool = false,
+) -> MixingTimeEstimate
+```
+
+**Burn-in detection (critical design decision):**
+
+The trace distance curve `d(t) = ||rho(t) - rho_beta||_1` during DM thermalization has three regimes:
+
+1. **Transient regime (burn-in):** Early steps where multiple Lindbladian modes contribute. The trace distance may even increase briefly if the initial state has poor overlap with the slow mode. The curve is not well-described by a single exponential.
+
+2. **Exponential regime:** After the fast modes have decayed, the trace distance follows `d(t) ~ A*exp(-lambda_gap*t) + C` where lambda_gap is the spectral gap.
+
+3. **Plateau regime:** The trace distance saturates at a floor set by the fixed-point accuracy (the deviation of the CPTP channel fixed point from the true Gibbs state). For KMS-BohrDomain this is ~1e-15; for TrotterDomain this is ~1e-8.
+
+**Approaches evaluated for burn-in detection:**
+
+| Approach | Pros | Cons | Recommendation |
+|----------|------|------|----------------|
+| Fixed fraction skip (skip_initial=0.2) | Simple, deterministic, no false positives | May skip too much or too little; not adaptive | Use as **default** |
+| Effective rate stabilization | Theoretically optimal; identifies the exact moment single-exp kicks in | Requires computing log-derivative which amplifies noise; for DM trace distance (noiseless) this is clean | Use as **validation** diagnostic, not as primary method |
+| Two-exponential fit (A1*exp(-g1*t) + A2*exp(-g2*t) + C) | Absorbs burn-in contamination; g1 gives true gap | Sensitive to initialization; 5-parameter fit needs more data | **Defer** to future milestone (already deferred from v1.4) |
+| Piecewise: fit only tail where d(t) < 0.1*d(0) | Robustly avoids transient; simple threshold | May lose too much data for short runs | Use as **fallback** |
+
+**Recommendation:** Use `skip_initial=0.2` as default. Add an optional `detect_burnin=false` flag that, when true, uses the effective rate method to automatically determine `t_min`. The effective rate method works well for noiseless DM data:
+
+```julia
+function _detect_burnin(times, trace_dists; lag=5, stability_threshold=0.1)
+    # Compute effective rate: lambda_eff(t) = -log(d(t+tau)/d(t)) / tau
+    # Find first t where lambda_eff stabilizes (relative variation < threshold
+    # over a window)
+    # Return that t as the burn-in cutoff
+end
+```
+
+**Extrapolation:**
+
+When `extrapolate=true` and `target_epsilon` is provided:
+
+```
+t_mix(epsilon) = -ln(epsilon / A) / gap
+```
+
+where A and gap come from the fit. This is valid when:
+- The fit has R^2 > 0.95 (good single-exponential fit)
+- The offset C is small relative to epsilon (C << epsilon)
+- The fitted gap is physically reasonable (gap > 0, gap_se / gap < 0.5)
+
+If any validity check fails, return `t_mix_extrapolated = nothing` with a warning.
+
+**Relationship to existing staging/fitting.jl:**
+
+The existing `fit_exponential_decay` does exactly what's needed. The mixing time estimation function wraps it with:
+1. Pre-processing: skip burn-in, select fit window, validate data quality
+2. Post-processing: compute mixing time from fitted gap, extrapolate if requested
+3. Quality gates: R^2 threshold, CI width check, offset sanity check
+
+The `FitResult` struct from staging/fitting.jl should be promoted from staging to active code and embedded within `MixingTimeEstimate`, or its fields replicated.
+
+---
+
+### TS-05: Multi-threaded BLAS for DM Thermalization
+
+| Aspect | Detail |
+|--------|--------|
+| **Why Expected** | The trajectory simulator already manages BLAS threads (BLAS.set_num_threads(1) during threaded execution). DM thermalization is single-threaded on Julia side, so it should use ALL BLAS threads for the dense matrix operations. |
+| **Complexity** | LOW |
+| **Notes** | May already be the default behavior, but explicit management is good practice |
+
+**What to build:**
+
+Ensure that during `run_thermalize`, BLAS has access to all available threads. The trajectory simulator explicitly sets `BLAS.set_num_threads(1)` to avoid oversubscription. The DM simulator should do the opposite:
+
+```julia
+function run_thermalize(...)
+    # Ensure BLAS uses all available threads for dense operations
+    blas_threads = BLAS.get_num_threads()
+    # No change needed if already at max; but if a prior trajectory run
+    # set it to 1, restore it
+    BLAS.set_num_threads(Sys.CPU_THREADS)
+    try
+        # ... main loop ...
+    finally
+        BLAS.set_num_threads(blas_threads)
     end
 end
-
-# AFTER (8 lines per jump):
-for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
-    foreach_energy_pair(energy_labels, ws.jump_hermitian[k]) do w
-        compute_jump_oft!(ws.jump_oft, eigenbasis, oft_source, w)
-        scalar_w = prefactor * transition(w)
-        _accumulate_sandwich!(ws.rho_out, ws.jump_oft, rho, scalar_w, ws)
-    end do w
-        scalar_neg = prefactor * transition(-w)
-        _accumulate_sandwich_adj_L!(ws.rho_out, ws.jump_oft, rho, scalar_neg, ws)
-    end
-end
 ```
 
-Actually, Julia's do-block syntax only supports one closure. A better pattern is:
+The main beneficiaries are the `mul!` calls in `_apply_precomputed_channel!` and the rho_jump sandwich. For dim=256 (n=8), multi-threaded BLAS can give 4-8x speedup on the matrix multiplications.
 
-```julia
-for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
-    foreach_energy_pair(energy_labels, ws.jump_hermitian[k],
-        w -> begin  # positive frequency action
-            compute_jump_oft!(ws.jump_oft, eigenbasis, oft_source, w)
-            _accumulate_sandwich!(ws.rho_out, ws.jump_oft, rho, prefactor * transition(w), ws)
-        end,
-        w -> begin  # negative frequency action (only for hermitian mirrors)
-            _accumulate_sandwich_adj_L!(ws.rho_out, ws.jump_oft, rho, prefactor * transition(-w), ws)
-        end
-    )
-end
-```
-
-The key constraint is that `ws.jump_oft` must already be computed by `f_pos` before `f_neg` reads it. The current code relies on this sequential ordering, and `foreach_energy_pair` preserves it by calling `f_pos(w)` then `f_neg(w)` in that order.
-
----
-
-### TS-04: Unified OFT Computation -- `compute_jump_oft!`
-
-| Aspect | Detail |
-|--------|--------|
-| **Why Expected** | `oft!`, `_krylov_oft!`, and inline NUFFT prefactor multiply are 3 ways to do the same thing |
-| **Complexity** | LOW -- merge to single dispatched function |
-| **Notes** | `_krylov_oft!` is slightly more efficient than `oft!` (uses `inv_4sigma2` precomputed) |
-
-**Concrete design:**
-
-```julia
-"""
-    compute_jump_oft!(out, eigenbasis, bohr_freqs, w, inv_4sigma2)
-
-EnergyDomain OFT: Gaussian filter in eigenbasis.
-    out[i,j] = eigenbasis[i,j] * exp(-(w - bohr_freqs[i,j])^2 * inv_4sigma2)
-"""
-@inline function compute_jump_oft!(
-    out::Matrix{T}, eigenbasis::Matrix{T},
-    bohr_freqs::Matrix{<:Real}, w::Real, inv_4sigma2::Real
-) where {T<:Complex}
-    @. out = eigenbasis * exp(-(w - bohr_freqs)^2 * inv_4sigma2)
-    return nothing
-end
-
-"""
-    compute_jump_oft!(out, eigenbasis, nufft_prefactors, w)
-
-Time/TrotterDomain OFT: NUFFT prefactor multiply.
-    out[i,j] = eigenbasis[i,j] * prefactor_view(nufft_prefactors, w)[i,j]
-"""
-@inline function compute_jump_oft!(
-    out::Matrix{T}, eigenbasis::Matrix{T},
-    nufft_prefactors::NUFFTPrefactors, w::Real
-) where {T<:Complex}
-    pf = _prefactor_view(nufft_prefactors, w)
-    @. out = eigenbasis * pf
-    return nothing
-end
-```
-
-The old `oft!(out, jump::JumpOp, ...)` is replaced because it accesses `jump.in_eigenbasis` (an abstractly-typed field causing boxing). The new version takes the concrete-typed `eigenbasis` matrix directly.
-
-The old `time_oft!` and `trotter_oft!` using `OFTCaches` are deprecated (marked so in code already). Remove them entirely; they exist only in `ofts.jl` for legacy test support. The tests can use `compute_jump_oft!` with the NUFFT path.
-
----
-
-### TS-05: Workspace Consolidation
-
-| Aspect | Detail |
-|--------|--------|
-| **Why Expected** | 5 workspace types with overlapping buffer names is confusing and wastes memory |
-| **Complexity** | HIGH -- touches every simulation path |
-| **Notes** | Must preserve zero-allocation hot paths |
-
-**Concrete target: 3 workspace types**
-
-**1. `SimWorkspace{T}` (replaces `KrausScratch` + `LindbladianWorkspace`)**
-
-The DM-level workspace for `run_lindblad` and `run_thermalize`. Both need dim x dim scratch matrices.
-
-```julia
-struct SimWorkspace{T<:Complex}
-    # Scratch matrices (dim x dim)
-    jump_oft::Matrix{T}      # A(omega) buffer
-    tmp1::Matrix{T}           # general scratch
-    tmp2::Matrix{T}           # general scratch
-    LdagL::Matrix{T}          # L'L product
-    R::Matrix{T}              # R accumulator (Thermalize only, zeroed per step)
-    rho_jump::Matrix{T}       # jump sandwich accumulator (Thermalize only)
-    K0::Matrix{T}             # I - alpha*R (Thermalize only)
-    rho_next::Matrix{T}       # output buffer
-
-    # Vectorized Liouvillian extras (Lindblad only)
-    Id::Matrix{T}             # identity
-    jump_conj::Matrix{T}      # conj(jump) for vectorization
-end
-```
-
-`LindbladianWorkspace` currently has 5 fields (Id, jump_tmp, jump_conj, jump_dag_jump, jump2_jump1). `KrausScratch` has 8 fields. The overlap is: `jump_tmp` = `jump_oft`, `jump_dag_jump` = `LdagL`. Combined: ~10 unique buffers. The `Lindblad`-specific ones (`Id`, `jump_conj`) are only used in vectorized Liouvillian construction, not in the hot path, so the small overhead of carrying them is acceptable.
-
-Constructor:
-```julia
-function SimWorkspace(::Type{T}, dim::Int; vectorized::Bool=false) where {T<:Complex}
-    # ... allocate all, skip Id/jump_conj if !vectorized
-end
-```
-
-**2. `KrylovWorkspace{T,PD}` (keep as-is, just remove channel duplication)**
-
-The Krylov workspace is already well-designed for its purpose. The only change is that `_accumulate_R_total!` and `_accumulate_jump_sandwich!` should call the unified `compute_jump_oft!` and `foreach_energy_pair` from the shared PRE layer instead of inlining them.
-
-The workspace should also drop the `jumps::Vector{JumpOp}` field (only used for external inspection) and keep only `jump_eigenbases`/`jump_hermitian` which are the concrete-typed hot-path fields.
-
-**3. `TrajectoryWorkspace{T}` (keep as-is)**
-
-Already minimal: `jump_oft`, `psi_tmp`, `Rpsi`, `rho_acc`. No changes needed. The trajectory hot path operates on state vectors, not density matrices, so it correctly has different buffer shapes.
-
-**Remove: `OFTCaches{T}`** -- deprecated, used only by `time_oft!` and `trotter_oft!` which are being removed.
-
----
-
-### TS-06: Unified R Accumulation -- `accumulate_R!`
-
-| Aspect | Detail |
-|--------|--------|
-| **Why Expected** | R computation appears in 3 places: `_precompute_R` (trajectories.jl x2 domains), `_accumulate_R_total!` (krylov_workspace.jl x3 domains). Same physics. |
-| **Complexity** | MEDIUM -- domain dispatch needed |
-| **Notes** | Uses `compute_jump_oft!` and `foreach_energy_pair` from TS-03/TS-04 |
-
-**Concrete design:**
-
-```julia
-"""
-    accumulate_R!(R, jump_eigenbases, jump_hermitian, precomputed_data, config, ham_or_trott)
-
-Accumulate R_total = sum_k sum_w rate^2(w) * L_kw' * L_kw into R.
-Dispatches on domain via config type parameter.
-"""
-function accumulate_R!(
-    R::Matrix{T},
-    eigenbases::Vector{Matrix{T}},
-    hermitian_flags::Vector{Bool},
-    precomputed_data,
-    config::SimConfig{S,EnergyDomain},
-    hamiltonian::HamHam,
-) where {T<:Complex, S}
-    (; transition, gamma_norm_factor, energy_labels) = precomputed_data
-    prefactor = domain_prefactor(config, gamma_norm_factor)
-    bohr_freqs = hamiltonian.bohr_freqs
-    inv_4sigma2 = 1.0 / (4 * config.sigma^2)
-
-    jump_oft = zeros(T, size(R)...)
-    LdagL = zeros(T, size(R)...)
-
-    for (k, eigenbasis) in enumerate(eigenbases)
-        foreach_energy_pair(energy_labels, hermitian_flags[k],
-            w -> begin
-                compute_jump_oft!(jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
-                mul!(LdagL, jump_oft', jump_oft)
-                @. R += prefactor * transition(w) * LdagL
-            end,
-            w -> begin
-                mul!(LdagL, jump_oft, jump_oft')
-                @. R += prefactor * transition(-w) * LdagL
-            end
-        )
-    end
-    hermitianize!(R)
-    return R
-end
-```
-
-The `_precompute_R` in trajectories.jl (which takes a `KrausScratch`) wraps this by pointing `eigenbases = [j.in_eigenbasis for j in jumps]`. The Krylov version already has `ws.jump_eigenbases`. Both call the same inner `accumulate_R!`.
-
----
-
-### TS-07: Sandwich Function Consolidation
-
-| Aspect | Detail |
-|--------|--------|
-| **Why Expected** | 6 sandwich functions in krylov_matvec.jl, but only 2 unique computations |
-| **Complexity** | LOW -- algebraic identity elimination |
-| **Notes** | The adjoint functions are literally identical to their non-adjoint counterparts |
-
-**Current situation:**
-- `_accumulate_sandwich!(out, L, rho, s, ws)` = `s * conj(L) * rho * L^T`
-- `_accumulate_sandwich_adj_L!(out, L, rho, s, ws)` = `s * L^T * rho * conj(L)`
-- `_accumulate_adjoint_sandwich!(out, L, rho, s, ws)` = `s * L^T * rho * conj(L)` -- **identical to `_adj_L`**
-- `_accumulate_adjoint_sandwich_adj_L!(out, L, rho, s, ws)` = `s * conj(L) * rho * L^T` -- **identical to base `_sandwich`**
-
-**Consolidation:** Keep exactly 2 functions:
-
-```julia
-"""Accumulate s * conj(L) * rho * L^T (forward sandwich / adjoint neg-freq)"""
-@inline function sandwich_forward!(out, L, rho, s, ws)
-
-"""Accumulate s * L^T * rho * conj(L) (forward neg-freq / adjoint sandwich)"""
-@inline function sandwich_adjoint!(out, L, rho, s, ws)
-```
-
-The 2-operator Bohr domain variant `_accumulate_sandwich_2op!` stays separate since it takes two different operators A and B_dag.
-
----
-
-### TS-08: Result Struct Pattern with Save
-
-| Aspect | Detail |
-|--------|--------|
-| **Why Expected** | User explicitly requested 4 result types with optional save capability |
-| **Complexity** | MEDIUM -- new save infrastructure, backward-compatible BSON |
-| **Notes** | Replaces the current `ExperimentResult` which only wraps trajectory results |
-
-**Concrete design -- 4 result types:**
-
-```julia
-# Each result type has a `save` kwarg that triggers BSON serialization.
-# Common metadata is captured uniformly.
-
-struct LindbladResult{T<:AbstractFloat}
-    liouvillian::Matrix{Complex{T}}
-    fixed_point::Matrix{Complex{T}}
-    gap_mode::Matrix{Complex{T}}
-    spectral_gap::Complex{T}
-    config::SimConfig
-    metadata::Dict{Symbol, Any}
-end
-
-struct ThermalizeResult{T<:AbstractFloat}
-    final_dm::Matrix{Complex{T}}
-    trace_distances::Vector{T}
-    time_steps::Vector{T}
-    config::SimConfig
-    metadata::Dict{Symbol, Any}
-end
-
-struct KrylovSpectrumResult{T<:AbstractFloat}
-    eigenvalues::Vector{Complex{T}}
-    spectral_gap::T
-    fixed_point::Matrix{Complex{T}}
-    gap_mode::Matrix{Complex{T}}
-    converged::Int
-    matvec_count::Int
-    num_restarts::Int
-    normres::Vector{T}
-    channel_eigenvalues::Union{Nothing, Vector{Complex{T}}}
-    delta_used::Union{Nothing, T}
-    config::SimConfig
-    metadata::Dict{Symbol, Any}
-end
-
-struct TrajectoryResult{T<:AbstractFloat}
-    rho_mean::Matrix{Complex{T}}
-    n_trajectories::Int
-    seed::Int
-    times::Union{Nothing, Vector{Float64}}
-    measurements_mean::Union{Nothing, Matrix{Float64}}
-    convergence::Union{Nothing, ConvergenceData}
-    config::SimConfig
-    metadata::Dict{Symbol, Any}
-end
-```
-
-**Save protocol:** Each `run_*` function gets an optional `save_path::Union{Nothing,String}=nothing` kwarg. If non-nothing, the result is serialized via:
-
-```julia
-function save_result(result::Union{LindbladResult, ThermalizeResult, KrylovSpectrumResult, TrajectoryResult}, path::String)
-    d = _result_to_dict(result)
-    mkpath(dirname(path))
-    BSON.bson(path, d)
-    _write_companion_txt(result, replace(path, ".bson" => ".txt"))
-    return path
-end
-```
-
-The `ExperimentResult` wrapper becomes unnecessary -- each result type carries its own config and metadata.
-
----
-
-### TS-09: File Renaming -- PRE/MID/POST Grouping
-
-| Aspect | Detail |
-|--------|--------|
-| **Why Expected** | Flat `src/` with 28 files needs a logical naming scheme |
-| **Complexity** | LOW -- pure renames, no logic changes |
-| **Notes** | Keep flat directory, use numeric prefix for include order |
-
-**File rename mapping:**
-
-```
-# PRE: Physics building blocks (included first)
-constants.jl           -> 01_constants.jl          (unchanged content)
-structs.jl             -> 02_types.jl              (SimConfig, domains, JumpOp, workspaces)
-hamiltonian.jl         -> 03_hamiltonian.jl         (HamHam, TrottTrott, Pauli, Trotter)
-qi_tools.jl            -> 04_qi_tools.jl            (trace_distance, fidelity, hermitianize!)
-misc_tools.jl          -> 05_misc_tools.jl          (load_hamiltonian, config validation, labels)
-nufft.jl               -> 06_nufft.jl               (NUFFTPrefactors)
-NEW                    -> 07_prefactors.jl          (domain_prefactor, compute_jump_oft!, foreach_energy_pair)
-energy_domain.jl       -> 08_transitions.jl         (pick_transition, create_alpha -- merge energy/bohr domain tools)
-bohr_domain.jl         -> 08_transitions.jl         (merged into above)
-time_domain.jl         -> 08_transitions.jl         (merged into above)
-trotter_domain.jl      -> 09_trotter.jl             (trotterize, TrottTrott constructor)
-coherent.jl            -> 10_coherent.jl            (B operators, coherent precomputation)
-
-# MID: Simulation runners (the 4 run_* functions + their inner helpers)
-ofts.jl                -> REMOVE (deprecated, logic absorbed into 07_prefactors.jl)
-kraus.jl               -> ABSORB into 02_types.jl (just a struct definition)
-jump_workers.jl        -> 20_jump_workers.jl        (vectorized Liouvillian _jump_contribution!)
-furnace_utensils.jl    -> 21_precompute.jl          (_precompute_data, _precompute_labels)
-furnace.jl             -> 22_run_lindblad.jl         (run_lindblad, construct_lindbladian)
-                       -> 23_run_thermalize.jl       (run_thermalize, split from furnace.jl)
-krylov_workspace.jl    -> 24_krylov_workspace.jl     (KrylovWorkspace constructor)
-krylov_matvec.jl       -> 25_krylov_matvec.jl        (apply_lindbladian!, apply_adjoint!)
-krylov_eigsolve.jl     -> 26_run_krylov_spectrum.jl  (krylov_spectral_gap -> run_krylov_spectrum)
-trajectories.jl        -> 27_run_trajectory.jl       (run_trajectory, TrajectoryFramework, step!)
-
-# POST: Results and analysis
-results.jl             -> 40_results.jl              (result types, save/load, BSON serialization)
-convergence.jl         -> 41_convergence.jl          (ConvergenceData, adaptive trajectory runs)
-fitting.jl             -> 42_fitting.jl              (exponential decay fitting)
-gap_estimation.jl      -> 43_gap_estimation.jl       (trajectory-based gap estimation)
-diagnostics.jl         -> 44_diagnostics.jl          (exact diagnostics suite)
-log_sobolev.jl         -> 45_log_sobolev.jl          (LSI framework)
-errors.jl              -> 50_errors.jl               (custom error types)
-```
-
-**Include order in `QuantumFurnace.jl`:** The numeric prefix guarantees correct include order. Files in the same prefix group (e.g., 08_*) can be included in any order since they are in the same dependency tier.
-
-**Unfinished trajectory-gap code:** The `SpectralGapResult` and `estimate_spectral_gap` in gap_estimation.jl, along with `ObservableTrajectoryResult`, move to a `staging/` directory outside `src/`. They are not part of the 4-runner architecture.
-
----
-
-### TS-10: `_thermalize_to_liouv_config` Elimination
-
-| Aspect | Detail |
-|--------|--------|
-| **Why Expected** | With unified config, there is no "conversion" needed |
-| **Complexity** | FREE -- falls out of TS-01 |
-| **Notes** | Currently 2 functions x 14 field-by-field copies |
-
-With `SimConfig{S,D,DB,T}`, the Krylov workspace constructor for a thermalize config simply reads the Lindbladian-relevant fields directly from the same struct. No conversion needed. The dispatch on `AbstractLiouvConfig` vs `AbstractThermalizeConfig` becomes dispatch on `SimConfig{Lindblad}` vs `SimConfig{Thermalize}`, and the shared physics parameters are accessed identically.
+**Caution:** Do NOT set BLAS threads inside the hot loop. Set once at entry, restore at exit.
 
 ---
 
 ## Differentiators
 
-Features that make the restructure excellent rather than merely adequate.
+Features that set the product apart. Not expected, but valued.
 
-### DIFF-01: Unified Dissipator Loop
+### DIFF-01: Multi-Threaded Frequency Summation
 
 | Feature | Value Proposition | Complexity | Notes |
 |---------|-------------------|------------|-------|
-| Single `dissipator_loop!` function with callback | Replaces 6 domain-specific loops across jump_workers, krylov_matvec, krylov_eigsolve | HIGH | The "holy grail" deduplication |
+| Thread-parallel w-loop in rho_jump accumulation | For large frequency grids (num_energy_bits >= 8), the w-loop is the dominant cost after precomputation | HIGH | Requires thread-local accumulators |
 
-**Concept:** A single inner loop that iterates over jumps and energies, computing the OFT for each, and calls back with the Lindblad operator L_w and scalar rate for each (w, jump) pair. The callback implements what to do with L_w:
-- Vectorized Liouvillian: `_vectorize_liouv_diss_and_add!(L_target, L_w, scalar, ws)`
-- Krylov sandwich: `_accumulate_sandwich!(rho_out, L_w, rho, scalar, ws)`
-- DM thermalization: accumulate into `R` and `rho_jump`
-- Trajectory step: compute jump probability and sample
+**Analysis:**
 
-**Risk:** The DM thermalization and trajectory paths have fundamentally different per-iteration logic (DM accumulates R+rho_jump, trajectory samples). Forcing them into a single callback may be awkward. Better to have `dissipator_loop!` handle the "iterate jumps x energies, compute L_w" part, and let callers handle per-L_w actions. This still eliminates the 16x hermitian branching duplication.
+After per-jump precomputation (TS-01), the remaining per-step work is the rho_jump accumulation:
+
+```julia
+for w in energy_labels
+    oft!(scratch.jump_oft, jump.in_eigenbasis, bohr_freqs, w, inv_4sigma2)
+    rate2 = base_prefactor * transition(w)
+    mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft')  # rho * L_w'
+    mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp, delta*rate2, 1.0)  # += L_w * (rho*L_w')
+end
+```
+
+Each iteration involves 2 BLAS gemm calls (O(d^3) each). For num_energy_bits=8, there are ~256 energy labels (128 for half-grid with hermitian jumps). This is 256 * 2 = 512 gemm calls per step.
+
+**Threading approach:**
+
+Partition the energy labels across threads. Each thread has its own `rho_jump_local` accumulator. After the loop, sum the thread-local accumulators:
+
+```julia
+# Thread-local accumulators
+rho_jump_locals = [zeros(CT, dim, dim) for _ in 1:nthreads()]
+scratch_locals = [ThermalizeScratch(CT, dim) for _ in 1:nthreads()]
+
+Threads.@threads for w_idx in 1:length(energy_labels_to_process)
+    tid = Threads.threadid()
+    w = energy_labels_to_process[w_idx]
+    sc = scratch_locals[tid]
+    # ... compute OFT, sandwich, accumulate into rho_jump_locals[tid] ...
+end
+
+# Reduce
+for t in 1:nthreads()
+    scratch.rho_jump .+= rho_jump_locals[t]
+end
+```
+
+**Risk assessment:** This requires careful BLAS thread management (set BLAS threads to 1 during Julia-threaded w-loop to avoid oversubscription). The overhead of thread spawning and reduction may negate the benefit for small grids (num_energy_bits <= 6). Recommend gating this behind a `threaded_omega::Bool=false` flag and only enabling for num_energy_bits >= 8.
+
+**Recommendation:** Defer to later in the milestone or make optional. The per-jump precomputation (TS-01/TS-02) provides the biggest speedup. Multi-threaded w-loop is a secondary optimization for large grids only.
 
 ---
 
-### DIFF-02: Config Factory Functions for Tests
+### DIFF-02: Effective Rate Diagnostic for Burn-In Validation
 
 | Feature | Value Proposition | Complexity | Notes |
 |---------|-------------------|------------|-------|
-| `make_test_config(; sim=Lindblad(), domain=EnergyDomain(), db=KMS(), ...)` | Eliminates 20+ ad-hoc config constructions across test files | LOW | Pure convenience |
+| Compute and return lambda_eff(t) alongside the fit | Provides a model-free diagnostic that validates the exponential fit quality | LOW | Leverages noiseless DM trace distance data |
+
+**What to build:**
+
+From the error catalogue (Section 6, Recommended Estimator, step (b)):
 
 ```julia
-# In test/test_helpers.jl:
-function make_test_config(;
-    sim::AbstractSimType = Lindblad(),
-    domain::AbstractDomain = EnergyDomain(),
-    db::AbstractDBType = KMS(),
-    num_qubits = NUM_QUBITS,
-    beta = BETA,
-    sigma = SIGMA,
-    kwargs...
-)
-    SimConfig(
-        sim_type = sim, domain = domain, db_type = db,
-        num_qubits = num_qubits, beta = beta, sigma = sigma,
-        with_linear_combination = false,
-        num_energy_bits = 6, t0 = ..., w0 = ...,
-        kwargs...
-    )
+function effective_rate(trace_dists::Vector{Float64}, time_steps::Vector{Float64}; lag::Int=3)
+    n = length(trace_dists)
+    t_vals = time_steps[1:n-lag]
+    lambda_eff = Vector{Float64}(undef, n-lag)
+    for i in 1:n-lag
+        d_now = trace_dists[i]
+        d_later = trace_dists[i+lag]
+        if d_now > 0 && d_later > 0
+            tau = time_steps[i+lag] - time_steps[i]
+            lambda_eff[i] = -log(d_later / d_now) / tau
+        else
+            lambda_eff[i] = NaN
+        end
+    end
+    return t_vals, lambda_eff
+end
+```
+
+For DM trace distance (noiseless), the effective rate plot shows:
+- **Plateau at lambda_gap** in the exponential regime
+- **Higher values** during the transient (where fast modes contribute)
+- **Instability** near convergence (d(t) ~ C, log(d/d) ~ 0/0)
+
+This is the "Rosetta Stone" diagnostic from the spectral gap refinement instructions. Including it in the `MixingTimeEstimate` output makes the mixing time result self-validating.
+
+**Add to MixingTimeEstimate:**
+
+```julia
+struct MixingTimeEstimate
+    # ... existing fields ...
+    effective_rate_times::Vector{Float64}
+    effective_rate_values::Vector{Float64}
 end
 ```
 
 ---
 
-### DIFF-03: Precomputed Data as Typed Struct
+### DIFF-03: Fit Quality Gates with Actionable Warnings
 
 | Feature | Value Proposition | Complexity | Notes |
 |---------|-------------------|------------|-------|
-| Replace NamedTuple precomputed_data with typed structs | Eliminates `hasproperty` checks, enables dispatch | MEDIUM | Optional but clean |
+| Structured warnings when fit quality is poor | Prevents users from trusting bad mixing time estimates | LOW | Critical for thesis-quality results |
 
-Currently `_precompute_data` returns ad-hoc NamedTuples with different fields per domain. The `TrajectoryFramework` constructor checks `hasproperty(precomputed_data, :oft_nufft_prefactors)`. With typed structs:
+**Quality gates to implement:**
 
-```julia
-struct EnergyPrecomputed{T,F}
-    transition::F
-    gamma_norm_factor::T
-    energy_labels::Vector{T}
-end
+1. **R-squared < 0.95:** Warning: "Single-exponential fit explains only X% of variance. Consider running longer (more data in exponential regime) or increasing skip_initial (transient contamination)."
 
-struct TimePrecomputed{T,F,P}
-    transition::F
-    gamma_norm_factor::T
-    energy_labels::Vector{T}
-    oft_nufft_prefactors::P
-    b_minus::Union{Nothing, Dict}
-    b_plus::Union{Nothing, Dict}
-end
-```
+2. **Fitted offset C > 0.1 * fitted amplitude A:** Warning: "Large offset C=X suggests the trace distance has not entered the exponential regime, or the fixed point accuracy is limiting. The offset should be approximately 0 for trace distance to the exact Gibbs state."
 
-This makes `_precompute_data` return type-stable and enables dispatch on precomputed data type in the dissipator loop.
+3. **Fitted gap negative or zero:** Error: "Non-physical negative decay rate. The trace distance may be increasing, suggesting the CPTP channel does not have the Gibbs state as its fixed point."
+
+4. **CI width > 100% of gap:** Warning: "Spectral gap uncertainty (X%) is very large. The exponential regime may be too short for reliable estimation."
+
+5. **Extrapolation sanity check:** When extrapolating, if `t_mix_extrapolated > 100 * t_data_max`, warning: "Extrapolation extends X times beyond observed data. Confidence in extrapolated mixing time is low."
 
 ---
 
 ## Anti-Features
 
-Features to explicitly NOT build during this restructure.
+Features to explicitly NOT build.
 
 | Anti-Feature | Why Avoid | What to Do Instead |
 |--------------|-----------|-------------------|
-| Module/subdirectory splitting of `src/` | Julia's module system adds compilation overhead for internal modules; flat `src/` with numeric prefixes is idiomatic for packages of this size | Use numeric file prefixes for logical grouping |
-| Generic abstract result type with parametric fields | Each simulation produces fundamentally different output (Liouvillian matrix vs trace distances vs eigenvalues vs trajectories); forcing them into one type is Procrustean | Keep 4 concrete result types, share metadata capture and save protocol via functions |
-| Automatic config validation via inner constructor | Inner constructors with validation make testing painful (cannot construct partial/invalid configs for edge case tests) | Keep `validate_config!` as explicit pre-flight check in each `run_*` function |
-| Trait-based dispatch instead of type parameters | Julia traits (Holy traits) add complexity without benefit here; `SimConfig{S,D,DB,T}` with 4 type params already gives precise dispatch | Use parametric dispatch directly |
-| Observable/convergence tracking in `run_thermalize` | The DM thermalization is for small-scale validation; observable tracking belongs in trajectory simulations | Keep `run_thermalize` minimal; trajectory code handles observables |
-| Moving `TrajectoryFramework` construction into workspace | The framework pre-computes per-operator Kraus data (eigendecompositions) which is expensive and should be explicit | Keep `build_trajectoryframework` as explicit construction step |
+| Two-exponential fit for trace distance | Adds 5-parameter fit complexity; for DM trace distance (noiseless), skip_initial + single-exp is sufficient. Two-exp was needed for noisy trajectory observables. | Use single-exponential with burn-in skip. If R^2 < 0.95, increase skip_initial. |
+| Bootstrap uncertainty on DM trace distance | DM evolution is deterministic -- there is no statistical noise to bootstrap over. Bootstrap is for trajectory-averaged quantities. | Report LsqFit confidence intervals from the Jacobian-based covariance estimate. |
+| Richardson extrapolation in delta for mixing time | Requires running thermalization at multiple delta values. This is a diagnostic tool, not a production feature. Mixing time estimation should work at a single delta. | Document that delta-convergence can be checked by running at delta/2 and comparing. |
+| Observable-based mixing time estimation | The DM simulator tracks trace distance directly -- this is the gold standard. Observable decay is a proxy used when trace distance is unavailable (trajectory simulations). | Use trace distance directly. Observable fitting stays in staging/ for trajectory gap estimation. |
+| Automatic delta selection for run_thermalize | Adds complexity without clear benefit. The user should choose delta based on domain knowledge (delta << 1 for CPTP validity). | Document recommended delta ranges in the function docstring. |
+| GPU acceleration for DM operations | Not needed for current system sizes (n <= 12, dim <= 4096). BLAS already handles dim=4096 matrices efficiently. | Multi-threaded BLAS is sufficient. |
 
 ---
 
 ## Feature Dependencies
 
 ```
-TS-01 (Config)
+TS-01 (Per-jump precomputation)
   |
-  +---> TS-02 (Prefactors) -- needs new config type for dispatch
+  +---> TS-02 (Precomputed CPTP application)
   |       |
-  |       +---> TS-03 (Half-grid iterator) -- no config dependency, but logically grouped
-  |       |
-  |       +---> TS-04 (OFT unification) -- no config dependency, but logically grouped
-  |       |
-  |       +---> TS-06 (R accumulation) -- uses TS-02, TS-03, TS-04
+  |       +---> DIFF-01 (Multi-threaded w-loop) -- only rho_jump remains in loop
   |
-  +---> TS-05 (Workspace) -- needs new config type
-  |
-  +---> TS-07 (Sandwich) -- independent, can parallelize
-  |
-  +---> TS-08 (Results) -- needs new config type for embedding
-  |
-  +---> TS-09 (File rename) -- do LAST, after all logic changes
-  |
-  +---> TS-10 (Config conversion elimination) -- FREE with TS-01
+  +---> TS-05 (BLAS thread management) -- independent but test together
 
-TS-03 + TS-04 can be done BEFORE TS-01 as pure extractions.
-TS-07 can be done BEFORE TS-01 (pure algebraic simplification).
+TS-03 (save_every) -- fully independent, can be done first
+
+TS-04 (Mixing time estimation)
+  |
+  +---> requires staging/fitting.jl to be promoted to active code
+  +---> uses ThermalizeResults output (trace_distances, time_steps)
+  +---> DIFF-02 (Effective rate diagnostic) -- enhances TS-04
+  +---> DIFF-03 (Quality gates) -- enhances TS-04
 ```
 
-**Critical path:** TS-01 -> TS-05 -> TS-06 -> TS-08 -> TS-09
+**Critical path:** TS-03 (easiest, do first) -> TS-01 -> TS-02 -> TS-05 -> TS-04
 
-**Parallelizable early wins:** TS-02, TS-03, TS-04, TS-07 (can be done before TS-01 using current types)
+**Parallelizable:** TS-03, TS-05 are independent of each other and of TS-01.
 
 ---
 
 ## MVP Recommendation
 
-### Phase 1 (Foundation -- do first, unblocks everything):
+### Phase 1: Quick Wins (Low Risk, High Visibility)
 
-1. **TS-02: Prefactor extraction** -- 30 min, zero risk, immediate deduplication
-2. **TS-03: Half-grid iterator** -- 1 hr, eliminates 16 code blocks
-3. **TS-04: OFT unification** -- 30 min, kills 3 OFT variants
-4. **TS-07: Sandwich consolidation** -- 30 min, kills 4 functions
+1. **TS-03: save_every** -- 30 min. Copy the pattern from trajectory simulator. Immediate usability improvement.
 
-These 4 can be done on the CURRENT type system. They reduce code volume by ~400 lines before touching any struct definitions. This is the safest starting point.
+### Phase 2: Performance Core
 
-### Phase 2 (Type system -- the big change):
+2. **TS-01: Per-jump precomputation** -- 2 hrs. Follow the exact pattern from `_build_trajectory_workspace`. Add precomputed Rs, K0s, U_residuals to the thermalization setup.
 
-5. **TS-01: Unified Config** -- the hardest single change. Do it in one focused session. Write the struct, update all dispatch sites, update serialization, update tests. The config change touches every file.
-6. **TS-10: Config conversion elimination** -- free with TS-01.
+3. **TS-02: Precomputed CPTP application** -- 1 hr. Replace `_finalize_kraus_step!` with `_apply_precomputed_channel!` using precomputed K0/U_residual. This eliminates the per-step eigendecomposition.
 
-### Phase 3 (Workspace and results):
+4. **TS-05: BLAS thread management** -- 30 min. Explicit BLAS thread control in run_thermalize.
 
-7. **TS-05: Workspace consolidation** -- after config is stable
-8. **TS-06: R accumulation unification** -- uses new workspaces
-9. **TS-08: Result struct pattern** -- after config and workspace are stable
+### Phase 3: Mixing Time Estimation
 
-### Phase 4 (Cleanup):
+5. **TS-04: Mixing time estimation** -- 3 hrs. Promote fitting.jl from staging, write `estimate_mixing_time`, add `MixingTimeEstimate` struct, implement extrapolation logic with quality gates.
 
-10. **TS-09: File rename** -- absolutely last. Git blame preservation via `git mv`.
+6. **DIFF-02: Effective rate diagnostic** -- 1 hr. Add lambda_eff computation to MixingTimeEstimate output.
+
+7. **DIFF-03: Quality gates** -- 1 hr. Add structured warnings for poor fit quality.
 
 ### Defer:
 
-- **DIFF-01: Unified dissipator loop** -- too risky for this milestone. The 4 simulation paths have enough structural differences that a single callback-based loop would be fragile. The prefactor + half-grid + OFT deduplication (TS-02/03/04) captures 80% of the benefit at 20% of the risk.
-- **DIFF-03: Typed precomputed data** -- nice-to-have, defer to a follow-up milestone.
-- **Trajectory-gap code staging** -- move `estimate_spectral_gap`, `SpectralGapResult`, `ObservableTrajectoryResult`, and the `trajectory_validation/` test directory to `staging/` at the end.
+- **DIFF-01: Multi-threaded w-loop** -- Defer until benchmarking shows the w-loop is the bottleneck after precomputation. For typical parameter regimes (num_energy_bits=6), the loop has ~64 iterations which may not benefit from threading.
 
 ---
 
-## Runner Function Signatures (Target API)
+## Expected Behavior Specification: Mixing Time Estimation
 
-```julia
-# The 4 public runner functions after restructure:
+### Input
 
-function run_lindblad(
-    jumps::Vector{JumpOp},
-    config::SimConfig{Lindblad, D, DB, T},
-    hamiltonian::HamHam;
-    trotter::Union{TrottTrott, Nothing} = nothing,
-    save_path::Union{Nothing, String} = nothing,
-) -> LindbladResult{T}
+`ThermalizeResults` from `run_thermalize` containing:
+- `trace_distances::Vector{Float64}` -- d(t_i) = ||rho(t_i) - rho_beta||_1
+- `time_steps::Vector{Float64}` -- t_i values
 
-function run_thermalize(
-    jumps::Vector{JumpOp},
-    config::SimConfig{Thermalize, D, DB, T},
-    evolving_dm::Matrix{Complex{T}},
-    hamiltonian::HamHam;
-    trotter::Union{TrottTrott, Nothing} = nothing,
-    rng::AbstractRNG = Random.default_rng(),
-    save_path::Union{Nothing, String} = nothing,
-) -> ThermalizeResult{T}
+### Model
 
-function run_krylov_spectrum(
-    config::SimConfig{KrylovSpectrum, D, DB, T},
-    hamiltonian::HamHam,
-    jumps::Vector{JumpOp};
-    trotter::Union{TrottTrott, Nothing} = nothing,
-    krylovdim::Int = 30,
-    howmany::Int = 4,
-    tol::Real = 1e-10,
-    save_path::Union{Nothing, String} = nothing,
-) -> KrylovSpectrumResult{T}
-
-function run_trajectory(
-    jumps::Vector{JumpOp},
-    config::SimConfig{Trajectory, D, DB, T},
-    psi0::Vector{Complex{T}},
-    hamiltonian::HamHam;
-    trotter::Union{TrottTrott, Nothing} = nothing,
-    ntraj::Int = 1,
-    observables::Union{Nothing, Vector{<:Matrix}} = nothing,
-    save_every::Int = 1,
-    seed::Union{Int, Nothing} = nothing,
-    save_path::Union{Nothing, String} = nothing,
-) -> TrajectoryResult{T}
+```
+d(t) = A * exp(-gap * t) + C
 ```
 
-Note: `run_krylov_spectrum` accepts both `SimConfig{KrylovSpectrum,D,DB}` (Lindbladian path) and can be called with a thermalize-like config by constructing `SimConfig{KrylovSpectrum,...}` with `delta` populated. The dispatch between Lindbladian eigsolve and channel eigsolve is determined by whether `config.delta` is nothing.
+where:
+- `A > 0` is the initial amplitude (related to initial state distance from Gibbs)
+- `gap > 0` is the effective spectral gap (the fitted parameter of interest)
+- `C >= 0` is the asymptotic offset (should be ~0 for exact fixed point, ~1e-8 for TrotterDomain)
+
+### Fit Procedure
+
+1. **Skip burn-in:** Drop the first `skip_initial` fraction of data points. Default: 0.2 (20%).
+
+2. **Initial guess:** Use `_log_linear_initial_guess` from fitting.jl:
+   - Estimate C from last 20% of remaining data
+   - Log-linear regression on log(d(t) - C) vs t gives A and gap
+
+3. **Levenberg-Marquardt fit:** Via LsqFit.jl with bounds `gap >= 0`.
+
+4. **Compute mixing time from data:** `t_mix_fitted = time at which fitted curve crosses convergence_cutoff`
+
+5. **Extrapolate (optional):** `t_mix_extrapolated = -ln(target_epsilon / A) / gap`
+
+### Output
+
+`MixingTimeEstimate` struct containing all fitted parameters, quality metrics, and optionally the extrapolated mixing time.
+
+### Validation Criteria
+
+For a known system (e.g., n=4 EnergyDomain with exact gap from `run_lindblad`):
+- Fitted gap should agree with exact gap within 10% (single-exponential approximation)
+- R-squared should be > 0.99 for clean DM trace distance data
+- Extrapolated t_mix should agree with actually observed convergence time within 20%
+
+### Edge Cases
+
+| Case | Expected Behavior |
+|------|------------------|
+| Insufficient data (< 10 points after skip) | Error: "Not enough data points for fitting" |
+| Trace distance not monotonically decreasing | Warning: possible non-convergence or oscillatory modes |
+| All trace distances below convergence_cutoff | Return gap=NaN, t_mix=0 (already converged) |
+| Very short run (< 3 relaxation times) | Warning: "Run may be too short for reliable fitting" |
+| Offset C > epsilon target | Warning: "Fixed point accuracy (C=X) exceeds target epsilon. Extrapolation not meaningful." |
 
 ---
 
 ## Sources
 
-- Exhaustive reading of all 28 source files in `/Users/bence/code/QuantumFurnace.jl/src/`
-- User's architecture notes in `supplementary-informations/quantumfurnace-structure.md`
-- Current test infrastructure in `test/test_helpers.jl` and `test/runtests.jl`
-- Julia language documentation on parametric types, multiple dispatch, and `@kwdef`
-- Existing research files in `.planning/research/` from the Krylov milestone
+- **Codebase:** Direct reading of all source files in `/Users/bence/code/QuantumFurnace.jl/src/`, especially `furnace.jl`, `jump_workers.jl`, `furnace_utensils.jl`, `trajectories.jl`, `staging/fitting.jl`, `staging/gap_estimation.jl`
+- **Chen et al. 2023:** Theorem III.1 (weak measurement CPTP channel), Proposition II.3 (mixing time from Hermitian gap), Corollary II.1 (fixed point accuracy)
+- **Ramkumar & Soleimanifar 2024:** Theorems 2.1-2.3 (spectral gap bounds for graph-local and random jumps)
+- **Error catalogue:** `supplementary-informations/error_catalogue_spectral_gap_estimation.md` -- Errors 1, 6 directly relevant to burn-in and fitting window selection
+- **Spectral gap refinement instructions:** `supplementary-informations/spectral-gap-refinements-instructions.md` -- effective rate diagnostic, fitting window optimization
+- **Project structure:** `supplementary-informations/quantumfurnace-structure.md` -- current architecture constraints and future plans
+- **Confidence level:** HIGH -- all recommendations verified against existing code patterns and theoretical foundations
