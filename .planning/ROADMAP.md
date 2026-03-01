@@ -114,7 +114,7 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 **Milestone Goal:** Optimize run_thermalize performance via per-jump precomputation and multi-threaded BLAS/omega-loops; add mixing time estimation via exponential fit on trace distance convergence curve.
 
 - [x] **Phase 39: Per-Jump Precomputation** - Eliminate per-step eigendecomposition by precomputing K0, U_residual, and U_coherent per jump at simulation start -- completed 2026-03-01
-- [ ] **Phase 40: Save Every** - Control trace distance computation frequency to decouple observation cost from step cost
+- [x] **Phase 40: Save Every** - Control trace distance computation frequency to decouple observation cost from step cost -- completed 2026-03-01
 - [ ] **Phase 41: Threading** - Multi-threaded BLAS and optional omega-loop parallelism for DM thermalization
 - [ ] **Phase 42: Mixing Time Estimation** - Exponential fit on trace distance convergence curve with extrapolation and quality gates
 
@@ -146,7 +146,7 @@ Plans:
 **Plans:** 1 plan
 
 Plans:
-- [ ] 40-01-PLAN.md -- Add save_every keyword to run_thermalize with gated trace distance computation and behavioral tests
+- [x] 40-01-PLAN.md -- Add save_every keyword to run_thermalize with gated trace distance computation and behavioral tests
 
 ### Phase 41: Threading
 **Goal**: Users get multi-threaded BLAS speedup on DM thermalization automatically, with optional omega-loop parallelism for large frequency grids, without data races or BLAS thread state leaks
@@ -196,6 +196,6 @@ Phases execute in numeric order: 39 -> 40 -> 41 -> 42
 | 27-32 | v1.5 | 12/12 | Complete | 2026-02-25 |
 | 33-38 | v2.0 | 19/19 | Complete | 2026-02-28 |
 | 39. Precomputation | v2.1 | 2/2 | Complete | 2026-03-01 |
-| 40. Save Every | v2.1 | 0/1 | Not started | - |
+| 40. Save Every | v2.1 | 1/1 | Complete | 2026-03-01 |
 | 41. Threading | v2.1 | 0/TBD | Not started | - |
 | 42. Mixing Time | v2.1 | 0/TBD | Not started | - |
