@@ -129,11 +129,11 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
   2. No eigen() or _build_cptp_channel call occurs inside the per-step hot loop -- all channel data comes from precomputed vectors of K0s and U_residuals
   3. BohrDomain run_thermalize continues to work correctly with general speedups applied but without per-Bohr-frequency precomputation
   4. Existing test suite passes with zero or near-zero regression test baseline updates (regenerated if O(1e-14) level shifts occur)
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 39-01: TBD
-- [ ] 39-02: TBD
+- [ ] 39-01-PLAN.md -- Precomputation infrastructure (BohrDomain _precompute_R, _precompute_per_jump_channels, _accumulate_rho_jump!, _apply_precomputed_channel!)
+- [ ] 39-02-PLAN.md -- Integration and validation (refactor run_thermalize, CPTP test extension, full test suite)
 
 ### Phase 40: Save Every
 **Goal**: Users control how often trace distance to the Gibbs state is computed during run_thermalize, reducing observation overhead for long simulations while preserving backward compatibility
@@ -195,7 +195,7 @@ Phases execute in numeric order: 39 -> 40 -> 41 -> 42
 | 26 | v1.4 | 2/2 | Complete | 2026-02-19 |
 | 27-32 | v1.5 | 12/12 | Complete | 2026-02-25 |
 | 33-38 | v2.0 | 19/19 | Complete | 2026-02-28 |
-| 39. Precomputation | v2.1 | 0/TBD | Not started | - |
+| 39. Precomputation | v2.1 | 0/2 | Not started | - |
 | 40. Save Every | v2.1 | 0/TBD | Not started | - |
 | 41. Threading | v2.1 | 0/TBD | Not started | - |
 | 42. Mixing Time | v2.1 | 0/TBD | Not started | - |
