@@ -102,7 +102,7 @@ end
 # (3.1) and Proposition III.1
 # Has to be on a symmetric time domain, otherwise it can't be Hermitian.
 # Single-jump variant removed in Phase 35; callers use [jump] wrapper.
-function B_time(jumps::Vector{JumpOp}, hamiltonian::HamHam, b_minus, b_plus, t0, beta, sigma)
+function B_time(jumps::AbstractVector{<:JumpOp}, hamiltonian::HamHam, b_minus, b_plus, t0, beta, sigma)
 
     d = size(hamiltonian.data, 1)
     CT = Complex{eltype(hamiltonian.eigvals)}
@@ -149,7 +149,7 @@ function B_time(jumps::Vector{JumpOp}, hamiltonian::HamHam, b_minus, b_plus, t0,
 end
 
 # Single-jump B_trotter variant removed in Phase 35; callers use [jump] wrapper.
-function B_trotter(jumps::Vector{JumpOp}, trotter::TrottTrott, b_minus, b_plus, beta, sigma)
+function B_trotter(jumps::AbstractVector{<:JumpOp}, trotter::TrottTrott, b_minus, b_plus, beta, sigma)
 
     d = size(trotter.eigvecs, 1)
     CT = Complex{eltype(trotter.bohr_freqs)}

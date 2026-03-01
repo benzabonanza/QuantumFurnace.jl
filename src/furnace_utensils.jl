@@ -244,14 +244,18 @@ For each jump operator, computes R^a via `_precompute_R`, optionally scales by `
 Returns a NamedTuple `(; K0s, U_residuals)` where each is a `Vector{Matrix{CT}}` of length `n_jumps`.
 """
 function _precompute_per_jump_channels(
-    jumps::Vector{JumpOp},
+    jumps::AbstractVector{<:JumpOp},
     ham_or_trott::Union{HamHam, TrottTrott},
     config::Config{Thermalize},
     precomputed_data;
     rescale_by_inv_prob::Bool = true,
 )
-    CT = Complex{eltype(ham_or_trott isa HamHam ? ham_or_trott.eigvals : ham_or_trott.eigvals)}
-    dim = size(ham_or_trott isa HamHam ? ham_or_trott.data : ham_or_trott.data, 1)
+    CT = if ham_or_trott isa HamHam
+        Complex{eltype(ham_or_trott.eigvals)}
+    else
+        eltype(ham_or_trott.eigvecs)  # already Complex{T}
+    end
+    dim = size(ham_or_trott isa HamHam ? ham_or_trott.data : ham_or_trott.eigvecs, 1)
     n_jumps = length(jumps)
     p_jump = 1.0 / n_jumps
 

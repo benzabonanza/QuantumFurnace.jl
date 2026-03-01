@@ -183,6 +183,15 @@ function run_thermalize(
     CT = eltype(evolving_dm)
     scratch = ThermalizeScratch(CT, dim)
 
+    # Precompute per-jump CPTP channels (K0, U_residual) -- eliminates eigen() from hot loop
+    (; K0s, U_residuals) = _precompute_per_jump_channels(
+        jumps, ham_or_trott, config, precomputed_data;
+        rescale_by_inv_prob = rescale_by_inv_prob,
+    )
+
+    # Precompute jump_weight_scaling for _accumulate_rho_jump!
+    jump_weight_scaling = rescale_by_inv_prob ? (precomputed_data.gamma_norm_factor / p_jump) : precomputed_data.gamma_norm_factor
+
     num_steps = Int(ceil(config.mixing_time / config.delta))
 
     convergence_cutoff = 1e-5
@@ -192,11 +201,22 @@ function run_thermalize(
         idx = rand(rng, 1:length(jumps))
         jump = jumps[idx]
 
-        _jump_contribution!(
-            evolving_dm, jump, ham_or_trott, config, precomputed_data, scratch;
-            coherent_unitary_cache = (coherent_unitaries === nothing ? nothing : coherent_unitaries[idx]),
-            jump_prob = p_jump,
-            rescale_by_inv_prob = rescale_by_inv_prob,
+        # Coherent evolution (already precomputed, same as before)
+        _apply_coherent_unitary!(
+            evolving_dm,
+            coherent_unitaries === nothing ? nothing : coherent_unitaries[idx],
+            scratch,
+        )
+
+        # Accumulate rho_jump (rho-dependent omega loop, no R/eigen)
+        _accumulate_rho_jump!(
+            scratch, evolving_dm, jump, ham_or_trott, config, precomputed_data;
+            jump_weight_scaling = jump_weight_scaling,
+        )
+
+        # Apply precomputed channel (no eigendecomposition)
+        _apply_precomputed_channel!(
+            evolving_dm, K0s[idx], U_residuals[idx], scratch,
         )
 
         dist = trace_distance_h(Hermitian(evolving_dm), gibbs)

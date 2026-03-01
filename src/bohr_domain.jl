@@ -1,5 +1,5 @@
 # Single-jump B_bohr variant removed in Phase 35; callers use [jump] wrapper.
-function B_bohr(hamiltonian::HamHam{T}, jumps::Vector{JumpOp}, config::Config{<:Any, <:Any, KMS}) where {T<:AbstractFloat}
+function B_bohr(hamiltonian::HamHam{T}, jumps::AbstractVector{<:JumpOp}, config::Config{<:Any, <:Any, KMS}) where {T<:AbstractFloat}
 
     dim = size(hamiltonian.data, 1)
     CT = Complex{T}
