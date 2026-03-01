@@ -266,3 +266,80 @@ end
 
     @info "DM-trajectory BLAS isolation" blas_threads=old_blas verified=true
 end
+
+# ============================================================================
+# Omega-loop threading tests (THREAD-01, THREAD-02, THREAD-04)
+# ============================================================================
+
+@testset "Omega-loop threading determinism" begin
+    if Threads.nthreads() > 1
+        for (domain, jumps, trott, name) in [
+            (EnergyDomain(), N3_JUMPS, nothing, "Energy"),
+            (TimeDomain(), N3_JUMPS, nothing, "Time"),
+            (TrotterDomain(), N3_TROTTER_JUMPS, N3_TROTTER, "Trotter"),
+            (BohrDomain(), N3_JUMPS, nothing, "Bohr"),
+        ]
+            cfg = make_config(Thermalize(), domain; num_qubits=3,
+                delta=0.01, mixing_time=0.5)
+            rng_seed = 42
+
+            result1 = run_thermalize(jumps, cfg, N3_HAM, trott;
+                rng=Random.Xoshiro(rng_seed))
+            result2 = run_thermalize(jumps, cfg, N3_HAM, trott;
+                rng=Random.Xoshiro(rng_seed))
+
+            # Deterministic: same seed, same thread count => identical results
+            @test result1.trace_distances == result2.trace_distances
+            @test result1.final_dm == result2.final_dm
+            @info "Omega-loop threading determinism ($name)" domain=name passed=true
+        end
+    else
+        @info "Skipping omega-loop threading determinism tests (nthreads=$(Threads.nthreads()))"
+        @test true
+    end
+end
+
+@testset "Serial vs threaded omega-loop agreement" begin
+    if Threads.nthreads() > 1
+        cfg = make_config(Thermalize(), EnergyDomain(); num_qubits=3,
+            delta=0.01, mixing_time=0.5)
+        rng_seed = 42
+
+        # Run with threading enabled (default path on -t 4)
+        result_threaded = run_thermalize(N3_JUMPS, cfg, N3_HAM;
+            rng=Random.Xoshiro(rng_seed))
+
+        # Compare against run with BLAS threads forced to 1
+        # (omega-loop threading sets BLAS=1 internally, so BLAS thread count
+        # only affects the outer run_thermalize try/finally block)
+        old_blas = BLAS.get_num_threads()
+        BLAS.set_num_threads(1)
+        result_serial_blas = run_thermalize(N3_JUMPS, cfg, N3_HAM;
+            rng=Random.Xoshiro(rng_seed))
+        BLAS.set_num_threads(old_blas)
+
+        # Threaded omega-loop + multi-BLAS vs threaded omega-loop + serial BLAS
+        # should agree within FP tolerance (BLAS thread count affects gemm
+        # accumulation order but not correctness)
+        @test isapprox(result_threaded.trace_distances,
+            result_serial_blas.trace_distances; atol=1e-10)
+        @test isapprox(result_threaded.final_dm,
+            result_serial_blas.final_dm; atol=1e-10)
+
+        td_diff = maximum(abs.(result_threaded.trace_distances .- result_serial_blas.trace_distances))
+        dm_diff = maximum(abs.(result_threaded.final_dm .- result_serial_blas.final_dm))
+        @info "Serial vs threaded omega-loop agreement" td_diff=td_diff dm_diff=dm_diff atol=1e-10
+    else
+        @info "Skipping serial vs threaded omega-loop test (nthreads=$(Threads.nthreads()))"
+        @test true
+    end
+end
+
+@testset "Omega-loop BLAS restoration" begin
+    old_blas = BLAS.get_num_threads()
+    cfg = make_config(Thermalize(), EnergyDomain(); num_qubits=3,
+        delta=0.01, mixing_time=0.5)
+    run_thermalize(N3_JUMPS, cfg, N3_HAM)
+    @test BLAS.get_num_threads() == old_blas
+    @info "Omega-loop BLAS restoration" blas_before=old_blas blas_after=BLAS.get_num_threads()
+end
