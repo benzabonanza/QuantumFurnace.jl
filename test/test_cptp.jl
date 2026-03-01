@@ -66,4 +66,58 @@ using LinearAlgebra
         @info "CPTP completeness (TrotterDomain)" n_jumps=ws.n_jumps max_error=max_err threshold_atol=1e-10
     end
 
+    @testset "BohrDomain (via _precompute_per_jump_channels)" begin
+        config = make_config(Thermalize(), BohrDomain(); delta=TEST_DELTA)
+        precomputed_data = QuantumFurnace._precompute_data(config, TEST_HAM)
+        (; K0s, U_residuals) = QuantumFurnace._precompute_per_jump_channels(
+            TEST_JUMPS, TEST_HAM, config, precomputed_data;
+            rescale_by_inv_prob=true,
+        )
+
+        n_jumps = length(TEST_JUMPS)
+        identity = Matrix{ComplexF64}(I, DIM, DIM)
+        # Need Rs to verify CPTP completeness -- recompute them
+        builder_scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, DIM)
+        p_jump = 1.0 / n_jumps
+        max_err = 0.0
+        for a in 1:n_jumps
+            QuantumFurnace._precompute_R([TEST_JUMPS[a]], TEST_HAM, config, precomputed_data, builder_scratch)
+            R_a = copy(builder_scratch.R)
+            R_a .*= (1.0 / p_jump)
+            completeness = K0s[a]' * K0s[a] + TEST_DELTA * R_a + U_residuals[a]' * U_residuals[a]
+            err = norm(completeness - identity)
+            max_err = max(max_err, err)
+            @test isapprox(completeness, identity; atol=1e-10)
+        end
+        @info "CPTP completeness (BohrDomain)" n_jumps max_error=max_err threshold_atol=1e-10
+    end
+
+    @testset "DM precomputation matches trajectory workspace" begin
+        for (domain, label, extra_kw) in [
+            (EnergyDomain(), "Energy", (;)),
+            (TimeDomain(), "Time", (;)),
+            (TrotterDomain(), "Trotter", (; trotter=TEST_TROTTER)),
+        ]
+            config = make_config(Thermalize(), domain; delta=TEST_DELTA)
+            jumps = domain isa TrotterDomain ? TEST_TROTTER_JUMPS : TEST_JUMPS
+            ham = TEST_HAM
+
+            # DM precomputation path
+            ham_or_trott = domain isa TrotterDomain ? TEST_TROTTER : ham
+            precomputed_data = QuantumFurnace._precompute_data(config, ham_or_trott)
+            (; K0s, U_residuals) = QuantumFurnace._precompute_per_jump_channels(
+                jumps, ham_or_trott, config, precomputed_data; rescale_by_inv_prob=true,
+            )
+
+            # Trajectory workspace path (reference)
+            ws = QuantumFurnace._build_trajectory_workspace(config, ham, jumps; extra_kw..., delta=TEST_DELTA)
+
+            for a in 1:length(jumps)
+                @test isapprox(K0s[a], ws.K0s[a]; atol=1e-15)
+                @test isapprox(U_residuals[a], ws.U_residuals[a]; atol=1e-15)
+            end
+            @info "DM precomp matches trajectory ($label)" n_jumps=length(jumps)
+        end
+    end
+
 end
