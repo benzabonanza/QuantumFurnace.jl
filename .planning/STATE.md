@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-03-01)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v2.1 Speedup & Mixing Time -- Phase 40 complete, ready for Phase 41 (BLAS/Omega Threading)
+**Current focus:** v2.1 Speedup & Mixing Time -- Phase 41 in progress (BLAS/Omega Threading)
 
 ## Current Position
 
-Phase: 40 of 42 (Save Every) -- COMPLETE
-Plan: 1 of 1 in current phase (COMPLETE)
-Status: Phase 40 complete -- save_every keyword implemented and tested
-Last activity: 2026-03-01 -- Phase 40 plan 01 executed (2 tasks, 1158 tests pass)
+Phase: 41 of 42 (Threading)
+Plan: 1 of 2 in current phase (COMPLETE)
+Status: Plan 41-01 complete -- BLAS try/finally wrapping run_thermalize with multi-threaded BLAS enablement
+Last activity: 2026-03-01 -- Phase 41 plan 01 executed (2 tasks, 1170 tests pass)
 
 Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 111 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 19, v2.1: 3)
+- Total plans completed: 112 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 19, v2.1: 4)
 
 **By Milestone:**
 
@@ -32,7 +32,7 @@ Progress: [██████████] 100%
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
 | v1.5 Krylov Gap Estimation | 27-32 | 12 (+3 quick) | 2026-02-20 to 2026-02-25 |
 | v2.0 Restructure | 33-38 | 19 (+2 quick) | 2026-02-25 to 2026-02-28 |
-| v2.1 Speedup & Mixing Time | 39-42 | 3/TBD | 2026-03-01 to present |
+| v2.1 Speedup & Mixing Time | 39-42 | 4/TBD | 2026-03-01 to present |
 
 ## Accumulated Context
 
@@ -52,6 +52,8 @@ Recent decisions affecting current work:
 - save_every gates observation only (trace_distance_h, push, printf, convergence); physics runs every step unconditionally
 - recorded_steps array replaces num_steps-based time_steps construction for save_every support
 - Convergence cutoff checked only at save points (coarser detection acceptable for reduced observation cost)
+- DM BLAS pattern: save -> set_num_threads(nthreads) -> try loop finally restore (inverse of trajectory pattern which sets BLAS=1)
+- Only hot loop wrapped in try/finally -- precomputation and result construction remain outside
 
 ### Pending Todos
 
@@ -59,10 +61,10 @@ None
 
 ### Blockers/Concerns
 
-None -- Phase 40 complete, no outstanding blockers.
+None -- Plan 41-01 complete, ready for Plan 41-02.
 
 ## Session Continuity
 
 Last session: 2026-03-01
-Stopped at: Completed 40-01-PLAN.md (save_every feature). Ready for Phase 41 (BLAS/Omega Threading).
+Stopped at: Completed 41-01-PLAN.md (BLAS threading for DM path). Ready for 41-02-PLAN.md.
 Resume file: None
