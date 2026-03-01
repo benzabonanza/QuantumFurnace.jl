@@ -5,14 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-03-01)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v2.1 Speedup & Mixing Time
+**Current focus:** v2.1 Speedup & Mixing Time -- Phase 39 (Per-Jump Precomputation)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-03-01 — Milestone v2.1 started
+Phase: 39 of 42 (Per-Jump Precomputation)
+Plan: 0 of TBD in current phase
+Status: Ready to plan
+Last activity: 2026-03-01 -- Roadmap created for v2.1 milestone (Phases 39-42)
+
+Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
@@ -30,12 +32,19 @@ Last activity: 2026-03-01 — Milestone v2.1 started
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
 | v1.5 Krylov Gap Estimation | 27-32 | 12 (+3 quick) | 2026-02-20 to 2026-02-25 |
 | v2.0 Restructure | 33-38 | 19 (+2 quick) | 2026-02-25 to 2026-02-28 |
+| v2.1 Speedup & Mixing Time | 39-42 | 0/TBD | 2026-03-01 to present |
 
 ## Accumulated Context
 
 ### Decisions
 
 All decisions logged in PROJECT.md Key Decisions table.
+Recent decisions affecting current work:
+
+- v2.1 scope: Per-jump precomputation, save_every, BLAS/omega threading, mixing time estimation
+- BohrDomain: NO per-Bohr-frequency precomputation (frequency count grows too fast); general speedups and threading only
+- Omega-loop threading: Optional/deferred within Phase 41 -- BLAS threading alone provides meaningful speedup
+- Mixing time estimation: Post-processing function, not embedded in run_thermalize
 
 ### Pending Todos
 
@@ -43,10 +52,11 @@ None
 
 ### Blockers/Concerns
 
-None
+- BohrDomain _precompute_R has no existing codebase precedent -- requires careful extraction of rho-independent R part from _jump_contribution!
+- Regression test baselines may need regeneration after precomputation (O(1e-14) level eigendecomposition FP variation)
 
 ## Session Continuity
 
 Last session: 2026-03-01
-Stopped at: Starting milestone v2.1. Defining requirements.
+Stopped at: Roadmap created for v2.1 milestone. Ready to plan Phase 39.
 Resume file: None

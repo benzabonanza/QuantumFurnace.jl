@@ -65,31 +65,31 @@ Requirements for v2.1 Speedup & Mixing Time. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PRECOMP-01 | — | Pending |
-| PRECOMP-02 | — | Pending |
-| PRECOMP-03 | — | Pending |
-| PRECOMP-04 | — | Pending |
-| THREAD-01 | — | Pending |
-| THREAD-02 | — | Pending |
-| THREAD-03 | — | Pending |
-| THREAD-04 | — | Pending |
-| THREAD-05 | — | Pending |
-| SAVE-01 | — | Pending |
-| SAVE-02 | — | Pending |
-| MIX-01 | — | Pending |
-| MIX-02 | — | Pending |
-| MIX-03 | — | Pending |
-| MIX-04 | — | Pending |
-| MIX-05 | — | Pending |
-| MIX-06 | — | Pending |
-| MIX-07 | — | Pending |
-| MIX-08 | — | Pending |
+| PRECOMP-01 | Phase 39 | Pending |
+| PRECOMP-02 | Phase 39 | Pending |
+| PRECOMP-03 | Phase 39 | Pending |
+| PRECOMP-04 | Phase 39 | Pending |
+| THREAD-01 | Phase 41 | Pending |
+| THREAD-02 | Phase 41 | Pending |
+| THREAD-03 | Phase 41 | Pending |
+| THREAD-04 | Phase 41 | Pending |
+| THREAD-05 | Phase 41 | Pending |
+| SAVE-01 | Phase 40 | Pending |
+| SAVE-02 | Phase 40 | Pending |
+| MIX-01 | Phase 42 | Pending |
+| MIX-02 | Phase 42 | Pending |
+| MIX-03 | Phase 42 | Pending |
+| MIX-04 | Phase 42 | Pending |
+| MIX-05 | Phase 42 | Pending |
+| MIX-06 | Phase 42 | Pending |
+| MIX-07 | Phase 42 | Pending |
+| MIX-08 | Phase 42 | Pending |
 
 **Coverage:**
 - v2.1 requirements: 19 total
-- Mapped to phases: 0
-- Unmapped: 19
+- Mapped to phases: 19
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-01*
-*Last updated: 2026-03-01 after initial definition*
+*Last updated: 2026-03-01 after roadmap creation*
