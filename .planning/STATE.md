@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-03-01)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v2.1 Speedup & Mixing Time -- Phase 39 (Per-Jump Precomputation)
+**Current focus:** v2.1 Speedup & Mixing Time -- Phase 39 complete, ready for Phase 40 (Save Every)
 
 ## Current Position
 
-Phase: 39 of 42 (Per-Jump Precomputation)
+Phase: 39 of 42 (Per-Jump Precomputation) — VERIFIED COMPLETE
 Plan: 2 of 2 in current phase (COMPLETE)
-Status: Phase 39 complete
-Last activity: 2026-03-01 -- Completed Plan 39-02 (integration and validation)
+Status: Phase 39 verified — 10/10 must-haves passed
+Last activity: 2026-03-01 -- Phase 39 verified and marked complete
 
 Progress: [██████████] 100%
 
@@ -61,5 +61,5 @@ None -- Phase 39 complete, no outstanding blockers.
 ## Session Continuity
 
 Last session: 2026-03-01
-Stopped at: Completed 39-02-PLAN.md (integration and validation). Phase 39 complete. Ready for Phase 40.
+Stopped at: Phase 39 verified (10/10 must-haves). Ready for Phase 40 (Save Every).
 Resume file: None

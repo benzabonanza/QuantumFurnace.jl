@@ -113,7 +113,7 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 
 **Milestone Goal:** Optimize run_thermalize performance via per-jump precomputation and multi-threaded BLAS/omega-loops; add mixing time estimation via exponential fit on trace distance convergence curve.
 
-- [ ] **Phase 39: Per-Jump Precomputation** - Eliminate per-step eigendecomposition by precomputing K0, U_residual, and U_coherent per jump at simulation start
+- [x] **Phase 39: Per-Jump Precomputation** - Eliminate per-step eigendecomposition by precomputing K0, U_residual, and U_coherent per jump at simulation start -- completed 2026-03-01
 - [ ] **Phase 40: Save Every** - Control trace distance computation frequency to decouple observation cost from step cost
 - [ ] **Phase 41: Threading** - Multi-threaded BLAS and optional omega-loop parallelism for DM thermalization
 - [ ] **Phase 42: Mixing Time Estimation** - Exponential fit on trace distance convergence curve with extrapolation and quality gates
@@ -132,8 +132,8 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 **Plans:** 2 plans
 
 Plans:
-- [ ] 39-01-PLAN.md -- Precomputation infrastructure (BohrDomain _precompute_R, _precompute_per_jump_channels, _accumulate_rho_jump!, _apply_precomputed_channel!)
-- [ ] 39-02-PLAN.md -- Integration and validation (refactor run_thermalize, CPTP test extension, full test suite)
+- [x] 39-01-PLAN.md -- Precomputation infrastructure (BohrDomain _precompute_R, _precompute_per_jump_channels, _accumulate_rho_jump!, _apply_precomputed_channel!)
+- [x] 39-02-PLAN.md -- Integration and validation (refactor run_thermalize, CPTP test extension, full test suite)
 
 ### Phase 40: Save Every
 **Goal**: Users control how often trace distance to the Gibbs state is computed during run_thermalize, reducing observation overhead for long simulations while preserving backward compatibility
@@ -195,7 +195,7 @@ Phases execute in numeric order: 39 -> 40 -> 41 -> 42
 | 26 | v1.4 | 2/2 | Complete | 2026-02-19 |
 | 27-32 | v1.5 | 12/12 | Complete | 2026-02-25 |
 | 33-38 | v2.0 | 19/19 | Complete | 2026-02-28 |
-| 39. Precomputation | v2.1 | 0/2 | Not started | - |
+| 39. Precomputation | v2.1 | 2/2 | Complete | 2026-03-01 |
 | 40. Save Every | v2.1 | 0/TBD | Not started | - |
 | 41. Threading | v2.1 | 0/TBD | Not started | - |
 | 42. Mixing Time | v2.1 | 0/TBD | Not started | - |
