@@ -143,10 +143,10 @@ Plans:
   1. run_thermalize accepts a save_every keyword that controls trace distance computation frequency (e.g., save_every=10 computes trace distance every 10 steps)
   2. Default save_every=1 produces identical results to pre-change behavior (full backward compatibility)
   3. ThermalizeResults contains aligned time_steps and trace_distances arrays whose lengths match ceil(n_steps / save_every) (plus or minus 1 for initial/final step handling)
-**Plans**: TBD
+**Plans:** 1 plan
 
 Plans:
-- [ ] 40-01: TBD
+- [ ] 40-01-PLAN.md -- Add save_every keyword to run_thermalize with gated trace distance computation and behavioral tests
 
 ### Phase 41: Threading
 **Goal**: Users get multi-threaded BLAS speedup on DM thermalization automatically, with optional omega-loop parallelism for large frequency grids, without data races or BLAS thread state leaks
@@ -196,6 +196,6 @@ Phases execute in numeric order: 39 -> 40 -> 41 -> 42
 | 27-32 | v1.5 | 12/12 | Complete | 2026-02-25 |
 | 33-38 | v2.0 | 19/19 | Complete | 2026-02-28 |
 | 39. Precomputation | v2.1 | 2/2 | Complete | 2026-03-01 |
-| 40. Save Every | v2.1 | 0/TBD | Not started | - |
+| 40. Save Every | v2.1 | 0/1 | Not started | - |
 | 41. Threading | v2.1 | 0/TBD | Not started | - |
 | 42. Mixing Time | v2.1 | 0/TBD | Not started | - |
