@@ -200,6 +200,11 @@ function _precompute_R(
     dim = size(hamiltonian.data, 1)
     (; transition, gamma_norm_factor, energy_labels) = precomputed_data
 
+    n_labels = length(energy_labels)
+    if Threads.nthreads() > 1 && n_labels >= OMEGA_THREAD_THRESHOLD
+        return _precompute_R_threaded_energy!(jumps, hamiltonian, config, precomputed_data, scratch)
+    end
+
     base_prefactor = precomputed_data.oft_domain_prefactor * gamma_norm_factor
     inv_4sigma2 = 1.0 / (4 * config.sigma^2)
 
@@ -255,6 +260,11 @@ function _precompute_R(
     ) where {D<:Union{TimeDomain, TrotterDomain}}
     dim = size(jumps[1].in_eigenbasis, 1)
     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = precomputed_data
+
+    n_labels = length(energy_labels)
+    if Threads.nthreads() > 1 && n_labels >= OMEGA_THREAD_THRESHOLD
+        return _precompute_R_threaded_timetrot!(jumps, ham_or_trott, config, precomputed_data, scratch)
+    end
 
     # Same weight as in jump_contribution!(::Union{TimeDomain,TrotterDomain}, ...), but without delta.
     base_prefactor = precomputed_data.oft_domain_prefactor * gamma_norm_factor
@@ -327,6 +337,11 @@ function _precompute_R(
     bohr_is   = hasproperty(precomputed_data, :bohr_is)   ? precomputed_data.bohr_is   : nothing
     bohr_js   = hasproperty(precomputed_data, :bohr_js)   ? precomputed_data.bohr_js   : nothing
 
+    n_keys = length(bohr_keys)
+    if Threads.nthreads() > 1 && n_keys >= OMEGA_THREAD_THRESHOLD
+        return _precompute_R_threaded_bohr!(jumps, hamiltonian, config, precomputed_data, scratch, bohr_keys, bohr_is, bohr_js)
+    end
+
     fill!(scratch.R, 0)
 
     @inbounds for jump in jumps
@@ -362,6 +377,266 @@ function _precompute_R(
 
     hermitianize!(scratch.R)
     return scratch.R
+end
+
+#* Threaded _precompute_R variants (THREAD-02) -------------------------------------------------------
+
+# --- EnergyDomain threaded _precompute_R ---
+
+function _precompute_R_threaded_energy!(
+    jumps::AbstractVector{<:JumpOp},
+    hamiltonian::HamHam,
+    config::Config{Thermalize, EnergyDomain},
+    precomputed_data,
+    scratch::ThermalizeScratch{CT},
+) where {CT<:Complex}
+    dim = size(hamiltonian.data, 1)
+    (; transition, gamma_norm_factor, energy_labels) = precomputed_data
+    base_prefactor = precomputed_data.oft_domain_prefactor * gamma_norm_factor
+    inv_4sigma2 = 1.0 / (4 * config.sigma^2)
+
+    fill!(scratch.R, 0)
+
+    @inbounds for jump in jumps
+        # For Hermitian jumps, pre-filter to half-grid indices
+        if jump.hermitian
+            half_indices = [i for i in eachindex(energy_labels) if energy_labels[i] <= 1e-12]
+        else
+            half_indices = collect(eachindex(energy_labels))
+        end
+
+        n_work = length(half_indices)
+        nt = min(Threads.nthreads(), n_work)
+        chunks = _partition_range(1:n_work, nt)
+
+        task_scratches = [ThermalizeScratch(CT, dim) for _ in 1:length(chunks)]
+
+        old_blas = BLAS.get_num_threads()
+        BLAS.set_num_threads(1)
+        try
+            @sync for (idx, chunk) in enumerate(chunks)
+                Threads.@spawn _precompute_R_chunk_energy!(
+                    task_scratches[idx], jump, hamiltonian, precomputed_data,
+                    half_indices[chunk];
+                    base_prefactor=base_prefactor, inv_4sigma2=inv_4sigma2)
+            end
+        finally
+            BLAS.set_num_threads(old_blas)
+        end
+
+        # Reduce: sum per-task R into scratch.R (additive across jumps)
+        for ts in task_scratches
+            scratch.R .+= ts.R
+        end
+    end
+
+    hermitianize!(scratch.R)
+    return scratch.R
+end
+
+function _precompute_R_chunk_energy!(
+    scratch::ThermalizeScratch{CT},
+    jump::JumpOp,
+    hamiltonian::HamHam,
+    precomputed_data,
+    label_indices::AbstractVector{Int};
+    base_prefactor::Real,
+    inv_4sigma2::Real,
+) where {CT<:Complex}
+    (; transition, energy_labels) = precomputed_data
+    fill!(scratch.R, 0)
+
+    @inbounds for li in label_indices
+        w_raw = energy_labels[li]
+        w = abs(w_raw)
+
+        oft!(scratch.jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
+
+        rate2_pos = base_prefactor * transition(w)
+        mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)
+        @. scratch.R += rate2_pos * scratch.LdagL
+
+        if jump.hermitian && w > 1e-12
+            rate2_neg = base_prefactor * transition(-w)
+            mul!(scratch.LdagL, scratch.jump_oft, scratch.jump_oft')
+            @. scratch.R += rate2_neg * scratch.LdagL
+        end
+    end
+
+    return nothing
+end
+
+# --- TimeDomain/TrotterDomain threaded _precompute_R ---
+
+function _precompute_R_threaded_timetrot!(
+    jumps::AbstractVector{<:JumpOp},
+    ham_or_trott::Union{HamHam, TrottTrott},
+    config::Config{Thermalize, D},
+    precomputed_data,
+    scratch::ThermalizeScratch{CT},
+) where {CT<:Complex, D<:Union{TimeDomain, TrotterDomain}}
+    dim = size(jumps[1].in_eigenbasis, 1)
+    (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = precomputed_data
+    base_prefactor = precomputed_data.oft_domain_prefactor * gamma_norm_factor
+
+    fill!(scratch.R, 0)
+
+    @inbounds for jump in jumps
+        if jump.hermitian
+            half_indices = [i for i in eachindex(energy_labels) if energy_labels[i] <= 1e-12]
+        else
+            half_indices = collect(eachindex(energy_labels))
+        end
+
+        n_work = length(half_indices)
+        nt = min(Threads.nthreads(), n_work)
+        chunks = _partition_range(1:n_work, nt)
+
+        task_scratches = [ThermalizeScratch(CT, dim) for _ in 1:length(chunks)]
+
+        old_blas = BLAS.get_num_threads()
+        BLAS.set_num_threads(1)
+        try
+            @sync for (idx, chunk) in enumerate(chunks)
+                Threads.@spawn _precompute_R_chunk_timetrot!(
+                    task_scratches[idx], jump, precomputed_data,
+                    half_indices[chunk];
+                    base_prefactor=base_prefactor)
+            end
+        finally
+            BLAS.set_num_threads(old_blas)
+        end
+
+        for ts in task_scratches
+            scratch.R .+= ts.R
+        end
+    end
+
+    hermitianize!(scratch.R)
+    return scratch.R
+end
+
+function _precompute_R_chunk_timetrot!(
+    scratch::ThermalizeScratch{CT},
+    jump::JumpOp,
+    precomputed_data,
+    label_indices::AbstractVector{Int};
+    base_prefactor::Real,
+) where {CT<:Complex}
+    (; transition, energy_labels, oft_nufft_prefactors) = precomputed_data
+    fill!(scratch.R, 0)
+
+    @inbounds for li in label_indices
+        w_raw = energy_labels[li]
+        w = abs(w_raw)
+
+        nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
+        @. scratch.jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
+
+        rate2_pos = base_prefactor * transition(w)
+        mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)
+        @. scratch.R += rate2_pos * scratch.LdagL
+
+        if jump.hermitian && w > 1e-12
+            rate2_neg = base_prefactor * transition(-w)
+            mul!(scratch.LdagL, scratch.jump_oft, scratch.jump_oft')
+            @. scratch.R += rate2_neg * scratch.LdagL
+        end
+    end
+
+    return nothing
+end
+
+# --- BohrDomain threaded _precompute_R ---
+
+function _precompute_R_threaded_bohr!(
+    jumps::AbstractVector{<:JumpOp},
+    hamiltonian::HamHam,
+    config::Config{Thermalize, BohrDomain},
+    precomputed_data,
+    scratch::ThermalizeScratch{CT},
+    bohr_keys::AbstractVector,
+    bohr_is::Union{Nothing, Vector{Vector{Int}}},
+    bohr_js::Union{Nothing, Vector{Vector{Int}}},
+) where {CT<:Complex}
+    dim = size(hamiltonian.data, 1)
+    (; alpha, gamma_norm_factor) = precomputed_data
+
+    fill!(scratch.R, 0)
+
+    @inbounds for jump in jumps
+        n_keys = length(bohr_keys)
+        nt = min(Threads.nthreads(), n_keys)
+        chunks = _partition_range(1:n_keys, nt)
+
+        task_scratches = [ThermalizeScratch(CT, dim) for _ in 1:length(chunks)]
+
+        old_blas = BLAS.get_num_threads()
+        BLAS.set_num_threads(1)
+        try
+            @sync for (idx, chunk) in enumerate(chunks)
+                Threads.@spawn _precompute_R_chunk_bohr!(
+                    task_scratches[idx], jump, hamiltonian, precomputed_data,
+                    bohr_keys, bohr_is, bohr_js, chunk;
+                    gamma_norm_factor=gamma_norm_factor)
+            end
+        finally
+            BLAS.set_num_threads(old_blas)
+        end
+
+        for ts in task_scratches
+            scratch.R .+= ts.R
+        end
+    end
+
+    hermitianize!(scratch.R)
+    return scratch.R
+end
+
+function _precompute_R_chunk_bohr!(
+    scratch::ThermalizeScratch{CT},
+    jump::JumpOp,
+    hamiltonian::HamHam,
+    precomputed_data,
+    bohr_keys::AbstractVector,
+    bohr_is::Union{Nothing, Vector{Vector{Int}}},
+    bohr_js::Union{Nothing, Vector{Vector{Int}}},
+    key_indices::UnitRange{Int};
+    gamma_norm_factor::Real,
+) where {CT<:Complex}
+    dim = size(hamiltonian.data, 1)
+    (; alpha) = precomputed_data
+    fill!(scratch.R, 0)
+
+    @inbounds for k in key_indices
+        nu_2 = bohr_keys[k]
+        @. scratch.jump_oft = alpha(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
+
+        if bohr_is !== nothing
+            is = bohr_is[k]
+            js = bohr_js[k]
+            @inbounds for t in eachindex(is)
+                i = is[t]
+                j = js[t]
+                v = conj(jump.in_eigenbasis[i, j]) * gamma_norm_factor
+                @inbounds for q in 1:dim
+                    scratch.R[j, q] += v * scratch.jump_oft[i, q]
+                end
+            end
+        else
+            indices = hamiltonian.bohr_dict[nu_2]
+            @inbounds for idx in indices
+                i = idx[1]
+                j = idx[2]
+                v = conj(jump.in_eigenbasis[i, j]) * gamma_norm_factor
+                @inbounds for q in 1:dim
+                    scratch.R[j, q] += v * scratch.jump_oft[i, q]
+                end
+            end
+        end
+    end
+
+    return nothing
 end
 
 # Fast squared norm without sqrt

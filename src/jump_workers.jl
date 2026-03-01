@@ -619,6 +619,11 @@ function _accumulate_rho_jump!(
     bohr_is   = hasproperty(precomputed_data, :bohr_is)   ? precomputed_data.bohr_is   : nothing
     bohr_js   = hasproperty(precomputed_data, :bohr_js)   ? precomputed_data.bohr_js   : nothing
 
+    n_keys = length(bohr_keys)
+    if Threads.nthreads() > 1 && n_keys >= OMEGA_THREAD_THRESHOLD
+        return _accumulate_rho_jump_threaded_bohr!(scratch, evolving_dm, jump, hamiltonian, config, precomputed_data, bohr_keys, bohr_is, bohr_js; jump_weight_scaling=jump_weight_scaling)
+    end
+
     scaled_delta = config.delta * jump_weight_scaling
 
     fill!(scratch.rho_jump, 0)
@@ -825,6 +830,106 @@ function _accumulate_rho_jump_chunk_timetrot!(
             mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft)
             mul!(scratch.rho_jump, scratch.jump_oft', scratch.sandwich_tmp, config.delta * rate2_neg, 1.0)
         end
+    end
+
+    return nothing
+end
+
+# --- BohrDomain threaded variant ---
+
+function _accumulate_rho_jump_threaded_bohr!(
+    scratch::ThermalizeScratch{CT},
+    evolving_dm::Matrix{CT},
+    jump::JumpOp,
+    hamiltonian::HamHam,
+    config::Config{Thermalize, BohrDomain},
+    precomputed_data,
+    bohr_keys::AbstractVector,
+    bohr_is::Union{Nothing, Vector{Vector{Int}}},
+    bohr_js::Union{Nothing, Vector{Vector{Int}}};
+    jump_weight_scaling::Real,
+) where {CT<:Complex}
+    dim = size(evolving_dm, 1)
+    (; alpha) = precomputed_data
+    scaled_delta = config.delta * jump_weight_scaling
+
+    n_keys = length(bohr_keys)
+    nt = min(Threads.nthreads(), n_keys)
+    chunks = _partition_range(1:n_keys, nt)
+
+    task_scratches = [ThermalizeScratch(CT, dim) for _ in 1:length(chunks)]
+
+    old_blas = BLAS.get_num_threads()
+    BLAS.set_num_threads(1)
+    try
+        @sync for (idx, chunk) in enumerate(chunks)
+            Threads.@spawn _accumulate_rho_jump_chunk_bohr!(
+                task_scratches[idx], evolving_dm, jump, hamiltonian,
+                precomputed_data, bohr_keys, bohr_is, bohr_js, chunk;
+                scaled_delta=scaled_delta)
+        end
+    finally
+        BLAS.set_num_threads(old_blas)
+    end
+
+    # Reduce: sum per-task rho_jump into scratch.rho_jump
+    fill!(scratch.rho_jump, 0)
+    for ts in task_scratches
+        scratch.rho_jump .+= ts.rho_jump
+    end
+
+    return nothing
+end
+
+function _accumulate_rho_jump_chunk_bohr!(
+    scratch::ThermalizeScratch{CT},
+    evolving_dm::Matrix{CT},
+    jump::JumpOp,
+    hamiltonian::HamHam,
+    precomputed_data,
+    bohr_keys::AbstractVector,
+    bohr_is::Union{Nothing, Vector{Vector{Int}}},
+    bohr_js::Union{Nothing, Vector{Vector{Int}}},
+    key_indices::UnitRange{Int};
+    scaled_delta::Real,
+) where {CT<:Complex}
+    dim = size(evolving_dm, 1)
+    (; alpha) = precomputed_data
+    fill!(scratch.rho_jump, 0)
+
+    @inbounds for k in key_indices
+        nu_2 = bohr_keys[k]
+
+        # B_{v2} = sum_{v1} alpha(v1, v2) * A
+        @. scratch.jump_oft = alpha(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
+
+        # sandwich_tmp := rho A_{v2}dag
+        fill!(scratch.sandwich_tmp, 0)
+        if bohr_is !== nothing
+            is = bohr_is[k]
+            js = bohr_js[k]
+            @inbounds for t in eachindex(is)
+                i = is[t]
+                j = js[t]
+                v = conj(jump.in_eigenbasis[i, j])
+                @inbounds for p in 1:dim
+                    scratch.sandwich_tmp[p, i] += evolving_dm[p, j] * v
+                end
+            end
+        else
+            indices = hamiltonian.bohr_dict[nu_2]
+            @inbounds for idx in indices
+                i = idx[1]
+                j = idx[2]
+                v = conj(jump.in_eigenbasis[i, j])
+                @inbounds for p in 1:dim
+                    scratch.sandwich_tmp[p, i] += evolving_dm[p, j] * v
+                end
+            end
+        end
+
+        # rho_jump += scaled_delta * B_{v2} * (rho A_{v2}dag)
+        mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp, scaled_delta, 1.0)
     end
 
     return nothing
