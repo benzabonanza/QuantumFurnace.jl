@@ -299,6 +299,71 @@ function _precompute_R(
     return scratch.R
 end
 
+"""
+    _precompute_R(jumps, hamiltonian, config::Config{Thermalize, BohrDomain}, precomputed_data, scratch)
+
+Compute R = sum_{nu_2} A_{nu_2}^dagger * B_{nu_2} for BohrDomain, where
+B_{nu_2} = sum_{nu_1} alpha(nu_1, nu_2) * A^a.
+
+Uses precomputed Bohr bucket indices (bohr_keys, bohr_is, bohr_js) when available
+from precomputed_data, falling back to hamiltonian.bohr_dict otherwise.
+
+The scaling factor uses `gamma_norm_factor` (bare, no 1/p_jump) -- the caller
+applies any per-jump probability rescaling separately.
+
+Returns `scratch.R` (Hermitianized).
+"""
+function _precompute_R(
+    jumps::AbstractVector{<:JumpOp},
+    hamiltonian::HamHam,
+    config::Config{Thermalize, BohrDomain},
+    precomputed_data,
+    scratch::ThermalizeScratch{<:Complex},
+)
+    dim = size(hamiltonian.data, 1)
+    (; alpha, gamma_norm_factor) = precomputed_data
+
+    bohr_keys = hasproperty(precomputed_data, :bohr_keys) ? precomputed_data.bohr_keys : collect(keys(hamiltonian.bohr_dict))
+    bohr_is   = hasproperty(precomputed_data, :bohr_is)   ? precomputed_data.bohr_is   : nothing
+    bohr_js   = hasproperty(precomputed_data, :bohr_js)   ? precomputed_data.bohr_js   : nothing
+
+    fill!(scratch.R, 0)
+
+    @inbounds for jump in jumps
+        for (k, nu_2) in pairs(bohr_keys)
+            # B_{nu_2} = sum_{nu_1} alpha(nu_1, nu_2) * A^a
+            @. scratch.jump_oft = alpha(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
+
+            # R += gamma_norm_factor * A_{nu_2}^dagger * B_{nu_2}
+            if bohr_is !== nothing
+                is = bohr_is[k]
+                js = bohr_js[k]
+                @inbounds for t in eachindex(is)
+                    i = is[t]
+                    j = js[t]
+                    v = conj(jump.in_eigenbasis[i, j]) * gamma_norm_factor
+                    @inbounds for q in 1:dim
+                        scratch.R[j, q] += v * scratch.jump_oft[i, q]
+                    end
+                end
+            else
+                indices = hamiltonian.bohr_dict[nu_2]
+                @inbounds for idx in indices
+                    i = idx[1]
+                    j = idx[2]
+                    v = conj(jump.in_eigenbasis[i, j]) * gamma_norm_factor
+                    @inbounds for q in 1:dim
+                        scratch.R[j, q] += v * scratch.jump_oft[i, q]
+                    end
+                end
+            end
+        end
+    end
+
+    hermitianize!(scratch.R)
+    return scratch.R
+end
+
 # Fast squared norm without sqrt
 @inline _norm2(v::AbstractVector{<:Complex}) = real(dot(v, v))
 

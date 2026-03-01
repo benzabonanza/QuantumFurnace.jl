@@ -199,3 +199,46 @@ function _build_cptp_channel(R::Matrix{T}, delta::Real) where {T<:Complex}
 
     return (; K0, U_residual, alpha)
 end
+
+"""
+    _precompute_per_jump_channels(jumps, ham_or_trott, config, precomputed_data; rescale_by_inv_prob=true)
+
+Precompute per-jump CPTP channel matrices (K0, U_residual) for all jumps.
+Eliminates per-step eigendecomposition in the `run_thermalize` hot loop.
+
+For each jump operator, computes R^a via `_precompute_R`, optionally scales by `1/p_jump`
+(when `rescale_by_inv_prob=true`), and builds the CPTP channel via `_build_cptp_channel`.
+
+Returns a NamedTuple `(; K0s, U_residuals)` where each is a `Vector{Matrix{CT}}` of length `n_jumps`.
+"""
+function _precompute_per_jump_channels(
+    jumps::Vector{JumpOp},
+    ham_or_trott::Union{HamHam, TrottTrott},
+    config::Config{Thermalize},
+    precomputed_data;
+    rescale_by_inv_prob::Bool = true,
+)
+    CT = Complex{eltype(ham_or_trott isa HamHam ? ham_or_trott.eigvals : ham_or_trott.eigvals)}
+    dim = size(ham_or_trott isa HamHam ? ham_or_trott.data : ham_or_trott.data, 1)
+    n_jumps = length(jumps)
+    p_jump = 1.0 / n_jumps
+
+    K0s = Vector{Matrix{CT}}(undef, n_jumps)
+    U_residuals = Vector{Matrix{CT}}(undef, n_jumps)
+
+    # Create temporary scratch for R construction (construction-time only)
+    builder_scratch = ThermalizeScratch(CT, dim)
+
+    @inbounds for a in 1:n_jumps
+        _precompute_R([jumps[a]], ham_or_trott, config, precomputed_data, builder_scratch)
+        R_a = copy(builder_scratch.R)
+        if rescale_by_inv_prob
+            R_a .*= (1.0 / p_jump)
+        end
+        (; K0, U_residual) = _build_cptp_channel(R_a, config.delta)
+        K0s[a] = K0
+        U_residuals[a] = U_residual
+    end
+
+    return (; K0s, U_residuals)
+end
