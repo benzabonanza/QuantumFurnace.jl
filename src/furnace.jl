@@ -201,37 +201,43 @@ function run_thermalize(
     trace_distances = [trace_distance_h(Hermitian(evolving_dm), gibbs)]
     recorded_steps = Int[0]
 
-    for step in 1:num_steps
-        idx = rand(rng, 1:length(jumps))
-        jump = jumps[idx]
+    old_blas = BLAS.get_num_threads()
+    try
+        BLAS.set_num_threads(Threads.nthreads())
+        for step in 1:num_steps
+            idx = rand(rng, 1:length(jumps))
+            jump = jumps[idx]
 
-        # Coherent evolution (already precomputed, same as before)
-        _apply_coherent_unitary!(
-            evolving_dm,
-            coherent_unitaries === nothing ? nothing : coherent_unitaries[idx],
-            scratch,
-        )
+            # Coherent evolution (already precomputed, same as before)
+            _apply_coherent_unitary!(
+                evolving_dm,
+                coherent_unitaries === nothing ? nothing : coherent_unitaries[idx],
+                scratch,
+            )
 
-        # Accumulate rho_jump (rho-dependent omega loop, no R/eigen)
-        _accumulate_rho_jump!(
-            scratch, evolving_dm, jump, ham_or_trott, config, precomputed_data;
-            jump_weight_scaling = jump_weight_scaling,
-        )
+            # Accumulate rho_jump (rho-dependent omega loop, no R/eigen)
+            _accumulate_rho_jump!(
+                scratch, evolving_dm, jump, ham_or_trott, config, precomputed_data;
+                jump_weight_scaling = jump_weight_scaling,
+            )
 
-        # Apply precomputed channel (no eigendecomposition)
-        _apply_precomputed_channel!(
-            evolving_dm, K0s[idx], U_residuals[idx], scratch,
-        )
+            # Apply precomputed channel (no eigendecomposition)
+            _apply_precomputed_channel!(
+                evolving_dm, K0s[idx], U_residuals[idx], scratch,
+            )
 
-        if step % save_every == 0
-            dist = trace_distance_h(Hermitian(evolving_dm), gibbs)
-            push!(trace_distances, dist)
-            push!(recorded_steps, step)
-            @printf("Dist to Gibbs: %s\n", dist)
-            if dist < convergence_cutoff
-                break
+            if step % save_every == 0
+                dist = trace_distance_h(Hermitian(evolving_dm), gibbs)
+                push!(trace_distances, dist)
+                push!(recorded_steps, step)
+                @printf("Dist to Gibbs: %s\n", dist)
+                if dist < convergence_cutoff
+                    break
+                end
             end
         end
+    finally
+        BLAS.set_num_threads(old_blas)
     end
 
     time_steps = T.(recorded_steps .* config.delta)
