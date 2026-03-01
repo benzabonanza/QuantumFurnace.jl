@@ -94,6 +94,19 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 
 ### Active
 
+#### Current Milestone: v2.1 Speedup & Mixing Time
+
+**Goal:** Optimize run_thermalize performance via per-jump precomputation, multi-threaded ω-loops, and multi-threaded BLAS; add mixing time estimation via exponential fit on trace distance convergence curve with extrapolation support.
+
+**Target features:**
+- [ ] Per-jump precomputation of K0^a, U_residual^a, U_coherent^a (eliminate redundant recomputation in hot loop)
+- [ ] Multi-threaded ω-loop with thread-local accumulators (both precomputation and dissipative sandwich)
+- [ ] Multi-threaded BLAS for finalize_kraus_step matrix multiplications
+- [ ] save_every parameter for trace distance computation frequency
+- [ ] Mixing time estimation via exponential fit on trace distance convergence curve (extrapolate=true/false)
+
+#### Future
+
 - [ ] DLL config (Ding et al. 2024 construction)
 - [ ] 1D Ising model Hamiltonian generation
 - [ ] 2D Heisenberg Hamiltonian generation (lattice graph support)
@@ -229,4 +242,4 @@ Results needed for publication: convergence curves (trace distance vs. steps), m
 | Keep explicit for-loops over foreach_frequency() (v2.0) | User decision: iterator abstraction adds complexity without clear benefit for current patterns | ✓ Good -- deferred, code remains readable |
 
 ---
-*Last updated: 2026-02-28 after v2.0 milestone*
+*Last updated: 2026-03-01 after v2.1 milestone start*
