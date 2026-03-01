@@ -9,7 +9,7 @@
 - ✅ **v1.4 Spectral Gap Refinement** -- Phase 26 (partial, shipped 2026-02-20)
 - ✅ **v1.5 Krylov Gap Estimation** -- Phases 27-32 (shipped 2026-02-25)
 - ✅ **v2.0 Restructure** -- Phases 33-38 (shipped 2026-02-28)
-- **v2.1 Speedup & Mixing Time** -- Phases 39-42 (in progress)
+- ✅ **v2.1 Speedup & Mixing Time** -- Phases 39-42 (shipped 2026-03-01)
 
 ## Phases
 
@@ -109,14 +109,14 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 
 </details>
 
-### v2.1 Speedup & Mixing Time (In Progress)
+### v2.1 Speedup & Mixing Time (Complete)
 
 **Milestone Goal:** Optimize run_thermalize performance via per-jump precomputation and multi-threaded BLAS/omega-loops; add mixing time estimation via exponential fit on trace distance convergence curve.
 
 - [x] **Phase 39: Per-Jump Precomputation** - Eliminate per-step eigendecomposition by precomputing K0, U_residual, and U_coherent per jump at simulation start -- completed 2026-03-01
 - [x] **Phase 40: Save Every** - Control trace distance computation frequency to decouple observation cost from step cost -- completed 2026-03-01
 - [x] **Phase 41: Threading** - Multi-threaded BLAS and optional omega-loop parallelism for DM thermalization -- completed 2026-03-01
-- [ ] **Phase 42: Mixing Time Estimation** - Exponential fit on trace distance convergence curve with extrapolation and quality gates
+- [x] **Phase 42: Mixing Time Estimation** - Exponential fit on trace distance convergence curve with extrapolation and quality gates -- completed 2026-03-01
 
 ## Phase Details
 
@@ -177,8 +177,8 @@ Plans:
 **Plans:** 2 plans
 
 Plans:
-- [ ] 42-01-PLAN.md -- LsqFit.jl promotion + MixingTimeEstimate implementation (fitting.jl promoted, mixing.jl created)
-- [ ] 42-02-PLAN.md -- Comprehensive tests and full validation (fitting tests promoted, mixing tests created)
+- [x] 42-01-PLAN.md -- LsqFit.jl promotion + MixingTimeEstimate implementation (fitting.jl promoted, mixing.jl created)
+- [x] 42-02-PLAN.md -- Comprehensive tests and full validation (fitting tests promoted, mixing tests created)
 
 ## Progress
 
@@ -197,4 +197,4 @@ Phases execute in numeric order: 39 -> 40 -> 41 -> 42
 | 39. Precomputation | v2.1 | 2/2 | Complete | 2026-03-01 |
 | 40. Save Every | v2.1 | 1/1 | Complete | 2026-03-01 |
 | 41. Threading | v2.1 | 2/2 | Complete | 2026-03-01 |
-| 42. Mixing Time | v2.1 | 0/2 | Not started | - |
+| 42. Mixing Time | v2.1 | 2/2 | Complete | 2026-03-01 |
