@@ -158,11 +158,11 @@ Plans:
   3. Threaded omega-loop rho_jump accumulation (when enabled) produces results matching serial accumulation within floating-point tolerance
   4. BohrDomain benefits from threading where applicable (Bohr bucket iteration, sandwich accumulation)
   5. No BLAS thread oversubscription occurs when run_thermalize is called independently or in sequence with trajectory functions
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 41-01: TBD
-- [ ] 41-02: TBD
+- [ ] 41-01-PLAN.md -- BLAS thread management for run_thermalize (try/finally save/restore, DM threading tests)
+- [ ] 41-02-PLAN.md -- Omega-loop parallelism with per-task accumulators (_accumulate_rho_jump!, _precompute_R for all 4 domains)
 
 ### Phase 42: Mixing Time Estimation
 **Goal**: Users can estimate mixing time from a run_thermalize trace distance curve via exponential fit, with optional early stopping via extrapolation, quality gates on fit reliability, and LsqFit.jl re-integrated as an active dependency
@@ -197,5 +197,5 @@ Phases execute in numeric order: 39 -> 40 -> 41 -> 42
 | 33-38 | v2.0 | 19/19 | Complete | 2026-02-28 |
 | 39. Precomputation | v2.1 | 2/2 | Complete | 2026-03-01 |
 | 40. Save Every | v2.1 | 1/1 | Complete | 2026-03-01 |
-| 41. Threading | v2.1 | 0/TBD | Not started | - |
+| 41. Threading | v2.1 | 0/2 | Not started | - |
 | 42. Mixing Time | v2.1 | 0/TBD | Not started | - |
