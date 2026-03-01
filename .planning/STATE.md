@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-03-01)
 ## Current Position
 
 Phase: 39 of 42 (Per-Jump Precomputation)
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-03-01 -- Roadmap created for v2.1 milestone (Phases 39-42)
+Plan: 1 of 2 in current phase
+Status: In progress
+Last activity: 2026-03-01 -- Completed Plan 39-01 (precomputation infrastructure)
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█████░░░░░] 50%
 
 ## Performance Metrics
 
@@ -32,7 +32,7 @@ Progress: [░░░░░░░░░░] 0%
 | v1.4 Spectral Gap Refinement | 26 | 2 (+1 quick) | 2026-02-19 to 2026-02-20 |
 | v1.5 Krylov Gap Estimation | 27-32 | 12 (+3 quick) | 2026-02-20 to 2026-02-25 |
 | v2.0 Restructure | 33-38 | 19 (+2 quick) | 2026-02-25 to 2026-02-28 |
-| v2.1 Speedup & Mixing Time | 39-42 | 0/TBD | 2026-03-01 to present |
+| v2.1 Speedup & Mixing Time | 39-42 | 1/TBD | 2026-03-01 to present |
 
 ## Accumulated Context
 
@@ -45,6 +45,8 @@ Recent decisions affecting current work:
 - BohrDomain: NO per-Bohr-frequency precomputation (frequency count grows too fast); general speedups and threading only
 - Omega-loop threading: Optional/deferred within Phase 41 -- BLAS threading alone provides meaningful speedup
 - Mixing time estimation: Post-processing function, not embedded in run_thermalize
+- _precompute_per_jump_channels stores K0s/U_residuals only (no Rs) -- DM path does not need raw R matrices
+- BohrDomain _precompute_R uses precomputed bohr_is/bohr_js with fallback to hamiltonian.bohr_dict
 
 ### Pending Todos
 
@@ -58,5 +60,5 @@ None
 ## Session Continuity
 
 Last session: 2026-03-01
-Stopped at: Roadmap created for v2.1 milestone. Ready to plan Phase 39.
+Stopped at: Completed 39-01-PLAN.md (precomputation infrastructure). Ready for 39-02.
 Resume file: None
