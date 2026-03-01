@@ -25,6 +25,8 @@ include("test_helpers.jl")
     include("test_krylov_matvec.jl")
     include("test_krylov_eigsolve.jl")
     include("test_krylov_crossvalidation.jl")
+    include("test_fitting.jl")
+    include("test_mixing.jl")
 
     # Trajectory validation (slow: ~minutes, gated behind env variable)
     if get(ENV, "QUANTUMFURNACE_FULL_TESTS", "false") == "true"
