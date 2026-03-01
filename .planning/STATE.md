@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-03-01)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v2.1 Speedup & Mixing Time -- Phase 41 in progress (BLAS/Omega Threading)
+**Current focus:** v2.1 Speedup & Mixing Time -- Phase 41 complete (BLAS + Omega Threading)
 
 ## Current Position
 
 Phase: 41 of 42 (Threading)
-Plan: 1 of 2 in current phase (COMPLETE)
-Status: Plan 41-01 complete -- BLAS try/finally wrapping run_thermalize with multi-threaded BLAS enablement
-Last activity: 2026-03-01 -- Phase 41 plan 01 executed (2 tasks, 1170 tests pass)
+Plan: 2 of 2 in current phase (COMPLETE)
+Status: Phase 41 complete -- BLAS threading + omega-loop parallelism for DM path
+Last activity: 2026-03-01 -- Phase 41 plan 02 executed (3 tasks, 1181 tests pass)
 
 Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 112 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 19, v2.1: 4)
+- Total plans completed: 113 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 19, v2.1: 5)
 
 **By Milestone:**
 
@@ -43,7 +43,7 @@ Recent decisions affecting current work:
 
 - v2.1 scope: Per-jump precomputation, save_every, BLAS/omega threading, mixing time estimation
 - BohrDomain: NO per-Bohr-frequency precomputation (frequency count grows too fast); general speedups and threading only
-- Omega-loop threading: Optional/deferred within Phase 41 -- BLAS threading alone provides meaningful speedup
+- Omega-loop threading: Implemented in Phase 41-02 -- OMEGA_THREAD_THRESHOLD=50, per-task ThermalizeScratch, BLAS=1 during Julia-level parallelism
 - Mixing time estimation: Post-processing function, not embedded in run_thermalize
 - _precompute_per_jump_channels stores K0s/U_residuals only (no Rs) -- DM path does not need raw R matrices
 - BohrDomain _precompute_R uses precomputed bohr_is/bohr_js with fallback to hamiltonian.bohr_dict
@@ -61,10 +61,10 @@ None
 
 ### Blockers/Concerns
 
-None -- Plan 41-01 complete, ready for Plan 41-02.
+None -- Phase 41 complete, ready for Phase 42.
 
 ## Session Continuity
 
 Last session: 2026-03-01
-Stopped at: Completed 41-01-PLAN.md (BLAS threading for DM path). Ready for 41-02-PLAN.md.
+Stopped at: Completed 41-02-PLAN.md (omega-loop threading). Phase 41 fully complete. Ready for Phase 42.
 Resume file: None
