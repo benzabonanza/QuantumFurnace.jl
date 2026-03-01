@@ -439,6 +439,33 @@ function _jump_contribution!(
     return evolving_dm
 end
 
+#* Omega-loop threading infrastructure ---------------------------------------------------------------
+
+# Minimum number of frequency labels to enable omega-loop parallelism.
+# Below this threshold, serial execution is faster due to task spawn overhead.
+const OMEGA_THREAD_THRESHOLD = 50
+
+"""
+    _partition_range(range, n_chunks) -> Vector{UnitRange{Int}}
+
+Partition a range into approximately equal chunks for parallel execution.
+Same algorithm as _partition_trajectories in trajectories.jl.
+"""
+function _partition_range(range::UnitRange{Int}, n_chunks::Int)
+    len = length(range)
+    n_chunks = min(n_chunks, len)
+    base = div(len, n_chunks)
+    remainder = rem(len, n_chunks)
+    chunks = Vector{UnitRange{Int}}(undef, n_chunks)
+    start = first(range)
+    for i in 1:n_chunks
+        chunk_size = base + (i <= remainder ? 1 : 0)
+        chunks[i] = start:(start + chunk_size - 1)
+        start += chunk_size
+    end
+    return chunks
+end
+
 #* Per-jump rho_jump-only accumulation (precomputed channel path) ----------------------------------------
 
 """
@@ -460,6 +487,11 @@ function _accumulate_rho_jump!(
     jump_weight_scaling::Real,
 )
     (; transition, energy_labels) = precomputed_data
+
+    n_labels = length(energy_labels)
+    if Threads.nthreads() > 1 && n_labels >= OMEGA_THREAD_THRESHOLD
+        return _accumulate_rho_jump_threaded_energy!(scratch, evolving_dm, jump, hamiltonian, config, precomputed_data; jump_weight_scaling=jump_weight_scaling)
+    end
 
     base_prefactor = precomputed_data.oft_domain_prefactor * jump_weight_scaling
     inv_4sigma2 = 1.0 / (4 * config.sigma^2)
@@ -518,6 +550,11 @@ function _accumulate_rho_jump!(
     jump_weight_scaling::Real,
 ) where {D<:Union{TimeDomain, TrotterDomain}}
     (; transition, energy_labels, oft_nufft_prefactors) = precomputed_data
+
+    n_labels = length(energy_labels)
+    if Threads.nthreads() > 1 && n_labels >= OMEGA_THREAD_THRESHOLD
+        return _accumulate_rho_jump_threaded_timetrot!(scratch, evolving_dm, jump, ham_or_trott, config, precomputed_data; jump_weight_scaling=jump_weight_scaling)
+    end
 
     base_prefactor = precomputed_data.oft_domain_prefactor * jump_weight_scaling
 
@@ -617,6 +654,177 @@ function _accumulate_rho_jump!(
 
         # rho_jump += scaled_delta * B_{v2} * (rho A_{v2}dag)
         mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp, scaled_delta, 1.0)
+    end
+
+    return nothing
+end
+
+#* Threaded omega-loop variants (THREAD-01, THREAD-04) ---------------------------------------------------
+
+# --- EnergyDomain threaded variant ---
+
+function _accumulate_rho_jump_threaded_energy!(
+    scratch::ThermalizeScratch{CT},
+    evolving_dm::Matrix{CT},
+    jump::JumpOp,
+    hamiltonian::HamHam,
+    config::Config{Thermalize, EnergyDomain},
+    precomputed_data;
+    jump_weight_scaling::Real,
+) where {CT<:Complex}
+    (; transition, energy_labels) = precomputed_data
+    base_prefactor = precomputed_data.oft_domain_prefactor * jump_weight_scaling
+    inv_4sigma2 = 1.0 / (4 * config.sigma^2)
+
+    # For Hermitian jumps, pre-filter to half-grid indices for balanced partitioning
+    if jump.hermitian
+        half_indices = [i for i in eachindex(energy_labels) if energy_labels[i] <= 1e-12]
+    else
+        half_indices = collect(eachindex(energy_labels))
+    end
+
+    n_work = length(half_indices)
+    nt = min(Threads.nthreads(), n_work)
+    chunks = _partition_range(1:n_work, nt)
+    dim = size(evolving_dm, 1)
+
+    # Per-task scratch: each needs rho_jump, jump_oft, sandwich_tmp
+    task_scratches = [ThermalizeScratch(CT, dim) for _ in 1:length(chunks)]
+
+    old_blas = BLAS.get_num_threads()
+    BLAS.set_num_threads(1)
+    try
+        @sync for (idx, chunk) in enumerate(chunks)
+            Threads.@spawn _accumulate_rho_jump_chunk_energy!(
+                task_scratches[idx], evolving_dm, jump, hamiltonian,
+                config, precomputed_data, half_indices[chunk];
+                base_prefactor=base_prefactor, inv_4sigma2=inv_4sigma2)
+        end
+    finally
+        BLAS.set_num_threads(old_blas)
+    end
+
+    # Reduce: sum per-task rho_jump into scratch.rho_jump
+    fill!(scratch.rho_jump, 0)
+    for ts in task_scratches
+        scratch.rho_jump .+= ts.rho_jump
+    end
+
+    return nothing
+end
+
+function _accumulate_rho_jump_chunk_energy!(
+    scratch::ThermalizeScratch{CT},
+    evolving_dm::Matrix{CT},
+    jump::JumpOp,
+    hamiltonian::HamHam,
+    config::Config{Thermalize, EnergyDomain},
+    precomputed_data,
+    label_indices::AbstractVector{Int};
+    base_prefactor::Real,
+    inv_4sigma2::Real,
+) where {CT<:Complex}
+    (; transition, energy_labels) = precomputed_data
+    fill!(scratch.rho_jump, 0)
+
+    @inbounds for li in label_indices
+        w_raw = energy_labels[li]
+        w = abs(w_raw)
+
+        oft!(scratch.jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
+
+        rate2_pos = base_prefactor * transition(w)
+        mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft')
+        mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp, config.delta * rate2_pos, 1.0)
+
+        if jump.hermitian && w > 1e-12
+            rate2_neg = base_prefactor * transition(-w)
+            mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft)
+            mul!(scratch.rho_jump, scratch.jump_oft', scratch.sandwich_tmp, config.delta * rate2_neg, 1.0)
+        end
+    end
+
+    return nothing
+end
+
+# --- TimeDomain/TrotterDomain threaded variant ---
+
+function _accumulate_rho_jump_threaded_timetrot!(
+    scratch::ThermalizeScratch{CT},
+    evolving_dm::Matrix{CT},
+    jump::JumpOp,
+    ham_or_trott,
+    config::Config{Thermalize, D},
+    precomputed_data;
+    jump_weight_scaling::Real,
+) where {CT<:Complex, D<:Union{TimeDomain, TrotterDomain}}
+    (; transition, energy_labels, oft_nufft_prefactors) = precomputed_data
+    base_prefactor = precomputed_data.oft_domain_prefactor * jump_weight_scaling
+
+    # For Hermitian jumps, pre-filter to half-grid indices for balanced partitioning
+    if jump.hermitian
+        half_indices = [i for i in eachindex(energy_labels) if energy_labels[i] <= 1e-12]
+    else
+        half_indices = collect(eachindex(energy_labels))
+    end
+
+    n_work = length(half_indices)
+    nt = min(Threads.nthreads(), n_work)
+    chunks = _partition_range(1:n_work, nt)
+    dim = size(evolving_dm, 1)
+
+    task_scratches = [ThermalizeScratch(CT, dim) for _ in 1:length(chunks)]
+
+    old_blas = BLAS.get_num_threads()
+    BLAS.set_num_threads(1)
+    try
+        @sync for (idx, chunk) in enumerate(chunks)
+            Threads.@spawn _accumulate_rho_jump_chunk_timetrot!(
+                task_scratches[idx], evolving_dm, jump,
+                config, precomputed_data, half_indices[chunk];
+                base_prefactor=base_prefactor)
+        end
+    finally
+        BLAS.set_num_threads(old_blas)
+    end
+
+    # Reduce: sum per-task rho_jump into scratch.rho_jump
+    fill!(scratch.rho_jump, 0)
+    for ts in task_scratches
+        scratch.rho_jump .+= ts.rho_jump
+    end
+
+    return nothing
+end
+
+function _accumulate_rho_jump_chunk_timetrot!(
+    scratch::ThermalizeScratch{CT},
+    evolving_dm::Matrix{CT},
+    jump::JumpOp,
+    config::Config{Thermalize, D},
+    precomputed_data,
+    label_indices::AbstractVector{Int};
+    base_prefactor::Real,
+) where {CT<:Complex, D<:Union{TimeDomain, TrotterDomain}}
+    (; transition, energy_labels, oft_nufft_prefactors) = precomputed_data
+    fill!(scratch.rho_jump, 0)
+
+    @inbounds for li in label_indices
+        w_raw = energy_labels[li]
+        w = abs(w_raw)
+
+        nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
+        @. scratch.jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
+
+        rate2_pos = base_prefactor * transition(w)
+        mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft')
+        mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp, config.delta * rate2_pos, 1.0)
+
+        if jump.hermitian && w > 1e-12
+            rate2_neg = base_prefactor * transition(-w)
+            mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft)
+            mul!(scratch.rho_jump, scratch.jump_oft', scratch.sandwich_tmp, config.delta * rate2_neg, 1.0)
+        end
     end
 
     return nothing
