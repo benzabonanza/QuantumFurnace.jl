@@ -192,3 +192,77 @@ end
         @test true
     end
 end
+
+# ============================================================================
+# DM thermalization BLAS threading tests (THREAD-03, THREAD-05)
+# ============================================================================
+
+@testset "DM BLAS thread restoration" begin
+    old_blas = BLAS.get_num_threads()
+
+    # Normal completion (EnergyDomain)
+    therm_config = make_config(Thermalize(), EnergyDomain(); num_qubits=3,
+        delta=0.01, mixing_time=0.1)
+    result = run_thermalize(N3_JUMPS, therm_config, N3_HAM)
+    @test BLAS.get_num_threads() == old_blas
+    @info "DM BLAS restoration (Energy)" blas_before=old_blas blas_after=BLAS.get_num_threads()
+
+    # Test across multiple domains to ensure all paths restore
+    for (domain, jumps, trott, name) in [
+        (TimeDomain(), N3_JUMPS, nothing, "Time"),
+        (TrotterDomain(), N3_TROTTER_JUMPS, N3_TROTTER, "Trotter"),
+    ]
+        cfg = make_config(Thermalize(), domain; num_qubits=3, delta=0.01, mixing_time=0.1)
+        run_thermalize(jumps, cfg, N3_HAM, trott)
+        @test BLAS.get_num_threads() == old_blas
+        @info "DM BLAS restoration ($name)" blas_after=BLAS.get_num_threads()
+    end
+end
+
+@testset "DM serial-threaded BLAS agreement" begin
+    # Run with BLAS threads = 1 (serial BLAS) vs default (multi-threaded BLAS)
+    therm_config = make_config(Thermalize(), EnergyDomain(); num_qubits=3,
+        delta=0.01, mixing_time=0.5)
+    rng_seed = 42
+
+    # Serial BLAS reference
+    old_blas = BLAS.get_num_threads()
+    BLAS.set_num_threads(1)
+    result_serial = run_thermalize(N3_JUMPS, therm_config, N3_HAM;
+        rng=Random.Xoshiro(rng_seed))
+    BLAS.set_num_threads(old_blas)
+
+    # Multi-threaded BLAS
+    result_multi = run_thermalize(N3_JUMPS, therm_config, N3_HAM;
+        rng=Random.Xoshiro(rng_seed))
+
+    # BLAS threading does NOT change FP results for BLAS gemm (BLAS is deterministic
+    # at fixed thread count, but may differ between 1 and N threads due to different
+    # reduction order in gemm). At dim=8 (3 qubits), the difference is negligible.
+    # For larger systems the FP accumulation order in gemm may differ.
+    td_diff = maximum(abs.(result_serial.trace_distances .- result_multi.trace_distances))
+    dm_diff = maximum(abs.(result_serial.final_dm .- result_multi.final_dm))
+    @test isapprox(result_serial.trace_distances, result_multi.trace_distances; atol=1e-10)
+    @test isapprox(result_serial.final_dm, result_multi.final_dm; atol=1e-10)
+    @info "DM serial-threaded BLAS agreement" trace_dist_diff=td_diff dm_diff=dm_diff threshold=1e-10
+end
+
+@testset "DM-trajectory BLAS isolation" begin
+    # Verify that calling run_thermalize then run_trajectories does not leak BLAS state
+    old_blas = BLAS.get_num_threads()
+
+    therm_config_dm = make_config(Thermalize(), EnergyDomain(); num_qubits=3,
+        delta=0.01, mixing_time=0.1)
+    run_thermalize(N3_JUMPS, therm_config_dm, N3_HAM)
+    @test BLAS.get_num_threads() == old_blas
+
+    therm_config_traj = make_config(Thermalize(), TimeDomain(); num_qubits=3,
+        delta=0.01, mixing_time=0.1, construction=GNS())
+    dim = size(N3_HAM.data, 1)
+    psi0 = zeros(ComplexF64, dim); psi0[1] = 1.0
+    run_trajectories(N3_JUMPS, therm_config_traj, psi0, N3_HAM;
+        delta=0.01, ntraj=10, seed=42)
+    @test BLAS.get_num_threads() == old_blas
+
+    @info "DM-trajectory BLAS isolation" blas_threads=old_blas verified=true
+end
