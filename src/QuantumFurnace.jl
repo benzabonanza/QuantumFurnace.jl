@@ -17,6 +17,7 @@ using Base.Threads
 using FINUFFT
 using KrylovKit
 using LibGit2
+using LsqFit
 using Dates
 
 # --- Public API ---
@@ -74,7 +75,7 @@ export validate_config!
 export oft!, time_oft!, trotter_oft!
 
 # STAGING: estimate_spectral_gap, OverlapAnalysisResult, eigenbasis_overlap_analysis
-# STAGING: fit_exponential_decay, FitResult
+export fit_exponential_decay, FitResult
 # STAGING: LSIFramework, compute_LSI_alpha2
 
 # --- Internal Implementation ---
@@ -100,5 +101,6 @@ include("krylov_eigsolve.jl")
 include("convergence.jl")
 include("diagnostics.jl")
 include("results.jl")
+include("fitting.jl")
 
 end
