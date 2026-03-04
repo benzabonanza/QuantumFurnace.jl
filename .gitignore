@@ -21,3 +21,7 @@
 
 # Editor-specific
 .vscode/
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db
