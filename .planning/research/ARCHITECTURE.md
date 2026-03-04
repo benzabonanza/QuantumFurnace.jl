@@ -1,575 +1,284 @@
-# Architecture Research: v2.1 Speedup & Mixing Time Integration
+# Architecture Patterns: v2.2 Hamiltonian Simulation Time Counter
 
-**Domain:** QuantumFurnace.jl performance optimization and feature extension
-**Researched:** 2026-03-01
-**Confidence:** HIGH (analysis based on full source code reading, not external docs)
+**Domain:** Analytical cost counting for quantum Gibbs sampler algorithm
+**Researched:** 2026-03-04
+**Confidence:** HIGH (based on exhaustive reading of all source files in existing codebase)
 
-## Current Architecture Summary
+## Recommended Architecture
 
-The v2.0 architecture has five core layers for the `run_thermalize` path:
+The Ham sim time counter is a **pure analytical computation module** that sits alongside the existing post-processing layer (fitting.jl, mixing.jl). It does NOT run simulations -- it computes the quantum algorithm's cost from parameters. This makes it architecturally clean: no workspace buffers, no scratch memory, no hot-loop concerns.
+
+### High-Level Data Flow
 
 ```
-run_thermalize (furnace.jl:143-223)
+HamHam (rescaling_factor, data size)
     |
-    |-- precompute phase (one-time)
-    |       _precompute_data (furnace_utensils.jl:30-141)
-    |       _precompute_coherent_unitary (coherent.jl:58-100)
+    +-- Scalar params (r, delta, beta, sigma, transition weight type)
+    |       |
+    |       +-- MixingTimeEstimate (mixing_time field)  [optional convenience]
+    |               |
+    v               v
+compute_simulation_time(ham, r, delta, mixing_time; beta, transition_weight=:smooth_metro, ...)
     |
-    |-- main loop (per-step)
-    |       _jump_contribution! (jump_workers.jl:194-440)
-    |           domain-dispatched: BohrDomain, EnergyDomain, TimeDomain/TrotterDomain
-    |           accumulates R and rho_jump over omega-loop
-    |           calls _finalize_kraus_step! at end
-    |       _finalize_kraus_step! (jump_workers.jl:172-192)
-    |           calls _build_cptp_channel (furnace_utensils.jl:183-200)
-    |           K0, U_residual from R via eigen decomposition
-    |           rho_next = K0 * rho * K0' + rho_jump + U_res * rho * U_res'
-    |
-    |-- return ThermalizeResults (structs.jl:201-207)
+    v
+SimulationTimeBudget (result struct)
+    |-- oft_time          (per step)
+    |-- b_time            (per step)
+    |-- per_step_time     (per step total)
+    |-- total_steps
+    |-- total_time
+    |-- grid_points, energy_range, etc.
 ```
 
-### Key Hot-Path Bottleneck: _build_cptp_channel Called Every Step
+### Component Boundaries
 
-The critical performance issue is in `_finalize_kraus_step!` (jump_workers.jl:178):
+| Component | Responsibility | Communicates With |
+|-----------|---------------|-------------------|
+| `SimulationTimeBudget` (struct) | Immutable result container for all time counts | Returned by compute functions, consumed by callers |
+| `compute_simulation_time` (main API) | Orchestrate full time budget computation from parameters | Reads HamHam fields, calls internal helpers |
+| `_qpe_grid_info` (internal) | Compute 2^r QPE grid point count and energy range | Used by OFT and B time helpers |
+| `_oft_hamiltonian_time` (internal) | Compute Ham sim time for OFT (dissipative channels) per step | Uses rescaling_factor, r, transition weight |
+| `_b_hamiltonian_time` (internal) | Compute Ham sim time for coherent B term per step | Uses rescaling_factor, beta, sigma |
+| Transition weight reuse | Leverage existing `pick_transition` or compute weights analytically | Reads from energy_domain.jl transition weight functions |
+
+### New File: `src/simulation_time.jl`
+
+Single new file, approximately 200-350 lines. No modifications to existing source files except:
+1. `src/QuantumFurnace.jl`: Add `include("simulation_time.jl")` line after `include("mixing.jl")` and add exports
+2. No changes to HamHam, Config, Workspace, or any existing struct
+
+This follows the established pattern: `fitting.jl` and `mixing.jl` were each added as standalone post-processing files with their own structs, included at the end of the module, exported from the main module file.
+
+## Patterns to Follow
+
+### Pattern 1: Immutable Result Struct (match FitResult, MixingTimeEstimate)
+
+**What:** All computation outputs stored in an immutable struct with descriptive field names and full docstring.
+**When:** Always -- this is the universal pattern in QuantumFurnace for computed results.
+**Why:** FitResult (10 fields), BiexpFitResult (12 fields), MixingTimeEstimate (14 fields) all follow this. No mutable state, full data capture.
 
 ```julia
-(; K0, U_residual) = _build_cptp_channel(scratch.R, delta)
-```
-
-This calls `_build_cptp_channel` (furnace_utensils.jl:183-200) which:
-1. Allocates K0 = I - alpha * R (dim x dim allocation)
-2. Computes R^2 via matrix multiply
-3. Computes S = (2*alpha - delta)*R - alpha^2 * R^2
-4. Calls `eigen(Hermitian(S))` -- O(dim^3) eigendecomposition
-5. Computes U_residual via Diagonal * eigvecs'
-
-**This eigendecomposition happens every single thermalization step.** For a single randomly-selected jump, R is computed fresh each step from the omega-loop, then K0 and U_residual are recomputed from R. But when only one jump is picked per step, R^a is deterministic for a given jump `a` -- it depends only on the jump operator and precomputed domain data, not on the evolving state.
-
-### Existing Precedent: Trajectory Workspace Already Has Per-Jump Precomputation
-
-The trajectory code (trajectories.jl:60-152) already precomputes per-jump K0^a, U_residual^a:
-
-```julia
-# trajectories.jl:104-122
-@inbounds for a in 1:n_jumps
-    _precompute_R([jumps_for_diss[a]], ham_or_trott, config, precomputed_data, builder_scratch)
-    R_a = copy(builder_scratch.R)
-    R_a .*= (1.0 / p_jump)
-
-    (; K0, U_residual) = _build_cptp_channel(R_a, delta)
-
-    Rs[a] = R_a
-    K0s[a] = K0
-    U_residuals[a] = U_residual
+struct SimulationTimeBudget
+    # Per-step costs (Ham sim time units)
+    oft_time::Float64
+    b_time::Float64
+    per_step_time::Float64
+    # Step count
+    total_steps::Int
+    mixing_time::Float64
+    delta::Float64
+    # Total cost
+    total_time::Float64
+    # QPE grid info
+    r::Int
+    grid_points::Int
+    energy_range::Float64
+    # Parameters used (provenance)
+    n::Int
+    beta::Float64
+    rescaling_factor::Float64
+    transition_weight::Symbol
+    with_coherent::Bool
 end
 ```
 
-These are stored in `Workspace.Rs`, `Workspace.K0s`, `Workspace.U_residuals`, and `Workspace.U_Bs` (per-jump coherent unitaries). This is exactly the pattern needed for `run_thermalize` speedup.
+### Pattern 2: Pure Function + Keywords (match estimate_mixing_time)
 
-## Integration Analysis: New Features
-
-### Feature 1: Per-Jump K0^a, U_residual^a Precomputation
-
-**Current flow (furnace.jl:191-209, jump_workers.jl:194-440):**
-
-```
-for step in 1:num_steps
-    idx = rand(rng, 1:length(jumps))
-    jump = jumps[idx]
-    _jump_contribution!(evolving_dm, jump, ..., scratch)
-        # Inside: accumulates R from omega-loop
-        # Then: _finalize_kraus_step!(evolving_dm, delta, scratch)
-        #   -> _build_cptp_channel(scratch.R, delta)  # EXPENSIVE: eigen() per step
-```
-
-**Proposed flow:**
-
-```
-# Precompute phase (new, one-time):
-for a in 1:n_jumps
-    _precompute_R([jumps[a]], ham_or_trott, config, precomputed_data, scratch)
-    R_a = copy(scratch.R) .* (1.0 / p_jump)
-    (; K0, U_residual) = _build_cptp_channel(R_a, delta)
-    K0s[a], U_residuals[a] = K0, U_residual
-end
-
-# Hot loop (modified):
-for step in 1:num_steps
-    idx = rand(rng, 1:length(jumps))
-    _apply_coherent_unitary!(evolving_dm, U_Bs[idx], scratch)
-    fill!(scratch.rho_jump, 0)
-    _accumulate_rho_jump_only!(scratch.rho_jump, evolving_dm, jumps[idx], ...)
-    _apply_precomputed_channel!(evolving_dm, K0s[idx], U_residuals[idx], scratch)
-```
-
-**Why the omega-loop for rho_jump still runs per step:** The rho_jump term is `delta * sum_w rate^2 * A_w * rho * A_w'` -- it depends on the current evolving_dm (the rho in the sandwich). Only the R accumulation (`R += rate^2 * A_w' * A_w`) and the resulting K0/U_residual are rho-independent and precomputable. The per-step omega-loop is cut roughly in half: only rho_jump sandwiches, no R accumulation.
-
-**Where to store precomputed data:** Do NOT extend the Workspace struct. The `Workspace{S,D,C,T}` struct already has 38 fields and is shared across 4 simulation types. Instead, store K0s/U_residuals as local variables inside `run_thermalize`, matching the existing pattern where `coherent_unitaries` (furnace.jl:180) is already a local variable, not a struct field.
-
-Specifically:
-- `K0s::Vector{Matrix{CT}}` -- local to run_thermalize
-- `U_residuals::Vector{Matrix{CT}}` -- local to run_thermalize
-- `coherent_unitaries` -- already exists as local (furnace.jl:180)
-
-**Modified components:**
-
-| File | Location | Change |
-|------|----------|--------|
-| `furnace.jl:143-223` | `run_thermalize` | Add precompute loop before main loop; change main loop to use precomputed channel |
-| `jump_workers.jl` | new function | Add `_apply_precomputed_channel!` |
-| `jump_workers.jl:194-440` | `_jump_contribution!` (all 3 Thermalize variants) | Split into rho_jump-only accumulation + precomputed channel application; or add new `_accumulate_rho_jump_only!` functions |
-| `furnace_utensils.jl` | existing file | Move `_precompute_R` here from trajectories.jl; add BohrDomain variant |
-
-**New functions:**
-
-| Function | Purpose | Location |
-|----------|---------|----------|
-| `_apply_precomputed_channel!(evolving_dm, K0, U_residual, scratch)` | Apply K0*rho*K0' + rho_jump + U_res*rho*U_res' using scratch buffers | `jump_workers.jl` |
-| `_accumulate_rho_jump_only!(rho_jump, evolving_dm, jump, ...)` | Domain-dispatched omega-loop for rho_jump sandwich only (no R accumulation) | `jump_workers.jl` (3 variants: BohrDomain, EnergyDomain, TimeDomain/TrotterDomain) |
-
-**Code reuse:** The `_precompute_R` function already exists in trajectories.jl:193-300 for EnergyDomain and TimeDomain/TrotterDomain. It should be moved to `furnace_utensils.jl` as a shared utility alongside `_precompute_data` and `_build_cptp_channel`.
-
-**BohrDomain gap:** `_precompute_R` in trajectories.jl has no BohrDomain variant (trajectories never use BohrDomain). For `run_thermalize`, BohrDomain IS used. Need to add a BohrDomain `_precompute_R` method. The R accumulation logic is embedded in `_jump_contribution!` (jump_workers.jl:226-282):
+**What:** Main API function takes a physics object + keyword arguments, dispatches internally on keyword values.
+**When:** For the top-level `compute_simulation_time` API.
+**Why:** `estimate_mixing_time(result; model=:single, ...)` established this pattern. Keywords for optional behavior, positional args for required data.
 
 ```julia
-@inbounds for (k, nu_2) in pairs(bohr_keys)
-    @. scratch.jump_oft = alpha(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
-    # ... accumulate both R and rho_jump interleaved
-end
+function compute_simulation_time(
+    ham::HamHam,
+    r::Int,
+    delta::Float64,
+    mixing_time::Float64;
+    beta::Float64,
+    sigma::Float64 = 1.0 / beta,
+    transition_weight::Symbol = :smooth_metro,
+    with_coherent::Bool = true,
+    a::Float64 = 0.0,
+    b::Float64 = 0.0,
+) :: SimulationTimeBudget
 ```
 
-For precomputation, extract only the R accumulation part into a new `_precompute_R` method dispatched on BohrDomain.
+### Pattern 3: Convenience Overload for MixingTimeEstimate
 
-### Feature 2: save_every for Trace Distance Computation
-
-**Current structure (furnace.jl:191-209):**
-
-```julia
-for step in 1:num_steps
-    # ... jump contribution ...
-    dist = trace_distance_h(Hermitian(evolving_dm), gibbs)
-    push!(trace_distances, dist)
-    @printf("Dist to Gibbs: %s\n", dist)
-    if dist < convergence_cutoff
-        break
-    end
-end
-```
-
-`trace_distance_h` involves an eigendecomposition (O(dim^3)), computed EVERY step. For long runs, this is wasteful.
-
-**Existing precedent:** The trajectory code uses `save_every` extensively (trajectories.jl:396-464):
+**What:** Allow passing a MixingTimeEstimate directly to extract mixing_time.
+**When:** Common workflow: user runs `estimate_mixing_time` then wants simulation time budget.
+**Why:** Avoids manual field extraction. Follows Julia multiple dispatch convention.
 
 ```julia
-if step % save_every == 0
-    save_idx = div(step, save_every) + 1
-    # ... save observable measurements ...
-end
-```
-
-**Proposed integration:** Add `save_every::Int = 1` keyword to `run_thermalize`:
-
-```julia
-function run_thermalize(
-    jumps, config, hamiltonian, trotter=nothing;
-    initial_dm=nothing, rng=Random.default_rng(),
-    rescale_by_inv_prob=true,
-    save_every::Int = 1,  # NEW
+function compute_simulation_time(
+    ham::HamHam, r::Int, delta::Float64,
+    est::MixingTimeEstimate;
+    kwargs...
 )
-```
-
-**Modified loop:**
-
-```julia
-num_saves = div(num_steps, save_every) + 1
-trace_distances = Vector{T}(undef, num_saves)
-trace_distances[1] = trace_distance_h(Hermitian(evolving_dm), gibbs)
-save_idx = 1
-
-for step in 1:num_steps
-    # ... jump contribution ...
-    if step % save_every == 0
-        save_idx += 1
-        dist = trace_distance_h(Hermitian(evolving_dm), gibbs)
-        trace_distances[save_idx] = dist
-        if dist < convergence_cutoff
-            break
-        end
-    end
-end
-trace_distances = trace_distances[1:save_idx]
-time_steps = [(s - 1) * save_every * config.delta for s in 1:save_idx]
-```
-
-**ThermalizeResults impact:** No struct change needed. `trace_distances` and `time_steps` already have matching lengths by construction. Callers get fewer data points when save_every > 1, which is the intended behavior.
-
-**Backward compatibility:** Default `save_every=1` preserves current behavior exactly.
-
-### Feature 3: Multi-threaded BLAS for Channel Application
-
-**After Feature 1:** The per-step `_apply_precomputed_channel!` consists of 4 `mul!` calls (BLAS.gemm) on dim x dim matrices. For dim >= 64 (n >= 6 qubits), multi-threaded BLAS provides speedup.
-
-**Current trajectory behavior:** The trajectory path sets `BLAS.set_num_threads(1)` during threaded execution (trajectories.jl:494-496) to avoid thread oversubscription. But `run_thermalize` is single-threaded at the Julia level, so multi-threaded BLAS on the matrix multiplies is beneficial and safe.
-
-**Implementation:** Ensure `BLAS.set_num_threads()` is at its default (number of CPU threads) during `run_thermalize`. Since the trajectory path restores BLAS threads in try/finally, this should already be the case. Verify and document.
-
-**No code changes needed** unless `run_thermalize` is called from within a trajectory batch (which it is not -- they are separate entry points).
-
-### Feature 4: Multi-threaded omega-loops (Precomputation Only)
-
-**After Feature 1:** The omega-loop only runs during precomputation (once per jump), not in the hot loop. Multi-threading the omega-loop in `_precompute_R` gives a one-time speedup on construction.
-
-**Implementation:** Thread the energy_labels loop with per-thread R accumulators:
-
-```julia
-function _precompute_R_threaded(jump, ham_or_trott, config, precomputed_data)
-    n_threads = Threads.nthreads()
-    R_threads = [zeros(CT, dim, dim) for _ in 1:n_threads]
-    scratch_threads = [ThermalizeScratch(CT, dim) for _ in 1:n_threads]
-
-    Threads.@threads for w_idx in eachindex(energy_labels)
-        tid = Threads.threadid()
-        # accumulate into R_threads[tid] using scratch_threads[tid]
-    end
-    R = sum(R_threads)
-    hermitianize!(R)
-    return R
+    return compute_simulation_time(ham, r, delta, est.mixing_time; kwargs...)
 end
 ```
 
-**The per-step rho_jump loop could also be threaded**, but this is riskier: the evolving_dm is shared read-only (safe), rho_jump accumulation needs atomic or per-thread reduction (manageable). However, the per-step loop is already smaller after Feature 1 (no R accumulation), and the BLAS calls within it may already use multi-threaded BLAS (Feature 3). Threading at the Julia level on top of multi-threaded BLAS risks oversubscription. **Defer per-step omega-loop threading** until profiling shows it is the bottleneck.
+### Pattern 4: Internal Helpers with Underscore Prefix
 
-### Feature 5: Mixing Time Estimation via Exponential Fit
-
-**Existing code:** `fit_exponential_decay` in `staging/fitting.jl` fits `A * exp(-gap * t) + C`. `FitResult` struct stores gap, amplitude, offset, CI, R-squared.
-
-**Integration approach:** Post-processing function, NOT integrated into `run_thermalize`. Reasons:
-1. Couples simulation logic with analysis logic if embedded
-2. Fit parameters (skip_initial, threshold) are analysis choices, not simulation parameters
-3. User may want to re-fit with different parameters without re-running
-
-```julia
-function estimate_mixing_time(result::ThermalizeResults;
-    skip_initial::Float64 = 0.0,
-    threshold::Float64 = 1e-4,
-    extrapolate::Bool = false,
-)
-    fit = fit_exponential_decay(result.time_steps, result.trace_distances;
-        skip_initial=skip_initial)
-
-    if fit.gap > 0 && fit.amplitude > 0 && (threshold - fit.offset) / fit.amplitude > 0
-        t_mix = -log((threshold - fit.offset) / fit.amplitude) / fit.gap
-    else
-        t_mix = NaN  # fit doesn't support meaningful extrapolation
-    end
-
-    return (; mixing_time=t_mix, fit=fit, extrapolated=extrapolate, threshold=threshold)
-end
-```
-
-**File location:** Move `fitting.jl` from `staging/` to active `src/`. Add `estimate_mixing_time` alongside it.
-
-**Return type:** NamedTuple, not a new struct. This is a lightweight post-processing step.
-
-## Component Modification Summary
-
-### Files Modified
-
-| File | Lines | Change | Risk |
-|------|-------|--------|------|
-| `furnace.jl` | 143-223 | Add precompute loop, modify main loop, add save_every kwarg | MEDIUM |
-| `jump_workers.jl` | new code | Add `_apply_precomputed_channel!`, add `_accumulate_rho_jump_only!` (3 domain variants) | MEDIUM |
-| `furnace_utensils.jl` | append | Move `_precompute_R` here, add BohrDomain variant | LOW |
-| `QuantumFurnace.jl` | exports | Add `estimate_mixing_time`, `FitResult`, `fit_exponential_decay`, include fitting.jl | LOW |
-
-### Files Moved from Staging
-
-| From | To | Purpose |
-|------|----|---------|
-| `staging/fitting.jl` | `src/fitting.jl` | Activate exponential fitting + add mixing time estimation |
-
-### Files NOT Modified
-
-| File | Reason |
-|------|--------|
-| `structs.jl` | No new structs needed; ThermalizeResults unchanged; K0s/U_residuals are local variables in run_thermalize |
-| `results.jl` | ThermalizeResults serialization unchanged (same fields, fewer trace_distance entries with save_every) |
-| `coherent.jl` | `_precompute_coherent_unitary` already produces per-jump U_B -- unchanged |
-| `trajectories.jl` | Keeps its own `_precompute_R` usage internally; shared function moves to furnace_utensils.jl |
-| `krylov_workspace.jl` | Krylov path unaffected |
-| `krylov_matvec.jl` | Krylov path unaffected |
-| `krylov_eigsolve.jl` | Krylov path unaffected |
-
-## Data Flow Diagrams
-
-### Current run_thermalize Data Flow (v2.0)
-
-```
-run_thermalize()
-    |
-    +-- _precompute_data(config, ham_or_trott)
-    |       -> precomputed_data (transition, gamma_norm_factor, energy_labels, ...)
-    |
-    +-- _precompute_coherent_unitary(jumps, ...)
-    |       -> coherent_unitaries: Vector{Matrix{CT}} (per-jump U_B)
-    |
-    +-- ThermalizeScratch(CT, dim)
-    |       -> scratch (R, rho_jump, sandwich_tmp, rho_next, jump_oft, LdagL, ...)
-    |
-    +-- for step in 1:num_steps  -------- HOT LOOP --------
-    |       |
-    |       +-- idx = rand(rng, 1:n_jumps)
-    |       |
-    |       +-- _jump_contribution!(evolving_dm, jumps[idx], ...)
-    |       |       |
-    |       |       +-- _apply_coherent_unitary!(evolving_dm, U_B[idx], scratch)
-    |       |       +-- fill!(scratch.R, 0); fill!(scratch.rho_jump, 0)
-    |       |       +-- for w in energy_labels  ---- OMEGA LOOP ----
-    |       |       |       scratch.R += rate^2 * A_w' * A_w       <-- rho-INDEPENDENT
-    |       |       |       scratch.rho_jump += delta * rate^2 * A_w * rho * A_w'  <-- rho-DEPENDENT
-    |       |       |
-    |       |       +-- hermitianize!(scratch.R)
-    |       |       +-- _finalize_kraus_step!(evolving_dm, delta, scratch)
-    |       |               |
-    |       |               +-- _build_cptp_channel(scratch.R, delta)
-    |       |               |       eigen(Hermitian(S))    <-- O(dim^3) PER STEP
-    |       |               |       -> K0, U_residual       (ALLOCATES EVERY STEP)
-    |       |               |
-    |       |               +-- rho_next = K0*rho*K0' + rho_jump + U_res*rho*U_res'
-    |       |
-    |       +-- dist = trace_distance_h(evolving_dm, gibbs)  <-- EVERY STEP
-    |
-    +-- return ThermalizeResults(evolving_dm, trace_distances, time_steps, metadata)
-```
-
-### Proposed run_thermalize Data Flow (v2.1)
-
-```
-run_thermalize(; save_every=1)
-    |
-    +-- _precompute_data(config, ham_or_trott)
-    |       -> precomputed_data
-    |
-    +-- _precompute_coherent_unitary(jumps, ...)
-    |       -> coherent_unitaries (per-jump U_B, unchanged)
-    |
-    +-- PER-JUMP CHANNEL PRECOMPUTATION (NEW, one-time)
-    |       for a in 1:n_jumps:
-    |           _precompute_R([jumps[a]], ..., scratch)  <-- omega-loop once per jump
-    |           R_a = copy(scratch.R) .* (1/p_jump)
-    |           (; K0, U_residual) = _build_cptp_channel(R_a, delta)
-    |           K0s[a] = K0; U_residuals[a] = U_residual
-    |       -> K0s, U_residuals: Vector{Matrix{CT}} (local vars)
-    |
-    +-- ThermalizeScratch(CT, dim)
-    |       -> scratch (rho_jump, sandwich_tmp, rho_next, jump_oft, LdagL)
-    |          (scratch.R no longer needed in hot loop)
-    |
-    +-- for step in 1:num_steps  -------- HOT LOOP (FASTER) --------
-    |       |
-    |       +-- idx = rand(rng, 1:n_jumps)
-    |       |
-    |       +-- _apply_coherent_unitary!(evolving_dm, U_Bs[idx], scratch)
-    |       |
-    |       +-- fill!(scratch.rho_jump, 0)
-    |       +-- _accumulate_rho_jump_only!(scratch, evolving_dm, jumps[idx],
-    |       |       config, precomputed_data)
-    |       |       for w in energy_labels:      <-- still per-step (rho-dependent)
-    |       |           rho_jump += delta * rate^2 * A_w * rho * A_w'
-    |       |       (NO R accumulation -- eliminated)
-    |       |
-    |       +-- _apply_precomputed_channel!(evolving_dm, K0s[idx],
-    |       |       U_residuals[idx], scratch)
-    |       |       rho_next = K0*rho*K0' + rho_jump + U_res*rho*U_res'
-    |       |       (NO eigendecomposition -- 4 mul! calls only)
-    |       |
-    |       +-- if step % save_every == 0:       <-- NOT every step
-    |               dist = trace_distance_h(evolving_dm, gibbs)
-    |
-    +-- return ThermalizeResults(evolving_dm, trace_distances, time_steps, metadata)
-    |
-    |   (Post-processing, separate call):
-    +-- estimate_mixing_time(result; threshold, extrapolate)
-            -> (; mixing_time, fit, extrapolated)
-```
-
-### Key Differences (v2.0 vs v2.1)
-
-| Aspect | v2.0 (current) | v2.1 (proposed) |
-|--------|----------------|-----------------|
-| R accumulation | Every step, in omega-loop | Once per jump, during precomputation |
-| K0/U_residual computation | `eigen()` every step | Precomputed, lookup by jump index |
-| Omega-loop per step | Full (R + rho_jump) | Half (rho_jump only) |
-| trace_distance_h calls | Every step | Every save_every steps |
-| Channel application | `_finalize_kraus_step!` (allocates K0, U_res) | `_apply_precomputed_channel!` (zero allocation) |
-| Mixing time | Not available | Post-processing via exponential fit |
-
-## Performance Impact Analysis
-
-### Per-step savings from Feature 1
-
-For each step, the eliminated operations are:
-1. **R accumulation over omega-loop:** |energy_labels| iterations, each doing a `mul!(LdagL, A', A)` and element-wise add. For EnergyDomain with n=6: ~128 frequencies, each with 64x64 BLAS.gemm + elementwise add.
-2. **eigendecomposition of S:** `eigen(Hermitian(S))` where S is dim x dim. For dim=64 (n=6), this is O(dim^3) and dominates.
-3. **K0 and U_residual construction:** I - alpha*R (elementwise), R^2 (gemm), S construction, Diagonal * eigvecs' (gemm).
-4. **All allocations in `_build_cptp_channel`:** K0, R2, S, eig.vectors -- 4 dim x dim matrix allocations per step eliminated.
-
-The remaining per-step cost is:
-1. **rho_jump accumulation:** Still |energy_labels| iterations with A_w*rho*A_w' sandwiches (two gemms per frequency).
-2. **Channel application:** 4 mul! calls (K0*rho*K0' + rho_jump + U_res*rho*U_res').
-
-### Estimated speedup by system size
-
-| System Size | dim | eigen() cost | Omega-loop (R half) | Estimated total speedup |
-|-------------|-----|-------------|---------------------|------------------------|
-| n=4 | 16 | Small | Small | ~1.5-2x |
-| n=6 | 64 | Significant | Moderate | ~2-4x |
-| n=8 | 256 | Dominant | Large | ~5-10x |
-| n=10 | 1024 | Massive | Massive | Essential for feasibility |
-
-### Per-step savings from save_every
-
-`trace_distance_h` calls `eigen(Hermitian(rho - gibbs))` -- another O(dim^3) eigendecomposition per evaluation. With `save_every=100` on a 10,000-step run, this drops from 10,000 to 100 evaluations.
-
-## Build Order (Dependency-Driven)
-
-### Phase A: Per-Jump Precomputation (Core Speedup)
-
-**Depends on:** Nothing (start immediately)
-**Enables:** Phase C (BLAS threading), Phase D (mixing time benefits from faster runs)
-
-**Steps:**
-1. Move `_precompute_R` from trajectories.jl to furnace_utensils.jl (EnergyDomain and Time/TrotterDomain variants). Keep trajectories.jl calling the shared function.
-2. Add BohrDomain `_precompute_R` variant (extract R accumulation from jump_workers.jl:226-282).
-3. Add `_apply_precomputed_channel!` to jump_workers.jl.
-4. Add `_accumulate_rho_jump_only!` for each domain (3 variants: BohrDomain, EnergyDomain, Time/TrotterDomain). These are extracted from existing `_jump_contribution!` by removing the R accumulation lines.
-5. Modify `run_thermalize` to: (a) precompute K0s/U_residuals per jump, (b) change main loop to call `_accumulate_rho_jump_only!` + `_apply_precomputed_channel!`.
-6. Tests: verify numerical equivalence of new vs old path (trace distances match to machine precision for all domains).
-
-**Risk:** MEDIUM -- restructuring 3 domain-dispatched functions. Mitigated by: testing equivalence against old code before removing it.
-
-### Phase B: save_every Integration
-
-**Depends on:** Phase A (both modify the loop, do them together or A then B)
-**Enables:** Phase D (mixing time estimation benefits from save_every for practical use)
-
-**Steps:**
-1. Add `save_every::Int = 1` kwarg to `run_thermalize`.
-2. Modify loop to check `step % save_every == 0`.
-3. Pre-allocate trace_distances with correct size.
-4. Adjust time_steps to match save points only.
-5. Tests: save_every=1 matches old behavior; save_every=N produces correct subset; convergence_cutoff still works.
-
-**Risk:** LOW -- additive change, backward compatible with default save_every=1.
-
-### Phase C: Multi-threaded BLAS + Precomputation Threading
-
-**Depends on:** Phase A (omega-loop threading only helps during precomputation after Phase A)
-**Enables:** Nothing (independent performance feature)
-
-**Steps:**
-1. Verify `BLAS.set_num_threads()` is at default (not 1) during run_thermalize. Document.
-2. Optionally: thread the omega-loop in `_precompute_R` with per-thread accumulators.
-3. Optionally: thread the rho_jump omega-loop with per-thread accumulators (requires BLAS single-thread to avoid oversubscription, profile first).
-4. Tests: numerical equivalence; verify no thread safety issues.
-
-**Risk:** LOW for BLAS threading (just verify default). MEDIUM for omega-loop threading (reduction pattern).
-
-### Phase D: Mixing Time Estimation
-
-**Depends on:** Phase B (save_every needed for practical use), fitting code activation
-**Enables:** Nothing (end-user feature)
-
-**Steps:**
-1. Move fitting.jl from staging/ to src/.
-2. Add `estimate_mixing_time` function.
-3. Add module includes and exports.
-4. Tests: known exponential decay produces correct mixing time; extrapolation handles edge cases (NaN for non-convergent fits).
-
-**Risk:** LOW -- post-processing function, no impact on simulation core.
+**What:** All internal computation helpers prefixed with `_`, not exported.
+**When:** Always for non-public functions.
+**Why:** Established codebase convention: `_check_fit_quality`, `_extrapolate_mixing_time`, `_log_linear_initial_guess`, `_create_energy_labels`.
 
 ## Anti-Patterns to Avoid
 
-### Anti-Pattern 1: Extending Workspace{S,D,C,T} with Thermalize-Only Fields
+### Anti-Pattern 1: Coupling to Config Struct
 
-**What people do:** Add K0s, U_residuals as new fields to Workspace.
-**Why it's wrong:** Workspace is shared across 4 simulation types and already has 38 fields. Adding Thermalize-specific fields bloats it further. The trajectory path stores these as trajectory-specific fields, which makes sense for Workspace{Trajectory} but not for a shared struct.
-**Do this instead:** Store K0s/U_residuals as local variables inside run_thermalize. The precomputation functions can be shared; the storage location differs.
+**What:** Making `compute_simulation_time` accept a `Config` object.
+**Why bad:** Config carries `sim::S`, `domain::D`, `construction::C` type parameters that are irrelevant to time counting. The counting function is independent of any specific simulation mode -- it counts the cost of the *ideal quantum algorithm*, not the classical simulation. Also, Config requires many fields (num_energy_bits, t0, w0, etc.) that are simulation parameters, not algorithm cost parameters.
+**Instead:** Accept HamHam + scalar parameters directly.
 
-### Anti-Pattern 2: Merging Thermalize and Trajectory Precomputation Paths
+### Anti-Pattern 2: Adding Fields to Existing Structs
 
-**What people do:** Make run_thermalize call `_build_trajectory_workspace` to reuse its precomputation.
-**Why it's wrong:** The trajectory workspace has completely different structure (per-thread scratch, state-vector vs density-matrix, different step function). Coupling them creates maintenance risk and conceptual confusion.
-**Do this instead:** Share `_precompute_R` and `_build_cptp_channel` functions (already shared), but keep workspace construction and hot loops separate.
+**What:** Extending MixingTimeEstimate or ThermalizeResults with simulation time fields.
+**Why bad:** Single responsibility violation. MixingTimeEstimate is about curve fitting; SimulationTimeBudget is about algorithm cost. Bundling them creates coupling where changes to one affect the other.
+**Instead:** Separate `SimulationTimeBudget` struct from a standalone function.
 
-### Anti-Pattern 3: Eliminating the Per-Step omega-loop Entirely via Superoperator
+### Anti-Pattern 3: Making This Domain-Dispatched
 
-**What people do:** Precompute the full Lindblad channel E(rho) = sum_w rate^2 A_w rho A_w' as a dim^2 x dim^2 superoperator matrix and apply it per step.
-**Why it's wrong:** The superoperator is dim^2 x dim^2 (4096 x 4096 for n=6), far more expensive to store and apply than the sum of dim x dim sandwiches. Storage is O(dim^4), application is O(dim^4) matmul vs O(|energy_labels| * dim^3) for the sandwich loop.
-**Do this instead:** Keep the per-step omega-loop for rho_jump. Only precompute the rho-independent parts (R, K0, U_residual).
+**What:** Creating separate `compute_simulation_time` methods for EnergyDomain, TrotterDomain, etc.
+**Why bad:** The time counting is analytical. It counts the cost of the quantum algorithm (which runs on a quantum computer), not the cost of the classical simulation (which runs on the workstation). The quantum algorithm's OFT cost is the same regardless of which classical approximation domain was used.
+**Instead:** A single function with transition weight type as a keyword.
 
-### Anti-Pattern 4: Adding Mixing Time Estimation as a run_thermalize Keyword
+### Anti-Pattern 4: Mutating HamHam or Creating Workspace
 
-**What people do:** Add `estimate_mixing_time::Bool=false` or `extrapolate::Bool=false` to run_thermalize.
-**Why it's wrong:** Couples simulation logic with analysis logic. The fit parameters (skip_initial, threshold) are analysis choices, not simulation parameters. Makes the function signature unwieldy and the function responsible for too many things.
-**Do this instead:** Keep `estimate_mixing_time` as a separate post-processing function that takes `ThermalizeResults` as input.
+**What:** Storing results in mutable containers or creating scratch buffers.
+**Why bad:** Time counting is pure arithmetic. It reads HamHam fields (rescaling_factor, data size) but never mutates anything. No matrices are constructed; no eigendecompositions happen.
+**Instead:** Pure function returning immutable result struct.
 
-### Anti-Pattern 5: Modifying ThermalizeScratch to Remove R Field
+## Integration Points with Existing Code
 
-**What people do:** Since R is no longer accumulated per-step, remove `scratch.R` from ThermalizeScratch.
-**Why it's wrong:** ThermalizeScratch is used by `_precompute_R` during the precomputation phase. Also, removing a struct field is a breaking change for any code that constructs ThermalizeScratch.
-**Do this instead:** Keep `scratch.R` in ThermalizeScratch. It is used during precomputation even though it is not used in the per-step hot loop. The unused per-step R accumulation becomes a scratch buffer for precomputation.
+### Dependencies (what the new code reads from existing components)
 
-## Integration Points
+| Existing Component | Fields/Functions Used | Why |
+|-------------------|----------------------|-----|
+| `HamHam{T}` | `rescaling_factor`, `size(ham.data, 1)` | Norm scaling determines physical time; dimension determines n |
+| `MixingTimeEstimate` | `mixing_time` field | Convenience overload to chain with mixing time estimation |
+| Transition weight logic (energy_domain.jl) | `pick_transition(config, w)` or analytical formulas | Compute transition weight values to sum over QPE grid |
 
-### Internal Boundaries
+### Critical Observation: HamHam Does Not Store beta or n Directly
 
-| Boundary | Communication | Notes |
-|----------|---------------|-------|
-| `run_thermalize` <-> `_precompute_R` | Calls with jumps/config/precomputed_data, gets R matrix back | Same pattern as trajectory path |
-| `run_thermalize` <-> `_accumulate_rho_jump_only!` | Passes scratch (mutable), evolving_dm (read), jump, config, precomputed_data | Domain-dispatched, 3 variants |
-| `run_thermalize` <-> `_apply_precomputed_channel!` | Passes evolving_dm (mutated), K0/U_residual (read), scratch (mutable) | Simple, no domain dispatch needed |
-| `estimate_mixing_time` <-> `fit_exponential_decay` | Passes time_steps + trace_distances from ThermalizeResults | Clean function call, no shared state |
-| `_precompute_R` shared between furnace_utensils.jl and trajectories.jl | Same function, called from different contexts | trajectories.jl changes to call shared function |
+- **n** (num_qubits) is inferred via `Int(log2(size(ham.data, 1)))` -- established pattern in `_extract_hamiltonian_params`
+- **beta** is baked into `ham.gibbs` but NOT stored as a field on HamHam
 
-### Function Extraction Detail: _accumulate_rho_jump_only!
+**Design decision:** `compute_simulation_time` must accept `beta` as a required keyword argument. This is consistent with how the codebase works -- `HamHam(raw, beta)` requires beta at construction, `load_hamiltonian(type, n; beta=...)` requires it at load time. Beta is always an external parameter.
 
-For EnergyDomain (jump_workers.jl:318-359), the current `_jump_contribution!` interleaves R and rho_jump accumulation:
+### Transition Weight Reuse Strategy
 
-```julia
-# Lines 326-334 (positive frequency):
-rate2_pos = base_prefactor * transition(w)
-mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)
-@. scratch.R += rate2_pos * scratch.LdagL                    # R part (REMOVE)
-mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft')
-mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp, config.delta * rate2_pos, 1.0)  # rho_jump part (KEEP)
+The existing `pick_transition(config, w)` dispatches on Config construction type (KMS/GNS) and uses Config fields (a, b, beta, sigma, gaussian_parameters). For the time counter, we have two options:
+
+**Option A: Reuse `pick_transition` by constructing a minimal Config**
+- Pro: No code duplication
+- Con: Requires constructing a fake Config just for transition evaluation; Config validation would need to be bypassed
+
+**Option B: Accept a transition weight function directly**
+- Pro: Clean separation; no Config dependency
+- Con: Caller must know how to construct the function
+
+**Option C (recommended): Accept weight type as Symbol + parameters, implement lightweight dispatch internally**
+- Accept `transition_weight::Symbol` (`:gaussian`, `:metropolis`, `:smooth_metro`)
+- Accept relevant parameters (a, b, beta, sigma, gaussian_parameters) as keywords
+- Internally call the correct formula
+- Pro: Self-contained; no Config dependency; clear API
+- Con: Small amount of formula duplication (but these are one-line formulas)
+
+This is the cleanest approach. The formulas in `pick_transition` are compact analytical expressions that can be called directly without constructing Config objects.
+
+### No Modifications to Existing Structs or Functions
+
+The new module is purely additive:
+- **New file:** `src/simulation_time.jl`
+- **Modified file:** `src/QuantumFurnace.jl` (add `include` + `export` lines)
+- **New test file:** `test/test_simulation_time.jl`
+- **Modified test file:** `test/runtests.jl` (add `include` line)
+
+Zero changes to HamHam, Config, Workspace, or any Result struct.
+
+## Data Flow Detail: The Physics of Time Counting
+
+### What Is Being Counted
+
+The quantum Gibbs sampler algorithm runs on a quantum computer. Each step of the algorithm requires:
+1. **OFT (Operator Fourier Transform):** For each energy grid point w, simulate the Hamiltonian for time proportional to the QPE circuit depth. This creates the frequency-filtered jump operators A(w).
+2. **B (Coherent correction):** For KMS detailed balance, a coherent unitary correction that involves further Hamiltonian simulation.
+
+The "Hamiltonian simulation time" is the total time the quantum computer spends simulating `e^{iHt}` across all steps of the algorithm. This is the primary cost metric for the quantum algorithm.
+
+### QPE Grid
+
+With `r` estimating qubits:
+- Grid has `N = 2^r` points
+- Energy spacing: `w0` (determined by desired resolution)
+- Time unit: `t0 = 2*pi / (N * w0)` (Fourier relation)
+- Each OFT evaluation at energy `w` sums over time grid points: the Hamiltonian is simulated for total time proportional to `N * t0` = `2*pi / w0`
+- In rescaled units, the Hamiltonian has norm ~0.45, so physical simulation time scales with `rescaling_factor`
+
+### Per-Step OFT Cost
+
+For each thermalization step:
+- Sum over truncated energy grid points `w` that have non-negligible transition weight
+- At each `w`: Ham sim time = number of time grid points * t0
+- Weight by transition function value (Gaussian/Metro/SmoothMetro)
+- The per-step OFT cost depends on how many energy grid points are "active" (non-negligible weight)
+
+### Per-Step B Cost
+
+For KMS with coherent term:
+- B involves convolutions `b_minus` and `b_plus` over the time grid
+- Each time label `t` requires Ham sim for duration `t` (or `s * beta` for `b_plus`)
+- The B cost is determined by the number of non-negligible time labels in b_minus and b_plus
+
+### Total Steps
+
+```
+total_steps = ceil(Int, mixing_time / delta)
 ```
 
-The new `_accumulate_rho_jump_only!` keeps only the rho_jump lines. The `scratch.LdagL` multiply for R is removed. The `scratch.R` fill is removed.
+## Suggested Build Order
 
-For BohrDomain (jump_workers.jl:218-282), the structure is different -- R accumulation is interleaved differently:
+### Phase 1: Struct + Grid Utilities (zero physics dependencies)
 
-```julia
-# Lines 256-257 (rho_jump):
-mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp, scaled_delta, 1.0)
-# Lines 260-281 (R):
-scratch.R[j, q] += v * scratch.jump_oft[i, q]
-```
+1. Define `SimulationTimeBudget` struct with full docstring
+2. Implement `_qpe_grid_info(r, w0)` returning `(grid_points, energy_range, t0)`
+3. Implement `_num_qubits(ham)` helper (just `Int(log2(size(ham.data, 1)))`)
+4. Unit tests for struct construction and grid arithmetic
 
-Again, `_accumulate_rho_jump_only!` drops the R lines and the jump_weight_scaling computation for R.
+### Phase 2: OFT Time Counting (core cost computation)
+
+1. Implement `_compute_transition_weight(w, transition_weight, beta, sigma, a, b, gaussian_params)` -- lightweight dispatch on Symbol
+2. Implement `_oft_hamiltonian_time(ham, r, w0, beta, sigma, transition_weight, ...)` -- sum over energy grid
+3. Must handle: `:gaussian`, `:metropolis`, `:smooth_metro` transition weight types
+4. Unit tests: verify OFT time scales correctly with r, n; verify against hand calculations
+
+### Phase 3: B Term Time Counting (coherent correction cost)
+
+1. Implement `_b_hamiltonian_time(ham, r, w0, beta, sigma, ...)` -- coherent term cost
+2. Returns 0.0 when `with_coherent=false`
+3. Unit tests: verify 0 when disabled; verify positive and plausible when enabled
+
+### Phase 4: Integration API + Validation
+
+1. Implement main `compute_simulation_time(ham, r, delta, mixing_time; ...)` orchestrator
+2. Add `MixingTimeEstimate` convenience overload
+3. Wire into module: add include + exports to `src/QuantumFurnace.jl`
+4. Add `include("test_simulation_time.jl")` to `test/runtests.jl`
+5. Integration tests: end-to-end from HamHam to SimulationTimeBudget
+6. Validation: compare against known analytical results or paper formulas
+
+**Rationale for ordering:**
+- Phase 1 is pure infrastructure with no physics -- safe to build and test independently
+- Phase 2 is the core: OFT dominates the time budget in practice
+- Phase 3 adds the optional coherent correction
+- Phase 4 ties everything together; can validate the full pipeline
 
 ## Sources
 
-All analysis based on direct source code reading:
-- `furnace.jl` lines 143-223 (run_thermalize)
-- `jump_workers.jl` lines 172-440 (_finalize_kraus_step!, _jump_contribution! x3 Thermalize domains)
-- `furnace_utensils.jl` lines 30-200 (_precompute_data, _build_cptp_channel)
-- `trajectories.jl` lines 60-300 (_build_trajectory_workspace, _precompute_R, _copy_workspace_for_thread)
-- `coherent.jl` lines 58-100 (_precompute_coherent_unitary)
-- `structs.jl` lines 291-417 (ThermalizeScratch, Workspace)
-- `staging/fitting.jl` full file (FitResult, fit_exponential_decay)
-- `staging/gap_estimation.jl` full file (estimate_spectral_gap, save_every usage)
-
----
-*Architecture research for: v2.1 Speedup & Mixing Time*
-*Researched: 2026-03-01*
+- Direct source code analysis of all files in `src/` directory of QuantumFurnace.jl
+- Existing architecture documentation: `.planning/codebase/ARCHITECTURE.md`
+- Existing patterns from fitting.jl (Phase 42) and mixing.jl (Phase 42-43)
+- Milestone context: v2.2 Hamiltonian Simulation Time Counter

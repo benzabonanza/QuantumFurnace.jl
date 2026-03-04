@@ -1,509 +1,541 @@
-# Domain Pitfalls: v2.1 Speedup & Mixing Time Features
+# Domain Pitfalls: v2.2 Hamiltonian Simulation Time Counting
 
-**Domain:** Adding per-jump precomputation, multi-threaded frequency loops, multi-threaded BLAS control, mixing time extrapolation, and save_every to an existing Lindbladian simulator (QuantumFurnace.jl)
-**Researched:** 2026-03-01
-**Confidence:** HIGH (grounded in direct codebase analysis + Julia threading documentation + numerical analysis literature)
+**Domain:** Adding quantum algorithm cost accounting (Hamiltonian simulation time counting) to an existing classical quantum Gibbs sampler simulator (QuantumFurnace.jl). The new code computes how expensive the *quantum algorithm* would be, NOT how expensive the classical simulation is.
+**Researched:** 2026-03-04
+**Confidence:** HIGH (grounded in direct codebase analysis + Chen 2023/2025 paper formulas + existing OFT/B/transition code inspection)
 
-**Relationship to prior research:** This document covers pitfalls specific to the v2.1 milestone. The v2.0 PITFALLS.md covered codebase restructure risks (abstract type boxing, BSON serialization, closure capture). Those pitfalls remain relevant but are not repeated here. This document covers NEW pitfalls introduced by adding performance and mixing time features to the existing v2.0 system.
+**Relationship to prior research:** This document covers pitfalls specific to the v2.2 milestone. The v2.0 PITFALLS.md covered codebase restructure risks and the v2.1 PITFALLS.md covered threading and mixing time estimation. Those pitfalls remain relevant but are not repeated here. This document covers NEW pitfalls introduced by adding Hamiltonian simulation time counting to the existing system.
+
+**Key distinction driving all pitfalls:** The simulator already computes OFT, B terms, transition weights, and QPE grids for *classical simulation*. The cost counter must compute the *quantum algorithm's* cost from these same parameters. The simulator's truncations, optimizations, and NUFFT shortcuts are valid for simulation but do NOT reflect the quantum computer's actual work. Confusing "what our simulator does" with "what the quantum algorithm does" is the central risk of this milestone.
 
 ---
 
 ## Critical Pitfalls
 
-Mistakes that cause silent numerical errors, race conditions, or fundamentally wrong results.
+Mistakes that produce silently wrong cost estimates, potentially by orders of magnitude.
 
 ---
 
-### CRIT-01: BLAS.set_num_threads Is Global State -- Cannot Be Scoped Per Code Path
+### CRIT-01: Truncated Energy Labels vs Full QPE Grid -- The Classical Simulator Does NOT Use the Full Grid
 
 **What goes wrong:**
-The existing trajectory engine calls `BLAS.set_num_threads(1)` before spawning Julia threads and restores it after (see `trajectories.jl` lines 500-508). This works because trajectory sampling is the ONLY code path running at that time. The v2.1 milestone introduces a second threading pattern: parallelizing the omega-loop within `run_thermalize` (DM evolution). The problem is that `BLAS.set_num_threads()` sets a **process-global** variable -- there is ONE OpenBLAS thread pool shared by all Julia threads. You cannot have "BLAS uses 8 threads for the DM engine" and "BLAS uses 1 thread for trajectory tasks" simultaneously in the same Julia process.
+The existing code creates energy labels via `_create_energy_labels(num_energy_bits, w0)` which produces a full grid of `2^num_energy_bits` points: `w0 * [-N/2 : N/2-1]`. But immediately after, `_truncate_energy_labels(energy_labels, config)` (in `furnace_utensils.jl` lines 152-201) aggressively truncates this grid to only the range where the integrand `gamma(w) * G(w,nu1) * G(w,nu2)` exceeds `1e-12`. For Gaussian transitions with narrow sigma, this can reduce thousands of grid points to a few hundred.
 
-**Why it matters for v2.1:**
-The design calls for three different BLAS threading strategies in the same codebase:
-1. **Trajectory engine**: `BLAS.set_num_threads(1)` -- Julia threads handle parallelism, each doing small BLAS calls (existing, works)
-2. **DM thermalize (no omega threading)**: `BLAS.set_num_threads(N)` -- single Julia thread, let BLAS handle parallelism (new feature)
-3. **DM thermalize (with omega threading)**: `BLAS.set_num_threads(1)` -- Julia threads parallelize the omega loop, each doing small BLAS calls (new feature)
+The classical simulator is correct to truncate: the integrand truly IS negligible outside this range, and skipping zero-contribution points saves computation. But the *quantum algorithm* running on a quantum computer uses the **full** `2^r` QPE grid. Every grid point requires a controlled-Hamiltonian simulation of duration `|t_k| = |k * t0|`. The quantum computer cannot skip grid points because QPE is a unitary operation that coherently processes all time points simultaneously.
 
-The danger: if a user calls `run_thermalize` and then `run_trajectories` in the same session, the BLAS thread count from one call persists into the next unless explicitly reset. The existing try/finally pattern in trajectories.jl handles this correctly for that path, but the NEW DM thermalize code must follow the same discipline.
+**The pitfall:** If the cost counter sums `|t_k|` only over the truncated `energy_labels` (as returned by `_precompute_labels`), it will massively undercount the quantum algorithm's Hamiltonian simulation time. The truncated set might have 200 points while the full set has 4096. Since the sum `sum(|t_k|)` over the full grid is `t0 * N^2/4`, underestimating N by a factor of ~4-5 underestimates the total cost by a factor of ~16-25.
 
-**Consequences:**
-- If DM thermalize sets `BLAS.set_num_threads(8)` and an error occurs before restore, subsequent trajectory calls with Julia threading will oversubscribe by 8x, causing ~10x slowdown.
-- If omega-loop threading forgets to set `BLAS.set_num_threads(1)`, each Julia thread's `mul!` call will internally spawn BLAS threads, causing thread oversubscription (N_julia * N_blas threads competing).
-- OpenBLAS with thread contention can produce **wrong numerical results** (not just slowness) in versions before 0.3.7 without USE_LOCKING=1. Julia ships OpenBLAS with locking enabled, but this is still a serialization bottleneck.
+**Why it happens:**
+The existing `_precompute_data` functions return the truncated `energy_labels` and never store the full grid separately. A developer implementing cost counting will naturally reach for `precomputed_data.energy_labels` since it is the array used everywhere in the simulator. It feels correct -- it is the energy grid the code uses. But the cost counter needs the grid the *quantum computer* uses.
+
+**Concrete example from the codebase:**
+For `num_energy_bits=12, w0=0.05, sigma=0.08, beta=1.0`:
+- Full grid: 4096 points from -102.4 to +102.35
+- Truncated grid (from `_truncate_energy_labels`): typically ~200-400 points in [-1, 1]
+- `sum(|k|)` for full grid: `t0 * 4096^2 / 4` ~ `t0 * 4.2e6`
+- `sum(|k|)` for truncated grid: `t0 * ~4e4` (100x smaller)
+
+**However, there is a subtlety about the energy sum itself:**
+The OFT cost is `sum_omega [sum_k |t_k|]` where the outer sum is over energy labels omega. The question is: does the *quantum algorithm* iterate over the full energy grid or the truncated one? On a quantum computer, the algorithm evaluates the channel at each energy omega in sequence (classically controlled), and CAN skip omegas where gamma(omega) is negligible. So the OUTER sum (over omega) uses the truncated energy grid, but the INNER sum (over time/QPE) uses the full QPE grid. Conflating these two grids is the core mistake.
 
 **Prevention:**
-- Wrap ALL threading entry points in a `try/finally` that saves and restores `BLAS.get_num_threads()`. The existing pattern in trajectories.jl (lines 500-508) is the model:
+- The cost counter MUST use `_create_energy_labels(num_energy_bits, w0)` (the FULL grid) for summing QPE time costs per energy evaluation.
+- The cost counter SHOULD use the truncated energy grid for counting how many energy evaluations are performed.
+- Create a clear separation: `simulation_energy_labels` (truncated, for counting outer sum) vs `qpe_time_points` (full, for inner QPE time sum). Never mix them.
+- Add a docstring on the cost counting function: "This uses the FULL QPE grid for time sums, not the truncated simulation grid."
+- Write a test: for the inner sum, verify against the closed form `sum_{k=-N/2}^{N/2-1} |k| * t0 = t0 * N * (N-2) / 4 + t0 * N/2`.
+
+**Detection:**
+- Cost estimates that seem suspiciously low -- orders of magnitude below what the paper quotes.
+- Cost estimates where the inner time sum changes with `sigma` (it should NOT -- sigma controls the truncation/filter, not the QPE grid).
+- Sanity check: `inner_time_sum ≈ t0 * N^2 / 4` for `N = 2^num_energy_bits`.
+
+**Which phase:** Must be addressed in the FIRST phase of cost counting. This is the foundational grid computation.
+
+---
+
+### CRIT-02: OFT Cost Must Sum |t_k| Without Filter Function Weighting
+
+**What goes wrong:**
+The quantum algorithm implements the OFT (Operator Fourier Transform) as:
+
+```
+A(omega) = sum_k f(t_k) * e^{iHt_k} * A * e^{-iHt_k}
+```
+
+where `f(t_k)` is the filter function (Gaussian envelope: `exp(-sigma^2 * t_k^2)`), and each term requires Hamiltonian simulation for time `|t_k|`. The *total Hamiltonian simulation time* for one OFT evaluation at frequency `omega` is:
+
+```
+T_OFT(omega) = 2 * sum_k |t_k|
+```
+
+The factor of 2 comes from the `e^{+iHt}` and `e^{-iHt}` evolutions (forward and backward). The filter function `f(t_k)` determines the *amplitude* of each term's contribution, NOT whether the time evolution actually runs. On a quantum computer, QPE implements ALL grid points coherently. The filter weights appear in the success probability, not in the gate count.
+
+**Three common mistakes:**
+
+1. **Forgetting the factor of 2:** The `e^{+iHt}` requires one Hamiltonian simulation forward, and `e^{-iHt}` requires one backward. Each costs `|t_k|` in Hamiltonian simulation time. Total is `2 * |t_k|` per term. Looking at the existing `time_oft!` code (ofts.jl lines 22-72), it computes `caches.U.diag .= exp.(1im .* hamiltonian.eigvals .* t)` -- this is the eigenvalue-domain shortcut for `e^{iHt}`, but the quantum computer implements both directions explicitly.
+
+2. **Weighting by the filter function:** Multiplying each `|t_k|` by `exp(-sigma^2 * t_k^2)` before summing. This is what the NUFFT prefactors do (`base_weights = exp.(-sigma^2 .* time_labels .^ 2)` in nufft.jl line 44). Using these weights for cost counting gives the *classical simulation's* effective contribution, NOT the quantum computer's gate count. The quantum computer does NOT skip terms with small filter values.
+
+3. **Using the truncated time grid:** The simulator uses `_truncate_time_labels_for_oft` (in `time_domain.jl`) to drop time points where `exp(-t^2 * sigma^2)` falls below `1e-12`. This is valid for the classical Riemann sum approximation. The quantum computer's QPE uses ALL `2^r` time points.
+
+**Prevention:**
+- Define the OFT cost as a pure function of the grid parameters:
   ```julia
-  old_blas = BLAS.get_num_threads()
-  BLAS.set_num_threads(1)
-  try
-      @sync for ...
-          Threads.@spawn ...
-      end
-  finally
-      BLAS.set_num_threads(old_blas)
+  function oft_ham_sim_time(num_energy_bits::Int, t0::Float64)
+      N = 2^num_energy_bits
+      # Full QPE grid: k = -N/2, ..., N/2-1
+      # |t_k| = |k| * t0
+      # sum_{k=-N/2}^{N/2-1} |k| = N^2/4 - N/2 + N/2 = N^2/4 (for even N)
+      # More precisely: 2 * sum_{k=1}^{N/2-1} k + N/2 = N*(N-2)/4 + N/2
+      total_abs_time = t0 * (N * (N - 2) / 4 + N / 2)
+      return 2.0 * total_abs_time  # factor of 2 for forward + backward evolution
   end
   ```
-- For the "let BLAS handle parallelism" path (no Julia threading), do NOT change `BLAS.set_num_threads` at all -- just let the user's default apply. Only set it when Julia threads are active.
-- Add a test: run trajectory engine, check `BLAS.get_num_threads()` is restored. Then run DM engine, check again. The existing `test_threading.jl` "BLAS thread restoration" testset is the model.
-- Document clearly: "The omega-loop threaded DM path requires BLAS single-threaded, same as trajectories."
+- This function should have NO dependency on `sigma`, `transition`, or any truncation.
+- Test against a brute-force loop: `2 * t0 * sum(abs(k) for k in -N/2:N/2-1)`.
+- Document the factor-of-2 convention prominently.
 
 **Detection:**
-- The existing `test_threading.jl` "BLAS thread restoration" test catches leaked BLAS state for trajectories. Write the equivalent for the DM engine.
-- Performance benchmark: if `run_thermalize` is slower than expected despite having multiple Julia threads, suspect BLAS oversubscription.
+- Cost estimate that changes with `sigma` is WRONG (sigma affects the classical simulation's accuracy, not the quantum algorithm's gate count).
+- Cost estimate that is orders of magnitude smaller than the exact formula `T ~ t0 * N^2 / 2` is suspicious.
 
-**Which phase:** Must be addressed in the omega-loop threading phase. Design decision at the start.
+**Which phase:** OFT cost counting phase. Must include factor-of-2 from the start.
 
 ---
 
-### CRIT-02: Per-Jump Precomputed Eigendecomposition Becomes Stale Under Numerical Drift
+### CRIT-03: B Coherent Term Cost Is a Double Sum Over Time, Not a Single Sum
 
 **What goes wrong:**
-The existing code computes `_build_cptp_channel(R_a, delta)` per-jump at trajectory workspace construction time (trajectories.jl lines 112-122). This calls `eigen(Hermitian(S))` to perform the PSD guard: negative eigenvalues of the residual matrix S are clamped to zero, then `U_residual = sqrt(diag(clamped_eigenvalues)) * eigvecs'` is computed. This precomputation is correct for the trajectory engine because delta is fixed and R is state-independent.
+The coherent B term (Chen 2025, KMS construction) involves two nested time sums:
 
-For the DM thermalize engine, the situation is different. The current `_finalize_kraus_step!` in jump_workers.jl (lines 172-192) calls `_build_cptp_channel(scratch.R, delta)` **every step**, recomputing the eigendecomposition of S from the current accumulated R. If v2.1 precomputes the eigendecomposition once (like the trajectory engine does), the key question is: does R depend on the evolving state?
-
-**Analysis of the existing code:**
-Looking at `_jump_contribution!` for `Config{Thermalize, ...}` (jump_workers.jl lines 194-290, 292-367, 369-440): the R accumulation uses `scratch.R` which is **reset to zero** at the start of each jump contribution (`fill!(scratch.R, 0)` at lines 219, 316, 395). The R matrix is built from `rate^2 * L'L` terms where L depends on jump operators and transition rates -- NOT on the evolving density matrix. This means R IS state-independent and CAN be precomputed.
-
-**However**, there is a subtlety: in the BohrDomain path (lines 194-290), the inner loop builds `scratch.jump_oft = alpha(...) * jump.in_eigenbasis` and uses it for both R and rho_jump. The `rho_jump` part DOES depend on the evolving state, but R does not. These two computations are interleaved in the current code. Precomputing R requires untangling R from rho_jump.
-
-**The real danger:**
-The PSD guard (`max.(eig.values, 0.0)`) handles numerical noise where S should theoretically be PSD but has eigenvalues at -1e-16 due to floating-point arithmetic. If R is precomputed once and used for many steps:
-1. The clamping is correct for the precomputed R.
-2. But if delta changes between steps (e.g., adaptive delta), the precomputed U_residual is WRONG because `S = (2*alpha - delta)*R - alpha^2*R^2` depends on delta through `alpha = 1 - sqrt(1 - delta)`.
-3. Even with fixed delta, if there are multiple jump operators and the code changes from "one R per step" to "per-jump R precomputed", the residual S per-jump might have different numerical properties than the summed R over all jumps in the current code.
-
-**Prevention:**
-- Verify that delta is truly fixed for the entire DM thermalize run (it is -- `config.delta` is a const field). This makes precomputation safe.
-- When precomputing per-jump, verify that `S_a = (2*alpha - delta)*R_a - alpha^2*R_a^2` has eigenvalues >= -eps for each individual R_a. Add an assertion: `@assert minimum(eigen(Hermitian(S_a)).values) > -1e-10 "Per-jump S_a has unexpectedly negative eigenvalues"` during workspace construction.
-- After precomputing, validate with a regression test: run one step with precomputed vs. recomputed channel and verify bitwise-identical results (or within machine epsilon).
-- The memory cost of storing per-jump precomputed data is `N_jumps * (3 * dim^2)` complex matrices (K0, U_residual, R). For 3 qubits (dim=8) with 6 jumps: 6 * 3 * 64 * 16 bytes = 18 KB. For 6 qubits (dim=64) with 12 jumps: 12 * 3 * 4096 * 16 bytes = 2.4 MB. Manageable. For 10+ qubits this starts to matter.
-
-**Detection:**
-- Trace distance to Gibbs state diverging instead of converging after switching to precomputed channels.
-- CPTP violation: `tr(rho) != 1.0` or `eigvals(rho)` having negative values beyond numerical noise after many steps.
-- The existing `test_cptp.jl` should catch CPTP violations.
-
-**Which phase:** Per-jump precomputation phase. Must include a regression test comparing precomputed vs. recomputed results.
-
----
-
-### CRIT-03: Race Conditions in Omega-Loop Accumulator Matrices
-
-**What goes wrong:**
-The omega-loop in `_jump_contribution!` for the Thermalize path accumulates into `scratch.R` and `scratch.rho_jump` across frequency iterations. If this loop is parallelized with `Threads.@threads` or `@sync/@spawn`:
-
-```julia
-# WRONG: concurrent writes to shared scratch.R
-@threads for w in energy_labels
-    # ... compute L(w), rate(w) ...
-    scratch.R .+= rate^2 * LdagL   # RACE CONDITION
-    mul!(scratch.rho_jump, ...)     # RACE CONDITION
-end
+```
+B = t0^2 * sum_t b_minus(t) * sum_s b_plus(s) * [time evolution terms involving s and t]
 ```
 
-Matrix `.+=` is NOT atomic. Each element addition is a separate read-modify-write operation. Two threads writing to the same matrix element will lose one update.
+Looking at the existing `B_time` function (coherent.jl lines 105-148), the structure is:
 
-**This is different from the trajectory threading:**
-The trajectory engine avoids this by giving each thread its OWN workspace (`_copy_workspace_for_thread`). Each thread accumulates into its own `rho_acc`, then results are summed after all threads complete. The omega-loop threading is different because all frequency iterations contribute to the SAME R and rho_jump matrices within a single DM step.
+1. **Inner loop over `s`** (keys of `b_plus`): For each `s`, compute `U(s*beta) * A' * U(-2*s*beta) * A * U(s*beta)`. The Hamiltonian simulation time for this inner step involves:
+   - `U(s*beta)` = evolution for time `|s * beta|`
+   - `U(-2*s*beta)` = evolution for time `|2*s * beta|`
+   - `U(s*beta)` again = evolution for time `|s * beta|`
+   - Total inner evolution per (s): `4 * |s * beta|`
 
-**Prevention strategy -- per-thread partial accumulators:**
-```julia
-# CORRECT: each task accumulates into its own R, then merge
-R_per_task = [zeros(CT, dim, dim) for _ in 1:ntasks]
-rho_jump_per_task = [zeros(CT, dim, dim) for _ in 1:ntasks]
+2. **Outer loop over `t`** (keys of `b_minus`): For each `t`, compute `U(t/sigma)' * [inner result] * U(t/sigma)`. This requires Hamiltonian simulation for time `2 * |t / sigma|` per outer step.
 
-@sync for (task_idx, freq_chunk) in enumerate(chunks)
-    Threads.@spawn begin
-        for w in freq_chunk
-            # accumulate into R_per_task[task_idx], rho_jump_per_task[task_idx]
-        end
-    end
-end
+The total Hamiltonian simulation time for B is:
 
-# Merge (single-threaded, safe)
-R_total = sum(R_per_task)
-rho_jump_total = sum(rho_jump_per_task)
+```
+T_B = sum_t sum_s [4 * |s * beta| + 2 * |t / sigma|]
+    = |b_minus_terms| * sum_s 4*|s*beta| + |b_plus_terms| * sum_t 2*|t/sigma|
 ```
 
-**Do NOT use Threads.threadid() for indexing:**
-Julia tasks can migrate between OS threads. Using `threadid()` to index into pre-allocated buffers is wrong because two tasks could observe the same `threadid()` simultaneously. Julia's own PSA (July 2023) explicitly warns against this pattern. Use task-local storage or indexed by task identity instead.
+This is O(N_outer * N_inner) in the number of loop iterations but the *time* decomposes into two independent sums scaled by the opposite count.
 
-**Memory cost of per-task accumulators:**
-For `ntasks` tasks with dim-by-dim complex matrices: `ntasks * 2 * dim^2 * 16` bytes (R and rho_jump). With 8 tasks and dim=64: 8 * 2 * 4096 * 16 = 1 MB. With dim=256: 8 * 2 * 65536 * 16 = 16 MB. Acceptable for typical problem sizes.
+**Common mistakes:**
 
-**Additional subtlety -- scratch.jump_oft:**
-The current code reuses `scratch.jump_oft` across frequency iterations: `@. scratch.jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix`. Each thread needs its OWN `jump_oft` buffer too, plus any other scratch matrices used within the loop body (`LdagL`, `sandwich_tmp`). Essentially, each task needs a full `ThermalizeScratch` worth of buffers.
+1. **Counting only the outer sum:** Computing `sum_t |t/sigma|` and ignoring the inner sum over `s`. The inner sum can have hundreds of terms, each requiring Hamiltonian simulation.
 
-**Detection:**
-- Non-deterministic trace distance results across runs with the same seed (race condition symptom).
-- Trace distance plateauing at a non-zero value (lost accumulation updates).
-- Compare threaded omega-loop result against serial loop result with `isapprox(..., atol=1e-14)`. Any disagreement beyond FP accumulation order differences indicates a race.
+2. **Double-counting the t0^2 factor:** The existing code returns `B .* t0^2` (coherent.jl line 148). This `t0^2` is the Riemann sum weight (dx_inner * dx_outer), NOT a Hamiltonian simulation time. The cost counter should account for the actual time evolution durations, not the Riemann sum weights.
 
-**Which phase:** Omega-loop threading phase. Must be the core design pattern.
+3. **Confusing truncated dictionaries with full sums:** The existing code computes `b_minus` and `b_plus` as truncated dictionaries (via `_compute_truncated_func` in coherent.jl lines 228-232) that drop terms below `1e-12`. For cost counting, you need to know how many terms the *quantum algorithm* would need. The truncation is an approximation -- the quantum computer must implement enough terms for the desired accuracy. However, unlike the OFT case, the B term's truncation IS algorithmically valid: the quantum computer also truncates terms with negligible b-function values, because B is implemented as a finite sum (not a QPE circuit).
 
----
-
-### CRIT-04: False Sharing When Per-Task Accumulators Are Contiguous in Memory
-
-**What goes wrong:**
-If per-task accumulator matrices are allocated as views into a single large array (e.g., `big_buffer = zeros(dim, dim, ntasks)` with `R_per_task[i] = @view big_buffer[:, :, i]`), adjacent matrices share cache lines. When thread 1 writes to the last elements of its R matrix and thread 2 writes to the first elements of its R matrix, the CPU invalidates the shared cache line for both cores, causing cache thrashing.
-
-On modern CPUs, cache lines are 64 bytes (Intel/AMD x86) or 128 bytes (Apple M-series). A ComplexF64 is 16 bytes, so 4 elements fit in an x86 cache line and 8 in an M-series cache line. The last row of one matrix and the first row of the next are almost certainly in the same cache line.
-
-**This is specific to the omega-loop accumulator pattern:**
-The trajectory engine does not have this problem because per-thread workspaces are independently allocated Julia Arrays (each has its own heap allocation, naturally cache-line-separated).
+**Connection to existing code:**
+The `B_trotter` function (coherent.jl lines 152-198) computes `num_t0_steps = Int(round(s * beta / trotter.t0))`, giving the discrete time in Trotter steps. The cost counter should use these actual step counts, not the continuous time values, for Trotter-specific cost reporting.
 
 **Prevention:**
-- Allocate each per-task matrix independently: `[zeros(CT, dim, dim) for _ in 1:ntasks]`. Julia's allocator naturally aligns to 16-byte boundaries, and individual heap allocations are typically cache-line-separated.
-- Do NOT use a single 3D array with views into slices. The independent allocation pattern used by `_copy_workspace_for_thread` (trajectories.jl line 164) is correct.
-- For very small matrices (dim <= 4), the entire matrix fits in 1-2 cache lines and false sharing is unavoidable. At these sizes, the omega-loop has too few iterations to benefit from threading anyway, so disable threading below a size threshold.
-
-**Detection:**
-- Threading speedup is less than expected (e.g., 1.5x with 8 threads instead of 4x+).
-- Performance profiling shows high L1/L2 cache miss rates.
-- Empirically: benchmark threaded vs. serial, compare against roofline.
-
-**Which phase:** Omega-loop threading phase. An implementation detail, not a design decision.
-
----
-
-### CRIT-05: Nested mul!/BLAS Calls Within Julia Threads Without BLAS Single-Threading
-
-**What goes wrong:**
-The omega-loop body contains `mul!` calls (BLAS GEMM):
-```julia
-mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)     # L'L
-mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft')    # rho * L'
-mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp, ...)  # L * (rho * L')
-```
-
-If Julia threads are used for the omega-loop and `BLAS.set_num_threads` is NOT set to 1, each `mul!` call will internally launch BLAS threads. With N Julia threads each launching M BLAS threads, you get N*M total threads competing for CPU resources. This is called "oversubscription" and causes severe performance degradation (worse than serial due to context switching overhead).
-
-**Specific danger for small matrices:**
-For typical QuantumFurnace problem sizes (dim = 8 to 64), BLAS GEMM on matrices this small is actually SLOWER with multi-threading because the overhead of thread creation/synchronization dominates the computation. OpenBLAS has an internal threshold below which it runs single-threaded anyway, but this threshold varies by OpenBLAS version and is not guaranteed.
-
-**Prevention:**
-- Before the omega-loop's threaded section, call `BLAS.set_num_threads(1)`.
-- After the threaded section, restore the original count.
-- This is the SAME pattern as the trajectory engine (trajectories.jl lines 500-508). Extract it into a shared helper:
+- Write the B cost as an explicit double loop over the truncated b_minus and b_plus dictionaries:
   ```julia
-  function with_serial_blas(f)
-      old = BLAS.get_num_threads()
-      BLAS.set_num_threads(1)
-      try
-          return f()
-      finally
-          BLAS.set_num_threads(old)
-      end
+  function b_term_ham_sim_time(b_minus_dict, b_plus_dict, beta, sigma)
+      n_outer = length(b_minus_dict)
+      n_inner = length(b_plus_dict)
+      inner_time_sum = sum(4 * abs(s * beta) for s in keys(b_plus_dict))
+      outer_time_sum = sum(2 * abs(t / sigma) for t in keys(b_minus_dict))
+      return n_outer * inner_time_sum + n_inner * outer_time_sum
   end
   ```
-- Add a threshold: only use Julia threading for the omega-loop when `length(energy_labels) >= min_freqs_for_threading` (suggest min_freqs_for_threading = 16-32). Below this, the serial loop is faster due to threading overhead.
+- Actually compute the truncated dicts using `_compute_truncated_func` (this is cheap, O(N) where N = 2^r).
+- Verify against the known complexity from the paper: the B term cost should scale roughly as `O(beta^2 / sigma)` times the number of grid points.
 
 **Detection:**
-- The new DM thermalize threaded path is slower than the serial path despite having multiple threads.
-- CPU utilization is 100% across all cores but throughput is low (oversubscription symptom).
-- `perf stat` or similar shows high context switch counts.
+- B cost that is smaller than OFT cost is possible but should be checked -- for KMS with coherent term at large beta, B can be significant.
+- B cost that does not depend on `beta` is WRONG.
+- B cost that has only single-sum scaling O(N) instead of a product-of-sums indicates a missed nesting level.
 
-**Which phase:** Omega-loop threading phase. Must be implemented together with the threading itself.
+**Which phase:** B coherent term cost phase. Should come after OFT cost is validated.
 
 ---
 
-### CRIT-06: Hermitianize Happening Before vs After Merge Changes Numerical Result
+### CRIT-04: Weak Measurement Channel Factor of 2 -- U and Controlled-U^dagger
 
 **What goes wrong:**
-The current code calls `hermitianize!(scratch.R)` after the omega-loop completes (jump_workers.jl line 285 for Bohr, line 362 for Energy, line 435 for Time/Trotter). This enforces Hermiticity of the accumulated R matrix. When threading the omega-loop:
+The quantum Gibbs sampler implements weak measurements via the CPTP channel (Chen Eq. 3.2):
 
-- **Option A: Hermitianize each per-task R, then sum.** Result: `sum(hermitianize.(R_task_i))`
-- **Option B: Sum per-task R, then hermitianize.** Result: `hermitianize(sum(R_task_i))`
+```
+E(rho) = K0 * rho * K0^dagger + delta * sum_w L_w * rho * L_w^dagger + U_res * rho * U_res^dagger
+```
 
-These give the same mathematical result but different floating-point results due to rounding. Hermitianizing before summation rounds each partial accumulator independently, then sums rounded values. Hermitianizing after summation sums the raw values, then rounds once. The difference is O(ntasks * dim^2 * eps), which for ntasks=8, dim=64, eps=1e-16 gives ~3e-12 -- above the 1e-13 tolerance used in the serial-threaded agreement test.
+On the quantum computer, implementing this channel requires:
+1. **Computing `A(w)` for each `w`:** This is the OFT, which costs `2 * sum_k |t_k|` per omega value.
+2. **Implementing the channel:** The weak measurement protocol uses `U_channel` (implementing the dissipative part) and `controlled-U_channel^dagger` (for the non-demolition measurement). This requires TWO applications:
+   - One forward: `U` (implementing the channel)
+   - One controlled backward: `controlled-U^dagger` (for measurement reversal)
+
+This means each step of the quantum algorithm costs **2x** the Hamiltonian simulation time of a single OFT computation for the dissipative part.
+
+**The easy-to-miss factor:**
+Looking at the existing `_build_cptp_channel` (furnace_utensils.jl lines 183-201), the code computes `alpha = 1 - sqrt(1 - delta)` and constructs `K0 = I - alpha * R`. This is the *mathematical* form of the channel. The *quantum implementation* doubles the OFT cost.
+
+**Connection to the coherent unitary:**
+The KMS construction also applies `U_B = exp(-i * delta * B)` (see `_precompute_coherent_unitary` in coherent.jl lines 57-99). The coherent unitary is a single unitary application (NOT controlled), so it contributes 1x its Hamiltonian simulation time, not 2x. Applying the 2x factor uniformly to both the dissipative part AND the coherent part is wrong -- only the dissipative channel gets the 2x.
 
 **Prevention:**
-- Use Option B (hermitianize after merge). This matches the serial code's behavior where hermitianize happens once after the full omega-loop.
-- Update the serial-threaded agreement test to use a tolerance that accounts for floating-point accumulation order differences: `atol = ntasks * dim^2 * eps(Float64)`. The existing trajectory threading test uses `atol=1e-13` for this reason (test_threading.jl line 89).
-- Do NOT aim for bitwise identical serial/threaded results -- FP addition is not associative. Aim for `isapprox` with a tight but realistic tolerance.
+- Clearly separate the cost into three components per step:
+  1. OFT dissipative cost: `2 * T_OFT` (U + controlled-U^dagger)
+  2. B coherent cost: `1 * T_B` (single unitary)
+  3. Total per step: `2 * T_OFT + T_B`
+- Document which factor applies to which component.
+- Write a test: `per_step_cost == 2 * oft_cost + b_cost`, NOT `2 * (oft_cost + b_cost)`.
 
 **Detection:**
-- Serial-threaded agreement tests failing with small errors (1e-13 to 1e-11 range).
-- Non-reproducible trace distance differences between serial and threaded DM evolution.
+- If the total cost is reported as `2 * (T_OFT + T_B)` instead of `2 * T_OFT + T_B`, the B term is over-counted. For large beta where B is significant, this error can be substantial.
+- Check: does the cost increase when switching from GNS (no B) to KMS (with B)? It should increase by exactly `T_B`, not `2 * T_B`.
 
-**Which phase:** Omega-loop threading phase. Must decide the hermitianize placement as part of the merge strategy.
+**Which phase:** Must be addressed when combining OFT and B costs into per-step totals.
+
+---
+
+### CRIT-05: Confusing Classical Simulation Mixing Time with Quantum Algorithm Mixing Time
+
+**What goes wrong:**
+The `config.mixing_time` parameter controls how long the *classical simulation* runs to evolve the density matrix. The v2.1 milestone added `estimate_mixing_time` which extrapolates the mixing time from simulation data. These are properties of the *classical simulation's* approximation to the Lindbladian dynamics.
+
+The quantum algorithm's mixing time is the mixing time of the *ideal* Lindbladian on the quantum computer. For an exact implementation, the quantum and classical mixing times should agree (up to approximation errors from Trotter, QPE truncation, etc.). But the classical simulation has additional sources of error:
+
+1. **Energy grid truncation** (CRIT-01) -- makes the classical Lindbladian slightly different from the ideal one.
+2. **Riemann sum approximation** -- the discrete sum over omega approximates a continuous integral. Coarser grids give a different Lindbladian.
+3. **Floor effect** (documented in MEMORY.md) -- the trace distance plateaus at a delta-dependent floor, not at zero. The floor scales as `k_energy * delta + floor_Trotter`. This floor affects the classical mixing time estimate but is irrelevant to the quantum algorithm's ideal mixing time.
+4. **Trotter error** -- the TrotterDomain simulator approximates time evolution. The quantum computer uses the same Trotter circuit, so this error IS shared.
+5. **Bohr frequency collisions** (documented in MEMORY.md) -- even-n chains with Z-only disorder have exact spectral symmetry causing collisions. This affects both classical and quantum mixing times.
+
+**The pitfall:** Using the classically estimated mixing time (from `estimate_mixing_time`) as the quantum algorithm's mixing time for cost counting. If the classical estimate is 150 time units due to a floor effect, but the ideal Lindbladian converges in 100 time units, the cost estimate is 50% too high. Conversely, if the classical Lindbladian has a larger spectral gap than the ideal one (due to truncation effects), the classical estimate could be too optimistic.
+
+**Prevention:**
+- The cost counter should accept `mixing_time` as an explicit input parameter, not derive it from the simulation. The user provides their best estimate of the quantum algorithm's mixing time.
+- Provide utilities to compute "what-if" costs for a range of mixing times: `compute_cost(config, ham; mixing_times=10:10:200)`.
+- Document clearly: "The mixing time used for cost estimation is the quantum algorithm's mixing time, which may differ from the classical simulation's observed mixing time due to approximation errors."
+- If using the classical estimate, provide a warning when the estimated floor is a significant fraction of the target epsilon.
+- Consider providing a separate field like `mixing_time_source::Symbol` (`:user_specified` vs `:classical_estimate`) in the cost result struct.
+
+**Detection:**
+- Cost estimate that changes dramatically when `delta` is varied (delta affects the classical floor but not the quantum mixing time).
+- Cost estimate that gives different answers for BohrDomain vs TrotterDomain for the same Hamiltonian (they approximate the same quantum algorithm differently).
+- Compare the classical estimate from `estimate_mixing_time` against the Krylov spectral gap (`run_krylov_spectrum`) -- significant discrepancies indicate the classical estimate is unreliable for cost counting.
+
+**Which phase:** Must be addressed from the start. This is a design-level decision about the cost counting API.
+
+---
+
+### CRIT-06: Transition Weight Function Differences Affect the Effective Energy Grid Size
+
+**What goes wrong:**
+The codebase supports three transition weight families:
+
+1. **Gaussian** (`with_linear_combination=false`): `gamma(w) = exp(-(w + w_gamma)^2 / (2 * sigma_gamma^2))`. Infinite support, Gaussian decay.
+2. **Metropolis** (`a=0, with_linear_combination=true`): `gamma(w) = exp(-beta * max(w + beta*sigma^2/2, 0))`. One-sided exponential decay with a kink.
+3. **Smooth Metropolis** (`a>0, b>=0`): Intermediate smoothness. Tails determined by `a` and `b` parameters.
+
+**The critical difference for cost counting:**
+The number of *effective* energy grid points (those with non-negligible `gamma(w)`) varies dramatically between transition types. `_truncate_energy_labels` uses `cutoff=1e-12` to determine this. For the same `num_energy_bits`:
+- Gaussian with narrow sigma_gamma: few effective points (Gaussian decays fast)
+- Metropolis: asymmetric, more effective points on the negative-w side
+- Smooth Metropolis: intermediate
+
+The total OFT cost = `n_effective_energies * T_OFT_per_energy`. Getting `n_effective_energies` wrong scales the total cost linearly.
+
+**The subtlety about symmetrization:**
+The existing `_truncate_energy_labels` SYMMETRIZES the truncated range (line 197: `sym_limit = max(abs(start), abs(end))`). This means Metropolis transitions keep energy points where `gamma(w) = 0` because the symmetric range extends to cover both tails. This is the classical simulation's choice (for Hermitian jump operator symmetry exploitation). The quantum algorithm could potentially use an asymmetric range, but for correctness must cover at least the range where `gamma(w)` is non-negligible.
+
+**For cost counting:**
+The cost counter should use the same truncated energy grid that the quantum algorithm would use. The symmetrized grid from `_truncate_energy_labels` is a reasonable choice (conservative -- includes some zero-contribution points for Metropolis), but the cost counter should document this.
+
+**Prevention:**
+- Use `_truncate_energy_labels` (or equivalent) for counting the number of energy evaluations. This is what the quantum algorithm also needs.
+- For the per-energy QPE time cost, use the full `2^r` QPE grid (CRIT-01). Do NOT confuse the energy grid truncation with the time grid truncation.
+- Add test cases for all three transition types, verifying the effective energy count changes appropriately.
+- Report `n_effective_energies` as a diagnostic in the cost struct.
+
+**Detection:**
+- n_effective_energies that does not change between Gaussian and Metropolis transitions (it should change significantly).
+- n_effective_energies that equals the full grid size `2^r` (truncation should reduce it for reasonable parameters).
+
+**Which phase:** OFT cost implementation phase. Affects the outer sum count.
 
 ---
 
 ## Moderate Pitfalls
 
-Issues that cause performance problems or incorrect mixing time estimates but not silent data corruption.
+Issues that cause confusing or inaccurate results, but not orders-of-magnitude errors.
 
 ---
 
-### MOD-01: Exponential Fit to Trace Distance Curve Has Structural Model Mismatch
+### MOD-01: Delta Step Size vs Total Cost -- Off-by-One and Delta-Dependence
 
 **What goes wrong:**
-The fitting code (staging/fitting.jl) fits `y(t) = A * exp(-gap * t) + C` to trace distance time series. The underlying assumption is that trace distance decays as a single exponential governed by the spectral gap. This is only true asymptotically (after initial transients die out). The actual trace distance dynamics is:
+The total quantum algorithm cost is:
 
-`d(rho(t), rho_gibbs) ~ sum_k |c_k| * exp(Re(lambda_k) * t)`
+```
+T_total = ceil(mixing_time / delta) * T_per_step
+```
 
-where lambda_k are Liouvillian eigenvalues and c_k are overlap coefficients (the code already analyzes these in gap_estimation.jl's `eigenbasis_overlap_analysis`).
+Two common issues:
 
-**When the single-exponential model breaks:**
-1. **Burn-in period:** Early transients from multiple eigenmode contributions make the initial data points follow a DIFFERENT exponential (or sum of exponentials). The `skip_initial` parameter handles this, but choosing it wrong biases the gap estimate.
-2. **Nearly degenerate eigenvalues:** If lambda_2 and lambda_3 have similar real parts, the trace distance follows a SUM of two exponentials. A single-exponential fit will return an average of the two rates, which is wrong.
-3. **Plateau misidentification:** The `C` parameter captures the asymptotic plateau. If the simulation has not run long enough, the fit interprets the still-decaying curve as a plateau plus fast exponential, overestimating the gap.
-4. **Non-monotone trace distance:** For some initial states, trace distance can temporarily INCREASE before decaying (the "initial slip" phenomenon in open quantum systems). The fitting code does not handle this.
+1. **Off-by-one in step count:** Is it `floor(mixing_time / delta)` or `ceil(mixing_time / delta)`? The existing code uses `num_steps = Int(config.mixing_time / config.delta)` (implicit truncation for exact division). For cost counting, `ceil` is more conservative (guarantees convergence).
+
+2. **Per-step cost independence from delta:** The OFT cost per step does NOT depend on delta. The B coherent term cost per step also does NOT depend on delta. Only the *number* of steps depends on delta. This means the cost counter cleanly factors as `n_steps * per_step_cost`. If delta sneaks into `per_step_cost`, something is wrong.
+
+3. **Total cost cancels delta in the limit:** For small delta, `n_steps ~ mixing_time / delta` and `per_step_cost` is delta-independent. So `T_total ~ mixing_time * per_step_cost / delta`. Wait -- this grows without bound as delta shrinks. This is physically correct: smaller delta means more steps, each with the same QPE cost. The key question for users: what is the "right" delta? The answer depends on the desired approximation accuracy of the weak measurement. The cost counter should accept delta as input, not choose it.
 
 **Prevention:**
-- The existing `skip_initial` parameter is critical. Default should be at least 0.1 (skip first 10% of data). For mixing time estimation where the goal is extrapolation, skip_initial = 0.2-0.3 is safer.
-- Add a diagnostic: compute R-squared for the fit. The existing code does this (`_compute_r_squared`). Set a hard threshold: if R^2 < 0.9, flag the fit as unreliable and do not use it for mixing time extrapolation.
-- For mixing time estimation specifically, consider fitting to the LOG of trace distance instead: `log(d(t)) ~ -gap * t + const`. This is a LINEAR fit (no iterative solver needed) and is more numerically stable. The existing `_log_linear_initial_guess` already does this for the initial guess -- consider making it an alternative fitting mode.
-- Validate the gap estimate against the Krylov spectral gap when available (`run_krylov_spectrum` gives the exact gap for small systems). The existing `eigenbasis_overlap_analysis` provides this cross-validation.
+- Use `ceil(Int, mixing_time / delta)` for step count.
+- Report both `cost_per_step` and `total_cost` separately so users can adjust mixing_time or delta independently.
+- Add a note: "Per-step cost is independent of delta. Total cost = ceil(mixing_time/delta) * per_step_cost."
+- Provide a utility for parameter sweeps: varying delta shows total cost scaling as 1/delta.
 
 **Detection:**
-- Gap estimate varies significantly with `skip_initial` (sensitivity analysis).
-- R-squared < 0.9 indicates model mismatch.
-- Gap estimate is negative or much larger than expected from Krylov results.
-- The existing `FitResult.converged` flag catches Levenberg-Marquardt non-convergence.
+- Total cost that does not scale linearly with `1/delta` indicates a bug.
+- Per-step cost that changes with `delta` is WRONG.
 
-**Which phase:** Mixing time extrapolation phase. Must include validation against known spectral gaps.
+**Which phase:** Final assembly phase.
 
 ---
 
-### MOD-02: Extrapolation Beyond the Fitted Range Produces Meaningless Mixing Time
+### MOD-02: The Rescaling Factor Converts Between Physical and Rescaled Hamiltonians
 
 **What goes wrong:**
-Mixing time estimation requires extrapolating the fitted exponential to find when `d(rho(t), rho_gibbs) < epsilon`. If the simulation only ran for time T_sim and the fitted curve predicts convergence at T_mix >> T_sim, the extrapolation is unreliable because:
-1. The fit was trained on data in [0, T_sim] but is being evaluated at T_mix which may be 10-100x larger.
-2. Small errors in the gap estimate are amplified exponentially: if gap_true = 0.1 and gap_fit = 0.11 (10% error), the mixing time estimate is off by `log(1/eps) * (1/0.1 - 1/0.11)` which for eps=1e-5 is `11.5 * 0.91 = 10.5` time units -- a significant error.
-3. The single-exponential model may be valid in [0, T_sim] but the actual dynamics at T_mix could be dominated by a different eigenmode.
+The HamHam constructor rescales the Hamiltonian so its spectrum fits in `[0, 0.45]` (hamiltonian.jl lines 394-405). The `rescaling_factor` field stores this conversion: `H_physical = rescaling_factor * (H_rescaled - shift * I)`.
+
+ALL Bohr frequencies, eigvals, and derived quantities in the HamHam are in rescaled units. The parameters `t0`, `w0`, `sigma` in Config are also in rescaled units. The cost counter's output is naturally in rescaled units.
+
+**The trap:** If the cost counter reports in rescaled units without stating this, and the user compares costs across Hamiltonians with different rescaling factors, the comparison is meaningless. A 3-qubit Hamiltonian (rescaling ~ 20) and a 6-qubit Hamiltonian (rescaling ~ 200) would appear to have similar costs in rescaled units when the physical costs differ by 10x.
 
 **Prevention:**
-- Compute the extrapolation ratio: `T_mix / T_sim`. Flag results where this exceeds a threshold (suggest: 5x). At >10x, the extrapolation is essentially meaningless.
-- Report confidence intervals on the mixing time using the gap uncertainty: `T_mix = log(A/epsilon) / gap`, so `dT_mix/dgap = -log(A/epsilon) / gap^2`. With `gap_se` from the fit, the mixing time uncertainty is approximately `T_mix_se = gap_se * |dT_mix/dgap|`.
-- Require that the fitted trace distance at the END of the simulation is at least 10x smaller than at the START. If the curve has barely decayed, the gap estimate is poorly constrained.
-- The existing `FitResult.gap_ci` (confidence interval) provides the raw statistical uncertainty. Propagate this through to mixing time.
+- Report in rescaled units (matching all other internal time quantities) AND store `rescaling_factor` in the result struct.
+- Add a helper: `physical_time(cost::HamSimCost) = cost.total_ham_sim_time * cost.rescaling_factor`.
+- For cross-system comparisons, always convert to physical units first.
+- The struct docstring must state: "All times are in rescaled Hamiltonian units (spectrum normalized to [0, 0.45]). Multiply by rescaling_factor for physical Hamiltonian time."
 
 **Detection:**
-- Mixing time estimates that vary wildly with small changes to `skip_initial` or `total_time`.
-- Mixing time confidence interval spanning more than an order of magnitude.
-- Extrapolation ratio > 10.
+- Cross-system comparison where a larger system appears cheaper (likely a rescaling factor issue).
+- Cost that does not change when the overall coupling strength of the Hamiltonian is scaled (it should scale linearly via `rescaling_factor`).
 
-**Which phase:** Mixing time extrapolation phase.
+**Which phase:** API and struct design phase. Must be decided early.
 
 ---
 
-### MOD-03: save_every Off-by-One Corrupts Downstream Time Grid
+### MOD-03: Per-Jump vs Summed-Over-Jumps Cost Reporting Ambiguity
 
 **What goes wrong:**
-The trajectory engine computes the number of saves as `num_saves = div(num_steps, save_every) + 1` (trajectories.jl line 604). The +1 is for the initial state (step 0). The time grid is `times[s] = (s - 1) * save_every * delta_step` (line 609). The DM thermalize code does NOT currently have save_every -- it records every step:
-```julia
-trace_distances = [trace_distance_h(Hermitian(evolving_dm), gibbs)]  # initial
-for step in 1:num_steps
-    ...
-    push!(trace_distances, dist)  # after each step
-end
-time_steps = collect(0.0:config.delta:(num_steps * config.delta))
-```
+The quantum algorithm applies one randomly chosen jump operator per step (uniform over `n_jumps` operators). Looking at `run_thermalize` (furnace.jl): `idx = rand(rng, 1:length(jumps))` -- ONE jump is selected per step.
 
-Adding save_every to the DM thermalize code creates several off-by-one risks:
+The per-step OFT cost is for ONE jump at all (truncated) energies, not for all jumps. The QPE time sum (`sum_k |t_k|`) is the same regardless of which jump is chosen -- it depends only on the grid, not the jump operator.
 
-1. **Mismatched lengths:** If `num_steps` is not divisible by `save_every`, the last partial interval may or may not be saved, creating a mismatch between `trace_distances` and `time_steps`.
-2. **Initial state inclusion:** The trajectory code saves the initial measurement at step 0. If the DM code skips the initial step, the arrays are shifted by one.
-3. **Time grid construction:** `times = collect(0.0 : save_every*delta : num_steps*delta)` vs `times = [(s-1) * save_every * delta for s in 1:num_saves]` produce different results when `num_steps % save_every != 0`.
+**But there is a subtlety with the B coherent term:** The existing code computes per-jump B_k for Thermalize mode (`_precompute_coherent_unitary`, coherent.jl lines 57-99) but total B = sum_k B_k for Lindbladian mode. The quantum algorithm applies `exp(-i * delta * B_k)` for the chosen jump k, so the per-step B cost is for ONE jump's B_k.
 
-**Downstream impact:**
-The fitting code (`fit_exponential_decay`) takes `times` and `values` vectors that must have matching lengths. The gap estimation code (`estimate_spectral_gap`) constructs these from trajectory results. If DM thermalize produces arrays with different length semantics, the fitting will either error (length mismatch) or silently use misaligned time-value pairs.
+Since all jumps have the same OFT cost (same grid, same QPE circuit) and the same B_k cost structure (same grid, same b_minus/b_plus), the per-step cost is jump-independent for symmetric jump sets (Pauli operators on periodic chains). For asymmetric jump sets, report worst-case.
 
 **Prevention:**
-- Copy the EXACT formula from trajectories.jl: `num_saves = div(num_steps, save_every) + 1`. Always include the initial state. Always use `times[s] = (s - 1) * save_every * delta`.
-- Add an assertion: `@assert length(trace_distances) == length(time_steps) "save_every off-by-one: got $(length(trace_distances)) trace distances but $(length(time_steps)) time steps"`.
-- Write a dedicated test: set `save_every = 7, num_steps = 20`. Expected `num_saves = div(20, 7) + 1 = 3` (saves at steps 0, 7, 14). The step 20 result is NOT saved because 20 % 7 != 0.
-- Consider also saving the FINAL step regardless of save_every (save at steps 0, 7, 14, 20). This avoids losing the last ~6 steps of data. But document this clearly and ensure the time grid matches.
+- Report per-step cost as the cost for ONE jump operator's channel.
+- Total cost: `ceil(mixing_time / delta) * T_per_step_one_jump`.
+- Add a breakdown: `per_step_oft_cost`, `per_step_b_cost`, `per_step_total`, `num_steps`, `total_cost`.
 
 **Detection:**
-- `ArgumentError: times and values must have the same length` from `fit_exponential_decay`.
-- Fitting produces a gap that does not match the visual slope of the trace distance plot (misaligned time grid).
-- Test that constructs trace_distances with save_every and verifies array sizes.
+- Total cost that scales with `n_jumps` is suspicious (per-step cost should be jump-independent for Pauli jumps).
 
-**Which phase:** save_every implementation phase. Must be tested before mixing time extrapolation depends on it.
+**Which phase:** API design phase.
 
 ---
 
-### MOD-04: GC Pauses Disrupting Threaded Omega-Loop Performance
+### MOD-04: GNS vs KMS Construction Changes Which Cost Components Exist
 
 **What goes wrong:**
-Julia's garbage collector (GC) is stop-the-world: when a GC event triggers, ALL threads are paused. In the trajectory engine, this is mitigated by the zero-allocation hot path (`step_along_trajectory!` allocates exactly 0 bytes per step, verified in test_allocation.jl). The omega-loop threading is different because:
+The GNS construction has no coherent B term (`with_coherent(GNS()) = false`), while KMS has it (`with_coherent(KMS()) = true`). The cost counter must handle both:
 
-1. The omega-loop body calls `mul!` which is allocation-free, but also does `@. scratch.jump_oft = ...` broadcasting which MAY allocate depending on the broadcast fusion.
-2. The `_finalize_kraus_step!` at the end of each DM step calls `_build_cptp_channel` which calls `eigen(Hermitian(S))` -- this allocates (eigenvalue/eigenvector arrays). With precomputation, this allocation moves to construction time.
-3. Even if the omega-loop body is allocation-free, other Julia code running concurrently (logging, GC of previous allocations) can trigger a GC pause.
+- GNS: `T_per_step = 2 * T_OFT`
+- KMS: `T_per_step = 2 * T_OFT + T_B`
 
-**Impact on omega-loop threading:**
-A GC pause during the omega-loop stalls ALL threads, including the ones doing useful frequency computation. If threads are unbalanced (some finish their chunk before others), idle threads could trigger GC from their own unrelated work, pausing the still-busy threads.
+**Additionally**, GNS uses a shifted transition weight `gamma(w + beta * sigma^2 / 2)` (documented in `_pick_transition_gns` docstring). This shift changes the effective energy support, affecting `n_effective_energies`. The cost counter must dispatch on the construction type for both:
+1. Whether B cost is included (structural difference)
+2. Which transition function determines the energy truncation (parametric difference)
 
 **Prevention:**
-- Precompute the eigendecomposition (CRIT-02) to move the `eigen()` allocation out of the hot path.
-- Verify that the omega-loop body is allocation-free using `@allocated` in a function barrier (same pattern as test_allocation.jl).
-- Use `GC.enable(false)` around the threaded section if GC pauses are problematic, but ONLY if the allocation within the section is bounded and small. Re-enable immediately after. This is a last resort.
-- Prefer `Threads.@spawn` with `@sync` over `Threads.@threads` -- the `@spawn` pattern gives better control over task granularity and avoids the scheduler overhead of `@threads :dynamic`.
+- Dispatch on `config.construction`:
+  ```julia
+  per_step_cost(config::Config{<:Any, <:Any, GNS}, ...) = 2 * oft_cost
+  per_step_cost(config::Config{<:Any, <:Any, KMS}, ...) = 2 * oft_cost + b_cost
+  ```
+- Use `Union{Nothing, Float64}` for `b_cost` in the result struct (nothing for GNS).
+- For energy truncation, use `pick_transition(config)` which already dispatches correctly on GNS/KMS.
 
 **Detection:**
-- Inconsistent timing for the same workload across runs (GC timing is non-deterministic).
-- `@time` shows non-zero GC percentage.
-- Threading speedup is below expected (1.5x with 4 threads instead of 3x+).
+- GNS result with non-nothing B cost is WRONG.
+- KMS result with nothing B cost is WRONG.
 
-**Which phase:** Omega-loop threading phase. Profile before optimizing.
+**Which phase:** API design phase.
 
 ---
 
-### MOD-05: Per-Jump Precomputation Changes Test Expectations for DM Thermalize
+### MOD-05: Domain Independence -- Same Quantum Algorithm, Different Classical Computation
 
 **What goes wrong:**
-The existing `run_thermalize` recomputes the CPTP channel (R, K0, U_residual) from scratch at every step inside `_jump_contribution!` -> `_finalize_kraus_step!` -> `_build_cptp_channel`. Moving to per-jump precomputed channels changes the computation path:
+The four domain types (BohrDomain, EnergyDomain, TimeDomain, TrotterDomain) are different levels of approximation for the *classical simulation*. They ALL approximate the SAME quantum algorithm. The cost counter should produce the same result regardless of which domain the classical simulator uses.
 
-**Before (current):**
-```
-For each DM step:
-  pick random jump a
-  accumulate R from all frequencies using current jump a
-  hermitianize R
-  S = f(R, delta)
-  eigen(S) -> clamp -> sqrt -> U_residual  # recomputed
-  apply K0 * rho * K0' + rho_jump + U_residual * rho * U_residual'
-```
+**The complication:** BohrDomain and EnergyDomain do not have `t0` (it is `nothing` in their Config). The cost counter needs `t0` to compute QPE time sums. For these domains, `t0` must be computed from the Fourier dual: `t0 = 2*pi / (2^num_energy_bits * w0)`.
 
-**After (precomputed):**
-```
-At construction time:
-  For each jump a:
-    accumulate R_a from all frequencies
-    hermitianize R_a
-    S_a = f(R_a, delta)
-    eigen(S_a) -> clamp -> sqrt -> U_residual_a  # precomputed
-
-For each DM step:
-  pick random jump a
-  accumulate rho_jump from all frequencies using jump a (needs evolving_dm)
-  apply K0_a * rho * K0_a' + rho_jump + U_residual_a * rho * U_residual_a'
-```
-
-The numerical results will differ at machine precision because:
-1. Eigendecomposition is numerically sensitive: two eigendecompositions of the "same" matrix constructed through different floating-point computation paths produce eigenvectors that differ by O(kappa * eps) where kappa is the condition number.
-2. The R matrix in the current code accumulates within a scratch buffer that may have different rounding than a freshly-allocated matrix.
+Additionally, `num_energy_bits` is `nothing` for BohrDomain (which operates at the Bohr frequency level, not a discretized grid). BohrDomain users must specify `num_energy_bits` explicitly for cost counting.
 
 **Prevention:**
-- Do NOT try to maintain bitwise identical results between precomputed and recomputed paths. Instead:
-  - Verify trace distance convergence is equivalent (final trace distance within 2x of each other).
-  - Verify the CPTP property is maintained (trace preservation, complete positivity).
-  - Compare at a meaningful tolerance: `isapprox(result_precomp.final_dm, result_recomp.final_dm, atol=1e-8)` for a long run.
-- Existing regression tests (test_regression.jl) store reference BSON outputs from the CURRENT (recomputed) code. These must be regenerated after switching to precomputed channels, or tests must be updated with looser tolerances.
-- Keep the recomputed path available (behind a flag or separate method) for validation.
+- The cost counter should accept `num_energy_bits`, `w0` (or `t0`) as explicit parameters, independent of the domain.
+- If extracting from Config, gracefully handle `nothing` values:
+  ```julia
+  r = something(config.num_energy_bits, error("num_energy_bits required for cost counting"))
+  t0_val = something(config.t0, 2*pi / (2^r * config.w0))
+  ```
+- For TrotterDomain, additionally report `num_trotter_steps` as a separate metric.
+- Document: "The cost counter computes the quantum algorithm's cost, independent of classical simulation domain."
 
 **Detection:**
-- Regression tests failing with small numerical differences (1e-14 to 1e-10 range).
-- CPTP test failures after precomputation.
+- Running cost computation with different domains gives different results for the same underlying parameters: WRONG.
+- BohrDomain user getting an error because `config.t0 === nothing`: handle gracefully.
 
-**Which phase:** Per-jump precomputation phase.
+**Which phase:** API design phase.
 
 ---
 
-### MOD-06: LsqFit SingularException from Flat or Noisy Trace Distance Data
+### MOD-06: HamHam Does Not Store beta -- Must Be Passed Separately
 
 **What goes wrong:**
-The existing fitting code (staging/fitting.jl, lines 199-208) already handles `SingularException` from `stderror(fit)` and `confint(fit)`:
-```julia
-gap_se, gap_ci = try
-    se = stderror(fit)
-    ci = confint(fit; level=level)
-    se[_IDX_GAP], (ci[_IDX_GAP][1], ci[_IDX_GAP][2])
-catch e
-    e isa LinearAlgebra.SingularException || rethrow(e)
-    Inf, (-Inf, Inf)
-end
-```
-
-This is good. But the SingularException occurs when the Jacobian is rank-deficient at the solution. For mixing time estimation, several common scenarios produce rank-deficient Jacobians:
-
-1. **Already converged:** If `skip_initial` removes the transient and the remaining data is essentially flat at the plateau value, all three parameters (A, gap, C) are poorly determined. The Jacobian for A and gap becomes nearly zero.
-2. **Too few data points after skip_initial:** The code requires >= 4 points (fitting.jl line 174), but with save_every the actual number of data points could be small.
-3. **Very noisy data:** DM evolution trace distances can be noisy for small systems where the CPTP approximation error (O(delta^2) per step) accumulates.
-
-**Downstream impact for mixing time estimation:**
-If `gap_se = Inf` and `gap_ci = (-Inf, Inf)`, the mixing time uncertainty is also infinite, making the estimate useless. The code needs a graceful fallback.
+`beta` (inverse temperature) is not a field on `HamHam{T}`. It is used during construction (`HamHam(raw, beta)`) to compute the Gibbs state, but the scalar value is not retained. The cost counter needs `beta` for:
+- B term cost (b_plus depends on `beta`)
+- Transition weight computation (gamma depends on `beta`)
+- Energy truncation (truncation range depends on `beta`)
 
 **Prevention:**
-- Before fitting, check data quality: if `max(values) - min(values) < 1e-6`, skip fitting and report "already converged."
-- After fitting, check `FitResult.converged && FitResult.gap > 0 && FitResult.r_squared > 0.8`. The existing `_select_best_observable` (gap_estimation.jl line 31-59) already does this for trajectory-based gap estimation. The DM mixing time path should use the same quality gates.
-- If gap_se = Inf, report the gap estimate as "unreliable" in the result struct rather than silently using it for mixing time computation.
-- Consider implementing a fallback: if single-exponential fit fails, use the log-linear estimate from `_log_linear_initial_guess` directly as a rough gap. It is less accurate but does not require a converged Levenberg-Marquardt solve.
+- Require `beta` as a mandatory argument to the cost function.
+- Alternatively, accept a `Config` object which already contains `beta`.
+- The cleanest API: `compute_ham_sim_cost(config::Config, hamiltonian::HamHam; mixing_time::Float64)`.
 
 **Detection:**
-- `FitResult.gap_se == Inf` or `FitResult.gap_ci == (-Inf, Inf)`.
-- `FitResult.converged == false`.
-- `FitResult.r_squared < 0` (model worse than horizontal line).
+- MethodError when trying to access `hamiltonian.beta` (field does not exist).
 
-**Which phase:** Mixing time extrapolation phase.
+**Which phase:** API design phase.
+
+---
+
+### MOD-07: w0 and t0 Are Fourier Duals -- Not Free Parameters
+
+**What goes wrong:**
+The codebase enforces `t0 * w0 = 2*pi / 2^num_energy_bits` (see `validate_config!` in misc_tools.jl lines 192-195). If the cost counter accepts `r`, `w0`, AND `t0` as independent inputs, inconsistent values could be passed.
+
+**Prevention:**
+- Accept `r` and `w0`, compute `t0 = 2*pi / (2^r * w0)`.
+- Or accept a Config (which already validates this relation).
+- Add an assertion: `@assert isapprox(t0 * w0, 2*pi / 2^r)`.
+
+**Detection:**
+- Cost values that don't match hand calculations -- check the `t0 * w0` relation first.
+
+**Which phase:** First implementation phase.
 
 ---
 
 ## Minor Pitfalls
 
-Issues that cause inconvenience or suboptimal performance but not incorrect results.
+Issues that cause inconvenience or confusion but not wrong numbers.
 
 ---
 
-### MIN-01: Threading Threshold Too Low -- Overhead Dominates for Small Systems
+### MIN-01: Cost Struct Should Clearly Separate Per-Step from Total
 
 **What goes wrong:**
-For 2-3 qubit systems (dim = 4-8), the omega-loop has `2^num_energy_bits` frequency points (typically 16-64). Spawning Julia tasks, distributing work, and merging accumulators has overhead (microseconds). The per-frequency computation is a few small matrix multiplies (dim x dim, so 4x4 or 8x8) which take nanoseconds. Threading overhead exceeds computation time, making the threaded path slower than serial.
+Users need costs at multiple levels:
+- Per OFT evaluation (one omega value, one direction)
+- Per step (one application of the channel, all omegas, both directions)
+- Per query (full mixing time evolution)
+
+Without clear naming, users compare apples to oranges.
 
 **Prevention:**
-- Add a minimum work threshold: `use_threading = length(energy_labels) * dim^2 >= THREADING_THRESHOLD`. Suggested threshold: `dim^2 >= 32^2 = 1024` (i.e., dim >= 32, or 5+ qubits). Below this, run the omega-loop serially.
-- Make the threshold configurable via a keyword argument with a sensible default.
-- The trajectory engine does not have this problem because each trajectory takes many steps (thousands of matrix multiplies), so the per-trajectory work always exceeds threading overhead.
+- Use a hierarchical result struct with self-documenting field names:
+  ```julia
+  struct HamSimCost
+      # Per-step breakdown
+      oft_time_per_energy::Float64     # T_QPE = 2 * sum_k |t_k| for one omega
+      n_effective_energies::Int        # number of truncated energy grid points
+      oft_time_per_step::Float64       # = oft_time_per_energy * n_effective_energies
+      b_time_per_step::Union{Nothing, Float64}
+      total_time_per_step::Float64     # = 2*oft_per_step + b_per_step
+      # Total
+      num_steps::Int
+      total_ham_sim_time::Float64
+      # Metadata
+      mixing_time_used::Float64
+      delta_used::Float64
+      num_energy_bits::Int
+      t0::Float64
+      w0::Float64
+      rescaling_factor::Float64
+      construction::Symbol             # :GNS or :KMS
+  end
+  ```
+- Provide a `Base.show` method for human-readable output.
 
-**Which phase:** Omega-loop threading phase.
+**Which phase:** Struct definition phase.
 
 ---
 
-### MIN-02: save_every Breaks Existing Plotting and Analysis Scripts
+### MIN-02: Trotter Domain Adds Trotter Step Counting
 
 **What goes wrong:**
-The existing `ThermalizeResults` stores `trace_distances::Vector{T}` and `time_steps::Vector{T}` with one entry per DM step. Downstream analysis code (plotting, convergence diagnostics) may assume `length(trace_distances) == num_steps + 1`. Introducing save_every changes this to `length(trace_distances) == div(num_steps, save_every) + 1`, breaking any code that indexes by step number.
+For TrotterDomain, each `e^{iHt_k}` requires `num_trotter_steps_per_t0 * |k|` Trotter steps. Users on TrotterDomain expect circuit-level cost, not just Hamiltonian simulation time.
 
 **Prevention:**
-- Default save_every to 1 for backward compatibility. Users opt-in to reduced saving.
-- Store `save_every` in the results struct so downstream code can reconstruct the step-to-save mapping.
-- Update the results BSON serialization (results.jl) to include the new field.
-- Add the `save_every` field as a Union{Nothing, Int} defaulting to nothing (meaning 1) for backward compatibility with old BSON files.
+- For TrotterDomain, report both `total_ham_sim_time` and `total_trotter_steps` as separate fields.
+- `total_trotter_steps = num_trotter_steps_per_t0 * sum_k |k|` for the QPE grid.
 
-**Which phase:** save_every implementation phase.
+**Which phase:** Can be deferred if TrotterDomain is not the initial focus.
 
 ---
 
-### MIN-03: Memory Spike from Per-Jump Precomputed Matrices at Large Scale
+### MIN-03: Cost Counter Must Be Deterministic
 
 **What goes wrong:**
-Per-jump precomputation stores 3 dim-by-dim matrices (K0, U_residual, R) per jump operator. The number of jump operators scales linearly with the number of qubits (typically `n_qubits` Pauli operators). Memory usage:
-
-| n_qubits | dim | n_jumps | Memory per jump | Total |
-|----------|-----|---------|-----------------|-------|
-| 3 | 8 | 6 | 3 KB | 18 KB |
-| 4 | 16 | 8 | 12 KB | 96 KB |
-| 6 | 64 | 12 | 192 KB | 2.3 MB |
-| 8 | 256 | 16 | 3 MB | 48 MB |
-| 10 | 1024 | 20 | 48 MB | 960 MB |
-
-At 10 qubits, storing per-jump precomputed data approaches 1 GB. This is borderline acceptable but surprising for users who do not expect the precomputation to use more memory than the density matrix itself (16 MB at dim=1024).
+The cost counter is an analytical formula. It should be fully deterministic with no RNG dependency. If accidentally coupled to `run_thermalize` (e.g., to get mixing time), it inherits stochastic behavior.
 
 **Prevention:**
-- Add a warning when total precomputed memory exceeds a threshold (100 MB): `@warn "Per-jump precomputation allocating $(total_mb) MB. Consider using lazy recomputation for systems this large."`.
-- Optionally provide a `precompute_jumps::Bool` flag in the API. When false, fall back to per-step recomputation (current behavior).
-- For large systems, consider precomputing only K0 and R, and computing U_residual lazily if the memory cost is dominated by the three matrices.
+- Pure function of config parameters and Hamiltonian properties.
+- Input: Config (or explicit grid params), HamHam (for rescaling_factor), mixing_time.
+- Output: HamSimCost struct.
+- Test: two identical calls give bitwise identical results.
 
-**Which phase:** Per-jump precomputation phase.
+**Which phase:** All phases. Design principle.
+
+---
+
+### MIN-04: B Term Computation Requires _compute_b_plus Variant Dispatch
+
+**What goes wrong:**
+The B cost depends on which `b_plus` function is used (Gaussian vs Metropolis vs Smooth Metropolis). The dispatch logic in `_select_b_plus_calculator` (furnace_utensils.jl lines 143-156) checks `with_linear_combination`, then `a` and `b` values. The cost counter must replicate this dispatch exactly to get the correct truncated dictionary size.
+
+**Prevention:**
+- Reuse `_select_b_plus_calculator` directly (it returns the function + args).
+- Then call `_compute_truncated_func` to get the truncated dictionary.
+- This ensures the cost counter uses the same truncation as the simulator.
+
+**Detection:**
+- B cost that does not change when switching transition weight types is suspicious.
+
+**Which phase:** B cost computation phase.
 
 ---
 
@@ -511,47 +543,54 @@ At 10 qubits, storing per-jump precomputed data approaches 1 GB. This is borderl
 
 | Phase | Pitfall | Severity | Key Mitigation |
 |-------|---------|----------|----------------|
-| Per-jump precomputation | CRIT-02: Stale eigendecomposition | Critical | Verify R is state-independent; assert S eigenvalues > -eps |
-| Per-jump precomputation | MOD-05: Changed numerical results | Moderate | Regression test with loose tolerance; keep recomputed path for validation |
-| Per-jump precomputation | MIN-03: Memory at large scale | Minor | Warning + optional lazy fallback |
-| Omega-loop threading | CRIT-01: BLAS global thread state | Critical | try/finally save/restore pattern; never mix BLAS threading strategies |
-| Omega-loop threading | CRIT-03: Race conditions in accumulators | Critical | Per-task accumulator pattern; do NOT use threadid() |
-| Omega-loop threading | CRIT-04: False sharing | Critical | Independently allocated matrices, not 3D array views |
-| Omega-loop threading | CRIT-05: BLAS oversubscription | Critical | set_num_threads(1) before threading; min_freqs threshold |
-| Omega-loop threading | CRIT-06: Hermitianize placement | Critical | Hermitianize after merge, matching serial semantics |
-| Omega-loop threading | MOD-04: GC pauses | Moderate | Zero-allocation hot path; precompute eigen |
-| Omega-loop threading | MIN-01: Threading threshold | Minor | Skip threading for dim < 32 |
-| save_every | MOD-03: Off-by-one errors | Moderate | Copy trajectory formula; assertion on array lengths |
-| save_every | MIN-02: Breaking downstream code | Minor | Default save_every=1; store in results |
-| Mixing time extrapolation | MOD-01: Model mismatch | Moderate | R^2 threshold; skip_initial; cross-validate with Krylov |
-| Mixing time extrapolation | MOD-02: Extrapolation reliability | Moderate | Extrapolation ratio limit; propagate gap_se to T_mix |
-| Mixing time extrapolation | MOD-06: Singular Jacobian | Moderate | Quality gates; fallback to log-linear estimate |
+| API/struct design | CRIT-05: Classical vs quantum mixing time | Critical | Accept mixing_time as explicit input |
+| API/struct design | MOD-02: Rescaling factor | Moderate | Store in struct; document units |
+| API/struct design | MOD-03: Per-jump vs summed | Moderate | Per-step = one jump's cost |
+| API/struct design | MOD-04: GNS vs KMS dispatch | Moderate | Dispatch on construction; Nothing for absent B |
+| API/struct design | MOD-05: Domain independence | Moderate | Accept grid params explicitly |
+| API/struct design | MOD-06: beta not on HamHam | Moderate | Require beta as argument |
+| OFT cost | CRIT-01: Full vs truncated grid | Critical | Full QPE grid for inner time sum; truncated for outer energy count |
+| OFT cost | CRIT-02: No filter weighting, factor of 2 | Critical | Pure grid formula; no sigma dependency in time sum |
+| OFT cost | CRIT-06: Transition type energy range | Critical | Use _truncate_energy_labels for outer count |
+| B cost | CRIT-03: Double sum structure | Critical | Explicit double loop; reuse truncated b-dicts |
+| B cost | MIN-04: b_plus variant dispatch | Minor | Reuse _select_b_plus_calculator |
+| Assembly | CRIT-04: Factor of 2 for U+cU^dagger | Critical | 2*OFT + 1*B, NOT 2*(OFT+B) |
+| Assembly | MOD-01: Delta step count | Moderate | ceil(mixing_time/delta); linear 1/delta scaling |
+| Assembly | MOD-07: w0/t0 consistency | Moderate | Compute one from other; validate |
+| Reporting | MIN-01: Clear struct | Minor | Separate per-step, per-query, metadata |
+| Reporting | MIN-02: Trotter steps | Minor | Report separately for TrotterDomain |
+| Reporting | MIN-03: Determinism | Minor | Pure function, no RNG |
 
 ---
 
 ## Recommended Phase Ordering Based on Pitfall Dependencies
 
-1. **Per-jump precomputation** first: This is the foundation. It eliminates the per-step `eigen()` call, which is needed before threading the omega-loop (otherwise each thread's eigen call would allocate and trigger GC). Also provides the biggest single-threaded speedup.
+1. **API and struct design** first: Define `HamSimCost` struct, decide units convention (MOD-02), accept explicit mixing time (CRIT-05), handle GNS/KMS dispatch (MOD-04), domain-independent API (MOD-05). This is the foundation that all computation phases build on.
 
-2. **save_every** second: Simple feature, independent of threading. Produces the time series data needed for mixing time extrapolation. Off-by-one bugs are easier to debug in serial code.
+2. **OFT cost computation** second: Implement the full-grid `sum(|t_k|)` formula (CRIT-01, CRIT-02). Count effective energies via `_truncate_energy_labels` (CRIT-06). Include the factor-of-2 for U+controlled-U^dagger (CRIT-04). Validate against closed-form `t0 * N^2 / 2`. This is the simplest computation and typically the largest cost component.
 
-3. **Omega-loop threading** third: Builds on precomputed channels (no eigen in hot path = allocation-free threading body). BLAS thread management pattern is well-established from trajectory engine.
+3. **B coherent term cost** third: Implement the double-sum formula using actual truncated b-dicts (CRIT-03). Handle the b_plus variant dispatch (MIN-04). Only applies to KMS. Validate by comparing truncated dict sizes against expectations.
 
-4. **Mixing time extrapolation** last: Depends on save_every for efficient data collection. Depends on understanding the DM convergence behavior, which benefits from having the threaded DM engine for faster iteration.
+4. **Assembly and total cost** fourth: Combine OFT + B costs with step count (MOD-01). Apply correct factors (2*OFT + B, CRIT-04). Multiply by `ceil(mixing_time / delta)`.
+
+5. **Trotter-specific and domain-specific reporting** last (optional): Add Trotter step counting for TrotterDomain users (MIN-02). This is an enhancement.
 
 ---
 
 ## Sources
 
-- [Julia Multi-Threading Documentation](https://docs.julialang.org/en/v1/manual/multi-threading/) (HIGH confidence -- official docs)
-- [Julia PSA: Don't Use threadid()](https://julialang.org/blog/2023/07/PSA-dont-use-threadid/) (HIGH confidence -- official Julia blog)
-- [Julia for HPC: Multithreading](https://enccs.github.io/julia-for-hpc/multithreading/) (MEDIUM confidence -- ENCCS/community resource)
-- [BLAS Thread Count vs Julia Thread Count](https://discourse.julialang.org/t/blas-thread-count-vs-julia-thread-count/57197) (MEDIUM confidence -- Discourse discussion)
-- [Document the interaction of Julia and BLAS threads, Issue #44201](https://github.com/JuliaLang/julia/issues/44201) (MEDIUM confidence -- open issue with developer discussion)
-- [MKL.jl Issue #106: Warn about NUM_THREADS behavior](https://github.com/JuliaLinearAlgebra/MKL.jl/issues/106) (MEDIUM confidence -- MKL-specific but pattern applies)
-- [Threads.threadid() and Task Migration -- Sharp Edge](https://discourse.julialang.org/t/sharp-edge-with-threads-threadid-and-task-migration/124550) (MEDIUM confidence -- community report)
-- [OhMyThreads.jl: Thread-Safe Storage](https://juliafolds2.github.io/OhMyThreads.jl/stable/literate/tls/tls/) (MEDIUM confidence -- alternative threading library docs)
-- [False Sharing in Multi-threading](https://blog.jling.dev/blog/false_share/) (MEDIUM confidence -- Julia-specific blog post)
-- [Exponential Data Fitting, SDSU Research Report](https://www.csrc.sdsu.edu/research_reports/CSRSR2009-04.pdf) (MEDIUM confidence -- academic reference)
-- [LsqFit.jl Tutorial](https://julianlsolvers.github.io/LsqFit.jl/latest/tutorial/) (MEDIUM confidence -- official LsqFit docs)
-- Direct codebase analysis of QuantumFurnace.jl v2.0 src/ and test/ directories (HIGH confidence)
+- Direct codebase analysis of QuantumFurnace.jl (HIGH confidence)
+  - `src/furnace_utensils.jl`: `_precompute_labels`, `_truncate_energy_labels`, `_create_energy_labels`, `_select_b_plus_calculator`, `_build_cptp_channel`
+  - `src/nufft.jl`: `_prepare_oft_nufft_prefactors` (filter weights, base_weights)
+  - `src/coherent.jl`: `B_time`, `B_trotter`, `_compute_b_minus`, `_compute_b_plus`, `_compute_b_plus_metro`, `_compute_b_plus_smooth`
+  - `src/ofts.jl`: `oft!`, `time_oft!`, `trotter_oft!`
+  - `src/energy_domain.jl`: `pick_transition`, `_pick_transition_kms`, `_pick_transition_gns`
+  - `src/time_domain.jl`: `_truncate_time_labels_for_oft`
+  - `src/structs.jl`: `Config`, `Workspace`, domain and construction types
+  - `src/hamiltonian.jl`: `HamHam`, `_rescaling_and_shift_factors`
+  - `src/jump_workers.jl`: `_jump_contribution!`
+  - `src/furnace.jl`: `run_thermalize` (jump selection), `construct_lindbladian`
+  - `src/misc_tools.jl`: `validate_config!` (Fourier relation enforcement)
+- [Chen et al. (2023), "An efficient and exact noncommutative quantum Gibbs sampler", arXiv:2311.09207](https://arxiv.org/abs/2311.09207) (HIGH confidence -- foundational paper for GNS construction)
+- [Chen, Kastoryano, Gilyen (2025), "Efficient quantum Gibbs samplers with KMS detailed balance condition", Comm. Math. Phys.](https://link.springer.com/article/10.1007/s00220-025-05235-3) (HIGH confidence -- KMS construction paper with B term)
+- Project MEMORY.md: floor analysis (`floor = k_energy * delta + floor_Trotter`), Bohr frequency collision analysis, bi-exponential fitting diagnostics (HIGH confidence -- direct prior work)
