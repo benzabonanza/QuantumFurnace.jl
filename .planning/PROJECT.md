@@ -102,15 +102,16 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 
 ### Active
 
-#### Current Milestone: v2.2 Hamiltonian Simulation Time Counter
+#### Current Milestone: v2.2 Ham Sim Time Counting
 
-**Goal:** Track total Hamiltonian simulation time consumed per Gibbs sample, enabling cost-vs-accuracy analysis across domains and system sizes for publication.
+**Goal:** Build functions that count the total Hamiltonian simulation time needed for Chen's quantum Gibbs sampling algorithm to reach ε-distance from the Gibbs state, using QPE-parameter-based time grids.
 
 **Target features:**
-- Hamiltonian simulation time accounting in run_thermalize and run_trajectory
-- Cost breakdown by component (OFT, channel application, coherent term)
-- Cost comparison across domains (Bohr/Energy/Time/Trotter) and constructions (KMS/GNS)
-- Scaling analysis with system size n and inverse temperature beta
+- OFT Hamiltonian simulation time counting from QPE parameters (r estimating qubits)
+- B coherent term Hamiltonian simulation time counting from QPE-derived time grid
+- Per-delta-step cost: B_time + 2 × OFT_time (weak measurement U + controlled-U†)
+- Total cost: (mixing_time / delta) × per_step_cost
+- Validation with r=12 on small systems
 
 #### Future
 

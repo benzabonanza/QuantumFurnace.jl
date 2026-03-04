@@ -5,7 +5,7 @@
 See: .planning/PROJECT.md (updated 2026-03-04)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v2.2 Hamiltonian Simulation Time Counter
+**Current focus:** v2.2 Ham Sim Time Counting
 
 ## Current Position
 
