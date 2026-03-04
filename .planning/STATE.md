@@ -5,21 +5,21 @@
 See: .planning/PROJECT.md (updated 2026-03-01)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** v2.1 Speedup & Mixing Time -- Phase 42 complete (all plans executed, 1246 tests pass)
+**Current focus:** Phase 43 Bi-Exponential Fitting complete (1273 tests pass, +27 new)
 
 ## Current Position
 
-Phase: 42 of 42 (Mixing Time Estimation)
-Plan: 2 of 2 in current phase (COMPLETE)
-Status: Phase 42 complete -- all mixing time estimation tests pass (1246 total, +65 new)
-Last activity: 2026-03-01 -- Phase 42 plan 02 executed (2 tasks, full test suite green)
+Phase: 43 of 43 (Bi-Exponential Fitting)
+Plan: 1 of 1 in current phase (COMPLETE)
+Status: Phase 43 complete -- bi-exponential fitting with <0.001% extrapolation error (1273 tests, +27 new)
+Last activity: 2026-03-04 -- Phase 43 plan 01 executed (6 tasks, full test suite green)
 
 Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 115 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 19, v2.1: 7)
+- Total plans completed: 116 (v1.0: 10, v1.1: 16, quick: 26, v1.2: 12, cleanup: 3, v1.3: 10, v1.4: 2, v1.5: 12, v2.0: 19, v2.1: 7, biexp: 1)
 
 **By Milestone:**
 
@@ -33,6 +33,7 @@ Progress: [██████████] 100%
 | v1.5 Krylov Gap Estimation | 27-32 | 12 (+3 quick) | 2026-02-20 to 2026-02-25 |
 | v2.0 Restructure | 33-38 | 19 (+2 quick) | 2026-02-25 to 2026-02-28 |
 | v2.1 Speedup & Mixing Time | 39-42 | 7 | 2026-03-01 |
+| Bi-Exponential Fitting | 43 | 1 | 2026-03-04 |
 
 ## Accumulated Context
 
@@ -59,6 +60,10 @@ Recent decisions affecting current work:
 - Convergence cutoff checked only at save points (coarser detection acceptable for reduced observation cost)
 - DM BLAS pattern: save -> set_num_threads(nthreads) -> try loop finally restore (inverse of trajectory pattern which sets BLAS=1)
 - Only hot loop wrapped in try/finally -- precomputation and result construction remain outside
+- Phase 43: Explicit :biexp model keyword only (no :auto mode with AICc)
+- Phase 43: Bi-exp mode sorting (g1 >= g2) with pre-swap SE/CI index tracking
+- Phase 43: Bi-exp extrapolation via Roots.Bisection (no closed-form for multi-exponential)
+- Phase 43: Synthetic FitResult from slow-mode params for backward-compatible fit_result field
 
 ### Pending Todos
 
@@ -66,10 +71,10 @@ None
 
 ### Blockers/Concerns
 
-None -- Phase 42 complete. v2.1 milestone fully delivered.
+None -- Phase 43 complete.
 
 ## Session Continuity
 
-Last session: 2026-03-01
-Stopped at: Completed 42-02-PLAN.md (mixing time estimation tests). Phase 42 and v2.1 milestone complete.
+Last session: 2026-03-04
+Stopped at: Completed Phase 43 PLAN.md (bi-exponential fitting). 1273 tests pass.
 Resume file: None
