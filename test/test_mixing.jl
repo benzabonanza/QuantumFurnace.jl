@@ -118,11 +118,11 @@ using StableRNGs
         result = _make_synthetic_result(times, dists; mixing_time=50.0)
         est = estimate_mixing_time(result; skip_initial=0.1, target_epsilon=0.01, extrapolate=true)
 
-        # Check all expected fields exist
+        # Check all expected fields exist (including Phase 43 additions)
         expected_fields = [
             :fitted_gap, :amplitude, :offset, :gap_ci, :gap_se, :r_squared,
             :converged, :mixing_time, :mixing_time_extrapolated, :mixing_time_actual,
-            :target_epsilon, :fit_result
+            :target_epsilon, :fit_result, :model_used, :biexp_fit_result
         ]
         for f in expected_fields
             @test f in fieldnames(MixingTimeEstimate)
@@ -211,6 +211,102 @@ using StableRNGs
         @test est.fit_result isa FitResult
 
         @info "Integration test" gap=est.fitted_gap r2=est.r_squared converged=est.converged mixing_time=est.mixing_time
+    end
+
+    # ===================================================================
+    # Bi-exponential mixing time tests (Phase 43)
+    # ===================================================================
+
+    # -----------------------------------------------------------------------
+    # BIEXP-MIX-01: Extrapolation accuracy <5% on synthetic bi-exp data
+    # -----------------------------------------------------------------------
+    @testset "BIEXP-MIX-01: biexp extrapolation accuracy <5%" begin
+        # Synthetic bi-exponential data mimicking Liouvillian multi-timescale decay
+        A1_true = 1.0    # fast mode
+        g1_true = 2.0    # fast gap
+        A2_true = 0.5    # slow mode
+        g2_true = 0.3    # slow gap (spectral gap)
+        C_true  = 6.8e-5 # small floor (from coherent unitary)
+        target  = 1e-4   # target epsilon, close to floor
+
+        times = collect(0.0:0.1:50.0)
+        dists = A1_true .* exp.(-g1_true .* times) .+
+                A2_true .* exp.(-g2_true .* times) .+
+                C_true
+
+        # True mixing time: solve A1*exp(-g1*t) + A2*exp(-g2*t) + C = target numerically
+        # For this data, the fast mode decays quickly so it's mainly A2*exp(-g2*t) + C = target
+        # => t_true ~ -log((target - C) / A2) / g2
+        # But we want the exact answer from the full bi-exp model
+        using Roots
+        f_true(t) = A1_true * exp(-g1_true * t) + A2_true * exp(-g2_true * t) + C_true - target
+        t_true = Roots.find_zero(f_true, (0.0, 200.0), Roots.Bisection())
+
+        result = _make_synthetic_result(times, dists; mixing_time=50.0)
+
+        # Bi-exponential extrapolation
+        est_biexp = estimate_mixing_time(result;
+            model=:biexp, skip_initial=0.1,
+            target_epsilon=target, extrapolate=true)
+
+        @test est_biexp.model_used == :biexp
+        @test est_biexp.biexp_fit_result isa BiexpFitResult
+        @test est_biexp.mixing_time_extrapolated !== nothing
+
+        biexp_err = abs(est_biexp.mixing_time_extrapolated - t_true) / t_true
+        @test biexp_err < 0.05  # <5% error (acceptance criterion)
+
+        # Compare with single-exp extrapolation
+        est_single = estimate_mixing_time(result;
+            model=:single, skip_initial=0.1,
+            target_epsilon=target, extrapolate=true)
+
+        if est_single.mixing_time_extrapolated !== nothing && !isnan(est_single.mixing_time_extrapolated)
+            single_err = abs(est_single.mixing_time_extrapolated - t_true) / t_true
+            @test biexp_err < single_err  # biexp should be more accurate
+            @info "BIEXP-MIX-01" t_true=t_true t_biexp=est_biexp.mixing_time_extrapolated t_single=est_single.mixing_time_extrapolated biexp_err=biexp_err single_err=single_err
+        else
+            @info "BIEXP-MIX-01 (single-exp extrapolation failed)" t_true=t_true t_biexp=est_biexp.mixing_time_extrapolated biexp_err=biexp_err
+        end
+    end
+
+    # -----------------------------------------------------------------------
+    # BIEXP-MIX-02: Backward compat — default model=:single
+    # -----------------------------------------------------------------------
+    @testset "BIEXP-MIX-02: backward compat default model" begin
+        A_true = 1.5
+        gap_true = 0.3
+        C_true = 0.001
+        times = collect(0.0:0.1:50.0)
+        dists = A_true .* exp.(-gap_true .* times) .+ C_true
+
+        result = _make_synthetic_result(times, dists; mixing_time=50.0)
+        est = estimate_mixing_time(result; skip_initial=0.1, target_epsilon=0.01, extrapolate=true)
+
+        # Default model should be :single
+        @test est.model_used == :single
+        @test est.biexp_fit_result === nothing
+
+        # Should produce identical results to explicit model=:single
+        est_explicit = estimate_mixing_time(result;
+            model=:single, skip_initial=0.1, target_epsilon=0.01, extrapolate=true)
+
+        @test est.fitted_gap == est_explicit.fitted_gap
+        @test est.mixing_time == est_explicit.mixing_time
+        @test est.offset == est_explicit.offset
+
+        @info "BIEXP-MIX-02 backward compat" model=est.model_used biexp_fit=est.biexp_fit_result
+    end
+
+    # -----------------------------------------------------------------------
+    # BIEXP-MIX edge: invalid model keyword throws
+    # -----------------------------------------------------------------------
+    @testset "BIEXP-MIX edge: invalid model throws" begin
+        times = collect(0.0:0.1:50.0)
+        dists = 1.5 .* exp.(-0.3 .* times) .+ 0.001
+
+        result = _make_synthetic_result(times, dists; mixing_time=50.0)
+        @test_throws ArgumentError estimate_mixing_time(result; model=:invalid)
     end
 
 end
