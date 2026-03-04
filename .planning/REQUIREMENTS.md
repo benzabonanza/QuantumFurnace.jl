@@ -76,33 +76,33 @@ Requirements for Hamiltonian simulation time counting. Each maps to roadmap phas
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| GRID-01 | — | Pending |
-| GRID-02 | — | Pending |
-| OFT-01 | — | Pending |
-| OFT-02 | — | Pending |
-| OFT-03 | — | Pending |
-| OFT-04 | — | Pending |
-| BTERM-01 | — | Pending |
-| BTERM-02 | — | Pending |
-| BTERM-03 | — | Pending |
-| COST-01 | — | Pending |
-| COST-02 | — | Pending |
-| COST-03 | — | Pending |
-| COST-04 | — | Pending |
-| API-01 | — | Pending |
-| API-02 | — | Pending |
-| API-03 | — | Pending |
-| API-04 | — | Pending |
-| VAL-01 | — | Pending |
-| VAL-02 | — | Pending |
-| VAL-03 | — | Pending |
-| VAL-04 | — | Pending |
+| GRID-01 | Phase 44 | Pending |
+| GRID-02 | Phase 44 | Pending |
+| OFT-01 | Phase 45 | Pending |
+| OFT-02 | Phase 45 | Pending |
+| OFT-03 | Phase 45 | Pending |
+| OFT-04 | Phase 45 | Pending |
+| BTERM-01 | Phase 46 | Pending |
+| BTERM-02 | Phase 46 | Pending |
+| BTERM-03 | Phase 46 | Pending |
+| COST-01 | Phase 47 | Pending |
+| COST-02 | Phase 47 | Pending |
+| COST-03 | Phase 47 | Pending |
+| COST-04 | Phase 44 | Pending |
+| API-01 | Phase 47 | Pending |
+| API-02 | Phase 47 | Pending |
+| API-03 | Phase 47 | Pending |
+| API-04 | Phase 47 | Pending |
+| VAL-01 | Phase 45 | Pending |
+| VAL-02 | Phase 47 | Pending |
+| VAL-03 | Phase 46 | Pending |
+| VAL-04 | Phase 47 | Pending |
 
 **Coverage:**
 - v2.2 requirements: 21 total
-- Mapped to phases: 0
-- Unmapped: 21
+- Mapped to phases: 21
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-04*
-*Last updated: 2026-03-04 after initial definition*
+*Last updated: 2026-03-04 after roadmap creation*
