@@ -152,4 +152,106 @@ using StableRNGs
         @test isapprox(result.gap, gap_true; atol=1e-6)
     end
 
+    # ===================================================================
+    # Bi-exponential fitting tests
+    # ===================================================================
+
+    # -----------------------------------------------------------------------
+    # BIEXP-01: Clean bi-exponential data recovery
+    # -----------------------------------------------------------------------
+    @testset "BIEXP-01: clean bi-exp data recovery" begin
+        A1_true = 1.0    # fast amplitude
+        g1_true = 2.0    # fast gap
+        A2_true = 0.5    # slow amplitude
+        g2_true = 0.3    # slow gap (spectral gap estimate)
+        C_true  = 0.001  # offset
+
+        times = collect(0.0:0.05:30.0)
+        values = A1_true .* exp.(-g1_true .* times) .+
+                 A2_true .* exp.(-g2_true .* times) .+
+                 C_true
+
+        result = fit_biexponential_decay(times, values)
+
+        @test result isa BiexpFitResult
+        @test result.converged == true
+        @test result.r_squared > 0.999
+
+        # Slow mode (spectral gap)
+        @test isapprox(result.gap, g2_true; rtol=0.05)
+        @test isapprox(result.amplitude, A2_true; rtol=0.1)
+
+        # Fast mode
+        @test isapprox(result.gap_fast, g1_true; rtol=0.1)
+        @test isapprox(result.amplitude_fast, A1_true; rtol=0.1)
+
+        # Offset
+        @test isapprox(result.offset, C_true; atol=1e-3)
+
+        # Mode sorting: fast >= slow
+        @test result.gap_fast >= result.gap
+
+        @info "BIEXP-01" gap_slow=result.gap gap_fast=result.gap_fast offset=result.offset r2=result.r_squared
+    end
+
+    # -----------------------------------------------------------------------
+    # BIEXP-02: Offset accuracy — bi-exp closer to true C than single-exp
+    # -----------------------------------------------------------------------
+    @testset "BIEXP-02: offset accuracy vs single-exp" begin
+        # This is the key validation: bi-exp should give more accurate offset
+        # when data has two timescales
+        A1_true = 1.0    # fast
+        g1_true = 2.0    # fast gap
+        A2_true = 0.5    # slow
+        g2_true = 0.3    # slow gap
+        C_true  = 6.8e-5 # small offset (like floor from coherent unitary)
+
+        times = collect(0.0:0.1:40.0)
+        values = A1_true .* exp.(-g1_true .* times) .+
+                 A2_true .* exp.(-g2_true .* times) .+
+                 C_true
+
+        single_fit = fit_exponential_decay(times, values; skip_initial=0.2)
+        biexp_fit  = fit_biexponential_decay(times, values; skip_initial=0.2)
+
+        single_err = abs(single_fit.offset - C_true)
+        biexp_err  = abs(biexp_fit.offset - C_true)
+
+        @test biexp_err < single_err
+        @info "BIEXP-02 offset comparison" true_C=C_true single_C=single_fit.offset biexp_C=biexp_fit.offset single_err=single_err biexp_err=biexp_err
+    end
+
+    # -----------------------------------------------------------------------
+    # BIEXP-03: skip_initial works with bi-exp
+    # -----------------------------------------------------------------------
+    @testset "BIEXP-03: skip_initial with bi-exp" begin
+        A1_true = 1.0
+        g1_true = 2.0
+        A2_true = 0.5
+        g2_true = 0.3
+        C_true  = 0.001
+
+        times = collect(0.0:0.05:30.0)
+        values = A1_true .* exp.(-g1_true .* times) .+
+                 A2_true .* exp.(-g2_true .* times) .+
+                 C_true
+
+        r1 = fit_biexponential_decay(times, values; skip_initial=0.0)
+        r2 = fit_biexponential_decay(times, values; skip_initial=0.2)
+
+        @test length(r2.times_used) < length(r1.times_used)
+        # Both should recover reasonable gap
+        @test isapprox(r1.gap, g2_true; rtol=0.1)
+        @test isapprox(r2.gap, g2_true; rtol=0.1)
+    end
+
+    # -----------------------------------------------------------------------
+    # BIEXP edge case: too few data points
+    # -----------------------------------------------------------------------
+    @testset "BIEXP: too few data points throws" begin
+        times = collect(0.0:1.0:5.0)  # 6 points
+        values = exp.(-0.3 .* times)
+        @test_throws ArgumentError fit_biexponential_decay(times, values)
+    end
+
 end
