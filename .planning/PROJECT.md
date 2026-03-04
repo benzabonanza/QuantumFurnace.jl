@@ -2,7 +2,7 @@
 
 ## What This Is
 
-A Julia package for simulating quantum Gibbs sampling via Lindbladian evolution. It implements multiple Lindbladian constructions (GNS and KMS detailed balance) across a hierarchy of approximation domains (Bohr, Energy, Time, Trotter), with a unified `Config{S,D,C,T}` type system dispatching on simulation type, domain, construction, and element type. Four clean entry points (`run_lindblad`, `run_thermalize`, `run_krylov_spectrum`, `run_trajectory`) return typed Result structs with BSON save/load capability. The package features multi-threaded trajectory sampling with adaptive convergence-driven batching, spectral gap estimation from both trajectory-based observable decay and matrix-free KrylovKit eigsolve, exact Lindbladian diagnostics with biorthogonal eigenvector analysis, and validated KMS-vs-GNS comparison capabilities. The architecture is designed for extensibility to future construction types (DLL) via singleton type dispatch. The package targets researchers and students working on quantum Gibbs sampling, providing both fast numerical simulations and pedagogic documentation grounded in the theoretical literature.
+A Julia package for simulating quantum Gibbs sampling via Lindbladian evolution. It implements multiple Lindbladian constructions (GNS and KMS detailed balance) across a hierarchy of approximation domains (Bohr, Energy, Time, Trotter), with a unified `Config{S,D,C,T}` type system dispatching on simulation type, domain, construction, and element type. Four clean entry points (`run_lindblad`, `run_thermalize`, `run_krylov_spectrum`, `run_trajectory`) return typed Result structs with BSON save/load capability. The package features per-jump CPTP channel precomputation with multi-threaded BLAS and omega-loop parallelism for DM thermalization, multi-threaded trajectory sampling with adaptive convergence-driven batching, mixing time estimation via single-exponential and bi-exponential fitting on trace distance curves with quality gates and extrapolation, spectral gap estimation from both trajectory-based observable decay and matrix-free KrylovKit eigsolve, exact Lindbladian diagnostics with biorthogonal eigenvector analysis, and validated KMS-vs-GNS comparison capabilities. The architecture is designed for extensibility to future construction types (DLL) via singleton type dispatch. The package targets researchers and students working on quantum Gibbs sampling, providing both fast numerical simulations and pedagogic documentation grounded in the theoretical literature.
 
 ## Core Value
 
@@ -91,19 +91,16 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 - ✓ 4 simulation scripts in simulations/ matching run_* entry points -- v2.0
 - ✓ Module exports organized by simulation type (Lindbladian/Thermalize/Krylov/Trajectory/Diagnostics/Common) -- v2.0
 - ✓ Diagnostics maintained as separate analysis module -- v2.0
+- ✓ Per-jump CPTP channel precomputation: K0^a, U_residual^a precomputed once per jump, eliminating eigendecomposition from hot loop -- v2.1
+- ✓ Multi-threaded ω-loop with per-task ThermalizeScratch accumulators (both precomputation and dissipative sandwich) -- v2.1
+- ✓ Multi-threaded BLAS for DM thermalization with try/finally save/restore -- v2.1
+- ✓ BohrDomain threading for Bohr bucket iteration and sandwich accumulation -- v2.1
+- ✓ save_every keyword controlling trace distance computation frequency with backward-compatible default -- v2.1
+- ✓ Single-exponential mixing time estimation: fit_exponential_decay + estimate_mixing_time with quality gates, extrapolation, MixingTimeEstimate struct -- v2.1
+- ✓ Bi-exponential mixing time estimation: fit_biexponential_decay + BiexpFitResult with model=:biexp keyword and Roots.Bisection extrapolation -- v2.1
+- ✓ LsqFit.jl promoted from staging to active dependency; fitting.jl and mixing.jl as active source -- v2.1
 
 ### Active
-
-#### Current Milestone: v2.1 Speedup & Mixing Time
-
-**Goal:** Optimize run_thermalize performance via per-jump precomputation, multi-threaded ω-loops, and multi-threaded BLAS; add mixing time estimation via exponential fit on trace distance convergence curve with extrapolation support.
-
-**Target features:**
-- [ ] Per-jump precomputation of K0^a, U_residual^a, U_coherent^a (eliminate redundant recomputation in hot loop)
-- [ ] Multi-threaded ω-loop with thread-local accumulators (both precomputation and dissipative sandwich)
-- [ ] Multi-threaded BLAS for finalize_kraus_step matrix multiplications
-- [ ] save_every parameter for trace distance computation frequency
-- [ ] Mixing time estimation via exponential fit on trace distance convergence curve (extrapolate=true/false)
 
 #### Future
 
@@ -139,28 +136,34 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 
 ## Context
 
-**Current State (v2.0 shipped, Phase 38 complete):**
-- 8,299 LOC src + 4,559 LOC test (Julia)
-- Tech stack: Julia, LinearAlgebra, KrylovKit, FINUFFT, Arpack, LsqFit, BSON, StableRNGs, LibGit2, Dates
+**Current State (v2.1 shipped, Phase 43 complete):**
+- 10,242 LOC src + 6,316 LOC test (Julia), 1273 tests all passing
+- Tech stack: Julia, LinearAlgebra, KrylovKit, FINUFFT, Arpack, LsqFit, Roots, BSON, StableRNGs, LibGit2, Dates
 - Unified `Config{S,D,C,T}` type hierarchy with 4 simulation types, 4 domains, 2 constructions (KMS/GNS), extensible to DLL
 - 4 clean entry points: `run_lindblad`, `run_thermalize`, `run_krylov_spectrum`, `run_trajectory` with typed Result structs
+- Per-jump CPTP channel precomputation eliminates eigendecomposition from run_thermalize hot loop
+- Multi-threaded BLAS + omega-loop parallelism for DM thermalization with per-task ThermalizeScratch
+- save_every keyword for trace distance observation gating (physics runs every step)
+- Mixing time estimation: estimate_mixing_time with single-exp and bi-exp models, quality gates, extrapolation
+- Bi-exponential fitting: <0.001% extrapolation error (vs ~26% single-exp on real data)
 - Consolidated `Workspace{S,D,C,T}` replacing 6 separate workspace types; `_build_cptp_channel` shared CPTP formula
 - Three gap estimation methods: (1) trajectory-based observable decay fitting, (2) dense eigendecomposition, (3) matrix-free Krylov eigsolve
 - Matrix-free Krylov eigsolve for all 4 domains with zero-allocation BLAS hot path and G_left/G_right precomputation
 - Cross-validated at n=4 (<1e-8) and n=6 (<1e-6) against dense reference; scaling benchmarks at n=3-7
 - Multi-threaded trajectory engine with per-thread workspace/RNG, BLAS control, deterministic seeding
 - Exact Lindbladian diagnostics: eigendata, fixed point, KMS defect, overlap coefficients, Sz sectors
-- Module exports organized by simulation type; gap/fitting code in src/staging/
+- Module exports organized by simulation type; gap estimation code in src/staging/
 - Test infrastructure: make_config/make_test_system factories, 204+ @info outputs, 163 threshold rationale comments
 
 **Known Limitations:**
 - n=6 periodic Heisenberg chain: gap mode has translational + discrete symmetry protection (diagnosed via Sz sector labeling)
-- Single-exponential fitting produces non-monotonic error at small delta due to multi-mode contamination
+- Single-exponential fitting produces non-monotonic error at small delta due to multi-mode contamination (bi-exponential model addresses this)
 - BENCH-04 partial: total time and matvec count recorded but no isolated per-component timing breakdown
 - Memory guard pre-flight estimate underestimates by 28-298x (calibration data available but formula not updated)
-- Two-exponential fitting, bootstrap uncertainty, and Richardson extrapolation deferred from v1.4
+- Bootstrap uncertainty and Richardson extrapolation deferred from v1.4
 - run_* entry points lack direct automated test coverage (exercised via simulation scripts and result round-trip tests)
 - foreach_frequency() iterator deferred (explicit for-loops kept by user decision)
+- src/staging/fitting.jl: dead code leftover from promotion to src/fitting.jl (no runtime impact)
 
 **Theoretical Foundation:**
 The package implements quantum Gibbs samplers from three key papers:
@@ -211,7 +214,7 @@ Results needed for publication: convergence curves (trace distance vs. steps), m
 | LindbladianResult/DMSimulationResult replacing HotSpectralResults/HotAlgorithmResults | Simpler 3-4 field structs without hamiltonian/config/trotter baggage | ✓ Good -- cleaner API, less coupling |
 | Single-node multi-core for trajectories | Shared memory for precomputed data avoids serialization overhead; cluster nodes have enough RAM | ✓ Good -- multi-threaded engine operational |
 | LsqFit.jl for exponential fitting (v1.3) | Levenberg-Marquardt with parameter bounds and covariance CIs; standard Julia choice | ✓ Good -- recovers synthetic decay rates within CIs; SingularException handled gracefully |
-| Single-exponential model A*exp(-gap*t)+C (v1.3) | Simplest model capturing dominant decay; multi-exponential deferred | ⚠️ Revisit -- works for n=4 (<1% error) but non-monotonic at small delta due to multi-mode contamination |
+| Single-exponential model A*exp(-gap*t)+C (v1.3) | Simplest model capturing dominant decay; bi-exponential added in v2.1 | ✓ Good (resolved) -- bi-exp model (v2.1) handles multi-mode contamination |
 | Smallest-gap selection for best observable (v1.3) | Gap mode is the slowest decaying; smallest fitted gap closest to true gap | ✓ Good -- reduces n=4 from ~1.6x to ~1.17x factor; Quick-23 validation |
 | Consolidated single observable builder (v1.3 Phase 25) | build_preset_trajectory_observables replaces 4 separate builders | ✓ Good -- cleaner API, single entry point, 8-observable bundle |
 | CrossValidationResult removed (v1.3 Phase 25) | Thin wrapper over manual comparison; eigenbasis_overlap_analysis more useful | ✓ Good -- simpler API surface, overlap analysis provides more insight |
@@ -240,6 +243,15 @@ Results needed for publication: convergence curves (trace distance vs. steps), m
 | Export list organized by simulation type (v2.0) | Lindbladian/Thermalize/Krylov/Trajectory/Diagnostics/Common sections | ✓ Good -- easy to find exports, dormant exports commented as STAGING |
 | make_config(sim, domain; kwargs...) test factory (v2.0) | Unified factory with keyword-only splatting replaces per-type factory functions | ✓ Good -- eliminates duplicate test setup patterns |
 | Keep explicit for-loops over foreach_frequency() (v2.0) | User decision: iterator abstraction adds complexity without clear benefit for current patterns | ✓ Good -- deferred, code remains readable |
+| Per-jump precomputation stores K0s/U_residuals only (v2.1) | DM hot loop only needs channel matrices, not raw R; reduces memory footprint | ✓ Good -- identical results, eigen() removed from hot loop |
+| BohrDomain: general speedups only, no per-frequency precomputation (v2.1) | Bohr frequency count grows too fast for large systems; would be anti-feature | ✓ Good -- threading still benefits Bohr via bucket iteration |
+| save_every gates observation only (v2.1) | Physics must run every step unconditionally; only trace_distance_h gated | ✓ Good -- backward-compatible, correct physics preserved |
+| DM BLAS pattern: save -> set high -> try/finally (v2.1) | Inverse of trajectory pattern (which sets BLAS=1); mutual exclusion ensures no oversubscription | ✓ Good -- BLAS always restored, verified by tests |
+| OMEGA_THREAD_THRESHOLD=50 for omega-loop parallelism (v2.1) | Below 50 frequencies, task spawn overhead exceeds parallelism benefit | ✓ Good -- automatic fallback to serial for small systems |
+| MixingTimeEstimate as separate struct (v2.1) | Preserves ThermalizeResults BSON compatibility; clean separation of concerns | ✓ Good -- no backward compatibility issues |
+| Explicit :biexp model keyword only (v2.1) | No :auto mode with AICc -- user decides model; keeps API simple | ✓ Good -- <0.001% error on synthetic data |
+| Bi-exp extrapolation via Roots.Bisection (v2.1) | Multi-exponential has no closed-form solution for t; bisection is robust | ✓ Good -- reliable numerical root-finding |
+| Single-exponential model A*exp(-gap*t)+C (v1.3, revisited v2.1) | Works for dominant decay mode; bi-exp model now available for multi-mode contamination | ✓ Good (updated) -- single-exp for quick estimates, bi-exp for accuracy |
 
 ---
-*Last updated: 2026-03-01 after v2.1 milestone start*
+*Last updated: 2026-03-04 after v2.1 milestone*

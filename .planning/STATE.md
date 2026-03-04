@@ -2,19 +2,19 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-01)
+See: .planning/PROJECT.md (updated 2026-03-04)
 
 **Core value:** Correct and efficient classical simulation of Lindbladian-based quantum Gibbs samplers
-**Current focus:** Phase 43 Bi-Exponential Fitting complete (1273 tests pass, +27 new)
+**Current focus:** v2.1 shipped. Planning next milestone.
 
 ## Current Position
 
-Phase: 43 of 43 (Bi-Exponential Fitting)
-Plan: 1 of 1 in current phase (COMPLETE)
-Status: Phase 43 complete -- bi-exponential fitting with <0.001% extrapolation error (1273 tests, +27 new)
-Last activity: 2026-03-04 -- Phase 43 plan 01 executed (6 tasks, full test suite green)
+Phase: 43 of 43 (all milestones through v2.1 complete)
+Plan: N/A (between milestones)
+Status: v2.1 Speedup & Mixing Time shipped 2026-03-04
+Last activity: 2026-03-04 -- Milestone v2.1 archived
 
-Progress: [██████████] 100%
+Progress: [██████████] 100% (v2.1 complete)
 
 ## Performance Metrics
 
@@ -39,30 +39,6 @@ Progress: [██████████] 100%
 ### Decisions
 
 All decisions logged in PROJECT.md Key Decisions table.
-Recent decisions affecting current work:
-
-- v2.1 scope: Per-jump precomputation, save_every, BLAS/omega threading, mixing time estimation
-- BohrDomain: NO per-Bohr-frequency precomputation (frequency count grows too fast); general speedups and threading only
-- Omega-loop threading: Implemented in Phase 41-02 -- OMEGA_THREAD_THRESHOLD=50, per-task ThermalizeScratch, BLAS=1 during Julia-level parallelism
-- Mixing time estimation: Post-processing function, not embedded in run_thermalize
-- MixingTimeEstimate is separate struct (not ThermalizeResults modification) -- preserves BSON compatibility
-- skip_initial passed through to fit_exponential_decay (not applied twice) -- Research pitfall 3 option b
-- Primary mixing_time: extrapolated when extrapolate=true, actual crossing when target_epsilon, total sim time otherwise
-- Mixing time tests: synthetic ThermalizeResults via helper function with zero DM for clean unit testing
-- Integration test uses N3 (3-qubit) with 5s mixing_time -- proves end-to-end API works
-- _precompute_per_jump_channels stores K0s/U_residuals only (no Rs) -- DM path does not need raw R matrices
-- BohrDomain _precompute_R uses precomputed bohr_is/bohr_js with fallback to hamiltonian.bohr_dict
-- jump_weight_scaling precomputed before hot loop as gamma_norm_factor / p_jump
-- B_bohr/B_time/B_trotter signatures use AbstractVector{<:JumpOp} for Julia type invariance correctness
-- save_every gates observation only (trace_distance_h, push, printf, convergence); physics runs every step unconditionally
-- recorded_steps array replaces num_steps-based time_steps construction for save_every support
-- Convergence cutoff checked only at save points (coarser detection acceptable for reduced observation cost)
-- DM BLAS pattern: save -> set_num_threads(nthreads) -> try loop finally restore (inverse of trajectory pattern which sets BLAS=1)
-- Only hot loop wrapped in try/finally -- precomputation and result construction remain outside
-- Phase 43: Explicit :biexp model keyword only (no :auto mode with AICc)
-- Phase 43: Bi-exp mode sorting (g1 >= g2) with pre-swap SE/CI index tracking
-- Phase 43: Bi-exp extrapolation via Roots.Bisection (no closed-form for multi-exponential)
-- Phase 43: Synthetic FitResult from slow-mode params for backward-compatible fit_result field
 
 ### Pending Todos
 
@@ -70,10 +46,10 @@ None
 
 ### Blockers/Concerns
 
-None -- Phase 43 complete.
+None -- v2.1 milestone complete.
 
 ## Session Continuity
 
 Last session: 2026-03-04
-Stopped at: Completed Phase 43 PLAN.md (bi-exponential fitting). 1273 tests pass.
+Stopped at: v2.1 milestone archived. Ready for next milestone.
 Resume file: None

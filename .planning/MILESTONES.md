@@ -167,3 +167,28 @@
 
 ---
 
+
+## v2.1 Speedup & Mixing Time (Shipped: 2026-03-04)
+
+**Started:** 2026-03-01 | **Shipped:** 2026-03-04
+**Phases:** 39-43 (8 plans, 19 tasks) | **Tests:** 1141 → 1273 | **Commits:** ~35
+**Julia LOC:** 10,242 src + 6,316 test | **Files changed:** 50 (+10,321 / -2,249)
+**Git range:** b5ad26f..c415d6f
+
+**Delivered:** Performance optimization and mixing time estimation -- per-jump CPTP channel precomputation eliminates eigendecomposition from the DM hot loop, multi-threaded BLAS and omega-loop parallelism for DM thermalization, save_every observation gating, single-exponential and bi-exponential fitting with quality gates and extrapolation support. Bi-exponential model reduces extrapolation error from ~26% to <0.001%.
+
+**Key accomplishments:**
+1. Per-jump CPTP channel precomputation eliminates eigendecomposition from run_thermalize hot loop across all 4 domains (Energy, Time, Trotter, Bohr)
+2. save_every keyword for trace distance computation frequency with full backward compatibility (default save_every=1)
+3. Multi-threaded BLAS + omega-loop parallelism for DM thermalization with per-task ThermalizeScratch isolation and BLAS try/finally save/restore
+4. Mixing time estimation API via exponential fit on trace distance curve with quality gates (R^2, offset), extrapolation support, and MixingTimeEstimate struct
+5. Bi-exponential decay fitting (BiexpFitResult, fit_biexponential_decay, model=:biexp) with Roots.Bisection extrapolation, reducing error from ~26% to <0.001%
+
+**Tech debt (from audit):**
+- src/staging/fitting.jl: dead code leftover from promotion to src/fitting.jl (no runtime impact)
+- test/test_threading.jl:31: `@test true` placeholder for nthreads==1 guard (standard Julia pattern)
+
+**Archives:** [v2.1-ROADMAP.md](milestones/v2.1-ROADMAP.md) | [v2.1-REQUIREMENTS.md](milestones/v2.1-REQUIREMENTS.md)
+
+---
+
