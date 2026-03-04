@@ -102,13 +102,22 @@ Correct and efficient classical simulation of Lindbladian-based quantum Gibbs sa
 
 ### Active
 
+#### Current Milestone: v2.2 Hamiltonian Simulation Time Counter
+
+**Goal:** Track total Hamiltonian simulation time consumed per Gibbs sample, enabling cost-vs-accuracy analysis across domains and system sizes for publication.
+
+**Target features:**
+- Hamiltonian simulation time accounting in run_thermalize and run_trajectory
+- Cost breakdown by component (OFT, channel application, coherent term)
+- Cost comparison across domains (Bohr/Energy/Time/Trotter) and constructions (KMS/GNS)
+- Scaling analysis with system size n and inverse temperature beta
+
 #### Future
 
 - [ ] DLL config (Ding et al. 2024 construction)
 - [ ] 1D Ising model Hamiltonian generation
 - [ ] 2D Heisenberg Hamiltonian generation (lattice graph support)
 - [ ] General k-local Hamiltonian construction on arbitrary graphs
-- [ ] Hamiltonian simulation time counter (total Hamiltonian simulation cost per Gibbs sample)
 - [ ] Gate complexity counter for Trotter-based circuit implementations
 - [ ] Qiskit circuit generation for resource estimation (gate count, circuit depth)
 - [ ] Documentation: API docs via Documenter.jl, theory tutorials via Literate.jl
@@ -254,4 +263,4 @@ Results needed for publication: convergence curves (trace distance vs. steps), m
 | Single-exponential model A*exp(-gap*t)+C (v1.3, revisited v2.1) | Works for dominant decay mode; bi-exp model now available for multi-mode contamination | ✓ Good (updated) -- single-exp for quick estimates, bi-exp for accuracy |
 
 ---
-*Last updated: 2026-03-04 after v2.1 milestone*
+*Last updated: 2026-03-04 after v2.2 milestone started*
