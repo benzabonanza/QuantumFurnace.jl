@@ -2,9 +2,13 @@
 # Mixing Time Estimation: post-processing of trace distance convergence curves
 # ============================================================================
 #
-# Given a ThermalizeResults (from run_thermalize), fits a single-exponential
-# decay model d(t) = A * exp(-gap * t) + C to the trace distance data and
-# extracts the effective spectral gap, mixing time, and quality metrics.
+# Given a ThermalizeResults (from run_thermalize), fits a decay model to the
+# trace distance data and extracts the effective spectral gap, mixing time,
+# and quality metrics.
+#
+# Supports two models:
+#   :single  — d(t) = A * exp(-gap * t) + C  (default, backward compatible)
+#   :biexp   — d(t) = A1 * exp(-g1 * t) + A2 * exp(-g2 * t) + C
 #
 # This is strictly post-processing -- it does NOT control or modify
 # run_thermalize execution.
@@ -23,9 +27,9 @@ mixing time (actual and/or extrapolated), quality metrics, and the full
 [`FitResult`](@ref) for advanced inspection.
 
 # Fields
-## Fit parameters (from FitResult)
+## Fit parameters (from FitResult slow mode)
 - `fitted_gap::Float64`: Fitted decay rate (spectral gap estimate).
-- `amplitude::Float64`: Fitted amplitude A.
+- `amplitude::Float64`: Fitted amplitude A (slow mode for biexp).
 - `offset::Float64`: Fitted offset C (asymptotic value).
 - `gap_ci::Tuple{Float64, Float64}`: Confidence interval on gap (lower, upper).
 - `gap_se::Float64`: Standard error on gap.
@@ -44,7 +48,11 @@ mixing time (actual and/or extrapolated), quality metrics, and the full
 - `target_epsilon::Union{Nothing, Float64}`: The target trace distance used.
 
 ## Full fit result
-- `fit_result::FitResult`: Complete fit result for advanced users.
+- `fit_result::FitResult`: Complete single-exp fit result (or synthetic from biexp slow mode).
+
+## Model info
+- `model_used::Symbol`: `:single` or `:biexp`.
+- `biexp_fit_result::Union{Nothing, BiexpFitResult}`: Full biexp fit, or `nothing` for single.
 """
 struct MixingTimeEstimate
     # Fit parameters (from FitResult)
@@ -62,6 +70,9 @@ struct MixingTimeEstimate
     target_epsilon::Union{Nothing, Float64}
     # Full fit for advanced users
     fit_result::FitResult
+    # Model info (new in Phase 43)
+    model_used::Symbol
+    biexp_fit_result::Union{Nothing, BiexpFitResult}
 end
 
 # ---------------------------------------------------------------------------
@@ -134,6 +145,85 @@ function _extrapolate_mixing_time(fit::FitResult, target_epsilon::Union{Nothing,
     return -log(effective_target / fit.amplitude) / fit.gap
 end
 
+"""
+    _extrapolate_mixing_time_biexp(bifit::BiexpFitResult, target_epsilon)
+
+Compute the extrapolated mixing time from the bi-exponential fitted model
+`d(t) = A1*exp(-g1*t) + A2*exp(-g2*t) + C` by numerically solving
+`d(t) = epsilon` using bisection via Roots.jl.
+
+Returns `nothing` if extrapolation is not possible.
+"""
+function _extrapolate_mixing_time_biexp(bifit::BiexpFitResult, target_epsilon::Union{Nothing, Float64})
+    target_epsilon === nothing && return nothing
+    bifit.gap <= 0.0 && return nothing
+
+    # Check: f(0) = A1 + A2 + C; need f(0) > target for a crossing to exist
+    f0 = bifit.amplitude_fast + bifit.amplitude + bifit.offset
+    f0 <= target_epsilon && return nothing  # already below target at t=0
+
+    # Check: asymptotic value C must be below target
+    bifit.offset >= target_epsilon && return nothing
+
+    # Define the function to find root of: f(t) - epsilon = 0
+    function biexp_residual(t)
+        return bifit.amplitude_fast * exp(-bifit.gap_fast * t) +
+               bifit.amplitude * exp(-bifit.gap * t) +
+               bifit.offset - target_epsilon
+    end
+
+    # Upper bracket: use slow-mode estimate with 3x safety margin
+    # From slow mode alone: t_slow = -ln((eps - C) / A_slow) / gap_slow
+    eff = target_epsilon - bifit.offset
+    if eff <= 0.0
+        return nothing
+    end
+    t_slow_est = if bifit.amplitude > 0.0 && eff < bifit.amplitude
+        -log(eff / bifit.amplitude) / bifit.gap
+    else
+        # Fallback: use a large upper bracket
+        100.0 / bifit.gap
+    end
+    t_upper = max(t_slow_est * 3.0, 10.0 / bifit.gap)
+
+    # Ensure f(t_upper) < target (bracket is valid)
+    if biexp_residual(t_upper) > 0.0
+        # Expand bracket
+        t_upper *= 3.0
+        if biexp_residual(t_upper) > 0.0
+            return nothing  # cannot bracket
+        end
+    end
+
+    try
+        t_mix = Roots.find_zero(biexp_residual, (0.0, t_upper), Roots.Bisection())
+        return t_mix
+    catch
+        return nothing
+    end
+end
+
+"""
+    _biexp_to_single_fit_result(bifit::BiexpFitResult) -> FitResult
+
+Construct a synthetic `FitResult` from the slow-mode parameters of a
+`BiexpFitResult` for backward compatibility with the `fit_result` field.
+"""
+function _biexp_to_single_fit_result(bifit::BiexpFitResult)
+    return FitResult(
+        bifit.gap,          # gap (slow mode)
+        bifit.amplitude,    # amplitude (slow mode)
+        bifit.offset,       # offset
+        bifit.gap_ci,       # gap_ci (slow mode)
+        bifit.gap_se,       # gap_se (slow mode)
+        bifit.r_squared,    # r_squared (from full bi-exp fit)
+        bifit.converged,    # converged
+        bifit.residuals,    # residuals (from full bi-exp fit)
+        bifit.times_used,   # times_used
+        bifit.values_used,  # values_used
+    )
+end
+
 # ---------------------------------------------------------------------------
 # Main API
 # ---------------------------------------------------------------------------
@@ -142,7 +232,7 @@ end
     estimate_mixing_time(result::ThermalizeResults; kwargs...) -> MixingTimeEstimate
 
 Estimate the mixing time from a `ThermalizeResults` trace distance curve by
-fitting a single-exponential decay model `d(t) = A * exp(-gap * t) + C`.
+fitting a decay model to the data.
 
 This is a post-processing function: it operates on a completed simulation
 result and does NOT control `run_thermalize` execution.
@@ -159,13 +249,18 @@ result and does NOT control `run_thermalize` execution.
 - `extrapolate::Bool=false`: If `true`, compute the extrapolated mixing time
   from the fitted model. Requires `target_epsilon`.
 - `level::Float64=0.95`: Confidence level for the gap confidence interval.
+- `model::Symbol=:single`: Fitting model to use.
+  - `:single` — Single-exponential `A * exp(-gap * t) + C` (default).
+  - `:biexp` — Bi-exponential `A1 * exp(-g1 * t) + A2 * exp(-g2 * t) + C`.
+    Captures multi-timescale dynamics for more accurate offset estimation
+    and extrapolation when the target epsilon is close to the floor.
 
 # Returns
 A [`MixingTimeEstimate`](@ref) containing the fitted gap, mixing time(s),
 quality metrics, and the full [`FitResult`](@ref).
 
 # Quality Gates
-Issues `@warn` when:
+Issues `@warn` when (for `:single` model):
 - R-squared < 0.95 (poor fit)
 - Offset C > 0.1 * target_epsilon (unreliable extrapolation)
 - Levenberg-Marquardt did not converge
@@ -178,6 +273,10 @@ est = estimate_mixing_time(result; skip_initial=0.2, target_epsilon=0.01, extrap
 println("Spectral gap: \$(est.fitted_gap)")
 println("Mixing time (extrapolated): \$(est.mixing_time)")
 println("R-squared: \$(est.r_squared)")
+
+# Bi-exponential model for improved extrapolation near floor:
+est_bi = estimate_mixing_time(result; model=:biexp, target_epsilon=1e-4, extrapolate=true)
+println("Biexp offset: \$(est_bi.offset)")
 ```
 """
 function estimate_mixing_time(
@@ -186,6 +285,7 @@ function estimate_mixing_time(
     target_epsilon::Union{Nothing, Float64} = nothing,
     extrapolate::Bool = false,
     level::Float64 = 0.95,
+    model::Symbol = :single,
 )
     times = result.time_steps
     dists = result.trace_distances
@@ -198,43 +298,60 @@ function estimate_mixing_time(
         throw(ArgumentError("target_epsilon required when extrapolate=true"))
     end
 
-    # --- Fit exponential decay ---
-    # Pass skip_initial THROUGH to fit_exponential_decay (do NOT apply it first;
-    # see Research pitfall 3, option b)
-    fit = fit_exponential_decay(Float64.(times), Float64.(dists);
-        skip_initial=skip_initial, level=level)
+    model in (:single, :biexp) || throw(ArgumentError(
+        "model must be :single or :biexp (got :$model)"))
 
-    # --- Quality gate warnings ---
-    _check_fit_quality(fit, target_epsilon)
-
-    # --- Compute mixing times ---
+    # --- Compute actual mixing time (model-independent) ---
     t_mix_actual = _find_actual_mixing_time(times, dists, target_epsilon)
-    t_mix_extrap = extrapolate ? _extrapolate_mixing_time(fit, target_epsilon) : nothing
 
-    # --- Determine primary mixing_time ---
-    mixing_time = if extrapolate
-        # Use extrapolated time, or NaN if extrapolation failed
-        t_mix_extrap !== nothing ? t_mix_extrap : NaN
-    elseif target_epsilon !== nothing
-        # Use actual crossing time, or NaN if not reached
-        t_mix_actual !== nothing ? t_mix_actual : NaN
-    else
-        # No target specified: use total simulation time
-        Float64(last(times))
+    if model == :single
+        # --- Single-exponential path (original behavior) ---
+        fit = fit_exponential_decay(Float64.(times), Float64.(dists);
+            skip_initial=skip_initial, level=level)
+
+        _check_fit_quality(fit, target_epsilon)
+
+        t_mix_extrap = extrapolate ? _extrapolate_mixing_time(fit, target_epsilon) : nothing
+
+        mixing_time = if extrapolate
+            t_mix_extrap !== nothing ? t_mix_extrap : NaN
+        elseif target_epsilon !== nothing
+            t_mix_actual !== nothing ? t_mix_actual : NaN
+        else
+            Float64(last(times))
+        end
+
+        return MixingTimeEstimate(
+            fit.gap, fit.amplitude, fit.offset,
+            fit.gap_ci, fit.gap_se, fit.r_squared, fit.converged,
+            mixing_time, t_mix_extrap, t_mix_actual, target_epsilon,
+            fit, :single, nothing,
+        )
+
+    else  # model == :biexp
+        # --- Bi-exponential path ---
+        bifit = fit_biexponential_decay(Float64.(times), Float64.(dists);
+            skip_initial=skip_initial, level=level)
+
+        # Use bi-exponential extrapolation
+        t_mix_extrap = extrapolate ? _extrapolate_mixing_time_biexp(bifit, target_epsilon) : nothing
+
+        mixing_time = if extrapolate
+            t_mix_extrap !== nothing ? t_mix_extrap : NaN
+        elseif target_epsilon !== nothing
+            t_mix_actual !== nothing ? t_mix_actual : NaN
+        else
+            Float64(last(times))
+        end
+
+        # Construct synthetic FitResult for backward compat
+        synthetic_fit = _biexp_to_single_fit_result(bifit)
+
+        return MixingTimeEstimate(
+            bifit.gap, bifit.amplitude, bifit.offset,
+            bifit.gap_ci, bifit.gap_se, bifit.r_squared, bifit.converged,
+            mixing_time, t_mix_extrap, t_mix_actual, target_epsilon,
+            synthetic_fit, :biexp, bifit,
+        )
     end
-
-    return MixingTimeEstimate(
-        fit.gap,
-        fit.amplitude,
-        fit.offset,
-        fit.gap_ci,
-        fit.gap_se,
-        fit.r_squared,
-        fit.converged,
-        mixing_time,
-        t_mix_extrap,
-        t_mix_actual,
-        target_epsilon,
-        fit,
-    )
 end
