@@ -80,15 +80,17 @@ function _trotterize2(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
         U_1site_terms = _compute_U_group(groups.one_sites[1], groups.one_sites[2], all_sites, num_qubits, timestep)
     end
 
-    # disorderinging part (1-site with different coeffs one each site, i.e. disordered)
+    # disordering part (per-site terms with different coeffs on each site, i.e. disordered)
     U_disordering = Matrix{ComplexF64}(I, dim, dim)
-    if hamiltonian.disordering_term !== nothing
-        for q in 1:num_qubits
-            disordering_term_f64 = Vector{Matrix{ComplexF64}}(hamiltonian.disordering_term)
-            coeff_f64 = Float64(hamiltonian.disordering_coeffs[q])
-            expm_disordering_pauli_term = expm_pauli_padded(disordering_term_f64,
-                    timestep * coeff_f64 / 2, num_qubits, q)
-            U_disordering *= expm_disordering_pauli_term
+    if hamiltonian.disordering_terms !== nothing
+        for (term, term_coeffs) in zip(hamiltonian.disordering_terms, hamiltonian.disordering_coeffs)
+            term_f64 = Vector{Matrix{ComplexF64}}(term)
+            for q in 1:num_qubits
+                coeff_f64 = Float64(term_coeffs[q])
+                expm_disordering_pauli_term = expm_pauli_padded(term_f64,
+                        timestep * coeff_f64 / 2, num_qubits, q)
+                U_disordering *= expm_disordering_pauli_term
+            end
         end
     end
 
@@ -193,12 +195,14 @@ function trotterize(hamiltonian::HamHam, T::Float64, num_trotter_steps::Int64)
             end
 
         # disordering
-            if typeof(hamiltonian.disordering_term) != Nothing
-                disordering_term_f64 = Vector{Matrix{ComplexF64}}(hamiltonian.disordering_term)
-                expm_disordering_pauli_term = expm_pauli_padded(disordering_term_f64,
-                                                            timestep * Float64(hamiltonian.disordering_coeffs[q]),
-                                                            num_qubits, q)
-                U *= expm_disordering_pauli_term
+            if hamiltonian.disordering_terms !== nothing
+                for (dis_term, dis_coeffs) in zip(hamiltonian.disordering_terms, hamiltonian.disordering_coeffs)
+                    dis_term_f64 = Vector{Matrix{ComplexF64}}(dis_term)
+                    expm_disordering_pauli_term = expm_pauli_padded(dis_term_f64,
+                                                                timestep * Float64(dis_coeffs[q]),
+                                                                num_qubits, q)
+                    U *= expm_disordering_pauli_term
+                end
             end
         end
     end

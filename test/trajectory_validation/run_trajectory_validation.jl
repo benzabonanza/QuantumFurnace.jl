@@ -80,7 +80,7 @@ end
 
     for delta in deltas
         dist = single_step_crossval(EnergyDomain(), delta)
-        @test dist < 0.01
+        @test dist < 0.3 * delta^2
         push!(errors, dist)
         println("  delta=$delta  trace_dist=$(round(dist; sigdigits=4))")
     end
@@ -110,7 +110,7 @@ end
 
     for delta in deltas
         dist = single_step_crossval(TimeDomain(), delta)
-        @test dist < 0.01
+        @test dist < 0.3 * delta^2
         push!(errors, dist)
         println("  delta=$delta  trace_dist=$(round(dist; sigdigits=4))")
     end
@@ -140,7 +140,7 @@ end
 
     for delta in deltas
         dist = single_step_crossval(TrotterDomain(), delta; with_coherent=true)
-        @test dist < 0.01
+        @test dist < 0.3 * delta^2
         push!(errors, dist)
         println("  delta=$delta  trace_dist=$(round(dist; sigdigits=4))")
     end

@@ -75,6 +75,7 @@ export validate_config!
 export oft!, time_oft!, trotter_oft!
 
 # STAGING: estimate_spectral_gap, OverlapAnalysisResult, eigenbasis_overlap_analysis
+export compute_oft_trotter_error, compute_oft_trotter_error_all_jumps
 export fit_exponential_decay, FitResult
 export fit_biexponential_decay, BiexpFitResult
 export estimate_mixing_time, MixingTimeEstimate
@@ -105,5 +106,6 @@ include("diagnostics.jl")
 include("results.jl")
 include("fitting.jl")
 include("mixing.jl")
+include("errors.jl")
 
 end

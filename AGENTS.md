@@ -149,3 +149,9 @@ For more details, see README.md and docs/QUICKSTART.md.
 
 <!-- END BEADS INTEGRATION -->
 Use 'bd' for task tracking
+
+## Persistent Memory
+
+Claude Code's auto-memory is symlinked to `.planning/memory/` so it survives Docker image rebuilds.
+This is set up automatically via a `PreToolUse` hook in `.claude/settings.json`.
+If the symlink is missing (e.g. fresh container), run: `bash .claude/setup-memory.sh`

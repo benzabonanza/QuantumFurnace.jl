@@ -43,10 +43,10 @@ function _load_hamiltonian_bson(path::String, beta::Float64)
     data_matrix = BSON.raise_recursive(fields[1], cache, init)::Matrix{ComplexF64}
     base_terms = Vector{Vector{Matrix{ComplexF64}}}(BSON.raise_recursive(fields[4], cache, init))
     base_coeffs = BSON.raise_recursive(fields[5], cache, init)::Vector{Float64}
-    disordering_term = let dt = BSON.raise_recursive(fields[6], cache, init)
+    disordering_term_raw = let dt = BSON.raise_recursive(fields[6], cache, init)
         dt === nothing ? nothing : Vector{Matrix{ComplexF64}}(dt)
     end
-    disordering_coeffs = let dc = BSON.raise_recursive(fields[7], cache, init)
+    disordering_coeffs_raw = let dc = BSON.raise_recursive(fields[7], cache, init)
         dc === nothing ? nothing : Vector{Float64}(dc)
     end
     eigvals_vec = BSON.raise_recursive(fields[8], cache, init)::Vector{Float64}
@@ -60,8 +60,8 @@ function _load_hamiltonian_bson(path::String, beta::Float64)
         matrix = data_matrix,
         terms = base_terms,
         base_coeffs = base_coeffs,
-        disordering_term = disordering_term,
-        disordering_coeffs = disordering_coeffs,
+        disordering_term = disordering_term_raw,
+        disordering_coeffs = disordering_coeffs_raw,
         eigvals = eigvals_vec,
         eigvecs = eigvecs_mat,
         nu_min = nu_min,

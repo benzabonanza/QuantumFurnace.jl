@@ -22,7 +22,6 @@ Methodology:
 using Test
 using LinearAlgebra
 using Random
-using Statistics
 
 # Load shared fixtures
 include(joinpath(@__DIR__, "..", "test_helpers.jl"))
@@ -91,7 +90,7 @@ function convergence_ratio_test(domain; with_coherent::Bool=false, delta::Float6
             dist = trace_distance_h(Hermitian(rho_ref), Hermitian(rho_traj))
             push!(batch_errors, dist)
         end
-        push!(mean_errors, mean(batch_errors))
+        push!(mean_errors, sum(batch_errors) / length(batch_errors))
     end
 
     # 4. Compute consecutive ratios

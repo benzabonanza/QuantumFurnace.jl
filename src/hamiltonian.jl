@@ -14,7 +14,9 @@
     - `bohr_freqs`: Precomputed Bohr frequency matrix (eigvals[i] - eigvals[j]).
     - `bohr_dict`: Mapping from Bohr frequencies to their matrix indices.
     - `base_terms`, `base_coeffs`: The 1, 2 or more site terms that constitute the Hamiltonians, and their uniform coefficients.
-    - `disordering_term`, `disordering_coeffs`: Some external field term, that can have different coeffs. on each site (optional, may be `nothing`).
+    - `disordering_terms`, `disordering_coeffs`: Disordering field terms with per-site coefficients (optional, may be `nothing`).
+      Each entry is a Pauli term (e.g. `[Z]` for single-site, `[Z,Z]` for two-site) with a corresponding
+      vector of per-site coefficients. Multiple disordering terms are supported (e.g. `[[Z], [Z,Z]]`).
     - `eigvals`, `eigvecs`: Spectral decomposition of the Hamiltonian.
     - `nu_min`: Smallest Bohr frequency in the spectrum, which has to be resolved by all approximations in the algorithm.
     - `shift`, `rescaling_factor`: Values to rescale the spectrum to [0; 0.45].
@@ -27,8 +29,8 @@ struct HamHam{T<:AbstractFloat}
     bohr_dict::Dict{T, Vector{CartesianIndex{2}}}
     base_terms::Vector{Vector{Matrix{Complex{T}}}}
     base_coeffs::Vector{T}
-    disordering_term::Union{Vector{Matrix{Complex{T}}}, Nothing}
-    disordering_coeffs::Union{Vector{T}, Nothing}
+    disordering_terms::Union{Vector{Vector{Matrix{Complex{T}}}}, Nothing}
+    disordering_coeffs::Union{Vector{Vector{T}}, Nothing}
     eigvals::Vector{T}
     eigvecs::Matrix{Complex{T}}
     nu_min::T  # Smallest bohr frequency
@@ -92,7 +94,7 @@ function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float6
         bohr_dict,
         terms,
         rescaled_base_coeffs,
-        nothing,  # disordering_term absent
+        nothing,  # disordering_terms absent
         nothing,  # disordering_coeffs absent
         rescaled_eigvals,
         rescaled_eigvecs,
@@ -105,17 +107,21 @@ function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float6
 end
 
 function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64},
-    disordering_terms::Vector{Matrix{ComplexF64}}, disordering_coeffs::Vector{Float64},
+    disordering_terms::Vector{Vector{Matrix{ComplexF64}}}, disordering_coeffs::Vector{Vector{Float64}},
     num_qubits::Int64, beta::Float64;
     periodic::Bool = true, hermitian_check = false,
     precision::Type{T} = Float64) where {T<:AbstractFloat}
-    """Creates a HamHam{T} object from terms, coefficients, and disordering terms, fully initialized."""
+    """Creates a HamHam{T} object from terms, coefficients, and multiple disordering terms, fully initialized."""
 
     # Mixed-precision policy: downward mismatch errors, upward promotion allowed
     if T !== Float64 && T <: Union{Float16, Float32}
         throw(ArgumentError(
             "Expected $(Complex{T}) term data, got ComplexF64. " *
             "Reconstruct with $(Complex{T}) inputs or use default Float64 precision."))
+    end
+
+    if length(disordering_terms) != length(disordering_coeffs)
+        throw(ArgumentError("Number of disordering terms must match number of coefficient vectors"))
     end
 
     base_hamiltonian = _construct_base_ham(terms, coeffs, num_qubits)
@@ -128,7 +134,7 @@ function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float6
 
     rescaled_eigvals, rescaled_eigvecs = eigen(rescaled_hamiltonian)
     rescaled_base_coeffs = coeffs / rescaling_factor
-    rescaled_disordering_coeffs = disordering_coeffs / rescaling_factor
+    rescaled_disordering_coeffs = [dc / rescaling_factor for dc in disordering_coeffs]
     smallest_bohr_freq = minimum(diff(rescaled_eigvals))
 
     if hermitian_check
@@ -157,6 +163,17 @@ function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float6
     )
 end
 
+# Single-term convenience: wraps a single disordering term into the multi-term format
+function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64},
+    disordering_term::Vector{Matrix{ComplexF64}}, disordering_coeffs::Vector{Float64},
+    num_qubits::Int64, beta::Float64;
+    periodic::Bool = true, hermitian_check = false,
+    precision::Type{T} = Float64) where {T<:AbstractFloat}
+
+    return HamHam(terms, coeffs, [disordering_term], [disordering_coeffs],
+        num_qubits, beta; periodic=periodic, hermitian_check=hermitian_check, precision=precision)
+end
+
 """
     HamHam(raw::NamedTuple, beta) -> HamHam{T}
 
@@ -165,6 +182,9 @@ Construct a fully-initialized HamHam from a NamedTuple of raw data (as returned 
 
 Infers T from `eltype(raw.eigvals)`. Computes `bohr_freqs`, `bohr_dict`, and `gibbs`
 from the raw eigvals.
+
+Supports both legacy single-term format (with `disordering_term` field) and the current
+multi-term format (with `disordering_terms` field).
 """
 function HamHam(raw::NamedTuple, beta::Real)
     T = eltype(raw.eigvals)
@@ -173,14 +193,17 @@ function HamHam(raw::NamedTuple, beta::Real)
     bohr_dict = create_bohr_dict(bohr_freqs)
     gibbs = Hermitian(_gibbs_in_eigen(raw.eigvals, beta_T))
 
+    # Handle both legacy single-term and new multi-term format
+    dis_terms, dis_coeffs = _unpack_disordering_fields(raw, T)
+
     return HamHam{T}(
         Matrix{Complex{T}}(raw.matrix),
         bohr_freqs,
         bohr_dict,
         Vector{Vector{Matrix{Complex{T}}}}(raw.terms),
         Vector{T}(raw.base_coeffs),
-        raw.disordering_term === nothing ? nothing : Vector{Matrix{Complex{T}}}(raw.disordering_term),
-        raw.disordering_coeffs === nothing ? nothing : Vector{T}(raw.disordering_coeffs),
+        dis_terms,
+        dis_coeffs,
         Vector{T}(raw.eigvals),
         Matrix{Complex{T}}(raw.eigvecs),
         T(raw.nu_min),
@@ -191,16 +214,48 @@ function HamHam(raw::NamedTuple, beta::Real)
     )
 end
 
+"""
+    _unpack_disordering_fields(raw::NamedTuple, T) -> (terms, coeffs)
+
+Convert disordering fields from a NamedTuple into the multi-term format.
+Handles legacy NamedTuples with singular `disordering_term`/`disordering_coeffs` fields
+by wrapping them into vectors.
+"""
+function _unpack_disordering_fields(raw::NamedTuple, ::Type{T}) where {T}
+    # New multi-term format
+    if haskey(raw, :disordering_terms)
+        if raw.disordering_terms === nothing
+            return (nothing, nothing)
+        end
+        terms = [Vector{Matrix{Complex{T}}}(t) for t in raw.disordering_terms]
+        coeffs = [Vector{T}(c) for c in raw.disordering_coeffs]
+        return (terms, coeffs)
+    end
+
+    # Legacy single-term format
+    if haskey(raw, :disordering_term)
+        if raw.disordering_term === nothing
+            return (nothing, nothing)
+        end
+        terms = [Vector{Matrix{Complex{T}}}(raw.disordering_term)]
+        coeffs = [Vector{T}(raw.disordering_coeffs)]
+        return (terms, coeffs)
+    end
+
+    return (nothing, nothing)
+end
+
 """find_ideal_heisenberg(num_qubits::Int, coeffs::Vector{Float64};
-    batch_size::Int=1, periodic::Bool=true) -> NamedTuple
+    batch_size::Int=1, periodic::Bool=true,
+    disordering_terms=[[Z]]) -> NamedTuple
 
     Constructs and optimizes a disordered 1D Heisenberg Hamiltonian to maximize the minimum level spacing (smallest Bohr frequency).
 
-    The function generates `batch_size` random realizations of a disordering ``Z``-field. For each realization, it constructs the Hamiltonian:
+    The function generates `batch_size` random realizations of the disordering fields. For each realization, it constructs the Hamiltonian:
     ```math
     H = H_{base} + H_{disorder}
     ```
-    where ``H_{base}`` is the Heisenberg chain defined by `coeffs` (XX, YY, ZZ interaction strengths) and ``H_{disorder}`` is a site-dependent ``Z`` term with random coefficients.
+    where ``H_{base}`` is the Heisenberg chain defined by `coeffs` (XX, YY, ZZ interaction strengths) and ``H_{disorder}`` is the sum of all disordering terms with random per-site coefficients.
 
     The Hamiltonian is rescaled and shifted to ensure the spectrum fits within specific bounds.
 
@@ -211,19 +266,20 @@ end
     # Keywords
     - `batch_size`: The number of random disorder configurations to sample (default: 1).
     - `periodic`: If `true`, applies periodic boundary conditions to the chain.
+    - `disordering_terms`: A vector of Pauli terms for disorder, e.g. `[[Z]]` (default) or `[[Z], [Z,Z]]`.
+      Each term gets its own random per-site coefficients.
 
     # Returns
     - `NamedTuple`: Raw Hamiltonian data with fields: `matrix`, `terms`, `base_coeffs`,
-      `disordering_term`, `disordering_coeffs`, `eigvals`, `eigvecs`, `nu_min`, `shift`,
+      `disordering_terms`, `disordering_coeffs`, `eigvals`, `eigvecs`, `nu_min`, `shift`,
       `rescaling_factor`, `periodic`. Use `HamHam(raw, beta)` to construct a fully-initialized HamHam.
 """
 function find_ideal_heisenberg(num_qubits::Int64,
-    coeffs::Vector{Float64}; batch_size::Int64 = 1, periodic::Bool = true)
-
+    coeffs::Vector{Float64}; batch_size::Int64 = 1, periodic::Bool = true,
+    disordering_terms::Vector{Vector{Matrix{ComplexF64}}} = [[Z]])
 
     dim = 2^num_qubits
     terms = [[X, X], [Y, Y], [Z, Z]]
-    disordering_term = [Z]
 
     base_hamiltonian = _construct_base_ham(terms, coeffs, num_qubits; periodic=periodic)
 
@@ -234,13 +290,15 @@ function find_ideal_heisenberg(num_qubits::Int64,
     best_eigvecs = Matrix{ComplexF64}(undef, 0, 0)
     best_shift = 0.0
     best_rescaling_factor = 1.0
-    best_disordering_coeffs = Float64[]
-    disordering_coeffs = zeros(Float64, num_qubits)
+    best_disordering_coeffs = [Float64[] for _ in disordering_terms]
+    all_disordering_coeffs = [zeros(Float64, num_qubits) for _ in disordering_terms]
 
     p = Progress(batch_size; desc="Optimizing Heisenberg Hamiltonian...")
     for _ in 1:batch_size
-        rand!(disordering_coeffs)
-        disordering_ham = _construct_disordering_terms(disordering_term, disordering_coeffs, num_qubits)
+        for dc in all_disordering_coeffs
+            rand!(dc)
+        end
+        disordering_ham = _construct_disordering_terms(disordering_terms, all_disordering_coeffs, num_qubits)
 
         total_ham = base_hamiltonian + disordering_ham
         rescaling_factor, shift = _rescaling_and_shift_factors(total_ham)
@@ -253,7 +311,7 @@ function find_ideal_heisenberg(num_qubits::Int64,
         if nu_min > best_nu_min
             best_nu_min = nu_min
             best_ham_matrix = copy(rescaled_ham)
-            best_disordering_coeffs = copy(disordering_coeffs)
+            best_disordering_coeffs = [copy(dc) for dc in all_disordering_coeffs]
             best_eigvals = rescaled_eigvals
             best_eigvecs = rescaled_eigvecs
             best_shift = shift
@@ -273,8 +331,8 @@ function find_ideal_heisenberg(num_qubits::Int64,
         matrix = best_ham_matrix,
         terms = terms,
         base_coeffs = coeffs ./ best_rescaling_factor,
-        disordering_term = disordering_term,
-        disordering_coeffs = best_disordering_coeffs ./ best_rescaling_factor,
+        disordering_terms = disordering_terms,
+        disordering_coeffs = [dc ./ best_rescaling_factor for dc in best_disordering_coeffs],
         eigvals = best_eigvals,
         eigvecs = best_eigvecs,
         nu_min = best_nu_min,
@@ -312,6 +370,22 @@ function _construct_disordering_terms(term::Vector{Matrix{ComplexF64}},
     disordering_hamiltonian::SparseMatrixCSC{ComplexF64} = spzeros(2^num_qubits, 2^num_qubits)
     for q in 1:num_qubits
         disordering_hamiltonian += coeffs[q] * pad_term(term, num_qubits, q)
+    end
+
+    return Hermitian(Matrix(disordering_hamiltonian))
+end
+
+function _construct_disordering_terms(terms::Vector{Vector{Matrix{ComplexF64}}},
+    coeffs::Vector{Vector{Float64}}, num_qubits::Int64)
+
+    disordering_hamiltonian::SparseMatrixCSC{ComplexF64} = spzeros(2^num_qubits, 2^num_qubits)
+    for (term, term_coeffs) in zip(terms, coeffs)
+        if length(term_coeffs) != num_qubits
+            throw(ArgumentError("Each disordering coefficient vector must have length num_qubits ($num_qubits), got $(length(term_coeffs))"))
+        end
+        for q in 1:num_qubits
+            disordering_hamiltonian += term_coeffs[q] * pad_term(term, num_qubits, q)
+        end
     end
 
     return Hermitian(Matrix(disordering_hamiltonian))

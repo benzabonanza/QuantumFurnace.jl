@@ -233,7 +233,7 @@ function _extract_hamiltonian_params(ham::HamHam)
         :num_qubits        => Int(log2(size(ham.data, 1))),
         :base_coeffs       => ham.base_coeffs,
         :base_terms        => [Matrix.(term_group) for term_group in ham.base_terms],
-        :disordering_term  => ham.disordering_term === nothing ? nothing : Matrix.(ham.disordering_term),
+        :disordering_terms  => ham.disordering_terms === nothing ? nothing : [Matrix.(t) for t in ham.disordering_terms],
         :disordering_coeffs => ham.disordering_coeffs,
         :periodic          => ham.periodic,
         :shift             => ham.shift,
