@@ -9,7 +9,7 @@
 - ✅ **v1.4 Spectral Gap Refinement** -- Phase 26 (partial, shipped 2026-02-20)
 - ✅ **v1.5 Krylov Gap Estimation** -- Phases 27-32 (shipped 2026-02-25)
 - ✅ **v2.0 Restructure** -- Phases 33-38 (shipped 2026-02-28)
-- ✅ **v2.1 Speedup & Mixing Time** -- Phases 39-42 (shipped 2026-03-01)
+- ✅ **v2.1 Speedup & Mixing Time** -- Phases 39-43 (shipped 2026-03-04)
 
 ## Phases
 
@@ -109,14 +109,15 @@ Full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
 
 </details>
 
-### v2.1 Speedup & Mixing Time (Complete)
+### v2.1 Speedup & Mixing Time (Complete, shipped 2026-03-04)
 
-**Milestone Goal:** Optimize run_thermalize performance via per-jump precomputation and multi-threaded BLAS/omega-loops; add mixing time estimation via exponential fit on trace distance convergence curve.
+**Milestone Goal:** Optimize run_thermalize performance via per-jump precomputation and multi-threaded BLAS/omega-loops; add mixing time estimation via exponential fit on trace distance convergence curve; bi-exponential fitting for improved extrapolation accuracy.
 
 - [x] **Phase 39: Per-Jump Precomputation** - Eliminate per-step eigendecomposition by precomputing K0, U_residual, and U_coherent per jump at simulation start -- completed 2026-03-01
 - [x] **Phase 40: Save Every** - Control trace distance computation frequency to decouple observation cost from step cost -- completed 2026-03-01
 - [x] **Phase 41: Threading** - Multi-threaded BLAS and optional omega-loop parallelism for DM thermalization -- completed 2026-03-01
 - [x] **Phase 42: Mixing Time Estimation** - Exponential fit on trace distance convergence curve with extrapolation and quality gates -- completed 2026-03-01
+- [x] **Phase 43: Bi-Exponential Fitting** - Bi-exponential decay model for improved mixing time extrapolation (<5% error vs 26% single-exp) -- completed 2026-03-04
 
 ## Phase Details
 
@@ -180,10 +181,22 @@ Plans:
 - [x] 42-01-PLAN.md -- LsqFit.jl promotion + MixingTimeEstimate implementation (fitting.jl promoted, mixing.jl created)
 - [x] 42-02-PLAN.md -- Comprehensive tests and full validation (fitting tests promoted, mixing tests created)
 
+### Phase 43: Bi-Exponential Fitting
+**Goal**: Reduce mixing time extrapolation error from ~26% to <5% by adding bi-exponential decay model with explicit :biexp keyword, preserving backward compatibility
+**Depends on**: Phase 42 (mixing time estimation)
+**Success Criteria** (what must be TRUE):
+  1. All existing tests pass unchanged
+  2. Bi-exp extrapolation achieves <5% error on synthetic bi-exp data
+  3. `model=:single` (default) preserves exact current behavior
+**Plans:** 1 plan
+
+Plans:
+- [x] PLAN.md -- BiexpFitResult, fit_biexponential_decay, model=:biexp in estimate_mixing_time, Roots.Bisection extrapolation
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 39 -> 40 -> 41 -> 42
+Phases execute in numeric order: 39 -> 40 -> 41 -> 42 -> 43
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -198,3 +211,4 @@ Phases execute in numeric order: 39 -> 40 -> 41 -> 42
 | 40. Save Every | v2.1 | 1/1 | Complete | 2026-03-01 |
 | 41. Threading | v2.1 | 2/2 | Complete | 2026-03-01 |
 | 42. Mixing Time | v2.1 | 2/2 | Complete | 2026-03-01 |
+| 43. Bi-Exp Fitting | v2.1 | 1/1 | Complete | 2026-03-04 |
