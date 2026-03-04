@@ -76,6 +76,7 @@ export oft!, time_oft!, trotter_oft!
 
 # STAGING: estimate_spectral_gap, OverlapAnalysisResult, eigenbasis_overlap_analysis
 export fit_exponential_decay, FitResult
+export fit_biexponential_decay, BiexpFitResult
 export estimate_mixing_time, MixingTimeEstimate
 # STAGING: LSIFramework, compute_LSI_alpha2
 
