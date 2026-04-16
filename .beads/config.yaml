@@ -10,11 +10,17 @@
 
 # Use no-db mode: JSONL-only, no Dolt database
 # When true, bd will use .beads/issues.jsonl as the source of truth
-no-db: true
+# NOTE: bd v0.62 silently ignores this for most commands — Dolt is the only
+# supported backend. Kept false to match reality.
+no-db: false
 
 # Dolt settings
+# auto-start: bd spawns a per-project dolt sql-server on demand. Required for
+# any session to work after container rebuild (no manual setup needed).
+# Zombie reaping is handled by the tini wrapper around bd
+# (see /usr/local/share/npm-global/lib/node_modules/@beads/bd/bin/bd).
 dolt:
-  auto-start: false
+  auto-start: true
 
 # Enable JSON output by default
 # json: false
