@@ -119,10 +119,10 @@ function B_time(jumps::AbstractVector{<:JumpOp}, hamiltonian::HamHam, b_minus, b
 
     # Inner summand b_plus (all jumps A^a)
     # Product per jump: diag(u) * A' * diag(u2) * A * diag(u)
-    for s in keys(b_plus)
-        t_s = s * beta
-        @. diag_u = exp(1im * eigvals * t_s)
-        @. diag_u2 = exp(-2im * eigvals * t_s)
+    for tau in keys(b_plus)
+        t_tau = tau * beta
+        @. diag_u = exp(1im * eigvals * t_tau)
+        @. diag_u2 = exp(-2im * eigvals * t_tau)
         diag_u_row = transpose(diag_u)
 
         for jump_a in jumps
@@ -131,8 +131,8 @@ function B_time(jumps::AbstractVector{<:JumpOp}, hamiltonian::HamHam, b_minus, b
             @. tmp = diag_u2 * jump_eig
             # M = A' * tmp = A' * diag(u2) * A
             mul!(M, jump_eig', tmp)
-            # b_plus_summand += b_s * diag(u) * M * diag(u)
-            b_plus_summand .+= b_plus[s] .* diag_u .* M .* diag_u_row
+            # b_plus_summand += b_plus[tau] * diag(u) * M * diag(u)
+            b_plus_summand .+= b_plus[tau] .* diag_u .* M .* diag_u_row
         end
     end
 
@@ -165,8 +165,8 @@ function B_trotter(jumps::AbstractVector{<:JumpOp}, trotter::TrottTrott, b_minus
 
     # Inner summand b_plus
     # Product per jump: diag(u) * A' * diag(u2) * A * diag(u)
-    for (s, b_s) in b_plus
-        num_t0_steps = Int(round(s * beta / trotter.t0))
+    for (tau, b_tau) in b_plus
+        num_t0_steps = Int(round(tau * beta / trotter.t0))
 
         @. diag_u = trotter.eigvals_t0 ^ num_t0_steps
         @. diag_u2 = trotter.eigvals_t0 ^ (-2 * num_t0_steps)
@@ -179,8 +179,8 @@ function B_trotter(jumps::AbstractVector{<:JumpOp}, trotter::TrottTrott, b_minus
             @. tmp = diag_u2 * jump_a_eig
             # M = A' * tmp = A' * diag(u2) * A
             mul!(M, jump_a_eig', tmp)
-            # b_plus_summand += b_s * diag(u) * M * diag(u)
-            b_plus_summand .+= b_s .* diag_u .* M .* diag_u_row
+            # b_plus_summand += b_tau * diag(u) * M * diag(u)
+            b_plus_summand .+= b_tau .* diag_u .* M .* diag_u_row
         end
     end
 
@@ -220,8 +220,8 @@ function _compute_b_plus_metro(t::Real, beta::Real, sigma::Real, eta::Real)
     return (1 / (2 * sqrt(2) * pi^2)) * numerator / denominator
 end
 
-function _compute_b_plus_smooth(t::Real, beta::Real, sigma::Real, a::Real, b::Real)
-    b_vals = exp(- a * b / 2) * exp(- sigma^2 * beta^2 * t * (2 * t + 1im) * (1 + b)) / (4 * t^2 + a + 2im * t)
+function _compute_b_plus_smooth(t::Real, beta::Real, sigma::Real, a::Real, s::Real)
+    b_vals = exp(- a * s / 2) * exp(- sigma^2 * beta^2 * t * (2 * t + 1im) * (1 + s)) / (4 * t^2 + a + 2im * t)
     return sqrt(4 * a + 1) * b_vals / (sqrt(2) * pi^2)
 end
 

@@ -79,11 +79,11 @@ function _generate_filename(config::Config{Lindbladian})
 
     beta_str = "beta=$(config.beta)"
     a_str = "a=$(config.a)"
-    b_str = "b=$(config.b)"
+    s_str = "s=$(config.s)"
     nqb_str = "n=$(config.num_qubits)"
     B = with_coherent(config.construction) ? "B" : "noB"
 
-    return join(["liouv", db_str, pic_str, nqb_str, beta_str, B, a_str, b_str], "_") * ".bson"
+    return join(["liouv", db_str, pic_str, nqb_str, beta_str, B, a_str, s_str], "_") * ".bson"
 end
 
 function _generate_filename(config::Config{Thermalize})
@@ -92,12 +92,12 @@ function _generate_filename(config::Config{Thermalize})
 
     beta_str = "beta=$(config.beta)"
     a_str = "a=$(config.a)"
-    b_str = "b=$(config.b)"
+    s_str = "s=$(config.s)"
     nqb_str = "n=$(config.num_qubits)"
     B = with_coherent(config.construction) ? "B" : "noB"
     mix = "mix=$(config.mixing_time)"
 
-    return join(["alg", db_str, pic_str, nqb_str, beta_str, B, a_str, b_str, mix], "_") * ".bson"
+    return join(["alg", db_str, pic_str, nqb_str, beta_str, B, a_str, s_str, mix], "_") * ".bson"
 end
 
 function _riemann_sum(f::Function, grid::Vector{Float64})
@@ -149,9 +149,7 @@ function validate_config!(config::Config)
     end
 
     if config.with_linear_combination && config.a == 0.0
-        if config.b != 0.0
-            push!(errors, "For linear combinations with b != 0, a must also be non-zero.")
-        end
+        # Note: the (a=0, s != 0) case is supported in eta-regularized smooth Metro (Task 8).
         if config.domain isa Union{TimeDomain, TrotterDomain} && with_coherent(config.construction) && (isnothing(config.eta) || config.eta <= 0.0)
             push!(errors, "For linear combinations in the KMS DB case with a=0 in TIME or TROTTER domain, eta must be > 0.")
         end
@@ -225,7 +223,7 @@ function _print_press(config::Config{Lindbladian})
         ("sigma", config.sigma),
         ("gaussian_parameters", config.gaussian_parameters),
         ("a", config.a),
-        ("b", config.b),
+        ("s", config.s),
         ("eta", config.eta),
         ("t0", config.t0),
         ("w0", config.w0),
@@ -255,7 +253,7 @@ function _print_press(config::Config{Thermalize})
         ("sigma", config.sigma),
         ("gaussian_parameters", config.gaussian_parameters),
         ("a", config.a),
-        ("b", config.b),
+        ("s", config.s),
         ("eta", config.eta),
         ("t0", config.t0),
         ("w0", config.w0),

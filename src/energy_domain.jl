@@ -10,10 +10,10 @@ function pick_transition(config::Config{<:Any, <:Any, KMS}, w::Real)
     end
     sqrtA = sqrt(config.beta / 4) * sqrt(4 * config.a + 1)
     sqrtB = sqrt(config.beta / 4) * abs(w + config.beta * config.sigma^2 / 2)
-    if config.b == 0 && config.a != 0
+    if config.s == 0 && config.a != 0
         return exp(-2 * sqrtA * sqrtB - config.beta * w / 2 - config.beta^2 * config.sigma^2 / 4)
-    elseif config.b != 0 && config.a != 0
-        u_min = sqrt(config.beta * config.sigma^2 * config.b / 2)
+    elseif config.s != 0 && config.a != 0
+        u_min = sqrt(config.beta * config.sigma^2 * config.s / 2)
         transition_b0 = exp(-2 * sqrtA * sqrtB - config.beta * w / 2 - config.beta^2 * config.sigma^2 / 4)
         return transition_b0 * (erfc(sqrtA * u_min - sqrtB / u_min) + exp(4 * sqrtA * sqrtB) * erfc(sqrtA * u_min + sqrtB / u_min)) / 2
     elseif config.a == 0
@@ -28,12 +28,12 @@ function pick_transition(config::Config{<:Any, <:Any, GNS}, w::Real)
         return exp(-(w + w_gamma)^2 / (2 * sigma_gamma^2))
     end
     sqrtA = sqrt(config.beta / 4) * sqrt(4 * config.a + 1)
-    if config.b == 0 && config.a != 0
+    if config.s == 0 && config.a != 0
         sqrtB = sqrt(config.beta / 4) * abs(w)
         return exp(-2 * sqrtA * sqrtB - config.beta * w / 2)
-    elseif config.b != 0 && config.a != 0
+    elseif config.s != 0 && config.a != 0
         sqrtB = sqrt(config.beta / 4) * abs(w)
-        u_min = sqrt(config.beta * config.sigma^2 * config.b / 2)
+        u_min = sqrt(config.beta * config.sigma^2 * config.s / 2)
         transition_b0 = exp(-2 * sqrtA * sqrtB - config.beta * w / 2)
         return transition_b0 * (erfc(sqrtA * u_min - sqrtB / u_min) + exp(4 * sqrtA * sqrtB) * erfc(sqrtA * u_min + sqrtB / u_min)) / 2
     elseif config.a == 0
@@ -53,25 +53,25 @@ function _pick_transition_kms(config::Config{<:Any, <:Any, KMS})
 
     # sqrtA = sqrt((4 * a + 1) / 8)
     sqrtA = sqrt(config.beta / 4) * sqrt(4 * config.a + 1)
-    if (config.b == 0 && config.a != 0)  # No time singularity but kinky Metro in energy
+    if (config.s == 0 && config.a != 0)  # a-regularized, no smoothing (s=0)
         return w -> begin
             # sqrtB = beta * abs(w + 1 / (2 * beta)) / sqrt(2)
             sqrtB = sqrt(config.beta / 4) * abs(w + config.beta * config.sigma^2 / 2)
             return exp((- 2 * sqrtA * sqrtB - config.beta * w / 2 - config.beta^2 * config.sigma^2 / 4))
         end
-    elseif (config.b != 0 && config.a != 0)  # No time singularity and no kinky Metro (Glauberish)
+    elseif (config.s != 0 && config.a != 0)  # a-regularized + smoothed (s>0)
         # @printf("Smooth Metro\n")
         return w -> begin
             sqrtB = sqrt(config.beta / 4) * abs(w + config.beta * config.sigma^2 / 2)
-            u_min = sqrt(config.beta * config.sigma^2 * config.b / 2)  # integral lower limit
+            u_min = sqrt(config.beta * config.sigma^2 * config.s / 2)  # integral lower limit
 
             transition_b0 = exp((- 2 * sqrtA * sqrtB - config.beta * w / 2 - config.beta^2 * config.sigma^2 / 4))
 
-            return (transition_b0 * (erfc(sqrtA * u_min - sqrtB / u_min) 
+            return (transition_b0 * (erfc(sqrtA * u_min - sqrtB / u_min)
                 + exp(4 * sqrtA * sqrtB) * erfc(sqrtA * u_min + sqrtB / u_min)) / 2)
 
-            # return (transition_b0 * (erfc(sqrtA * sqrt(b) - sqrtB / sqrt(b)) 
-            #     + exp(4 * sqrtA * sqrtB) * erfc(sqrtA * sqrt(b) + sqrtB / sqrt(b))) / 2)
+            # return (transition_b0 * (erfc(sqrtA * sqrt(s) - sqrtB / sqrt(s))
+            #     + exp(4 * sqrtA * sqrtB) * erfc(sqrtA * sqrt(s) + sqrtB / sqrt(s))) / 2)
         end
     elseif config.a == 0  # Time singularity and kinky Metro, i.e. simple shifted Metro
         # @printf("Kinky Metro\n")
@@ -112,18 +112,18 @@ function _pick_transition_gns(config::Config{<:Any, <:Any, GNS})
     end
 
     sqrtA = sqrt(config.beta / 4) * sqrt(4 * config.a + 1)
-    if (config.b == 0 && config.a != 0)
+    if (config.s == 0 && config.a != 0)
         # Smooth Metropolis (no time singularity) — UN-SHIFTED.
         return w -> begin
             sqrtB = sqrt(config.beta / 4) * abs(w)
             return exp((-2 * sqrtA * sqrtB - config.beta * w / 2))
         end
-    elseif (config.b != 0 && config.a != 0)
+    elseif (config.s != 0 && config.a != 0)
         # Smooth Metropolis (Glauber-like smoothing) — UN-SHIFTED.
         # @printf("Smooth Metro approx GNS gamma \n")
         return w -> begin
             sqrtB = sqrt(config.beta / 4) * abs(w)
-            u_min = sqrt(config.beta * config.sigma^2 * config.b / 2)  # integral lower limit
+            u_min = sqrt(config.beta * config.sigma^2 * config.s / 2)  # integral lower limit
 
             transition_b0 = exp((-2 * sqrtA * sqrtB - config.beta * w / 2))
 

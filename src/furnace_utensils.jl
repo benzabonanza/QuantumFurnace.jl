@@ -147,7 +147,7 @@ function _select_b_plus_calculator(config::Config{<:Any, <:Any, KMS})
     else
         if config.a != 0.0
             # Improved Metro / Glauber
-            return (_compute_b_plus_smooth, (config.beta, config.sigma, config.a, config.b))
+            return (_compute_b_plus_smooth, (config.beta, config.sigma, config.a, config.s))
         else
             # Metro
             return (_compute_b_plus_metro, (config.beta, config.sigma, config.eta,))

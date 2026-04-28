@@ -33,16 +33,16 @@ function _pick_f(config::Config{<:Any, <:Any, KMS})
     sigma = config.sigma
     if config.with_linear_combination
         a = config.a
-        b = config.b
-        return (nu_1, nu_2) -> create_f(nu_1, nu_2, beta, sigma, a, b)
+        s = config.s
+        return (nu_1, nu_2) -> create_f(nu_1, nu_2, beta, sigma, a, s)
     else
         gaussian_parameters = config.gaussian_parameters
         return (nu_1, nu_2) -> create_f_gauss(nu_1, nu_2, beta, sigma, gaussian_parameters)
-    end 
+    end
 end
 
-function create_f(nu_1::Real, nu_2::Real, beta::Real, sigma::Real, a::Real, b::Real)
-    alpha = create_alpha(nu_1, nu_2, beta, sigma, a, b)
+function create_f(nu_1::Real, nu_2::Real, beta::Real, sigma::Real, a::Real, s::Real)
+    alpha = create_alpha(nu_1, nu_2, beta, sigma, a, s)
     return tanh(-beta * (nu_1 - nu_2) / 4) * alpha / (2im)
 end
 
@@ -59,7 +59,7 @@ _pick_alpha(config::Config{<:Any, <:Any, GNS}) = _pick_alpha_gns(config)
 # 2-arg forms: compute alpha directly via dispatch (zero allocation on hot path)
 function _pick_alpha(config::Config{<:Any, <:Any, KMS}, nu_1::Real, nu_2::Real)
     if config.with_linear_combination
-        return create_alpha(nu_1, nu_2, config.beta, config.sigma, config.a, config.b)
+        return create_alpha(nu_1, nu_2, config.beta, config.sigma, config.a, config.s)
     else
         return create_alpha_gauss(nu_1, nu_2, config.sigma, config.gaussian_parameters)
     end
@@ -67,7 +67,7 @@ end
 
 function _pick_alpha(config::Config{<:Any, <:Any, GNS}, nu_1::Real, nu_2::Real)
     if config.with_linear_combination
-        return create_alpha_gns(nu_1, nu_2, config.beta, config.sigma, config.a, config.b)
+        return create_alpha_gns(nu_1, nu_2, config.beta, config.sigma, config.a, config.s)
     else
         return create_alpha_gauss(nu_1, nu_2, config.sigma, config.gaussian_parameters)
     end
@@ -79,21 +79,21 @@ function _pick_alpha_kms(config::Config{<:Any, <:Any, KMS})
     if config.with_linear_combination
         beta = config.beta
         a = config.a
-        b = config.b
-        return (nu_1, nu_2) -> create_alpha(nu_1, nu_2, beta, sigma, a, b)
+        s = config.s
+        return (nu_1, nu_2) -> create_alpha(nu_1, nu_2, beta, sigma, a, s)
     else
         gaussian_parameters = config.gaussian_parameters
         return (nu_1, nu_2) -> create_alpha_gauss(nu_1, nu_2, sigma, gaussian_parameters)
-    end 
+    end
 end
 
-function create_alpha(nu_1::Real, nu_2::Real, beta::Real, sigma::Real, a::Real, b::Real)
+function create_alpha(nu_1::Real, nu_2::Real, beta::Real, sigma::Real, a::Real, s::Real)
 
     sqrtA = sqrt(beta * (4 * a + 1) / 4)
     sqrtB = sqrt(beta / 16) * abs(nu_1 + nu_2)
     C = beta * (nu_1 + nu_2) / 4
     prefactor = exp(a * beta^2 * sigma^2 / 2) / 2
-    u_min = sqrt(beta * sigma^2 * (1 + b) / 2)
+    u_min = sqrt(beta * sigma^2 * (1 + s) / 2)
     z_plus = sqrtA * u_min + sqrtB / u_min
     z_minus = sqrtA * u_min - sqrtB / u_min
 
@@ -109,8 +109,8 @@ function _pick_alpha_gns(config::Config{<:Any, <:Any, GNS})
     if config.with_linear_combination
         beta = config.beta
         a = config.a
-        b = config.b
-        return (nu_1, nu_2) -> create_alpha_gns(nu_1, nu_2, beta, sigma, a, b)
+        s = config.s
+        return (nu_1, nu_2) -> create_alpha_gns(nu_1, nu_2, beta, sigma, a, s)
     else
         gaussian_parameters = config.gaussian_parameters  # but now β = 2ω_γ / σ_γ^2
         return (nu_1, nu_2) -> create_alpha_gauss(nu_1, nu_2, sigma, gaussian_parameters)
@@ -122,12 +122,12 @@ Coming from unshifted γ(ω) in the energy domain, leads to a partially shifted 
 Difference vs the KMS DB case: |ν1 + ν2| → |ν1 + ν2 + β σ^2 / 2| (and thus not skew symmetric due to the Gaussian filters)
 Also: No f and no b-funcs will be constructed because in this setup there is no fine-tuned B in the Lindbladian.
 """
-function create_alpha_gns(nu_1::Real, nu_2::Real, beta::Real, sigma::Real, a::Real, b::Real)
+function create_alpha_gns(nu_1::Real, nu_2::Real, beta::Real, sigma::Real, a::Real, s::Real)
     sqrtA = sqrt(beta * (4 * a + 1) / 4)
     sqrtB = sqrt(beta / 16) * abs(nu_1 + nu_2 + beta * sigma^2 / 2)
     C = beta * (nu_1 + nu_2) / 4
     prefactor = exp(a * beta^2 * sigma^2 / 2) / 2
-    u_min = sqrt(beta * sigma^2 * (1 + b) / 2)
+    u_min = sqrt(beta * sigma^2 * (1 + s) / 2)
     z_plus = sqrtA * u_min + sqrtB / u_min
     z_minus = sqrtA * u_min - sqrtB / u_min
 

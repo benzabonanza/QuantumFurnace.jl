@@ -37,7 +37,7 @@ function _config_to_dict(config::Config)
     d[:sigma]                   = config.sigma
     d[:gaussian_parameters]     = config.gaussian_parameters
     d[:a]                       = config.a
-    d[:b]                       = config.b
+    d[:s]                       = config.s
     d[:num_energy_bits]         = config.num_energy_bits
     d[:t0]                      = config.t0
     d[:w0]                      = config.w0
@@ -101,7 +101,7 @@ function _dict_to_config_kwargs(d::Dict, domain)
     kwargs[:sigma]                   = d[:sigma]
 
     # Optional fields (only set if present and non-nothing)
-    for key in (:a, :b, :num_energy_bits, :t0, :w0, :eta, :num_trotter_steps_per_t0)
+    for key in (:a, :s, :num_energy_bits, :t0, :w0, :eta, :num_trotter_steps_per_t0)
         val = get(d, key, nothing)
         if val !== nothing
             kwargs[key] = val

@@ -52,7 +52,7 @@ via the trait function `with_coherent(construction)`, not stored as a field.
 - `beta`: Inverse temperature.
 - `sigma`: Gaussian width parameter.
 - `gaussian_parameters`: Optional `(omega_gamma, sigma_gamma)` tuple for secondary Gaussian.
-- `a` and `b`: Parameters for the linear combination type.
+- `a` and `s`: Parameters for the linear combination type.
 
 ## Grid parameters
 - `num_energy_bits`: Coarseness of energy/time grid.
@@ -65,10 +65,11 @@ via the trait function `with_coherent(construction)`, not stored as a field.
 - `delta`: Time step size for weak-measurement emulation (only for `Thermalize` simulations).
 
 ## Currently possible linear combinations:
-(a, b) =
-- (0, 0) - no linear combination, simple Gaussian
-- (>0, 0) - linear combination that results in Metropolis-like transition
-- (>0, >0) - linear combination that results in Glauber transition (smoother)
+(a, s) =
+- (0, 0)   - plain Metropolis (kinky, eta-regularized in time domain)
+- (0, >0)  - smooth Metropolis (eta-regularized, kink-smoothed by s; thesis-main case)
+- (>0, 0)  - a-regularized smooth Metro (alternative regularization, no kink-smoothing)
+- (>0, >0) - a-regularized Glauberish (smooth in both senses)
 
 ## Available domains:
 - **`BohrDomain()`**: Highest level -- Lindbladian in Bohr frequency decomposition.
@@ -91,7 +92,7 @@ via the trait function `with_coherent(construction)`, not stored as a field.
     sigma::T
     gaussian_parameters::Union{Tuple{T, T}, Tuple{Nothing, Nothing}} = (nothing, nothing)
     a::Union{T, Nothing} = nothing
-    b::Union{T, Nothing} = nothing
+    s::Union{T, Nothing} = nothing
 
     # Grid parameters
     num_energy_bits::Union{Int, Nothing} = nothing

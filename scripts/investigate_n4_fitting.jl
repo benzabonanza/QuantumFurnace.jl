@@ -79,7 +79,7 @@ for num_qubits in [3, 4, 5]
     config = Config(;
         sim=Thermalize(), domain=EnergyDomain(), construction=KMS(),
         num_qubits=num_qubits, with_linear_combination=true,
-        beta=beta, sigma=sigma, a=beta/30.0, b=0.4,
+        beta=beta, sigma=sigma, a=beta/30.0, s=0.4,
         num_energy_bits=num_energy_bits, w0=w0, t0=t0,
         num_trotter_steps_per_t0=10,
         mixing_time=long_time, delta=delta,

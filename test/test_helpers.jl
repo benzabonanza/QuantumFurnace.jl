@@ -198,7 +198,7 @@ function make_config(sim, domain;
         beta = BETA,
         sigma = SIGMA,
         a = BETA / 30.0,
-        b = 0.4,
+        s = 0.4,
         num_energy_bits = NUM_ENERGY_BITS,
         w0 = W0,
         t0 = T0,

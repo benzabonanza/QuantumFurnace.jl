@@ -99,7 +99,7 @@ function make_config(mixing_time)
         beta                      = beta,
         sigma                     = sigma,
         a                         = beta / 30.0,
-        b                         = 0.4,
+        s                         = 0.4,
         num_energy_bits           = num_energy_bits,
         w0                        = w0,
         t0                        = t0,
