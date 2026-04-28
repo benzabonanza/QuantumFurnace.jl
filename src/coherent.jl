@@ -208,13 +208,13 @@ function _compute_b_plus(t::Real, beta::Real, w_gamma::Real, sigma_gamma::Real) 
     return beta * sigma_gamma * exp(- 2 * beta * w_gamma * (2 * t^2 + im * t)) / sqrt(pi^3)
 end
 
-function _compute_b_plus_metro(t::Real, beta::Real, sigma::Real, eta::Real)
-    if abs(t) < 1e-12  # Handle t=0
-        return complex(1 / (2 * sqrt(2) * pi^2))
+function _compute_b_plus_metro(t::Real, beta::Real, sigma::Real, eta::Real, s::Real=0.0)
+    if abs(t) < 1e-12  # Handle t=0 (L'Hopital limit; reduces to 1/(2√2 π²) at σβ=1, s=0)
+        return complex((2 - sigma^2 * beta^2 * (1 + s)) / (2 * sqrt(2) * pi^2))
     elseif abs(t) <= eta
-        numerator = exp(- sigma^2 * beta^2 * (2 * t^2 + 1im * t)) + 1im * (2 * t + 1im)
+        numerator = exp(- sigma^2 * beta^2 * (2 * t^2 + 1im * t) * (1 + s)) + 1im * (2 * t + 1im)
     else
-        numerator = exp(- sigma^2 * beta^2 * (2 * t^2 + 1im * t))
+        numerator = exp(- sigma^2 * beta^2 * (2 * t^2 + 1im * t) * (1 + s))
     end
     denominator = t * (2 * t + 1im)
     return (1 / (2 * sqrt(2) * pi^2)) * numerator / denominator

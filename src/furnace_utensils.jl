@@ -146,11 +146,12 @@ function _select_b_plus_calculator(config::Config{<:Any, <:Any, KMS})
         return (_compute_b_plus, (config.beta, config.gaussian_parameters[1], config.gaussian_parameters[2]))
     else
         if config.a != 0.0
-            # Improved Metro / Glauber
+            # a-regularized smooth (covers Metro a>0,s=0 and Glauberish a>0,s>0)
             return (_compute_b_plus_smooth, (config.beta, config.sigma, config.a, config.s))
         else
-            # Metro
-            return (_compute_b_plus_metro, (config.beta, config.sigma, config.eta,))
+            # eta-regularized smooth Metro (covers Chen plain s=0 and thesis-main s>0)
+            s_val = something(config.s, 0.0)
+            return (_compute_b_plus_metro, (config.beta, config.sigma, config.eta, s_val))
         end
     end
 end
