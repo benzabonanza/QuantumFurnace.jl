@@ -97,3 +97,101 @@ Tests for the eta-regularized smooth Metropolis variant (a=0, s>0):
     end
 
 end
+
+@testset "Energy-domain γ for a=0, s>0 uses smooth Metropolis form (eq:smooth-metro)" begin
+    using SpecialFunctions: erfc
+
+    function _make_cfg_eD(construction, a, s)
+        Config(;
+            sim=Thermalize(), domain=EnergyDomain(), construction=construction,
+            num_qubits=NUM_QUBITS, with_linear_combination=true,
+            beta=BETA, sigma=SIGMA, a=a, s=s,
+            num_energy_bits=NUM_ENERGY_BITS, w0=W0, t0=T0,
+            num_trotter_steps_per_t0=NUM_TROTTER_STEPS_PER_T0,
+            mixing_time=1.0, delta=TEST_DELTA,
+        )
+    end
+
+    # Closed-form γ at a=0 from thesis eq:smooth-metro (line 297-303):
+    #   γ_M^{(s)}(ω) = γ_M^{(0)}(ω) · (1/2) [erfc(z_-) + e^{β|ω̃|} erfc(z_+)]
+    # with ω̃ = ω + βσ²/2 and z_± = βσ√s/(2√2) ± |ω̃|/(σ√(2s)).
+    function thesis_gamma_a0_kms(omega, beta, sigma, s)
+        omega_tilde = omega + beta * sigma^2 / 2
+        gamma_0 = exp(-beta * max(omega_tilde, 0.0))
+        s == 0 && return gamma_0
+        z_plus  = beta * sigma * sqrt(s) / (2*sqrt(2)) + abs(omega_tilde) / (sigma * sqrt(2*s))
+        z_minus = beta * sigma * sqrt(s) / (2*sqrt(2)) - abs(omega_tilde) / (sigma * sqrt(2*s))
+        return gamma_0 * (erfc(z_minus) + exp(beta * abs(omega_tilde)) * erfc(z_plus)) / 2
+    end
+
+    # GNS un-shifted analog (replace ω̃ → ω in z_± and prefactor)
+    function thesis_gamma_a0_gns(omega, beta, sigma, s)
+        gamma_0 = exp(-beta * max(omega, 0.0))
+        s == 0 && return gamma_0
+        z_plus  = beta * sigma * sqrt(s) / (2*sqrt(2)) + abs(omega) / (sigma * sqrt(2*s))
+        z_minus = beta * sigma * sqrt(s) / (2*sqrt(2)) - abs(omega) / (sigma * sqrt(2*s))
+        return gamma_0 * (erfc(z_minus) + exp(beta * abs(omega)) * erfc(z_plus)) / 2
+    end
+
+    test_omegas = [-0.5, -0.1, -0.05, -0.02, 0.0, 0.02, 0.05, 0.1, 0.5]
+
+    @testset "KMS (a=0, s=0.4) γ matches thesis closed form" begin
+        cfg = _make_cfg_eD(KMS(), 0.0, 0.4)
+        for omega in test_omegas
+            @test pick_transition(cfg, omega) ≈
+                  thesis_gamma_a0_kms(omega, BETA, SIGMA, 0.4) atol=TOL_EXACT
+        end
+    end
+
+    @testset "KMS (a=0, s=0.4) closure form matches 2-arg form" begin
+        cfg = _make_cfg_eD(KMS(), 0.0, 0.4)
+        gamma_fn = pick_transition(cfg)
+        for omega in test_omegas
+            @test gamma_fn(omega) ≈ pick_transition(cfg, omega) atol=TOL_EXACT
+        end
+    end
+
+    @testset "KMS (a=0, s=0.4) differs from kinky γ near the kink (ω̃ ≈ 0)" begin
+        # ω̃ = 0 ⇒ ω = -βσ²/2 = -0.05 at BETA=10, SIGMA=0.1
+        cfg_kinky  = _make_cfg_eD(KMS(), 0.0, 0.0)
+        cfg_smooth = _make_cfg_eD(KMS(), 0.0, 0.4)
+        omega_kink = -BETA * SIGMA^2 / 2
+        for delta_omega in [-0.02, -0.005, 0.005, 0.02]
+            omega = omega_kink + delta_omega
+            kinky  = pick_transition(cfg_kinky, omega)
+            smooth = pick_transition(cfg_smooth, omega)
+            @test !isapprox(kinky, smooth; atol=1e-6)
+        end
+    end
+
+    @testset "KMS (a=0, s→0⁺) recovers kinky γ_M^(0)" begin
+        cfg_kinky   = _make_cfg_eD(KMS(), 0.0, 0.0)
+        cfg_tiny_s  = _make_cfg_eD(KMS(), 0.0, 1e-8)
+        for omega in test_omegas
+            @test pick_transition(cfg_tiny_s, omega) ≈
+                  pick_transition(cfg_kinky, omega) atol=1e-3
+        end
+    end
+
+    @testset "GNS (a=0, s=0.4) γ matches un-shifted thesis form" begin
+        cfg = _make_cfg_eD(GNS(), 0.0, 0.4)
+        for omega in test_omegas
+            @test pick_transition(cfg, omega) ≈
+                  thesis_gamma_a0_gns(omega, BETA, SIGMA, 0.4) atol=TOL_EXACT
+        end
+        # Closure form too
+        gamma_fn = pick_transition(cfg)
+        for omega in test_omegas
+            @test gamma_fn(omega) ≈ pick_transition(cfg, omega) atol=TOL_EXACT
+        end
+    end
+
+    @testset "GNS (a=0, s→0⁺) recovers un-shifted kinky γ" begin
+        cfg_kinky  = _make_cfg_eD(GNS(), 0.0, 0.0)
+        cfg_tiny_s = _make_cfg_eD(GNS(), 0.0, 1e-8)
+        for omega in test_omegas
+            @test pick_transition(cfg_tiny_s, omega) ≈
+                  pick_transition(cfg_kinky, omega) atol=1e-3
+        end
+    end
+end
