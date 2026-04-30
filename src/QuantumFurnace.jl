@@ -52,6 +52,9 @@ export EigenDecompositionResult, FixedPointResult, DefectResult, OverlapResult,
        compute_anti_hermitian_defect, compute_overlap_coefficients,
        compute_sz_labels, detect_multiplets, run_exact_diagnostics
 
+# --- Discriminant ---
+export DiscriminantBuffers, gibbs_fractional_powers
+
 # --- Common ---
 export Config, AbstractSimulation, Lindbladian, Thermalize, KrylovSpectrum, Trajectory
 export AbstractConstruction, KMS, GNS, DLL, with_coherent
@@ -103,6 +106,7 @@ include("krylov_matvec.jl")
 include("krylov_eigsolve.jl")
 include("convergence.jl")
 include("diagnostics.jl")
+include("discriminant.jl")
 include("results.jl")
 include("fitting.jl")
 include("mixing.jl")
