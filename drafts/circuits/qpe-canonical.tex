@@ -1,0 +1,109 @@
+% Circuit: Quantum Phase Estimation / OFT forward half (unified)
+% Generated for: QuantumFurnace.jl PhD thesis
+% Usage: \input{circuits/qpe-canonical.tex} in main thesis, or compile standalone
+%
+% Shows r ancilla qubits acted on by a generic state-preparation block
+% \mathbf{Prep}_f (which loads the time-domain window \ket{f} on the
+% ancilla register), then controlled-U^{2^k} gates on a bundled system
+% register with exponentially increasing powers, followed by the inverse
+% QFT and computational-basis readout. Specialising \mathbf{Prep}_f to a
+% tensor product of Hadamards recovers standard QPE; a Gaussian (or
+% Gevrey) window implements the forward half of the operator Fourier
+% transform.
+%
+\documentclass{article}
+\usepackage[margin=1cm]{geometry}
+\usepackage{tikz}
+\usetikzlibrary{quantikz2}
+\usepackage{amsmath,amssymb}
+\usepackage{braket}
+
+\newcommand{\ee}{\mathrm{e}}
+\newcommand{\ii}{\mathrm{i}}
+
+% Rounded corners on all gates globally
+\tikzset{operator/.append style={rounded corners}}
+
+\begin{document}
+\pagestyle{empty}
+
+\begin{figure}[ht]
+  \centering
+  \begin{quantikz}[row sep=0.7cm, column sep=0.45cm]
+  %
+  % Ancilla qubit 0 (MSB)
+    \lstick{$\ket{0}$}
+      & \gate[4, nwires={2}, style={fill=orange!8}]{\mathbf{Prep}_f}
+      & \qw
+      & \qw
+      & \qw
+      & \ctrl{4}
+      & \gate[4, nwires={2}, style={dashed, fill=blue!5}]{\text{QFT}}
+      &
+      &
+      & \meter{} \\
+  %
+  % Ancilla qubit 1
+    \lstick{$\ket{0}$}
+      &
+      & \qw
+      & \qw
+      & \ctrl{3}
+      & \qw
+      &
+      &
+      &
+      & \meter{} \\
+  %
+  % Vdots row (invisible wire, just for the ellipsis)
+    \lstick{$\vdots$} \setwiretype{n}
+      &
+      & \vdots
+      &
+      &
+      &
+      &
+      &
+      &
+      & \vdots \\
+  %
+  % Ancilla qubit r-1 (LSB)
+    \lstick{$\ket{0}$}
+      &
+      & \ctrl{1}
+      & \qw
+      & \qw
+      & \qw
+      &
+      &
+      &
+      & \meter{} \\
+  %
+  % System register (bundled)
+    \lstick{$\ket{\psi}$}
+      & \qwbundle{}
+      & \gate{U}
+      & \ \ldots\ \qw
+      & \gate{U^{2^{r-2}}}
+      & \gate{U^{2^{r-1}}}
+      & \qw
+      & \qw
+      & \qw
+      & \rstick{$\ket{\psi}$} \qw
+  \end{quantikz}
+  \caption{Unified phase-estimation / operator-Fourier-transform forward-half
+  circuit with $r$ ancilla qubits and a bundled system register $\ket{\psi}$. The
+  state-preparation block $\mathbf{Prep}_f$ loads the time-domain window
+  $\ket{f} = \sum_{\bar t\in S_{t_0}} f(\bar t)\ket{\bar t}$ on the ancilla register;
+  specialising to the uniform window $f\equiv 1/\sqrt{N}$ reduces it to a tensor
+  product of Hadamard gates on each qubit (standard QPE), while a Gaussian
+  (or Gevrey) window implements the forward half of the operator Fourier
+  transform. Each ancilla then controls $U^{2^k}$ with $U = \ee^{+\ii H t_0}$
+  and $k = 0,\ldots,r{-}1$, and the QFT (physics-forward convention, with
+  kernel $\ee^{-\ii\bar t\bar\omega}/\sqrt{N}$) maps the accumulated phases to
+  the frequency register $\ket{\bar\omega}$ for readout or for a subsequent
+  diagonal action $\gamma(\bar\omega)$ on the ancilla before uncomputation.}
+  \label{fig:qpe-canonical}
+\end{figure}
+
+\end{document}

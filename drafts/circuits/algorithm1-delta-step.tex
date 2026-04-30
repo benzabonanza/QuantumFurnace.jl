@@ -1,0 +1,193 @@
+% Circuit: Algorithm 1 --- one delta-step of the CKG Lindbladian for a fixed jump A_a.
+% Generated for: QuantumFurnace.jl PhD thesis (Chapter 5, Algorithm subsection).
+% Usage: \input{circuits/algorithm1-delta-step.tex} in the main thesis, or compile standalone.
+%
+% Implements, on the system register S, the per-jump channel
+%     e^{delta L_a} = e^{-i delta B_a} . e^{delta L_{a,diss}} + O(delta^2)
+% via the coherent--dissipative splitting (5.90).  This is the body of the
+% inner loop of Algorithm 1: the enclosing sweep over jumps and the L outer
+% iterations are not drawn.
+%
+% Subroutines (left-to-right):
+%   CoherentStep    (Alg. 1a):  degree-d GQSP of the nested-LCU block encoding
+%                   U_{B_a}, matching the prelim GQSP circuit (sec:prelim-QSP):
+%                   W = R_T . U_{B_a}  is the walk operator on (T_-, T_+, S),
+%                   with R_T = 2|0><0|_{T_-T_+} - I the reflection on the
+%                   time registers.  One layer Lambda(U_{B_a}) Lambda(R_T) R_k
+%                   is drawn inside a dashed gategroup labelled "repeat d times".
+%   DissipativeStep (Alg. 1b):  forward U_{diss} -> weak-measurement rotation
+%                   Y_delta (0-ctrl on q_gamma) -> U_{diss}^dag (0-ctrl on q_delta)
+%                   -> measure.  The Boltzmann rotation Y_gamma is now absorbed
+%                   into U_{diss} (Chen et al. 2023 Fig. 3 convention), giving
+%                       U_{diss} := Y_gamma . QFT . Ctrl-Trott^+ . A_a
+%                                   . Ctrl-Trott^- . StatePrep(|f>),
+%                   a 3-register unitary on (Omega, q_gamma, S).
+%
+% Notation matches the prelim circuits:
+%   Y_delta      = R_Y(2 arcsin sqrt(delta))                    (prelim sec:prelim-weak-meas)
+%   Y_{1-gamma}  = R_Y(2 arcsin sqrt(1 - gamma(bar omega)))      (absorbed into U_{diss})
+%   R(theta_k, phi_k, lambda_k)                   (GQSP signal rotation, prelim sec:prelim-QSP)
+%   R_T     = 2 |0><0|_{T_-T_+} - I               (reflection, prelim sec:prelim-QSP)
+%
+% Ancilla reuse (the visual punchline of this figure): after measuring the
+% coherent-step ancillas q_QSP, T_-, T_+ at the end of the GQSP protocol,
+% the *same physical qubits* are re-initialised to |0> and used as the
+% dissipative-step ancillas.  The wire-row mapping is:
+%
+%       q_QSP  (1 qubit)          --->    q_delta   (1 qubit)
+%       T_-    (r_- qubits, bdl)  --->    Omega     (r qubits, bdl; assume r_- >= r)
+%       T_+    (r_+ qubits, bdl)  --->    q_gamma   (1 qubit;  use 1 qubit of T_+ bundle)
+%       S      (n qubits, bdl)    --->    S         (unchanged throughout)
+%
+% This mapping keeps U_{B_a} contiguous on rows 2-4 in CoherentStep and
+% U_{diss} contiguous on rows 2-4 in DissipativeStep; q_delta sits alone
+% on row 1 in DissipativeStep (rotated, then 0-controls the reverse pass).
+%
+% Row order top-to-bottom:
+%    Row 1:  q_QSP   -->  q_delta   (weak-meas ancilla, measured at end)
+%    Row 2:  T_+     -->  q_gamma   (immediately under q_delta for clean \octrl{-1})
+%    Row 3:  T_-     -->  Omega     (energy register, bundled)
+%    Row 4:  S       -->  S         (system; never touched)
+% Placing q_gamma above Omega (inverted w.r.t. Chen's original ordering)
+% makes the Boltzmann -> weak-measurement control a single-row \octrl{-1},
+% rather than skipping over the bundled Omega register.
+%
+\documentclass{article}
+\usepackage[margin=1cm]{geometry}
+\usepackage{tikz}
+\usetikzlibrary{quantikz2}
+\usepackage{amsmath,amssymb}
+\usepackage{braket}
+
+\newcommand{\ee}{\mathrm{e}}
+\newcommand{\ii}{\mathrm{i}}
+
+% Rounded corners on all gates globally
+\tikzset{operator/.append style={rounded corners}}
+
+\begin{document}
+\pagestyle{empty}
+
+\begin{figure}[ht]
+  \centering
+  \resizebox{\textwidth}{!}{%
+  \begin{quantikz}[row sep=0.6cm, column sep=0.5cm]
+  %
+  % Cell-by-cell layout (15 cells per row):
+  %   1: \lstick          (left label)
+  %   2: wire decl        (\qw or \qwbundle{r})
+  %   3: R_0 / qw         (coherent: first QSP rotation)
+  %   4: octrl / U_{B_a}  (Lambda(U_{B_a}))
+  %   5: octrl / R_T      (Lambda(R_T))
+  %   6: R_k / qw         (coherent: inner-loop QSP rotation)
+  %   7: meter / qw       (terminate coherent ancilla)
+  %   8: setwiretype{n}   (transition cell A: hide outgoing wire)
+  %   9: new lstick       (transition cell B: re-init wire as dissipative ancilla)
+  %  10: U_{diss} / qw    (dissipative forward)
+  %  11: Y_delta / octrl  (weak-measurement rotation)
+  %  12: U_{diss}^dag     (dissipative reverse, 0-ctrl by q_delta)
+  %  13: meter / rstick   (terminate dissipative ancilla / system output)
+  %
+  % Meter and setwiretype{n} are placed in SEPARATE cells so that the
+  % wire leading into the meter stays visible (otherwise quantikz2 applies
+  % {n} retroactively to the incoming wire and breaks the meter).
+  %
+  % ==================================================================
+  % Row 1:  q_QSP  (coherent, cells 3-7)  -->  q_delta  (dissipative, cells 9-13)
+  % ==================================================================
+    \lstick{$\ket{0}_{\mathrm{QSP}}$}
+      & \qw
+      & \gate{R(\theta_0,\phi_0,\lambda_0)}
+      & \octrl{1}
+      \gategroup[4,steps=3,style={dashed,rounded corners,fill=blue!6,inner sep=5pt},
+                 background,label style={label position=above,yshift=0.30cm,anchor=south}]
+        {\scriptsize \textsc{CoherentStep}: repeat $d$ times with angles $(\theta_k,\phi_k)$\quad$\Rightarrow\quad \ee^{-\ii\delta B_a}$ on $S$}
+      & \octrl{1}
+      & \gate{R(\theta_k,\phi_k,0)}
+      & \meter{}
+      & \setwiretype{n}
+      & \lstick{$\ket{0}_\delta$} \setwiretype{q} \wireoverride{n}
+      & \qw
+      & \qw
+      \gategroup[4,steps=4,style={dashed,rounded corners,fill=red!6,inner sep=5pt},
+                 background,label style={label position=below,yshift=-0.40cm,anchor=north}]
+        {\scriptsize \textsc{DissipativeStep}: weak-measurement simulation of $\ee^{\delta\mathcal{L}_{a,\mathrm{diss}}}$;\ $\;U_{\mathrm{diss}}\supset Y_{1-\gamma}$ (Boltzmann filter absorbed)}
+      & \gate{Y_\delta}
+      & \octrl{1}
+      & \meter{}
+      \\
+  %
+  % ==================================================================
+  % Row 2:  T_+  -->  q_gamma  (holds the multi-row gate labels in both phases:
+  %         U_{B_a}/R_T on coherent, U_{diss}/U_{diss}^dag on dissipative.
+  %         q_gamma sits directly under q_delta so the weak-measurement
+  %         control is the minimal \octrl{-1}.)
+  % ==================================================================
+    \lstick{$\ket{0}_{T_+}$}
+      & \qwbundle{r_+}
+      & \qw
+      & \gate[3]{U_{B_a}}
+      & \gate[2]{R_T}
+      & \qw
+      & \meter{}
+      & \setwiretype{n}
+      & \lstick{$\ket{0}_\gamma$} \setwiretype{q} \wireoverride{n}
+      & \qw
+      & \gate[3]{U_{\mathrm{diss}}}
+      & \octrl{-1}
+      & \gate[3]{U_{\mathrm{diss}}^\dagger}
+      & \meter{}
+      \\
+  %
+  % ==================================================================
+  % Row 3:  T_-  -->  Omega  (bundled throughout; cells 4, 5, 10, 12 empty as
+  %         they are consumed by the multi-row gates sitting on row 2 above.)
+  % ==================================================================
+    \lstick{$\ket{0}_{T_-}$}
+      & \qwbundle{r_-}
+      & \qw
+      &
+      &
+      & \qw
+      & \meter{}
+      & \setwiretype{n}
+      & \lstick{$\ket{0}_\Omega$} \setwiretype{q} \wireoverride{n}
+      & \qw
+      &
+      & \qw
+      &
+      & \meter{}
+      \\
+  %
+  % ==================================================================
+  % Row 4:  S  (system register, active throughout with no wire-type change)
+  % ==================================================================
+    \lstick{$\rho_S$}
+      & \qwbundle{n}
+      & \qw
+      &
+      & \qw
+      & \qw
+      & \qw
+      & \qw
+      & \qw
+      & \qw
+      &
+      & \qw
+      &
+      & \qw
+      & \rstick{$\ee^{\delta\mathcal{L}_a}(\rho_S)+\mathcal{O}(\delta^2)$}\qw
+  \end{quantikz}%
+  }
+  \caption{Algorithm~\ref*{alg:main}: one $\delta$-step of the CKG Lindbladian
+  $\ee^{\delta\mathcal{L}_a} = \ee^{-\ii\delta B_a}\cdot
+  \ee^{\delta\mathcal{L}_{a,\mathrm{diss}}}+\mathcal{O}(\delta^2)$ for a fixed
+  jump $A_a$, split into a GQSP \emph{coherent block} (blue, $d$ repetitions
+  of $\Lambda(U_{B_a}),\Lambda(R_T),R(\theta_k,\phi_k,0)$) and a
+  weak-measurement \emph{dissipative block} (red).  Mid-circuit measurements
+  mark ancilla reuse: $q_{\mathrm{QSP}}\!\to q_\delta$, $T_-\!\to\Omega$,
+  $T_+\!\to q_\gamma$.}
+  \label{fig:algorithm1-delta-step}
+\end{figure}
+
+\end{document}

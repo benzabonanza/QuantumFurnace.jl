@@ -1,0 +1,104 @@
+% Circuit: GQSP layer matching qsp-subsection-v7.md (generic version).
+% Replaces drafts/circuits/gqsp-thm6-laurent.tex and the current figure at
+% 1_preliminaries.tex:1071--1113. Notation is aligned with v7 body:
+%
+%   * Generic Hermitian operator A with block encoding U_A and
+%     subnormalisation alpha (no B, no b_pm, no alg:coh-specific objects).
+%   * Walk operator W as a single box spanning the PREP ancilla and S
+%     (the internal PREP-sandwich + SELECT structure is explained in v7's
+%     walk-operator paragraph, Eq. eq:qsp-walk, and is NOT unrolled here).
+%   * d (not d_JA) is the Jacobi-Anger truncation index. The circuit has
+%     2d controlled signal slots: d controlled-W calls followed by d
+%     controlled-W^dagger calls per MW Eq. 46 canonical "last k" pattern
+%     (deg P = 2d, k = d).
+%   * Output on S: L_d(W)|psi> + O(eps_QSP) = e^{-i delta A}|psi> + O(eps_QSP).
+%
+% Two dashed gategroups cover the d controlled-W slots and the d
+% controlled-W^dagger slots. Rotation indices run j = 1, ..., d in the
+% first group and j = d+1, ..., 2d in the second, consistent with the
+% 2d+1 rotation triples produced by MW Alg. 1 on the underlying ordinary
+% polynomial P(z) = z^d L_d(z) of degree 2d.
+%
+% Control convention: open (white) controls match the existing thesis
+% figure at 1_preliminaries.tex:1071-1113 and the v7 parenthetical
+% "(open-)controlled calls to W". Filled controls correspond to MW's
+% canonical signal operator A = |0><0| x I + |1><1| x W and are a
+% one-line edit if alignment with MW's definition is preferred.
+%
+\documentclass{article}
+\usepackage[margin=1cm]{geometry}
+\usepackage{tikz}
+\usetikzlibrary{quantikz2}
+\usepackage{amsmath,amssymb}
+\usepackage{braket}
+
+\newcommand{\ee}{\mathrm{e}}
+\newcommand{\ii}{\mathrm{i}}
+
+\tikzset{operator/.append style={rounded corners}}
+
+\begin{document}
+\pagestyle{empty}
+
+\begin{figure}[ht]
+  \centering
+  \begin{quantikz}[row sep=0.7cm, column sep=0.55cm]
+  %
+  % Row 1: QSP ancilla. Opening R_0 (three parameters); within each
+  % dashed group one (open-)control + one two-parameter rotation, repeated
+  % d times. Rotation indices j = 1,...,d in the first group and
+  % j = d+1,...,2d in the second.
+  %
+    \lstick{$\ket{0}_\mathrm{QSP}$}
+      & \gate{R(\theta_0,\phi_0,\lambda_0)}
+      & \octrl{1}
+      \gategroup[3,steps=2,style={dashed,rounded corners,fill=black!6,inner sep=5pt},background,label style={label position=below,yshift=-0.45cm,align=center}]{\scriptsize Repeat $d$ times\\\scriptsize $j = 1,\dots,d$}
+      & \gate{R(\theta_j,\phi_j,0)}
+      & \octrl{1}
+      \gategroup[3,steps=2,style={dashed,rounded corners,fill=black!6,inner sep=5pt},background,label style={label position=below,yshift=-0.45cm,align=center}]{\scriptsize Repeat $d$ times\\\scriptsize $j = d{+}1,\dots,2d$}
+      & \gate{R(\theta_j,\phi_j,0)}
+      & \rstick{$\bra{0}_\mathrm{QSP}$}\qw
+      \\
+  %
+  % Row 2: PREP ancilla register b. Prepared in PREP|0>_b before the layer
+  % and post-selected on PREP|0>_b afterwards. W acts on b+S jointly
+  % (the PREP-sandwiched walk of MW Cor. 8, Eq. eq:qsp-walk).
+  %
+    \lstick{$\text{PREP}\,\ket{0}_b$}
+      & \qwbundle{}
+      & \gate[2]{W}
+      & \qw
+      & \gate[2]{W^\dagger}
+      & \qw
+      & \rstick{$\bra{0}\,\text{PREP}^\dagger$}\qw
+      \\
+  %
+  % Row 3: System register S. Passes through the W / W^dagger slots; after
+  % post-selection the top-left block on each qubitization subspace is
+  % L_d(W) = e^{-i delta alpha cos theta} I + O(eps_QSP), i.e.
+  % e^{-i delta A} + O(eps_QSP) on S (v7 body, target-polynomial paragraph).
+  %
+    \lstick{$\ket{\psi}$}
+      & \qwbundle{}
+      &
+      & \qw
+      &
+      & \qw
+      & \rstick{$L_d(W)\ket{\psi} + \mathcal{O}(\varepsilon_\mathrm{QSP})$}\qw
+  \end{quantikz}
+  \caption{GQSP layer of depth $\deg P = 2d$. With $k = d$ of the $2d$
+  controlled signal slots deployed as controlled-$W^\dagger$
+  (Thm.~6 of~\cite{motlagh2024generalized}, Eq.~46 canonical
+  ``last $k$'' pattern) and the remaining $d$ as controlled-$W$, the
+  walk $W$ is the PREP-sandwiched operator of (Eq.~\ref{eq:qsp-walk}).
+  Post-selecting both ancillas on $\ket{0}_\mathrm{QSP}\otimes\text{PREP}\ket{0}_b$
+  yields the Jacobi--Anger Laurent polynomial
+  $L_d(W) = \ee^{-\ii\delta\alpha\cos\theta}\,I + \mathcal{O}(\varepsilon_\mathrm{QSP})$
+  on each qubitization subspace, equivalently
+  $\ee^{-\ii\delta A} + \mathcal{O}(\varepsilon_\mathrm{QSP})$ on the system
+  register. The $2d+1$ rotation triples are extracted by MW Alg.~1 from
+  the underlying ordinary polynomial $P(z) = z^{d} L_d(z)$ of degree $2d$.}
+  \label{circ:gqsp}
+\end{figure}
+
+\end{document}

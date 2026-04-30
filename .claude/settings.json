@@ -1,12 +1,49 @@
 {
+  "model": "claude-opus-4-7",
   "hooks": {
-    "PreToolUse": [
+    "SessionStart": [
       {
-        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "if [ ! -f /tmp/.claude-memory-linked ]; then bash /Users/bence/code/QuantumFurnace.jl/.claude/setup-memory.sh && touch /tmp/.claude-memory-linked; fi"
+            "command": "bash -c 'MEMORY_SRC=$(pwd)/.claude-memory && MEMORY_DST=$HOME/.claude/projects/$(pwd | sed \"s|[/.]|-|g\")/memory && mkdir -p \"$MEMORY_SRC\" \"$(dirname \"$MEMORY_DST\")\" && [ -d \"$MEMORY_DST\" ] && [ ! -L \"$MEMORY_DST\" ] && cp -rn \"$MEMORY_DST\"/* \"$MEMORY_SRC/\" 2>/dev/null; rm -rf \"$MEMORY_DST\" && ln -sf \"$MEMORY_SRC\" \"$MEMORY_DST\" || true'"
+          },
+          {
+            "type": "command",
+            "command": "bash .beads/bin/install-bd-wrapper.sh 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "TaskCreated": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'INPUT=$(cat) && SUBJECT=$(echo \"$INPUT\" | jq -r \".task.subject // empty\") && [ -n \"$SUBJECT\" ] && command -v bd >/dev/null 2>&1 && bd create \"$SUBJECT\" -t task -p 2 2>/dev/null || true'",
+            "statusMessage": "Syncing task to beads..."
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'INPUT=$(cat) && SUBJECT=$(echo \"$INPUT\" | jq -r \".task.subject // empty\") && [ -n \"$SUBJECT\" ] && command -v bd >/dev/null 2>&1 && ISSUE_ID=$(bd search \"$SUBJECT\" 2>/dev/null | head -1 | awk \"{print \\$1}\") && [ -n \"$ISSUE_ID\" ] && bd close \"$ISSUE_ID\" -r \"completed\" 2>/dev/null || true'",
+            "statusMessage": "Closing beads issue..."
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'command -v bd >/dev/null 2>&1 && bd dolt stop 2>/dev/null || true'",
+            "statusMessage": "Stopping dolt server..."
           }
         ]
       }

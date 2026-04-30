@@ -1,0 +1,1351 @@
+\part{Preliminaries}
+
+As with any topic, we need to first understand the basic notions and tools that build the foundation. After the foundation is set, we can see what is possible to our current knowledge. Both the title and the introduction suggest that we would like to understand how a quantum system evolves to its thermal equilibrium state, the Gibbs state. For this, it is crucial to define the quantum dynamics that are at play here. But also to introduce the properties of the Gibbs state we would like to prepare. As we will see, these properties will set the difficulty level of the equilibration process. The underlying physics is however only one side of the problem, the other is the method with which we would like to prepare this target state. The tool we would \textit{eventually} like to use is a quantum computer, and accordingly we will need a quantum algorithm that could run on such a machinery. In classical computation Markov chain sampling was the quintessential technique to prepare and sample from the Gibbs distributions, and thus it comes as no surprise that we will work with quantum Markov chains in this thesis. Understanding how the quantum side works is definitely one aim of this chapter, but we also want to make the differences between the classical and quantum pictures as clear as possible. This should complement later analysis of the parameter regimes in which we can hope for a quantum advantage.
+
+\label{ch:quantum-formalism}
+\chapter{Quantum Formalism and Notation}
+In order to have a self-contained thesis, we ought to start with the necessary concepts in quantum information. The aim here is not to give a complete introduction, but rather to provide all the definitions that are used later on in the text. In case the reader needs more details and pedagogic examples, we would advise them to open up already well-established textbooks and lecture notes like \cite{bible, wolf2012lecture, breuer2002theory}.
+
+\smallskip
+\label{sec:quantum-states}
+\subsection{Quantum states.} The state of a finite-dimensional quantum system is described within a complex vector space known as the Hilbert space, $\mathcal{H}$. While pure states are represented by vectors in $\mathcal{H}$, the most general description of a quantum state is given by a density operator, $\rho$.
+
+These bounded operators belong to the space of all linear operators on $\mathcal{H}$, which we denote by $\mathcal{B}(\mathcal{H})$. For a physical state, an operator $\rho \in \mathcal{B}(\mathcal{H})$ must satisfy the following properties:
+\begin{itemize}
+    \item \textit{Hermiticity.} $\rho^\dagger = \rho$
+    \item \textit{Positive semi-definiteness.} $\rho \geq 0$
+    \item \textit{Normalization.} $\tr[\rho] = 1$
+\end{itemize}
+The set of all operators that fulfil these conditions forms the space of physical states, which we will denote by $\mathcal{D}(\mathcal{H})$. This space is a convex subset of $\mathcal{B}(\mathcal{H})$, i.e. any convex combination (or mixture) of density matrices is also a density matrix, $\sum_i \lambda_i \rho_i = \rho \in \mathcal{D}(\mathcal{H}).$
+
+The states in $\mathcal{D}$ can be characterized by their purity, a measure of mixedness defined as $\tr [\rho^2]$. At one end there are the \textit{pure states}, for which the purity takes its maximal value of $1$. In this case the state is given by a rank-one projector onto a state vector $\ket{\psi} \in \mathcal{H}$
+$$
+\rho = \ket{\psi}\bra{\psi}
+$$
+States that are not pure, are called \textit{mixed states}. At this end we find the maximally mixed state, $\rho = 1 / \dim(\mathcal{H})$, which has the minimum possible purity of $\idm / \dim(\mathcal{H})$.
+We can decompose any mixed state into a convex sum of orthogonal pure states as well:
+\begin{equation}
+    \rho = \sum_i \lambda_i \ket{\psi_i} \bra{\psi_i},
+\end{equation}
+where $\{\ket{\psi_i}\}$ is an orthonormal basis on $\mathcal{H}$ and are the eigenvectors of $\rho$. This is a powerful decomposition, as it tells us that mixed states can be represented by an ensemble of pure states with some probabilities $\lambda_i$. This will be quite useful later on for our numerical computations, as it is much easier to simulate the evolution of pure states than mixed states.
+
+The task of preparing a specific state, such as the thermal Gibbs state, on a quantum computer involves navigating this state space $\mathcal{D}(\mathcal{H})$ through a sequence of physical operations. Once a state is prepared, we can then measure an observable quantity of interest, such as the system's energy.
+
+\textbf{TODO: maybe correlation and entanglement and distances}
+
+\smallskip
+\subsection{Quantum measurements.} In order to extract valuable information about the physical system, we still need to apply measurements to the system. In classical theory, predicting the outcome of a measurement should be possible, granted that we know the initial condition of the system and have the right theory. But due to the inherently probabilistic nature of quantum mechanics, such a prediction is just not possible. What is possible, is to predict probabilities and thus also the resulting measurement statistics that we expect for our statistical experiments. It is useful to first separate two notions, one is \textit{what} we can measure, and the other is \textit{how} we can measure it. A physical observable $A \in \mathcal{B}(\mathcal{H})$ that we can measure is described by a Hermitian matrix. The expectation value of the measurement can be then only understood with respect to a state $\rho$, and we can write it as $\langle A \rangle = \tr [\rho A]$. 
+We can give this expression slightly more depth if we label the possible outcomes of the measurement by $\{a_\alpha\}$ and the probability with which we measure them by $\{p_\alpha\}$. Consequently, the expectation value is $\langle A \rangle = \sum_\alpha p_\alpha a_\alpha$. 
+
+Now it is just a question of what do we really understand by the probabilities $p_\alpha$, which is also the same question of \textit{how} do we do measurements. In principle, we can always associate an outcome to a positive-valued operator $0 < E_\alpha \leq \idm$ such that,
+$$p_\alpha = \tr [\rho E_\alpha].$$ 
+If these operators (called \textit{effects}) have the normalization property $\sum_\alpha E_\alpha = \idm$, then they define a \textit{positive operator-valued measure} or POVM. This is still quite a general way of understanding quantum measurements. The way we connect back to the physical observable $A$ and its measurement statistics, is to find the spectral decomposition, $A = \sum_\alpha a_\alpha P_\alpha$, in which case $\{P_\alpha\}$ forms a special kind of POVM, a \textit{projection valued measure} (PVM). The naming is due to the fact that now each $E_\alpha = P_\alpha$ satisfy $P_\alpha^\dagger P_\alpha =  P_\alpha$, and thus an orthogonal projection to the eigenspace of $A$ with eigenvalue $a_\alpha$. While the POVM formalism is perfectly suited for describing measurement statistics, it does not care about the quantum state that we would find post measurement. However, in the PVM case, we definitely know in which state the system is after the measurement, as the operator projects to one of the eigenspaces of $A$:
+\begin{equation}
+    \label{eq:post_meas_state}
+    \rho_\alpha = \frac{P_\alpha\rho P_\alpha}{\sqrt{\tr{\left[P_\alpha \rho\right]}}} = \frac{P_\alpha\rho P_\alpha}{\sqrt{p_\alpha}}.
+\end{equation}
+Due to the projection operator's property, if we were to repeat this measurement we would get the same $a_\alpha$ result and the same state $\rho_\alpha$. Famously, this is called as the collapse of the wave function, as the projection singles out a component of the superposition. Clearly not all measurements are repeatable in quantum mechanics, so the projective measurement must really be a special case. For instance when we measure a photon, we destroy it in the process and there is no way to repeat that measurement again. The post measurement state in the most general case can still be written up, and its form is similar to \eqref{eq:post_meas_state}, but without the projective property of the operator,
+\begin{equation}
+    \label{eq:post_meas_state_general}
+    \rho_\alpha' = \frac{M_\alpha \rho M_\alpha^\dagger}{\sqrt{\tr\left[M_\alpha \rho M_\alpha^\dagger\right]}} = \frac{M_\alpha \rho M_\alpha^\dagger}{\sqrt{p_\alpha}}\quad\text{with}\quad M_\alpha M_\alpha^\dagger = E_\alpha.
+\end{equation}
+The difference here is that $\rho_\alpha'$ is in general not an eigenstate of $A$ and if we were to measure the same operator $M_\alpha$ we would get a different post measurement state.
+
+\chapter{Quantum Dynamics}
+With the introduction of quantum measurements in the previous chapter, we have already stumbled upon the notion of how a quantum system $\rho$ can change from one moment in time to another. This process can be described by an \textit{open quantum system evolution}, where we, the observers or (if we take away the human part) the environment, act on a quantum system. From the point of view of the observed system, this is an irreversible process, i.e. there is no physical map that would reverse the dynamics for all possible initial states. Irreversibility arises because we only observe a subsystem and lose the information of the rest. But the dynamics of the whole \textit{closed} system we can describe by a reversible process. 
+
+Before we describe closed and open system dynamics in more detail, this is also a good place to introduce two frameworks in which one can understand evolutions. Since in quantum mechanics the only physically measurable quantities are the expectation values of some observables, $\langle A \rangle (t)$, and a physical process as we have seen is divided into a state preparation and a measurement, we have the freedom to choose which side we would like to evolve. In the \textit{Schrödinger picture} we evolve the system $\rho(t)$ and the operators $A$ are considered to be static, while in the \textit{Heisenberg picture} we keep the state $\rho$ static and evolve the operators $A(t)$. Naturally these pictures are equivalent to each other and give the same physical expectation values,
+\begin{equation}
+    \label{eq:schrödinger-heis}
+    \langle A \rangle (t) = \tr \left[A \rho(t) \right] = \tr \left[ A(t) \rho \right].
+\end{equation}
+\section{Closed systems}
+A reversible evolution of a closed system is described by a unitary map $u(\rho)$
+\begin{equation}
+    \label{eq:unitary-map}
+    \rho \mapsto \rho(t) = \mathcal{U}(\rho) = U \rho U^\dagger,
+\end{equation}
+in the Schrödinger picture, or as the dual map $\mathcal{U}^\dagger(A)$ in the Heisenberg picture. These maps are naturally related via \eqref{eq:schrödinger-heis}, and by using the cyclic property of the trace we can see that $A(t) = \mathcal{U}^\dagger(A) = U^\dagger A U$. From Stone's theorem, we know that if these unitaries build a homogeneous group and have a continuous time parameter, i.e. multiple time evolutions can always be written as one: $U(t) U(t') = U(t + t'),\,\forall t, t'\in\mathbb{R}$, then there exists a Hermitian $H$, such that
+$$
+U(t) = \exp (-\ii H t).
+$$
+If we let a closed system evolve naturally, it will do so with respect to the Hermitian $H$ we call the Hamiltonian of the system. In principle, we can also evolve a system coherently via a unitary given by some other Hermitians, which we will see when we come to the quantum circuits. It is important to note that if we act with a unitary on a state, it will preserve its norm, which means that in a closed system evolution we can be certain that our evolving quantum state remains a density matrix. The same for open system evolutions cannot be said in general, however as we will see, we will always use map that will preserve all density matrix properties, for which reason we will call the map \textit{physical.}
+\section{Open systems} \label{sec:OQS}
+While closed system evolutions can describe a lot of scenarios, it requires for us to know the \textit{whole} system. In many cases this is impossible to do, either because the number of degrees of freedom is intractable, or because the interaction with the environment is not even known. 
+For this exact reason, there has been a lot of research on how to describe the evolution of just a subsystem, while discarding the information of the environment. Naturally, this will not be a reversible process any more, because the discarded information is generally irrecoverable by any physical operation on the subsystem alone. 
+
+A physical meaningful evolution in the Schrödinger picture is given by a linear map $\mathcal{E}: \mathcal{D}(\mathcal{H}) \rightarrow \mathcal{D}(\mathcal{H}')$ that preserves all the density matrix properties. 
+This means that $\mathcal{E}$ has to be \textit{trace preserving} (TP), $\tr[\mathcal{E}(A)] = \tr[A]$ and also \textit{completely positive} (CP). Positivity for a map means, that it would map positive operators to positive operators, i.e. $\mathcal{E}(A^\dagger A) \geq 0$. Imagine that we only act with $T$ on just part of the system and rest we leave alone, $\mathcal{E}\otimes \id_n$. We will also require this map to be positive, for all $n \in \mathbb{N}$, which is exactly what we call complete positivity. If a linear map fulfils both of these conditions we call it a CPTP map or a \textit{quantum channel}. 
+
+We can also define here the dual map $\mathcal{E}^\dagger : \mathcal{B}(\mathcal{H'})\rightarrow \mathcal{B}(\mathcal{H})$ that describes the same evolution in the Heisenberg picture, which we can always find from $T$ by $\tr[\mathcal{E}(\rho) A] = \tr[\rho \mathcal{E}^\dagger(A)]$. The only difference here is that the trace preserving property manifests itself as the \textit{unitality} of the map, $\mathcal{E}^\dagger(\idm) = \idm$.
+
+While the unitary map, discussed for the closed system earlier, is a CPTP map, we can now introduce more general maps too. A quantum channel can be brought into different forms and representations that will be useful in different settings. 
+
+\smallskip
+\subsection{Kraus representation.} A linear map $\mathcal{E}: \mathcal{B}(\mathcal{H}) \rightarrow \mathcal{B}(\mathcal{H}')$ is completely positive iff there exists $r$ operators $K_j: \mathcal{H}\rightarrow\mathcal{H}'$ such that
+\begin{equation}
+    \label{eq:kraus}
+    \mathcal{E}(A) = \sum_{j=1}^r K_j A K_j^\dagger,
+\end{equation}
+and $\mathcal{E}$ is trace preserving iff $\sum_j K_j^\dagger K_j = \idm$. The minimum number of Kraus operators needed to describe a map is called the Kraus rank. 
+Now we can also better understand quantum measurements, as they are a very important example of irreversible evolution. A quantum channel can be understood as a general measurement process where the classical outcome is discarded. There is a clear similarity, between the post-measurement state we found in \eqref{eq:post_meas_state_general} and the Kraus representation: we find that the Kraus operators $\{K_j\}$ are precisely the measurement operators $\{M_\alpha\}$. From \eqref{eq:kraus} we also see, that the resulting state after applying all the measurements, or $\mathcal{E}(\rho)$, is the ensemble average over all possible post-measurement states.
+
+This operator-sum representation is useful when our aim is to find out what state we get after applying a quantum channel to an initial state. However, sometimes we are interested in the map itself and want to analyse its static properties. The next representation could provide some help with that. 
+
+\smallskip
+\todo{rewrite this a bit more rigorously, mention isometry}
+\subsection{Choi-Jamiolkowski representation.} A channel that acts on $d = \dim(\mathcal{H})$ dimensional operators, can be expressed in terms of a $d^2\times d^2$ matrix. But before we turn maps into matrices, let us first turn matrices into vectors. \textit{Vectorization} of a $d\times d$ matrix $A$ is the $d^2 \times 1$ column vector, denoted by $\mathrm{vec}(A)$, formed by stacking the columns of $A$ on top of one another:
+$$
+A = 
+\begin{pmatrix}
+    a &\! b \\
+    c &\! d
+\end{pmatrix}
+\quad \Rightarrow \quad 
+\mathrm{vec}(A) \equiv \ket{A}\rangle = 
+\begin{pmatrix}
+    a \\
+    c \\
+    b \\
+    d
+\end{pmatrix}.
+$$
+The way linear maps $\mathcal{E}$ are related to operators $\tau$ is slightly more complicated. Define a bipartite system $\mathrm{AB}$ with the joined Hilbert space $\mathcal{H}_A \otimes \mathcal{H}_B$. Then prepare this system in the maximally entangled state $\ket{\Omega}$
+\begin{equation}
+    \ket{\Omega} = \frac{1}{\sqrt{d}} \sum_{j=1}^d \ket{j}_A \otimes \ket{j}_B \equiv \frac{1}{\sqrt{d}} \sum_{j=1}^d \ket{jj}_{AB}.
+\end{equation}
+The Choi matrix $\tau$ is then found by applying the map $\mathcal{E}$ only on one part of the maximally entangled system $\tau = (\mathcal{E} \otimes \id_d)(\ket{\Omega}\bra{\Omega})$, and it is in one-to-one correspondence with the linear map $\mathcal{E}$ via
+\begin{equation}
+    \tr[A \mathcal{E}(B)] = d \tr[\tau A \otimes B^T].
+\end{equation}
+After some entry reshuffling (see \textbf{Appendix}) we can find a key vectorization identity:
+\begin{equation}
+    \mathrm{vec} (AXB) = (B^T \otimes A) \ket{X}\rangle.
+\end{equation}
+For instance if applied to the Kraus representation of the channel \eqref{eq:kraus}
+we find that
+\begin{equation}
+    \label{eq:vectorized_kraus}
+    \ket{\mathcal{E}(A)}\rangle = \left(\sum_j \bar K_j \otimes K_j\right)\ket{A}\rangle =: \hat{\mathcal{E}}\ket{A}\rangle.
+\end{equation}
+
+\smallskip
+\subsection{Lindbladian generator.} So far we have described open quantum system evolutions with discrete maps that would transform some initial state to a final state over a fixed time. However, we are often interested in what hides in gaps between now and then, i.e. in continuous evolutions. Just as a single parameter, time, parametrized the unitary evolution of closed systems, it can also parametrize a family of quantum channels $(\mathcal{P}_t)_{t\geq 0}$: $\mathcal{D}(\mathcal{H}) \rightarrow \mathcal{D}(\mathcal{H})$. We call such a family a \textit{quantum dynamical semigroup} if it satisfies the following properties for all $t, s \in \mathbb{R}_+$
+$$
+\mathcal{P}_t\mathcal{P}_s = \mathcal{P}_{t + s} \quad\text{and}\quad \mathcal{P}_0 = \id.
+$$
+Mathematically, these are the properties that describe a continuous, homogeneous and \textit{Markovian} process. Physically, we can understand it as a memoryless process, i.e. that a future state depends only on the present state and not on any of the past states. In a moment we will see what physical assumptions are needed for the open quantum system to have its evolution described by a physical quantum dynamical semigroup. But first let us look into from the mathematical side.
+
+An important result from the theory of one-parameter semigroups is that any such continuous family of maps is uniquely determined by a time-independent operator 
+known as the generator, denoted by $\mathcal{L}$. The generator is a linear map on the space of operators, $\mathcal{L}: \mathcal{B}(\mathcal{H})\rightarrow \mathcal{B}(\mathcal{H})$, and is formally defined as the derivative of the dynamical map at $t=0$:, 
+\begin{equation}
+\mathcal{L} = \lim_{t \to 0^+} \frac{\mathcal{P}_t - \mathrm{id}}{t}.
+\end{equation}
+The generator thus describes the infinitesimal change that drives the dynamics. The naming also becomes clear since if we have $\mathcal{L}$, we can generate the semigroup $(\mathcal{P}_t)_{t\geq 0}$ through the exponentiation of the superoperator
+\begin{equation}
+    \mathcal{P}_t = \exp (t \mathcal{L}).
+\end{equation}
+For our purposes of course $\mathcal{L}$ cannot take up any arbitrary form. The evolution it generates $\mathcal{P}_t$ must be a valid physical process for all times $t \geq 0$, i.e. each $\mathcal{P}_t$ must be a CPTP map. In this case we call the semigroup a \textit{quantum Markov semigroup} (QMS) and we can describe the continuous evolution of a subsystem within an environment starting from some initial state $\rho(0)$ by
+\begin{equation}
+    \label{eq:oqs-evo-with-L}
+    \rho(t) = \exp(t \mathcal{L})(\rho(0)).
+\end{equation}
+Or conversely,
+\begin{equation}
+    \frac{\dd}{\dd t}\rho(t) = \mathcal{L}(\rho(t)).
+\end{equation}
+
+What is the general form of $\mathcal{L}$ that generates physical evolutions? This was answered by Gorini, Kossakowski, Sudarshan, and Lindblad (GKSL) by a fundamental theorem they proved in \cite{gorini1976completely,lindblad1976generators}. The way to get to their result, starts by pointing out that any generator $\mathcal{L}$ of a QMS can be written in the form:
+\begin{equation}
+    \label{eq:qms_generator}
+\mathcal{L}(\rho) = \Psi(\rho) + K\rho + \rho K^\dagger,
+\end{equation}
+where $\Psi: \mathcal{B}(\mathcal{H})\rightarrow \mathcal{B}(\mathcal{H})$ is a completely positive map and $K$ is an operator in $\mathcal{B}(\mathcal{H})$. The separation between the completely positive part and the remaining part allows us to reveal some structure, if we decompose the operator $K$ into its Hermitian and anti-Hermitian parts
+\begin{equation}
+    K = -V - \ii H,
+\end{equation}
+with the Hermitian operators: $H = \frac{\ii}{2}(K - K^\dagger)$ and $V = \frac{\ii}{2}(K + K^\dagger)$. Substituting this into the expression \eqref{eq:qms_generator} yields
+\begin{equation}
+\mathcal{L}(\rho) = -i[H, \rho] + \Psi(\rho) - \{V, \rho\}.
+\end{equation}
+Up until now the decomposition is completely general. But this is where the GKSL theorem comes in and finds a central constraint for $\mathcal{L}$ to be a generator of a CPTP semigroup: the map $\Psi$ must have a Kraus form $\Psi(\rho) = \sum_k L_k \rho L_k^\dagger$, and for the dynamics to be trace-preserving, the operator $V$ must be given by $\frac{1}{2}\sum_k L_k^\dagger L_k$. Putting these pieces together, we arrive at the celebrated GKSL form of the Lindbladian generator
+\begin{equation}
+    \label{eq:lindblad-generator}
+    \mathcal{L}(\rho) = -\ii [H, \rho] + \sum_{k}\gamma_k \left(L_k^\dagger \rho L_k - \frac{1}{2}\left\{L_k^\dagger L_k, \rho\right\}\right).
+\end{equation}
+We can also clearly separate the different dynamics in this picture. The first term is the $\textit{coherent part}$, generated by the Hermitian $H$. Note, that $H$ does not necessarily have to be the Hamiltonian of the system, it could also be just some generator that coherently drives the system (foreshadowing). The second term is the \textit{dissipative part}, which describes the various ways of decoherence and dissipation via the Lindblad jump operators $\{L_k\}$ with a dissipation or jump rate given by $\gamma_k \geq 0$.
+
+\smallskip
+\subsection{Microscopic picture.} While it is nice to arrive at a mathematically rigorous result, it is also insightful to derive the same GKSL form of the generator from the physical principles and assumptions. For this we need to work with the microscopic model of a system $S$, interacting with a large environment or reservoir, $E$. The combined system is described by the following Hamiltonian
+\begin{equation}
+    H = H_S + H_E + H_I,
+\end{equation}
+where $H_S$ is the system Hamiltonian, $H_E$ the environment Hamiltonian, and $H_I$ defines the interaction between them. The total system is assumed to be closed, i.e. the evolution is purely unitary and governed by the von Neumann equation for the total density matrix $\rho$,
+\begin{equation}
+    \label{eq:von-neumann}
+    \frac{\dd}{\dd t}\rho(t) = -\ii [H(t), \rho(t)].
+\end{equation}
+Note, that this is the same evolution as \eqref{eq:unitary-map} but written in the differential form. But of course, we are interested in the effective equation of motion of only the subsystem $\rho_S$. In order to derive it, we first have to translate the von Neumann equation to the interaction picture. This is another picture we can work in, and it is equivalent to the previously mentioned Schrödinger and Heisenberg pictures. The difference is that here we split the time evolutions between states and observables, and say that the states are evolved by the unitary generated by only the interaction Hamiltonian $H_I$ while the observables by $H_S + H_E$. In this picture the von Neumann equation in the Schrödinger picture \eqref{eq:von-neumann} will simply turn into
+\begin{equation}
+    \label{eq:von-neumann-int}
+    \frac{\dd}{\dd t}\rho(t) = -\ii [H_I(t), \rho(t)],
+\end{equation}
+or in the integral form
+\begin{equation}
+    \rho(t) = \rho(0) - \ii \int_0^t \dd s [H_I(s), \rho(s)].
+\end{equation}
+Inserting this back into the von Neumann equation \eqref{eq:von-neumann-int} we find
+\begin{equation}
+    \label{eq:starting-integral-von-neumann}
+    \frac{\dd}{\dd t}\rho_S(t) = -\int_0^t \dd s \tr_E \left[H_I(t), \left[H_I(s), \rho(s)\right]\right].
+\end{equation}
+Here, $\tr_E[\cdot]$ denotes the partial trace over the Hilbert space $\mathcal{H}_E$, which leads us to the system state, $\rho_S = \tr_E[\rho]$. Without loss of generality we assumed above that the interaction does not generate any dynamics in the environment from the initial state,
+\begin{equation}
+    \tr_E\left[H_I(t), \rho(0)\right] = 0.
+\end{equation}
+To proceed we need to use our first approximation, called the \textit{Born-Markov approximation}, which describes systems that interact weakly with their environment. Thus, the state of the environment is negligibly affected by the interaction and can be approximately separated from the system state, 
+\begin{equation}
+    \label{eq:sys-env-separable}
+    \rho(t) \approx \rho_S(t) \otimes \rho_E.
+\end{equation}
+Though it might sound trivial, it is crucial to separate the system from the environment, because otherwise any statement about the system's dynamics alone is ill-defined. In \eqref{eq:sys-env-separable} we also assume that the environment is in a fixed stationary state $\rho_E$, which is essential if we want to derive a time-independent Lindblad generator \eqref{eq:lindblad-generator}. But it raises the question on which stationary state should we choose for $\rho_E$, and if this reflects at all what happens in Nature. In the next chapter we will see that choosing the environment to be the Gibbs state is necessary to derive thermalizing dynamics for the system $S$.
+The Born-Markov approximation also assumes a timescale separation, in which the excitations in the environment decay much faster than what the system $\rho_S$ could ever resolve. This allows the replacement of $\rho(s)$ with $\rho(t)$, but also lets us replace $s$ with $t-s$ and send the upper limit to infinity (since the integrand decays quickly above the timescale of the environment). Applying all these steps to \eqref{eq:starting-integral-von-neumann} gets us
+\begin{equation}
+    \label{eq:born-markov-me}
+    \frac{\dd}{\dd t}\rho_S(t) = -\int_0^\infty \dd s \tr_E \left[H_I(t), \left[H_I(t-s), \rho_S(t)\otimes\rho_E\right]\right].
+\end{equation}
+However, there is a problem here: these last steps indeed bring us closer to find a time-independent generator, it also fails to generate completely positive maps. Works from \cite{davies1974markovian,dumcke1979proper} illuminated why, and also provided the rigorous approximations we need to derive the Lindblad generator. Since the techniques derived in these works are necessary for us to understand the algorithms in this thesis, we give here a bit more thorough review. 
+
+Let us write the interaction Hamiltonian in the Schrödinger picture as a tensor product of Hermitian system operators $A^a$ and Hermitian environment operators $B^a$
+\begin{equation}
+    H_I = \sum_a A^a \otimes B^a.
+\end{equation}
+The Bohr frequencies of the Hamiltonian $H_S$ are given by 
+\begin{equation}
+    B_{H_S} = \{\nu = \lambda_i - \lambda_j : \lambda_i,\lambda_j \in \mathrm{Spec}(H_S)\},
+\end{equation}
+where $\mathrm{Spec}(H_S)$ is the spectrum of $H_S$. Then we can write the Bohr decomposition of an operator $A$ as
+\begin{equation}
+    \label{eq:bohr-decomp}
+    A = \sum_{\lambda_i, \lambda_j \in \mathrm{Spec}(H_S)} \Pi_i A \Pi_j = \sum_{\nu \in B_{H_S}} A_\nu,
+\end{equation}
+with
+\begin{equation}
+    A_\nu := \sum_{\lambda_i - \lambda_j = \nu} \Pi_i A \Pi_j.
+\end{equation}
+If we now do a unitary rotation, we find the operator's form in the interaction picture, 
+\begin{equation}
+    A(t) = e^{\ii H_S t} A e^{-\ii H_S t} = \sum_\nu e^{\ii \nu t} A_\nu \quad\text{or}\quad [H_S, A_\nu] = \nu A_\nu.
+\end{equation}
+Generally the Bohr spectrum $B_{H_S}$ is degenerate, meaning that there could be always different parts of an operator $A$ that would lead to the same energy difference $\nu$. The interaction Hamiltonian in the interaction picture follows
+\begin{equation}
+    H_I(t) = \sum_{a, \nu} e^{\ii \nu t} A^a_\nu \otimes B^a(t),
+\end{equation}
+with $B(t) = e^{\ii H_E t} B e^{-\ii H_E t}$. This finally lets us reinterpret the Born-Markov master equation \eqref{eq:born-markov-me} as
+\begin{equation}
+    \label{eq:bohr-decomposed-born-markov-me}
+    \begin{split}
+        \frac{\dd}{\dd t}\rho_S(t) =& \sum_{\nu, \nu'}\sum_{a, b}e^{\ii(\nu - \nu')t}\Gamma_{ab}(\nu)\left(A^b_\nu\, \rho_S(t)\, (A^{a}_{\nu'})^\dagger - (A^a_{\nu'})^\dagger A_{\nu'}^b\, \rho_S(t)\right) \\
+        &+ \text{h.c.}
+    \end{split}
+\end{equation}
+Here, h.c. stands for the Hermitian conjugate part. $\Gamma_{ab}(\nu)$ obtained by carrying out $\int \dd s$ in \eqref{eq:born-markov-me}, or as it turns out the half Fourier transforming the reservoir correlation functions:
+\begin{equation}
+    \label{eq:half-fourier-reservoir-corr-fn}
+    \begin{split}
+        \Gamma_{ab}(\nu) &:= \int_{0}^{\infty} \dd s\, e^{\ii\nu s} \tr_E\left[(B^a)^\dagger(t)B^b(t-s)\rho_E\right] \\
+        &\equiv \int_{0}^{\infty} \dd s\,e^{\ii\nu s}\langle (B^a)^\dagger(t)B^b(t-s) \rangle \\
+        &= \int_{0}^{\infty} \dd s\,e^{\ii\nu s}\langle (B^a)^\dagger(s)B^b(0) \rangle.
+    \end{split}
+\end{equation}
+In the last equation we used the assumption that the bath is in a stationary state, $[H_E, \rho_E] = 0$, which leads to the correlation functions time translation invariant, with which we see that $\Gamma_{ab}(\nu)$, the function the determines the jump rates in the system-environment interactions is time-independent. 
+
+For the Born-Markov form we also assumed a timescale separation between the system and the environment, which manifests here by assuming that the reservoir correlation functions decay rapidly $\lim_{s\rightarrow\infty}\langle (B^a)^\dagger(s)B^b(0) \rangle = 0$, before the system could ever be affected by it. But this also elucidate why a large or infinite environment is also required: if $\mathrm{Spec}(H)$ is not continuous then there will be quasi-periodic remnants left from the Fourier transform. From the physics point of view, in the case of a smaller, finite environment, the information that flowed from the system to the environment over the past interactions, would never die off, and after some time (Poincarré recurrence time) it would reappear and affect the system. Hence, ruining the Markovianity of the dynamics.
+
+But there are still problems left after the Born-Markov approximation: $(i)$ there is still time-dependency left in the generator, $(ii)$ by assuming the coefficient matrix \eqref{eq:half-fourier-reservoir-corr-fn} to be constant over all times, it can in general break the positivity of the whole generator in some time regions as well. Thus, it cannot yet be a generator of a QMS. The solution to both of these problems is the \textit{secular approximation}. In \eqref{eq:bohr-decomposed-born-markov-me}, the secular terms are those that have $\nu = \nu'$, and they correspond to resonant processes where the total energy of the system and the environment is conserved. The non-secular terms, with $\nu \neq \nu'$ are off-resonant transitions to virtual states for which the total energy is temporarily not conserved. In the master equation they are also accompanied by the oscillating prefactor $e^{\ii(\nu - \nu')t}$. This oscillation is happening on the system's timescale, $\tau_S \sim \nu^{-1} \sim |\nu - \nu'|^{-1}$. Another timescale that is relevant here, is the relaxation time $\tau_R$ over which the system state changes through the interaction with the reservoir. It is inversely proportional to the coupling strength or jump rates, i.e. quite long in the weak-coupling limit we are working with. The secular approximation then says that we are only interested in cases where
+\begin{equation}
+    \label{eq:secular-approx}
+    \tau_S \gg \tau_R \quad\text{or}\quad {|\nu - \nu'|} \gg 1.
+\end{equation}
+This effectively means that we can drop all the off-diagonal terms with $\nu \neq \nu'$ in \eqref{eq:bohr-decomposed-born-markov-me} and find
+\begin{equation}
+    \label{eq:after-secular-me}
+    \frac{\dd}{\dd t}\rho_S(t) = \sum_{\nu}\sum_{a, b}\Gamma_{ab}(\nu)\left(A^b_\nu\, \rho_S(t)\, (A^{a}_{\nu})^\dagger - (A^a_{\nu})^\dagger A_{\nu}^b\, \rho_S(t)\right) + \text{h.c.},
+\end{equation}
+which is finally a QMS generator! To bring it into the Lindblad form we need to decompose the coefficient matrix into its Hermitian and anti-Hermitian parts:
+\begin{equation}
+    \Gamma_{ab}(\nu) = \frac{1}{2}\gamma_{ab}(\nu) + \ii S_{ab}(\nu)
+\end{equation} 
+with
+\begin{equation}
+    \gamma_{ab}(\nu) = \Gamma_{ab}(\nu) + \Gamma_{ab}^\dagger(\nu)
+    = \int_{-\infty}^{\infty}\dd s\, e^{\ii\nu s}\langle (B^a(s))^\dagger B^b(0)\rangle
+\end{equation}
+and
+\begin{equation}
+       S_{ab}(\nu) = \frac{1}{2\ii}\left(\Gamma_{ab}(\nu) - \Gamma_{ab}^\dagger(\nu)\right).
+\end{equation}
+$S_{ab}(\nu)$ is a Hermitian and $\gamma_{ab}(\nu)$ is called the \textit{Kossakowski matrix} and it contains all jump rate coefficients; it is positive since now the Fourier transform over the reservoir correlations is a full Fourier (Bochner's theorem).
+By inserting these into \eqref{eq:after-secular-me}, we have finally derived the (non-diagonal) Lindblad generator from microscopic principles and more-or-less physical assumptions:
+\begin{equation}
+    \label{eq:lindblad-microscopic}
+    \mathcal{L}(\rho_S) = -\ii[H_{LS}, \rho_S] +  \sum_{ab}\sum_\nu \gamma_{ab}(\nu)\left(A^b_\nu\, \rho_S (A^a_\nu)^\dagger - \frac{1}{2}\left\{(A^a_\nu)^\dagger A^b_\nu, \rho_S\right\}\right).
+\end{equation}
+Comparing it to the general Lindblad generator \eqref{eq:lindblad-generator} we find that the Lindblad jumps are $L^a_\nu = \sqrt{\gamma_a(\nu)} A^a_\nu$, and that there is a contributing coherent term of the form:
+\begin{equation}
+    H_{LS} = \sum_{ab}\sum_\nu S_{ab}(\nu)(A_\nu^a)^\dagger A_\nu^b.
+\end{equation}
+This is the Lamb shift Hamiltonian, and it originates from the interactions with the environment which effectively shift the system's energy levels (since $[H_S, H_{LS}] = 0$). As the system $S$ evolves coherently with respect to its Hamiltonian $H_S$, the Lamb shift will add to it and lead to an evolution with $H_\text{eff} = H_S + H_{LS}$. 
+
+There is one more comment to be made about \eqref{eq:lindblad-microscopic}: in its current form it is non-diagonal in the indices $a, b$. However, it is always possible to diagonalize the Kossakowski matrix $\gamma_{ab}(\nu)$, since it is Hermitian. Thus, we can always find some unitary $U$ such that $\gamma_a(\nu) = U \gamma_{ab}(\nu) U^\dagger$. We can accordingly find the rotated jump operators for which we can work in this diagonal picture by
+\begin{equation}
+    \label{eq:diagonalize-jumps-in-generator}
+    L^a_\nu = \sum_b U_{ab} A^b_\nu.
+\end{equation} 
+Such a diagonalization `trick' can be quite useful for efficient numerical analysis as we will later see. 
+
+Up to this point, we have introduced the main character of Markovian open quantum system dynamics: the Lindbladian generator. We have derived it from mathematical and physical principles, and have found that they generate CPTP maps, i.e. as the subsystem evolves within an environment, it preserves its density matrix properties. Of course, we are not only interested in how the system evolves but also where it is headed. Generally, these evolutions inch the system towards some stationary state(s). But a priori it is not clear if the system ever reaches that equilibrium (within a practical amount of time), since it can stumble upon a metastable state, where the evolution can get stuck. In order to understand this side of the dynamics, we will introduce the theory of Markov chains in the next chapter.
+\chapter{Detailed Balanced Markov Dynamics}
+A Markov chain is a stochastic process that describes the evolution of a probability distribution over a set of states $\mathcal{X}$. The dynamics are governed by a stochastic map that has the Markov property, which dictates that the probability of transitioning to any future state depends only upon the current state. Once we get to know the fundamentals of Markov chains, we can ask questions about to which state or states does the Markov chain evolve to, and how fast it reaches its goal. For more details on this topic, we refer to the indispensable source from Levin and Peres, \cite{levin2017markov}.
+
+\section{Classical Markov Semigroups}
+It is instructive to start the discussion with the classical theory of Markov chains. Even if the notions have to be generalized later to the quantum case, introducing them first classically, sheds a lot of light on the path ahead.
+
+In classical theory, a probability distribution over the states $x\in\mathcal{X}$ at some time $t$ is given by a row vector $\mu_t$, where $\mu_t(x)$ gives the probability of finding the system in state $x$. The evolution of the probability distribution is described by a stochastic transition matrix $P$ as
+$$
+\mu_{t+1} = \mu_t P.
+$$
+The stochasticity of $P$, i.e. having non-negative entries and each of its row sums to $1$, ensures that $\mu_t$ stays a well-defined probability distribution at all times during the evolution.
+
+In this work, we will be interested in Markov chains that for long enough times $t\rightarrow\infty$ let the distribution $\mu_t$ converge to an equilibrium distribution, known as the \textit{stationary distribution} $\pi$. This distribution is a fixed point of the dynamics, 
+\begin{equation}
+    \pi = \pi P.
+\end{equation}
+The existence of a unique stationary distribution to which an initial distribution converges, is guaranteed if the chain is \textit{irreducible} and \textit{aperiodic} due to the Perron-Frobenius theorem. Irreducible means that it is possible to reach any state from another state, while aperiodic means that the chain does not get stuck in a cycle of states. If both of these conditions hold, we will also call the chain \textit{ergodic}. As an example, if the system has some symmetry and the transitions prescribed by $P$ are all within that symmetric subspace, then the Markov chain would never be able to discover the states in the whole space, and would never reach its global stationary state $\pi$.
+
+In Markov chain applications, the goal can be simply stated as: construct a transition matrix $P$ that prepares a desired probability distribution $\pi$ from some initial distribution(s). Naturally, we would first ask, why is there even a need for this, couldn't we directly sample from the target distribution $\pi$ if we know its form already?
+In general the answer is no, and there are cases where it is indeed easier to walk through a Markov chain defined by $P$ that converges to $\pi$. Such a case is exactly what we have at our hands in this thesis, finding and sampling from the Gibbs (or Boltzmann) distribution
+\begin{equation}
+    \label{eq:cl-gibbs}
+    \pi_\beta(x) = \frac{e^{-\beta E(x)}}{Z}, \quad  Z = \tr [e^{-\beta E(x)}]
+\end{equation}
+With $E(x)$ the energy of the state $x$, and $Z$ the partition function, which is a sum over all the possible energies in a system... which is a Herculean task to compute for larger system sizes.
+
+Thankfully, there is a universal way to construct Markov chains with a given stationary distribution $\pi$. (Though universal, it does not always mean an efficient Markov chain.) The main concept for these processes, is \textit{detailed balance}. A chain is said to satisfy the detailed balance condition if, at equilibrium $\mu_t = \pi$, the probability flow from state $x$ to state $y$ is equal to the flow from $y$ to $x$:
+\begin{equation}
+    \label{eq:db-classical}
+    \pi(x) P(x, y) = \pi(y) P(y, x), \quad\forall x, y\in\mathcal{X}.
+\end{equation}
+These chains are also called \textit{reversible}. This refers to a time-reversal symmetry of the dynamics, like a musical palindrome, for which we could not distinguish if it is played forwards or backwards. From a thermodynamic point of view these are processes that produce zero entropy at the equilibrium.
+
+Important to note that while the detailed balance condition \eqref{eq:db-classical} is a sufficient condition for $\pi$ to be a stationary distribution, it is not strictly necessary. A weaker version of the condition, the \textit{global balance condition}, does not require for each pair of states to have reversible probability flow, but rather the net probability flow for each state $\pi(x)$ should remain zero under $P$:
+\begin{equation}
+    \sum_{x\in\mathcal{X}} \pi(x) P(x, y) = \sum_{x\in\mathcal{X}} \pi(y) P(y, x) = \pi(y),\quad\forall y\in\mathcal{X}.
+\end{equation}
+This latter condition however, is much less utilized in applications, since in terms of states it is not a local condition any more.
+
+There is also another, operational, way of understanding detailed balance, which will help with the quantum detailed balance generalization later on. For this, we will work in the space of real-valued functions that act on the state space, $L^2(\pi)$, equipped with the $\pi$\textit{-weighted inner product}, $\langle\cdot,\cdot\rangle_\pi$. For two functions $f: \mathcal{X}\rightarrow \mathbb{R}$ and $g: \mathcal{X}\rightarrow \mathbb{R}$, it is defined as:
+\begin{equation}
+    \langle f, g\rangle_\pi := \sum_{x\in\mathcal{X}} f(x) g(x) \pi(x),
+\end{equation}
+where $\pi$ is still the stationary distribution of the chain. Since $\pi(x) > 0$ for all $x$ in an irreducible chain, the inner product is positive definite. Basically, it weighs each state's contribution by how likely that state is to occur at equilibrium. An inner product induces the natural norm in this space, $\|f\|_{2} = \sqrt{\langle f, f \rangle_\pi}$.
+
+An operator (our transition matrix $P$) is then said to be self-adjoint with respect to the $\pi$-weighted inner product  if for any two functions $f$ and $g$, the following holds:
+\begin{equation}
+    \label{eq:P-selfadjoint-cl}
+    \langle f, Pg\rangle_\pi = \langle Pf, g\rangle_\pi.
+\end{equation}
+Both sides written out gives,
+\begin{equation}
+    \sum_{x, y\in\mathcal{X}} f(x) g(y) \pi(x) P(x, y) = \sum_{x, y\in\mathcal{X}} f(x) g(y) \pi(y) P(y, x),
+\end{equation}
+which is exactly the detailed balance condition \eqref{eq:db-classical}, since it holds for all $f, g$. After showing the converse, we find a fundamental equivalence that, even if not in its exact form but in concept, survives in the quantum regime: a Markov chain satisfies detailed balance if and only if its transition matrix $P$ is a self-adjoint with respect to the $\pi$-weighted inner product.  
+A consequence that comes from \eqref{eq:P-selfadjoint-cl} is that all the eigenvalues $\lambda_i(P)$ of $P$ are real, which allows us to order all eigenvalues on the real line, 
+$$
+1 = \lambda_1(P) > \lambda_2(P) \geq ... \geq -1,
+$$
+and have a clean definition for the spectral gap $\gamma(P) := 1 - \lambda_2(P)$. Intuitively, a large gap $\gamma(P)$ means that all terms in the distribution that are not the stationary state decay quickly. Conversely, a vanishing gap implies very slow convergence. We will soon see how to bound the mixing time of a chain with the spectral gap, but let us first explain how to construct a Markov chain that prepares a desired target distribution.
+
+\label{parag:MH}
+\smallskip
+\subsection{Metropolis-Hastings algorithm.} The generic recipe for constructing a transition matrix $P$ that satisfies the detailed balance condition for any target distribution $\pi$. It was pioneered and was run on the MANIAC computer as early as 1953 \cite{metropolis1953equation}, and the algorithm has been generalized by Hastings in \cite{hastings1970monte}. The recipe is as follows:
+\begin{enumerate}
+    \item Decide upon an initial state $x\in\mathcal{X}$ where the Markov chain starts from. 
+    \item Propose a new state $y\in\mathcal{X}$ based on a \textit{proposal matrix} $Q(x, y)$, which is some irreducible Markov chain on the state space $\mathcal{X}$. This can be as simple as randomly picking a state in the space. 
+    \item Accept the state with probability given by the \textit{acceptance matrix} $A(x,y)$.
+\end{enumerate}
+Therefore, the transition matrix $P$ for the resulting Markov chain is a combination of a proposal $Q$ and acceptance $A$.
+\begin{equation}
+    P(x,y) =
+\begin{cases}
+    Q(x,y)A(x,y), \quad &\text{if}\; y\neq x, \\
+    1 - \sum_{z\neq x} Q(x, z)A(x, z), \quad &\text{if}\;y = x.
+\end{cases} 
+\end{equation}
+The key here is to define the acceptance probability $A(x, y)$ such that the final chain $P$ satisfied detailed balance condition \eqref{eq:db-classical} with respect to $\pi$, 
+\begin{equation}
+    \pi(x) Q(x, y) A(x, y) = \pi(y) Q(y, x) A(y, x),
+\end{equation}
+for which the choice that maximizes the acceptance rates $A$ (thus allowing for more efficient exploration in the state space) is given by the Metropolis-Hastings form: 
+\begin{equation}
+    \label{eq:MH-acceptance}
+    A(x,y) = \min\left(1, \frac{\pi(y)Q(y, x)}{\pi(x)Q(x,y)}\right).
+\end{equation}
+It is straightforward to show that this choice of $A(x,y)$ forces the detailed balance condition to hold for $P$. The special case, when the proposal matrix is symmetric, i.e. $Q(x, y) = Q(y, x)$, is the Metropolis algorithm that Hastings later generalized to \eqref{eq:MH-acceptance}.
+
+Finally, it becomes clear why this algorithm is so powerful. The acceptance $A$ and thus the full transition $P$ depends only on the \textit{ratio} of the target probabilities. For sampling from the Gibbs distribution $\pi(x) = e^{-\beta E(x)} / Z$, we would never have to compute the intractable partition function $Z$. The sole information the Markov chain needs in this case, is to the energy difference between $x\rightarrow y$: $\Delta E = E(y) - E(x)$. 
+
+Note, that the Metropolis-Hastings algorithm makes no guarantee about the speed of convergence. It heavily depends on the state space, the proposal  matrix $Q$, and its interplay with the target distribution $\pi$. Quantifying this efficiency is the subject of mixing time analysis, which will be crucial for us for later findings as well. 
+
+We have now come to the point where we can turn our attention to recent developments in quantum Gibbs sampling. The moment we mentioned Gibbs sampling in the classical setting, we also learnt the recipe that allowed researchers for decades to sample Gibbs states. So much so, that the \hyperref[parag:MH]{Metropolis-Hastings algorithm} is now an indispensable word of the sampling jargon. 
+
+\smallskip
+\subsection{Mixing time.} The go-to quantity that defines how fast the Markov chain converges to the target distribution. First, we need to define a distance between two probability distributions $\mu$ and $\nu$ using the \textit{total variation distance}:
+\begin{equation}
+    \label{eq:tv-distance}
+    \|\mu - \nu\|_{TV} = \frac{1}{2} \sum_{x\in\mathcal{X}} |\mu(x) - \nu(x)|.
+\end{equation} 
+The distance from stationarity at time $t$ is then defined as the worst-case distance, maximizing over all possible starting states $x$:
+\begin{equation}
+    \label{eq:convergence-thm}
+    d(t) := \sup_{x\in\mathcal{X}} \|P^t(x, \cdot) - \pi\|_{TV} 
+\end{equation}
+With respect to this distance, the mixing is the amount of time needed to reach a given $\varepsilon>0$ closeness to the stationary state $\pi$:
+\begin{equation}
+    \label{eq:mixing-time-cl}
+    t_\text{mix}(\varepsilon) := \inf\left\{t \geq 0:\; d(t) \leq \varepsilon \right\}
+\end{equation}
+The mixing time clearly tells us how efficiently does a Markov chain prepare the target distribution $\pi$. Often we are interested in how the mixing time scales with the system size $n$ (or the state space size $|\mathcal{X}| = 2^n$). We distinguish between these cases
+\begin{alignat*}{3}
+    \text{(i)}\;   &\textit{Slow mixing}  &\quad& \text{with} &\quad& t_\text{mix}(\varepsilon) = \mathcal{O}(\exp(n) \log(1/\varepsilon)), \\
+    \text{(ii)}\; &\textit{Rapid mixing}  &\quad& \text{with} &\quad& t_\text{mix}(\varepsilon) = \mathcal{O}(\mathrm{poly}(n) \log(1/\varepsilon)),\\
+    \text{(ii)}\; &\textit{Optimal mixing}  &\quad& \text{with} &\quad& t_\text{mix}(\varepsilon) = \mathcal{O}(n \log(n) \log(1/\varepsilon)).
+\end{alignat*}
+Sometimes there could be also other parameters that can have a huge influence on the mixing times, like the temperature, which always have to be taken into account for Gibbs sampling. 
+Broadly we can say, that high temperature systems unless there are geometric bottlenecks, or if the system is at a critical point of phase transition. In this latter case the system would have non-local correlations, that a local Markov chain like the Metropolis-Hastings would fail to resolve.
+
+In order to bound the mixing times as the next step, we will make use of the following.
+While the total variation distance is an $L^1$ distance, it can be rewritten in terms of the $L^1(\pi)$ distance $\|\cdot\|_{\pi, 1}$ induced by the $\pi$-weighted inner product, 
+\begin{equation}
+    \label{eq:tv-1norm}
+    \begin{split}
+        2\|P^t(x,\cdot) - \pi \|_{TV} &= \sum_{y\in\mathcal{X}} |P^t(x, y) - \pi(y)| \\
+        &= \sum_{y} \pi(y) \left|\frac{P^t(x, y)}{\pi(y)} - \mathbf{1}\right| \\
+        &= \left\|\frac{P^t(x, \cdot)}{\pi(\cdot)} - \mathbf{1}\right\|_{\pi, 1}.
+    \end{split}
+\end{equation}
+After using Jensen's inequality, we can upper-bound the TV-distance from the stationary state $\pi$ via the $L^2(\pi)$ distance to $\pi$:
+\begin{equation}
+    \label{eq:tv-2norm}
+    \begin{aligned}
+          2\|P^t(x,\cdot) - \pi \|_{TV} &= \left\|\frac{P^t(x, \cdot)}{\pi(\cdot)} - \mathbf{1}\right\|_{\pi, 1} \leq \left\| \frac{P^t(x, \cdot)}{\pi(\cdot)} - \mathbf{1}\right\|_{\pi, 2} \\
+          \quad \xRightarrow{\sup} d(t) &\leq \frac{1}{2} \sup_{x\in\mathcal{X}}\left\| \frac{P^t(x, \cdot)}{\pi(\cdot)} - \mathbf{1}\right\|_{\pi, 2} 
+    \end{aligned}
+\end{equation}
+
+\smallskip
+\subsection{Spectral bounds.} Bounding the mixing time is a central challenge in the analysis of Markov chains. While simulation can provide empirical estimates, rigorous analytical bounds are required for guaranteeing efficiency. One of the most fundamental approaches, relates the convergence rate to the spectral properties of the transition matrix $P$. While finding those spectral properties can be computationally difficult, this method at least provides a universal way to bound mixing times for all kinds problems.
+
+Determining the mixing time is more subtle than simply identifying the decay rate of the second-largest eigenmode. While the eigenvalue spectrum dictates the asymptotic speed at which the system forgets its initial state, it does not account for the distance the system must traverse. To capture both effects, we must move from the natural metric of the total variation distance, to a metric compatible with spectral analysis.
+
+As we have shown in \eqref{eq:tv-1norm} and \eqref{eq:tv-2norm}, the TV distance, is basically an $L^1(\pi)$ norm, and it can be upper bounded by the $L^2(\pi)$ norm. Working in the $L^2(\pi)$ space with the $\pi$-weighted inner norm is suitable, because the spectral theorem becomes applicable. This states, that for a self-adjoint operator, like our detailed balanced $P$, has an orthonormal basis $\{v_i\}$ and real eigenvalues $\lambda_i(P)$. (If the chain is taken to be `lazy', i.e. $P(x, x)\geq 1/2$, then $\lambda_i(P) \geq 0$.) 
+
+In this function space, probabilistic notions turn into geometric objects. Probability distributions $\mu_t$ are represented by relative density vector $h_t = \mu_t / \pi$, while the stationary distribution $\pi$ corresponds to the constant vector $\mathbf{1}$ that stays constant under the transition: $P \mathbf{1} = \mathbf{1}$. Statistical expectations are now projections onto the axis given by $\pi$, $\mathbb{E}_\pi [f] = \langle f, \mathbf{1} \rangle_\pi$. Then the variance is the squared $L^2(\pi)$ norm of the orthogonal terms, $\text{Var}_\pi(f) = \|f - \mathbf{1}\|_{\pi, 2} ^2$. To see this, take the deviation from the equilibrium to be the vector $g_t = h_t - \mathbf{1}$. This is orthogonal to the stationary state because
+\begin{equation}
+    \mathbb{E}_\pi[g_t] \equiv \langle g_t, \mathbf{1} \rangle_\pi = \sum_x \left(\frac{\mu_t(x)}{\pi(x)}- \mathbf{1}\right) \pi(x) = \sum_x \mu_t(x) - \sum_x \pi(x) = 0.
+\end{equation}
+Thus, the deviation vector $g_t$ is spanned only by the rest of the eigenvector over its whole evolution,
+\begin{equation}
+    g_0 = \sum_{i=2}^{|\mathcal{X}|} c_i v_i \rightarrow P^t g_0 = g_t = \sum_{i=2}^{|\mathcal{X}|} c_i \lambda^t_i(P) v_i.
+\end{equation}
+The sum is dominated by the second-largest eigenvalue $\lambda_2$ and allows us to bound the decay of the distance (or variance) at time $t$ as,
+\begin{equation}
+    \begin{split}
+        \sqrt{\text{Var}_\pi(h_t)} &\equiv \left\|g_t\right\|_{\pi, 2}  = \left\|\sum_{i=2}^{|\mathcal{X}|} c_i \lambda_i^t(P) v_i\right\|_{\pi, 2}\leq (1-\gamma(P))^t\sum_{i=2}^{|\mathcal{X}|} c_i v_i \\
+        &\leq e^{-\gamma(P) t} \|g_0\|_{\pi, 2}.
+    \end{split}
+\end{equation}
+Here, we used that $\lambda_2(P) = 1 - \gamma(P)$. This inequality shows already the structure we expected for the mixing process to have: the decay part is an exponential governed by the \textit{relaxation time}, $t_\text{rel} := 1 / \gamma(P)$, that multiplies a term quantifying the initial distance from stationarity. 
+
+To derive a rigorous mixing time bound, we must still evaluate this initial distance for the worst-case starting configuration. If the system starts in a specific state $x_0$, the initial point mass will have a peak at $\mu_0(x_0) = 1$. Then the $L^2(\pi)$ norm of the initial deviation is:
+\begin{equation}
+    \begin{split}
+            \left\|g_0\right\|_{\pi, 2} &= \left\|\frac{\mu_0}{\pi} - \mathbf{1}\right\|_{\pi, 2} = \sqrt{\sum_x \pi(x) \left(\frac{\mu_0}{\pi} - \mathbf{1}\right)^2} = \sqrt{\frac{1}{\pi(x_0)} -1} \\
+            &\leq \frac{1}{\sqrt{\pi(x_0)}}.
+    \end{split}
+\end{equation}
+Evidently, the worst-case means that the initial distribution $\mu_0$ concentrated all its probability mass on a state $x_0$ that has the least contribution to the stationary state: $\pi(x_0) = \pi_{\min} := \min_x \pi(x)$. Consequently, the mixing time is the required for the exponential decay to suppress this large initial factor, the \textit{burn-in} factor, down to a desired $\varepsilon$ size,
+\begin{equation}
+    \frac{1}{\sqrt{\pi_{\min}}} e^{-\gamma(P) t} \leq \varepsilon
+\end{equation}
+Rearranging, simplifying and not forgetting that mixing time was defined with the TV distance, this inequality yields the standard spectral bound on the mixing time:
+\begin{equation}
+\label{eq:spectral-bound}
+t_\text{mix}(\varepsilon) \leq \frac{1}{\gamma(P)} \ln \left(\frac{1}{2\varepsilon \sqrt{\pi_{\min}}}\right).
+\end{equation}
+
+While the spectral bound \eqref{eq:spectral-bound} is universally applicable, it is often loose for high-dimensional systems where $\pi_{\min}$ is exponentially small. This motivates the need for sharper tools, such as the \textit{logarithmic Sobolev inequalities}, that were pioneered by Leonard Gross in \cite{gross1975logarithmic}.
+
+\smallskip
+\subsection{Logarithmic Sobolev bounds.} The weakness of the $1 / \sqrt{\pi_{\min}}$ scaling in the spectral bound stemmed from the $L^2(\pi)$ norm. Essentially, we have been tracking the convergence of the variance, $\mathrm{Var}_\pi(h) = \|h - \mathbf{1}\|_{\pi, 2}^2 = \|g\|_{\pi, 2}^2$ with $h = \mu / \pi$. But it turns out that looking at the convergence of entropy instead can lead to stronger results on the mixing time. 
+
+The \textit{relative entropy} (or \textit{Kullback-Leibler divergence}) between the evolving distribution $\mu$ and the stationary distribution $\pi$ is defined as:
+\begin{equation}
+    \label{eq:relative-entropy}
+    \text{Ent}_\pi(h) = \sum_{x\in\mathcal{X}} \pi(x) h(x) \ln h(x).
+\end{equation}
+Before we bound the relative entropy, it is constructive to explain why and when this measure is better than the variance. 
+
+Consider the near-equilibrium regime, where the relative density takes the form $h(x) = \mathbf{1} + \varepsilon g(x)$ with $\varepsilon \ll 1$, thus $\mathbb{E}_\pi[g] = 0$. By performing a Taylor expansion of the function $f(t) = t \ln t $ from \eqref{eq:relative-entropy} around $t=1$, one finds that the entropy and variance agree to leading order:
+\begin{equation} 
+    \text{Ent}_\pi(\mathbf{1} + \varepsilon g(x)) = \frac{1}{2} \text{Var}_\pi(\mathbf{1} + \varepsilon g(x)) + \mathcal{O}(\varepsilon^3).
+\end{equation}
+In other words, when the initial distribution is close to $\pi$, the variance and the relative entropy are locally equivalent and both decay exponentially. 
+
+Where they differ significantly is in their treatment of far-from-equilibrium states. Thus, consider now a chain starting in the worst-case initial distribution $h_0$, i.e. a point mass at the least likely state,
+$$
+h_0(x_0) = \frac{1}{\pi_{\min}}, \quad h_0(x\neq x_0) = 0.
+$$
+In this case, the variance in $L^2(\pi)$ is given by
+\begin{equation}
+    \mathrm{Var}_\pi(h_0) = \mathbb{E}_\pi[h_0^2] - 1 = \frac{1}{\pi_{\min}} - 1. 
+\end{equation}
+This scales exponentially with the system size $n$, since $\pi_{\min}\sim e^{-n}$. On the other hand, the relative entropy is now 
+\begin{equation}
+    \label{eq:initial-entropy}
+    \mathrm{Ent}_\pi(h_0) = \pi_{\min} \left(\frac{1}{\pi_{\min}} \ln \frac{1}{\pi_{\min}}\right) = \ln \frac{1}{\pi_{\min}},
+\end{equation}
+which scales only linearly with the system size $n$. Of course, this is not the end of the story. To exploit this better scaling, we must prove that the entropy also contracts exponentially, which requires establishing a Log-Sobolev inequality.
+
+Just as the spectral gap $\gamma(P)$ controls the decay of the variance, we define a new parameter, the constant $\alpha$, to control the decay of the entropy. It has been shown \cite{bobkov2006modified}, that the Markov chain satisfies a modified Log-Sobolev inequality (MLSI) with constant $\alpha > 0$ if for all positive functions $h$:
+\begin{equation}
+    \alpha \text{Ent}_\pi(h) \leq \mathcal{E}(h, \ln h),
+\end{equation}
+where $\mathcal{E}(f, g) = \langle f, (\id-P)g \rangle_\pi$ is the Dirichlet form associated with the chain. This specific form is chosen because the time derivative of the entropy is exactly the negative of the Dirichlet form on the right-hand side: $\frac{d}{dt}\text{Ent}_\pi(h_t) = -\mathcal{E}(h_t, \ln h_t)$ (in the continuous time limit). Consequently, this inequality guarantees that the relative entropy contracts exponentially at a rate $\alpha$:
+\begin{equation}
+    \text{Ent}_\pi(h_t) \leq e^{-\alpha t} \text{Ent}_\pi(h_0).
+\end{equation}
+To translate this entropy decay into a bound on the mixing time, we relate the entropy back to the TV distance using \textit{Pinsker's inequality}, which states that $2\|\mu - \pi\|_{TV}^2 \leq \text{Ent}_\pi(\mu/\pi)$.
+Together with the initial entropy calculated above \eqref{eq:initial-entropy}:
+$$
+2 d(t)^2 \leq \text{Ent}_\pi(h_t) \leq e^{-\alpha t} \ln \frac{1}{\pi_{\min}} \leq 2\varepsilon^2.
+$$
+Solving for $t$ yields the Log-Sobolev bound on the mixing time:
+\begin{equation}
+    \label{eq:log-sobolev-bound}
+    t_\text{mix}(\varepsilon) \leq \frac{1}{\alpha} \ln \left( \frac{\ln(1/\pi_{\min})}{2\varepsilon^2} \right).
+\end{equation}
+Compared with the spectral bound \eqref{eq:spectral-bound}, we see a significant improvement for high-dimensional systems. Recall that for a system of size $n$, the inverse stationary probability scales as $1/\pi_{\min} \sim e^{-n}$. The spectral bound depends linearly on this factor inside the logarithm, resulting in a mixing time scaling of $\mathcal{O}(n)$. In contrast, the Log-Sobolev bound takes the logarithm of this factor, resulting in a scaling of $\mathcal{O}(\ln n)$.
+
+Intuitively, this improvement arises because the entropy is less sensitive to the spiky nature of the initial point-mass distribution than the $L^2$ norm is. The latter requires the dynamics to smooth out the sharp peak of the initial state before the bound becomes `useful'. The entropy, being logarithmic, penalizes this initial peak much less, thus having a tighter bound on mixing time. 
+
+Unfortunately, the stronger bound comes with a significant analytical cost. While the spectral gap $\gamma(P)$ is well-defined for any reversible chain (by $1-\lambda_2$), establishing a strictly positive Log-Sobolev constant $\alpha$ is much harder. It generally requires proving geometric properties of the state space, e.g. Bakry-Émery criterion which relates to the Ricci curvature of the generator \cite{bakry2006diffusions}; or product structures (non-interacting systems) \cite{diaconis1996logarithmic}, that was extended to near-product structures (weakly-interacting systems, e.g. for high-temperatures) by \cite{stroock1992logarithmic}. But these results are neither universally present, nor easy to compute. Interestingly, we can relate the two decay rates as $2\alpha \leq \gamma(P)$ \cite{diaconis1996logarithmic}, which means the rate of entropy decay is actually slower than of the variance decay. But this factor is less consequential, than the difference in handling the far equilibrium starting points. All in all, while the Log-Sobolev inequalities are standard for proving rapid mixing in high-dimensional systems, the spectral gap remains the more universal and accessible tool for general contexts.
+
+\smallskip
+\subsection{Continuous-time Markov chains.} The natural generalizations of Markov chains, where the transitions occur at random times $t\in[0, \infty)$. The discrete nature of the chains we previously introduced, did also come with some artefacts, that will not be present for the continuous case, e.g. periodicity issues. 
+
+In the continuous limit, the transition matrix $P$ is replaced by the classical Markov semigroup $(P_t)_{t\geq 0}$ generated by $L$. No surprise here, indeed, this is the classical analogue of the generator we introduced for open quantum system evolutions in Section \ref{sec:OQS}. Only that the generator $L$ will have slightly different but analogue properties to the quantum one. The evolution of the probability distribution $\mu(t)$ is governed by the classical Master Equation:
+\begin{equation}
+    \frac{\dd}{\dd t} \mu(t) = \mu(t)L
+\end{equation}
+The solution to this differential equation is formally given by the matrix exponential $\mu(t) = \mu(t=0) e^{t L}$. Just as the Lindbladian preserves the trace and positivity of the density matrix, the classical generator $L$ preserves the normalization and positivity of the probability vector $\mu(t)$ at all times. This requires the off diagonal entries of $L$ to be non-negative, and the row sums to be zero, $\sum_y L(x, y) = 0$.
+
+The concept of detailed balance \eqref{eq:db-classical} gets rephrased in terms of the generator. Since detailed balance should hold at all times, then the derivatives of the probability flows must match at $t=0$ as well. The generator is defined exactly as that derivative, $L = \frac{\dd}{\dd t}P_t |_{t=0}$, and thus the detailed balance condition takes the form:
+\begin{equation}
+    \pi(x)L(x, y) = \pi(y) L(y, x), \quad \forall x\neq y.
+\end{equation}
+Note, that the diagonal is already fixed by $L(x, x) = - \sum_{y\neq x} L(x, y)$. This also implies, just as detailed balance implies global balance, that $\pi L = 0$. Equivalently to the above, in the operational framework, $L$ must be self-adjoint with respect to the $\pi$-weighted inner product:
+\begin{equation}
+    \langle f, Lg\rangle_\pi = \langle Lf, g\rangle_\pi.
+\end{equation}
+This self-adjointness of $L$ ensures that the semigroup $P_t$ is also self-adjoint, thereby preserving reversibility at all times $t\geq0$.
+
+The convergence to the stationary state is still determined by the spectral gap, only that now the spectrum of a reversible $L$ is non-positive, and the unique stationary state $\pi$ has the eigenvalue $\lambda_1(L) = 0$, such that the spectral gap is simply $\gamma(L) = -\lambda_2(L)$. Of course, the relation between the eigenvalues of $P$ and $L$ at some time $t$ is $\lambda_i(P) = e^{t \lambda_i(L)}$. Nevertheless, there is no change about the contractive nature of the deviation from the stationary state, only that now we would replace $\gamma(P)$ with $\gamma(L)$, and have
+$$\|h_t - \mathbf{1}\|_{\pi, 2} \leq e^{\lambda_2(L) t}\|h_0 - \mathbf{1}\|_{\pi, 2}.$$
+Thus, the spectral bounds on mixing time \eqref{eq:mixing-time-cl}, also apply for the continuous case.
+
+Similarly, the Log-Sobolev inequality adapts as expected to the generator setting. The Dirichlet form becomes $\mathcal{E}(f, g) = \langle f, -Lg \rangle_\pi$, and the modified Log-Sobolev inequality is now,
+$$
+    \alpha \text{Ent}_\pi(h) \leq \langle h, -L (\ln h) \rangle_\pi.
+$$
+This recovers the mixing time bound \eqref{eq:log-sobolev-bound} for the continuous case as well. 
+
+With this formalism established, we can finally tackle the quantum setting in the next section. We will see that quantum Gibbs sampling is essentially the task of designing a quantum generator (the Lindbladian) that satisfies the \textit{quantum detailed balance} with respect to the quantum Gibbs state. For the convergence analysis of quantum Markov semigroups, we will also describe the required non-commutative generalizations of the spectral and Log-Sobolev results.
+
+\section{Quantum Markov Semigroups}
+
+It is now time to introduce the core subject of this work: the evolution of open quantum systems towards the thermal equilibrium. Just as we described classical mixing using generators and weighted inner products, we will formulate the quantum problem using reversible quantum Markov semigroups.
+
+In the quantum setting, the probability distributions are given by density matrices $\rho(t)$, which in general does not commute with other density matrices. Gibbs sampling then means that we
+construct a Lindbladian generator $\mathcal{L}$ of the GKSL form \eqref{eq:lindblad-generator}, such that the system state $\rho(t)$ converges to the stationary density matrix, i.e. the quantum Gibbs state,
+\begin{equation}
+    \rho_\beta = \frac{e^{-\beta H}}{Z}, \quad Z = \tr[e^{-\beta H}].
+\end{equation}
+What makes this quantum compared to the similar classical definition of  $\pi_\beta$ in \eqref{eq:cl-gibbs}, is the fact that now we have non-commuting terms in $H$ contributing to the energy $E(x)$. If $H$ has exclusively commuting terms inside (e.g. classical Ising model), then it is possible to write it as a diagonal matrix in some product basis, like the computational basis ($\sigma_Z$ basis). The Gibbs state $\rho_\beta$ would also be diagonal. Showing, that in very special cases quantum Gibbs sampling reduces to the classical problem.
+
+The evolution is governed by the quantum Master equation $\frac{\dd}{\dd t} \rho = \mathcal{L}(\rho)$ which generates the semigroup $(\mathcal{P}_t)_{t\geq 0}$, just as we described for open quantum systems \eqref{eq:oqs-evo-with-L}. For the system to globally thermalize, $\rho_\beta$ must be the unique fixed point, $\mathcal{L}(\rho_\beta) = 0$. Note, that now the operators $\mathcal{L}$ (and $\mathcal{P}$) have been upgraded to superoperators $\mathcal{L}: \mathcal{B}(\mathcal{H})\rightarrow \mathcal{B}(\mathcal{H})$ since they act on operators (density matrices) instead of vector distributions.
+
+However, generalizing the concept of detailed balance to the quantum case is not straightforward. Classical detailed balance was defined by the reversibility condition $\pi(x) P(x, y) = \pi(y) P(y, x)$. In the quantum case, the transition probabilities are replaced by operators, and the non-commutativity of the Hamiltonian and the states, $[\rho, H] \neq 0$ in general, means there is no unique way to `weight' the inner product by the stationary state.
+
+\smallskip
+\label{parag:qdb}
+\subsection{Quantum detailed balance.} To define reversibility for a quantum process, we must adopt the operational framework we introduced classically: a generator is detailed balanced if it is self-adjoint with respect to a specific $\sigma$-weighted inner product. The non-weighted inner product on the space of bounded operators $\mathcal{B(H)}$ is the \textit{Hilbert-Schmidt inner product}:
+\begin{equation}
+    \label{eq:HS}
+    \langle A, B \rangle := \tr[A^\dagger B].
+\end{equation}
+In fact, the Hilbert space we get with this inner product, can be thought of as the infinite temperature limit, where the stationary state is the maximally mixed state, $\lim_{\beta\rightarrow 0}\rho_\beta = \id_\mathcal{H} / \dim \mathcal{H}$. Since we juggle several inner products in this text, let us fix the following notation: the adjoint of the superoperator $\Phi\;:\;\mathcal{B(H)}\rightarrow\mathcal{B(H)}$ is always with respect to the Hilbert-Schmidt inner product $\langle \cdot,\cdot\rangle$, and it is denoted by $\Phi^\dagger$, e.g. 
+\begin{equation}
+    \langle A, \Phi(B) \rangle = \langle \Phi^\dagger(A), B \rangle.
+\end{equation}
+Written out explicitly for a general case we get,
+\begin{equation}
+    \Phi(\cdot) = \sum_j \alpha_j A_j (\cdot) B_j \quad\Rightarrow\quad \Phi^\dagger(\cdot) = \sum_j \bar{\alpha}_j A^\dagger_j (\cdot) B^\dagger_j
+\end{equation}
+
+The moment we have to deal with finite temperatures, we have to weight \eqref{eq:HS}. Due to non-commutativity there is no unique way to distribute the multiplication by $\sigma$ within the trace. Thus, we find a family of weighted inner-products:
+\begin{equation}
+    \label{eq:weighted-HS}
+    \langle A, B \rangle_{\sigma, s} := \tr[\sigma^s A^\dagger \sigma^{1-s} B], \quad s\in[0,1].
+\end{equation}
+While all of these choices reduce to the classical product when matrices commute, they correspond to fundamentally different physical processes in the quantum setting.
+The expression above \eqref{eq:weighted-HS} defines a continuous family of inner products parametrized by $s$, but they effectively boil down to just two distinct cases. As it turns out \cite{fagnola2007generators}, the inner products in \eqref{eq:weighted-HS} lead to coinciding QMS for all $s\in[0,1] \backslash \{\frac{1}{2}\}$. Consequently, all of these inner products are equivalent to the \textit{Gelfand-Naimark-Segal (GNS) inner product} defined by $s\in\{0, 1\}$ in \cite{alicki1976detailed}, i.e. to the following,
+\begin{equation}
+    \label{eq:GNS-product}
+    \langle A, B\rangle_{\sigma, 1} = \tr[\sigma A^\dagger B].
+\end{equation}
+For $s=\frac{1}{2}$ on the other hand, we get a distinct, symmetrically weighted inner product, which was introduced in \cite{goldstein1995kms} and was named after \textit{Kubo-Martin-Schwinger (KMS)}:
+\begin{equation}
+\langle A, B \rangle_{\sigma, \frac{1}{2}} := \tr[\sigma^{1/2} A^\dagger \sigma^{1/2} B].
+\end{equation}
+A generator $\mathcal{L}$ satisfies quantum detailed balance if it is self-adjoint with respect to either of these weighted inner products, and it is called GNS or KMS detailed balanced for $s = 0, 1$ or $s=\frac{1}{2}$ respectively.
+\begin{equation}
+    \langle A, \mathcal{L}(B) \rangle_{\sigma, s} = \langle \mathcal{L}(A), B \rangle_{\sigma, s} \quad\forall A, B \in \mathcal{B(H)}
+\end{equation}
+Equivalently, if detailed balance holds we can express the adjoint of the generator as
+\begin{equation}
+    \label{eq:general-qdb-adjoint}
+    \mathcal{L^\dagger}(\cdot) = \sigma^{s-1} \mathcal{L}(\sigma^{1-s}\, \cdot\, \sigma^{s}) \sigma^{-s}.
+\end{equation}
+Let us check if this is the case, then the stationary state $\sigma$ is indeed stationary. Since $\mathcal{L}$ generates unital maps in the Heisenberg picture, i.e. $\mathcal{L}^\dagger(\idm) = 0$, we can write 
+\begin{equation}
+    \label{eq:sigma-is-fix}
+    \begin{split}
+        0 &= \langle A, \mathcal{L}^\dagger(\idm) \rangle_{\sigma, s} \\
+        &= \langle A, \sigma^{s-1} \mathcal{L}(\sigma) \sigma^{-s} \rangle_{\sigma, s} \\
+        &= \tr[A^\dagger \mathcal{L}(\sigma)] \\
+        &= \langle A, \mathcal{L}(\sigma)\rangle, \qquad\forall A\in\mathcal{B(H)}.
+    \end{split}
+\end{equation}
+Where we used \eqref{eq:weighted-HS} and \eqref{eq:general-qdb-adjoint}, and assumed that $\sigma$ is a full-rank density matrix (e.g. the Gibbs state at finite temperatures) and are invertible. 
+This confirms, that if the generator and its adjoint has the relation $\eqref{eq:general-qdb-adjoint}$ then $\sigma$ is the stationary state of the generated QMS, $\mathcal{P}_t(\sigma) = \sigma$.
+
+An alternate but equivalent definition of quantum detailed balance that we will use later is given by its \textit{discriminant} or parent Hamiltonian, 
+\begin{equation}
+    \label{eq:discriminant}
+    \begin{split}
+        \mathcal{D}(\sigma, \mathcal{L}) &:= \sigma^{-\frac{1}{4}}\mathcal{L}(\sigma^{\frac{1}{4}} \cdot \sigma^{\frac{1}{4}})\sigma^{-\frac{1}{4}} \\
+        &= \sigma^{\frac{1}{4}}\mathcal{L}^\dagger(\sigma^{-\frac{1}{4}} \cdot \sigma^{-\frac{1}{4}})\sigma^{\frac{1}{4}} \equiv \mathcal{D}^\dagger(\sigma, \mathcal{L}).
+    \end{split}
+\end{equation}
+For the last equation we used the definition of $\mathcal{L}^\dagger$ from \eqref{eq:general-qdb-adjoint}. Thus, conjugating a Lindbladian with its unique stationary state in this manner, can be thought of as a similarity transformation that makes the Lindbladian Hermitian. 
+Then breaking detailed balance can be understood as having a non-Hermitian discriminant. Or equivalently, since every operator can be decomposed into a Hermitian and anti-Hermitian part, that we have a non-vanishing anti-Hermitian part.
+\begin{equation}
+    \begin{split}
+        \mathcal{D}(\rho, \mathcal{L}) &= \mathcal{H}(\rho, \mathcal{L}) + \mathcal{A}(\rho, \mathcal{L}) \\
+        \mathcal{D}(\rho, \mathcal{L})^\dagger &= \mathcal{H}(\rho, \mathcal{L}) - \mathcal{A}(\rho, \mathcal{L}).
+    \end{split}
+\end{equation}
+\begin{definition} \label{def:approx-db}
+    \textup{(Approximate detailed balance condition)}. The Lindbladian $\mathcal{L}$ with full-ranked fixed point $\rho$ satisfies the $\varepsilon-$approximate detailed balance condition if the anti-Hermitian part $\mathcal{A}$ is small
+    $$
+    \frac{1}{2}\left\|\mathcal{D}(\rho, \mathcal{L}) - \mathcal{D}(\rho, \mathcal{L})^\dagger \right\|_{2\rightarrow2} = \left\|\mathcal{A}(\rho, \mathcal{L})\right\|_{2\rightarrow2} \leq \varepsilon
+    $$
+\end{definition}
+This is one of the main quantities we will track in our numerical analyses, because it gives a clear picture on how much we break detailed balance via implementation errors.
+
+An advantage of the transformation \eqref{eq:discriminant}, is that it keeps the spectrum the same, which makes spectral analysis possible for Lindbladians through their parent Hamiltonians. This is often useful if the jump operators are local or quasi-local. In these cases we often find an already known gapped quantum lattice model, or at least have more tools to use to bound that spectral gap. They used these techniques for GNS detailed balanced Lindbladians with commuting system Hamiltonians in \cite{kastoryano2016quantum}, and for the recent KMS Lindbladians where the parent Hamiltonians are provably frustration-free in \cite{rouze2025efficient,bergamaschi2024quantum,vsmid2025polynomial}.
+
+At the moment it might seem that the difference between GNS and KMS detailed balances is purely mathematical, and it is merely a choice of the parameter $s$. But for the thermalizing process there are clear physical consequences of choosing one or the other. To understand the distinction, we must introduce the \textit{modular operator} $\Delta_\sigma\;:\;\mathcal{B(H)} \rightarrow \mathcal{B(H)}$ defined as:
+\begin{equation}
+    \Delta_\sigma(A) = \sigma A \sigma^{-1}
+\end{equation}
+In the classical limit where all operators commute, $\Delta_\sigma$ reduces to the identity. Now it encodes the non-commutativity structure of the algebra with respect to the steady state. Since $\rho_\beta \propto e^{-\beta H}$, the action of the modular operator is intimately linked to the (imaginary) time evolution by the system Hamiltonian $H$. It was shown in \cite{alicki1976detailed} that a generator $\mathcal{L}$ satisfies the GNS detailed balance if and only if it satisfies KMS detailed balance, \textit{and} it commutes with the modular operator:
+\begin{equation}
+    [\mathcal{L}, \Delta_\sigma] = 0.
+\end{equation}
+This additional condition implies that the dissipative dynamics generates a semigroup that commutes with the free unitary evolution of the system. In other words, the dissipation does not generate coherences between energy levels and thus respects the energy conservation of the system. Notice, that this is actually in line with the standard weak-coupling limit in which we explicitly needed the secular approximation \eqref{eq:secular-approx} (dropping non-secular or coherent terms) to derive a physical generator. The KMS detailed balance however leads to more permissive yet still physical dynamics that couple populations (diagonal terms) to coherences (off-diagonal terms). The fact that it retains non-secular terms but also physical, since we started from a physical Lindbladian and restricted it to have KMS detailed balance, means that it cannot be derived in the standard weak-coupling limit with a heat bath. On what kind of first principles would lead to KMS detailed balanced thermalization, we can refer to works where they use the \textit{singular coupling limit} \cite{alicki2007quantum}, or the \textit{thermal quantum collision / repeated interaction limit} \cite{attal2007langevin}.
+
+\smallskip
+\label{subsec:davies}
+\subsection{Davies generator.} Canonically, the first thermalizing Lindbladian has been written up in the standard weak-coupling limit (with Born-Markov and secular approximations) by Davies in \cite{davies1974markovian}. This has been achieved by coupling the system to an infinite free heat bath, and the resulting GNS detailed balanced generator was such a milestone that it got named after Davies.
+
+We have already derived most of what we need for it in \eqref{eq:lindblad-microscopic} where we derived the Lindblad generator from first principles. There the main idea was to decompose the interaction operator into eigenoperators of the system Hamiltonian, $A_\nu$, such that $[H, A_\nu] = -\nu A_\nu$. These operators characterize the transitions between the energy levels with an energy separation of $\nu$. In the Davies generator the transition rates given by $\gamma_a(\nu)$ satisfy a specific condition, called the \textit{KMS condition} (not to be confused with KMS symmetry), which relates the absorption and emission via the Boltzmann factor for any $a$ indexing the set of jump operators $\{A^a\}$:
+\begin{equation}
+    \label{eq:KMS-condition}
+    \frac{\gamma_a(-\nu)}{\gamma_a(\nu)} = e^{\beta \nu}
+\end{equation}
+To remind ourselves, the Kossakowski matrix $\gamma(\nu)$ is the full Fourier transform of the reservoir correlation functions \eqref{eq:half-fourier-reservoir-corr-fn}. If we assume the environment is in the Gibbs state $\rho_E = e^{-\beta H_E} / Z_E$, then the correlation functions of the reservoir indeed satisfy the KMS condition \eqref{eq:KMS-condition}. This is a necessary condition for any thermalizing dynamics, but not sufficient. In this text we will discuss two distinct ways to thermalize a system dissipatively. If we work in the standard weak-coupling limit and drop all non-secular terms, we end up with the GNS detailed balanced Lindbladian from Davies
+\begin{equation}
+    \label{eq:davies-generator}
+    \mathcal{L}_\text{Davies}(\rho) = -\ii[H_{LS}, \rho] +  \sum_{a}\sum_\nu \gamma_{a}(\nu)\left(A^a_\nu\, \rho (A^a_\nu)^\dagger - \frac{1}{2}\left\{(A^a_\nu)^\dagger A^a_\nu, \rho\right\}\right).
+\end{equation}
+We can see that due to the secular approximation, all terms with $\nu \neq \nu'$ have been dropped, while keeping all terms with $\nu=\nu'$. A unitary rotation via \eqref{eq:diagonalize-jumps-in-generator} was also used such that after diagonalization we have $a=b$ compared to \eqref{eq:lindblad-microscopic}. Note, that the only other difference to the Lindbladian derived in the microscopic picture with the Bohr decomposition, is that the transition rates $\gamma_{a}(\nu)$ now fulfil \eqref{eq:KMS-condition}. 
+
+In a few steps we can even see how the Davies generator satisfies the GNS detailed balance. From $[H, A_\nu] = \nu A_\nu$, the following relation will be quite useful
+\begin{equation}
+    \label{eq:sigma-A-commutation}
+    \rho_\beta A_\nu = e^{-\beta \nu} A_\nu \rho_\beta.
+\end{equation}
+This helps to show that since the Lamb-Shift Hamiltonian $H_{LS}$ commutes with the Gibbs state, and so does the anti-commutator term $\mathcal{R} \propto \{A_\nu^\dagger A_\nu, \rho\}$ in the Lindbladian, they are both self-adjoint with respect to the GNS inner product \eqref{eq:GNS-product}. Note, that this is only so simple because we have solely secular terms in the Davies generator. As we will later see, the insight for the KMS detailed balanced Lindbladian was to keep and make the non-secular terms in the coherent and reflective part $\mathcal{R}$ comply with each other. 
+
+The remaining transition part needs a bit more work to prove that it is self-adjoint. But in both the GNS and KMS cases, the main requirement is for the transitions to fulfill KMS condition \eqref{eq:KMS-condition}, and to have  
+the Bohr frequencies of the system have $B_H = - B_H$. The following derivation should apply for all jumps $a$ of $\{\sqrt{\gamma^a(\nu)A_\nu^a}\}$.
+\begin{equation}
+    \label{eq:davies-gns-db}
+    \begin{alignedat}{2}
+        \langle X, \mathcal{T}(Y) \rangle_{\rho_\beta, 1} &= \sum_\nu \gamma(\nu) \tr\left[\rho_\beta X^\dagger A_\nu^\dagger Y A_\nu\right] \\
+        &= \sum_\nu \gamma(\nu) e^{\beta \nu} \tr\left[\rho_\beta (A_\nu X A_\nu^\dagger)^\dagger Y\right]  &\quad& (\text{cyclic trace; \eqref{eq:sigma-A-commutation}})\\
+        &= \sum_\nu \gamma(-\nu) \tr\left[\rho_\beta ((A_{-\nu})^\dagger X A_{-\nu})^\dagger Y\right] &\quad& (\text{KMS condition})\\
+        &= \sum_\nu \gamma(\nu) \tr\left[\rho_\beta (A_{\nu}^\dagger X A_{\nu})^\dagger Y\right] &\quad& (-\nu \rightarrow \nu)\\
+        &= \langle \mathcal{T}(X), Y \rangle_{\rho_\beta, 1}
+    \end{alignedat}
+\end{equation}
+Hence, all parts of the Davies generator are self-adjoint with respect to the GNS inner product, which implies that the Gibbs state $\rho_\beta$ is the fixed point, $\mathcal{L}_\text{Davies}(\rho_\beta) = 0.$
+
+It is natural to question the physical ubiquity of the Davies semigroup. The secular approximation, which enforces the GNS detailed balance for the generator by discarding non-secular terms, implies that the environment seems to discriminate perfectly between the system's energy levels. But it is better to think of it as the ideal case where the coupling is so weak, and the environment is so large that the relaxation time $\tau_R\sim 1 / \lambda_2(\mathcal{L})$ is orders of magnitude longer than the system's intrinsic time $\tau_S \sim 1/ \nu_{\min}$. In this asymptotically exact description, all the non-secular terms average to zero, hence their absence in the Davies generator. The other obstacle that arises, is the fact that for a simulation \textit{we} would have to be the ones (instead of Nature) that discriminate, or resolve the energy levels of the system. An implementation that constantly has to distinguish between Bohr frequencies cannot be efficiently done for larger system sizes. With growing system size the gap between the Bohr frequencies gets exponentially small. Accordingly, the amount if simulation time needed, due to the Heisenberg's uncertainty principle $\Delta E \Delta t \geq \hbar / 2$, would exponentially increase as well, leading to an intractable computation even if it was done in a quantum computer. \todo{Refer to QPE section.}
+
+Before we move on to introduce and work with the KMS detailed balanced Lindbladian, let us first go over the notion of mixing time and the techniques to bound it in the quantum setting. 
+
+\smallskip
+\subsection{Mixing time.} Similar to the classical setting, we need to first quantify the distance from the equilibrium before and then establish rigorous bounds on the convergence speed. The natural generalization of the total variation distance \eqref{eq:tv-distance} is the \textit{trace distance}. For any two quantum states $\rho$ and $\sigma$, it is defined via the non-commutative $L^1$ norm called the Schatten 1-norm, or trace norm $\|\cdot\|_1$
+\begin{equation}
+    \|\rho - \sigma\|_1 = \tr\left[ \sqrt{(\rho-\sigma)^\dagger (\rho-\sigma)} \right].
+\end{equation}
+Operationally, it represents the maximum probability of distinguishing two states with an optimal measurement. The mixing time is defined analogously to the classical case \eqref{eq:mixing-time-cl}. We look for the time $t$ required for the evolved state $\rho(t) = \mathcal{P}_t(\rho_0)$ to be $\varepsilon$ close to the stationary Gibbs state $\rho_\beta$ for any initial state $\rho_0$,
+\begin{equation} \label{eq:mixing-time-defi}
+    t_\text{mix}(\varepsilon) := \inf \left\{ t \ge 0 : \sup_{\rho_0} \|\mathcal{P}_t(\rho_0) - \rho_\beta\|_1 \le \varepsilon \right\}.
+\end{equation}
+Intuitively, the mixing of a quantum Markov semigroup is a more complex process than its classical counterpart. While a classical chain merely has to redistribute probability mass among the states (population or diagonal elements), a quantum process must simultaneously accomplish two tasks: it must drive the populations to the Gibbs distribution \textit{and} it must destroy all off-diagonal quantum coherences between energy levels. We will soon see what role this new decoherence timescale will play.
+On top of that, the non-commutative nature of the space also creates new ways to thermalize. In the classical case, if an energy barrier stopped the convergence, a large enough kick could get the evolution moving. In the quantum case, such an energy barrier could be tunnelled through (if it is not too wide). But some transitions could also be possibly blocked if the phases do not align with the target subspace. Thus, a priori it is not always clear, that quantum mixing is faster than classical. To find out more about it, a recent paper \cite{rakovszky2024bottlenecks} discusses bottlenecks in both regimes. 
+
+\todo{Possibly mention classical energy transport for Davies.}
+
+\smallskip
+\subsection{Quantum spectral bounds.} To bound the mixing time, we once again turn to the spectral properties of the generator. But just as before, we have to change to the (non-commutative) $L^2$ space. There, we can work with an orthonormal basis due to the spectral theorem that still applies.
+
+We consider the Hilbert space of bounded operators $\mathcal{B(H)}$ equipped with the weighted inner product $\langle \cdot, \cdot \rangle_{\sigma, s}$ for which the generator $\mathcal{L}$ satisfies detailed balance. This means that even in the quantum setting, the generator is self-adjoint to an inner-product, and accordingly has real eigenvalues. Together with the fact that $\mathcal{L}$ generates CPTP maps, we know that all the eigenvalues lie on the non-positive real line, $0 = \lambda_1(\mathcal{L}) > \lambda_2(\mathcal{L}) \geq \dots$, and the spectral gap is clearly defined as:
+\begin{equation}
+    \lambda(\mathcal{L}) := - \lambda_2(\mathcal{L}).
+\end{equation}
+The arguments follow similarly to the classical case. The generator's only fixed point is $\rho_\beta$, as shown in $\eqref{eq:sigma-is-fix}$, and the dynamics in the subspace orthogonal to this kernel are governed by the remaining eigenvalues and eigenstates. The variance of any observable (equivalently, the distance of any state from the equilibrium) contracts exponentially at a rate given by $\lambda(\mathcal{L})$.
+
+The trace distance used for the mixing time definition, can be bounded by the weighted $L^2(\sigma)$ norm via the non-commutative Cauchy-Schwarz inequality. Without loss of generality, we can use the KMS inner product with $s=\frac{1}{2}$, and write $\|\cdot\|_{2, \text{KMS}} := \|\cdot\|_{2, \rho_\beta, 1/2}$ for the following derivations. The evolved state $\rho_t = \mathcal{P}_t(\rho_0)$ the distance from the stationary state $\rho_\beta$ takes the form:
+\begin{equation}
+    \label{eq:trdist-ub-kms-norm}
+    \begin{split}
+        \|\rho_t - \rho_\beta\|_1  &= \|\rho_\beta^{-\frac{1}{2}}(X_t - \idm)\rho_\beta^{-\frac{1}{2}} \|_1 \\
+        &= \|X_t - \idm\|_{1, \text{KMS}} \\
+        &\leq \|X_t - \idm\|_{2, \text{KMS}} \\
+        &\leq e^{-\lambda(\mathcal{L}) t} \|X_0 - \idm\|_{2, \text{KMS}}.
+    \end{split}
+\end{equation}
+Here, $X_t := \rho_\beta^{-\frac{1}{2}} \rho_t \rho_\beta^{-\frac{1}{2}}$ can be interpreted as the relative density of $\rho_t$ to the Gibbs state with respect to the KMS inner product. (Admittedly, there is no unique "density" any more, as for the GNS inner product we would get a different form.) The evolution of $X_t$ is governed by the KMS self-adjoint operator: $$X_t = \rho_\beta^{-\frac{1}{2}}\mathcal{P}_t\left(\rho_\beta^{\frac{1}{2}} X_0 \rho_\beta^{\frac{1}{2}}\right) \rho_\beta^{-\frac{1}{2}}.$$
+For a rigorous upper-bound we have to take the worst-case scenario for the remaining norm in \eqref{eq:trdist-ub-kms-norm}, i.e. when the initial state $\rho_0$ has a small overlap with the Gibbs state $\rho_\beta.$ An example would be a high energy initial state, that tries to thermalize to a low temperature Gibbs state, i.e. where $\beta \gg 1$. After squaring and writing out the remaining norm, it simplifies to
+\begin{equation}
+    \begin{split}
+        \|X_0 - \idm\|_{2, \text{KMS}}^2 &= \| X_0 \|_{2, \text{KMS}} - \idm \\
+        &\leq \tr\left[ \rho_0 \rho_\beta^{-1} \rho_0\right] \\
+        &= \bra{\psi} \rho_\beta^{-1} \ket{\psi}.
+    \end{split}
+\end{equation}
+Here, we first used that $X_0 = \rho_\beta^{-\frac{1}{2}} \rho_0 \rho_\beta^{-\frac{1}{2}}$, then chose a pure state for $\rho_0 = \ket{\psi}\bra{\psi}$ to have an initial state whose probability mass concentrates on a state that is the least compatible with $\rho_\beta$. This allows us to bound the norm, just as in the classical case, with the smallest eigenvalue of $\rho_\beta$:
+$$
+\sup_{\psi} \langle \psi | \rho_\beta^{-1} | \psi \rangle = \|\rho_\beta^{-1}\|_\infty = \frac{1}{\lambda_{\min}(\rho_\beta)}.
+$$
+Substituting back to \eqref{eq:trdist-ub-kms-norm} we get the upper bound on the trace distance from the fixed point,
+$$
+\|\rho_t - \rho_\beta\|_1 \leq e^{-\lambda(\mathcal{L})t} \frac{1}{\sqrt{\lambda_{\min}(\rho_\beta)}}.
+$$
+Finally, solving it for time for which the distance falls below some $\varepsilon$ gives the spectral bound on the mixing time,
+\begin{equation}
+    \label{eq:quantum-spectral-bound}
+        t_\text{mix}(\varepsilon) \leq \frac{1}{\lambda(\mathcal{L})} \ln \left( \frac{1}{\varepsilon \sqrt{\lambda_{\min}(\rho_\beta)}} \right).
+\end{equation}
+A neat result, since it coincides with the classical bound \eqref{eq:spectral-bound}, only that now the relaxation time due to the spectral gap of the quantum generator $\mathcal{L}$ and the burn-in factor due to the smallest eigenvalue of the quantum state $\rho_\beta$ have quite different behaviour to their classical analogues. Note, that the result is the same even if we were to use the GNS inner product in the derivation. 
+
+Unfortunately, the problem of handling far-equilibrium initial states for this bound is also inherited from the classical result. But worry not, there has been a vast amount of research done to use the logarithmic Sobolev techniques also in the non-commuting quantum setting. \todo{CITE from rouzé}
+
+\smallskip
+\subsection{Quantum logarithmic Sobolev bounds.} The problem with the spectral bound \eqref{eq:quantum-spectral-bound} is that the factor $1 / \sqrt{\lambda_{\min}(\rho_\beta)}$ typically scales as $e^{\beta n / 2}$ for an $n$-particle system, making the bound loose for large systems. To get a tighter bound even in these cases, we once again turn to the (quantum) relative entropy of the system, and try to find that logarithmic factor that helped us out for the classical case as well, \eqref{eq:log-sobolev-bound}.
+
+The quantum relative entropy between the states $\rho, \sigma \in \mathcal{D(H)}$ is defined as:
+\todo{write it up with Ent from rouzé, its not $\text{Ent}(\rho)$}
+\begin{equation} 
+    \text{Ent}_{\sigma}(\rho) := D(\rho \| \sigma) = \tr[ \rho (\ln \rho - \ln \sigma)]
+\end{equation}
+In analogy to the classical case, we seek a constant $\alpha > 0$ such that the entropy relative to the Gibbs state $\rho_\beta$ decays exponentially, i.e.
+$$
+D(\rho_t \| \rho_\beta) \leq e^{-\alpha t} D(\rho_0 \| \rho_\beta).
+$$
+The differential condition of this decay is the \textit{Quantum Logarithmic Sobolev Inequality} (QLSI), which is satisfied for a quantum Markov semigroup generated by $\mathcal{L}$
+\begin{equation}
+    \alpha D(\rho \| \rho_\beta) \leq \mathcal{E}
+\end{equation}
+where $\mathcal{E}_L(\rho) := -\frac{d}{dt} D(\rho_t \| \sigma)|_{t=0} = -\tr[\mathcal{L}(\rho)(\ln \rho - \ln \sigma)]$ is the quantum entropy production (or Dirichlet form for the log-relative entropy).
+
+$$\mathcal{E_L}(X, Y) := -\langle X, \mathcal{L}(Y)\rangle_{\sigma}$$
+
+\chapter{Quantum Circuits}
+\smallskip
+\subsection{Basics.}
+The smallest non-trivial system in $\mathcal{D(H)}$ is the \emph{qubit}, the quantum analogue of a classical bit. Its Hilbert space is $\mathcal{H} = \mathbb{C}^2$ and a pure state takes the form
+$$
+\ket{\psi} = \alpha\ket{0} + \beta\ket{1}\quad\text{with}\quad |\alpha|^2 + |\beta|^2 = 1.
+$$
+An $n$-qubit register lives in the tensor product $\mathcal{H}^{\otimes n} = (\mathbb{C}^2)^{\otimes n}$ of dimensions $2^n$, with computational basis $\{\ket{x}\}_{x\in\{0,1\}^n}$ where $\ket{x} = \ket{x_1}\otimes\cdots\otimes\ket{x_n}$. Mixed states $\rho$ on this register are the density operators on $\mathcal{H}^{\otimes n}$, in the same sense as introduced \hyperref[sec:quantum-states]{previously}.
+
+A \emph{quantum gates} acting on $n$ qubits is a unitary $U \in \mathcal{B}((\mathbb{C}^2)^{\otimes n})$. Any unitary on $n$ qubits can be approximated to arbitrary accuracy by composing gates from the universal set consisting of all single-qubit unitaries together with the two-qubit \textsc{CNOT} gate \cite{bible}. The single-qubit Pauli matrices that will time to time show up in the thesis are defined as
+\begin{equation}
+    \label{eq:paulis}
+    X = \begin{pmatrix} 0 & 1 \\ 1 & 0 \end{pmatrix}, \quad
+    Y = \begin{pmatrix} 0 & -\ii \\ \ii & 0 \end{pmatrix}, \quad
+    Z = \begin{pmatrix} 1 & 0 \\ 0 & -1 \end{pmatrix}.
+\end{equation}
+They are simultaneously Hermitian and unitary, and satisfy $X^2 = Y^2 = Z^2 = \idm$. For $\sigma_i, \sigma_j \in \{X, Y, Z\}$ they fulfil the following (anti-)commutation relations
+$$
+[\sigma_i, \sigma_j] = 2\ii\,\epsilon_{ijk}\,\sigma_k, \qquad \{\sigma_i, \sigma_j\} = 2\,\delta_{ij}\,\idm
+$$
+with $\epsilon_{ijk}$ the totally antisymmetric Levi-Civita symbol. Together with $\idm$ they span $\mathcal{B}(\mathbb{C}^2)$, and tensor products of Paulis form an orthogonal basis of $\mathcal{B}((\mathbb{C}^2)^{\otimes n})$ under the Hilbert-Schmidt inner product \eqref{eq:HS}. \todo{we could reason that this is why we like to write Hams as Paulis and ref to our Ham in numerical section}
+
+Each Pauli generates a one-parameter family of \emph{Pauli rotations} $R_\sigma(\theta) := \ee^{-\ii\theta\sigma/2}$ for $\sigma\in\{X,Y,Z\}$ (which can also be extended to multiple qubit rotations $R_{\sigma_j\sigma_k}$). One of them is of particular interest to us, since it can encode arbitrary amplitudes, namely 
+\begin{equation}
+    R_Y(\theta) = \cos(\tfrac{\theta}{2})\,\idm - \ii\sin(\tfrac{\theta}{2})\,Y.
+\end{equation}
+Then, for a well-chosen angle $\theta$ its action is $R_Y(2\arcsin\sqrt{p})\ket{0} = \sqrt{1-p}\ket{0} + \sqrt{p}\ket{1}$, i.e. it deterministically loads a probability $p\in[0, 1]$ into the amplitude of $\ket{1}$. We will also make use of the shorthand: $Y_\theta := R_Y(2\arcsin\sqrt{\theta})$ throughout, particularly for the Boltzmann and weak measurement ancillas used in \hyperref[sec:algorithm]{Sec.~\ref*{sec:algorithm}}. 
+
+A \emph{quantum circuit} is a horizontal-time diagram in which each wire carries one qubit (or a bundled register), boxes denote gates applied at that time slice, and a filled dot $\bullet$ on a wire indicates a control: the gate on the target wire fires conditionally on the control being $\ket{1}$ (or controlled on $\ket{0}$ if it is an open dot $\circ$). A half-filled dot \tikz[baseline=-0.5ex]{\node[halfctrl]{};} on a bundled register denotes a \emph{uniform} (SELECT-style) control, under which the target gate is applied in superposition to every computational-basis state of the control register (i.e. all possible bitstrings), each contributing its own branch to the state. All circuit figures in this thesis follow this convention and were created by the quantikz package \cite{kay2018tutorial}.
+
+There is another key element in the quantum circuit: the read-out, which is performed by a \emph{computational-basis measurement}. This is a projective measurement \eqref{eq:post_meas_state} associated with the spectral decomposition of the $Z$-operators on each qubit. On a pure state $\ket{\psi} \in (\mathbb{C}^2)^{\otimes n}$ this returns a bitstring $x\in\{0, 1\}^n$ with probability $|\langle x|\psi\rangle|^2$ and collapses the register onto $\ket{x}$. \emph{Mid-circuit} measurements are also available on several types of quantum hardware, where the outcome can be discarded (yielding a non-unitary channel of Kraus form \eqref{eq:kraus}) or post-selected on a desired result.
+
+The three primitives introduced so far, e.g. universal gate set, fresh ancilla qubits prepared in $\ket{0}$, and measurements, already suffice to realise \emph{any} CPTP map $\Phi: \mathcal{D}(\mathcal{H}^{\otimes n}) \to \mathcal{D}(\mathcal{H}^{\otimes n})$. By Stinespring's dilation theorem (see \hyperref[sec:OQS]{Sec.~\ref*{sec:OQS}} and \cite{bible}), every quantum channel can be lifted to a unitary on a larger Hilbert space. More concretely, there exist an $m$-qubit ancilla register $A$ and a joint unitary $U$ on $n + m$ qubits such that, 
+$$
+\Phi(\rho) = \tr_A\!\bigl[\,U\,\bigl(\rho \otimes \ket{0}\bra{0}^{\otimes m}\bigr)\,U^\dagger\,\bigr],
+$$
+with the partial trace implemented either by physically discarding the ancilla or, equivalently, by measuring it in the computational basis and forgetting the outcome. The resulting average over unread outcomes reproduces the Kraus form \eqref{eq:kraus}. Since single-qubit unitaries together with \textsc{CNOT} decomposes $U$ exactly, a circuit implementing $\Phi$ to any desired accuracy requires only the three primitives above.
+
+For any work about quantum algorithms and their realizations we cannot forget about the different timsecales in which a quantum and a classical computer operate. The gates above are physical processes on real hardware, and their wall-clock duration is a hard constant in any complexity statement. On state-of-the-art \emph{superconducting} processors, single- and two-qubit gates take $10-100\, \text{ns}$ (e.g. IBM Heron r3 pushing median two-qubit fidelity above $99.9\%$ \cite{abughanem2025ibm}). On a \emph{trapped-ion} hardware pursued by QVLS in Hannover, the most recent fully chip-integrated two-qubit register on $^{9}\text{Be}^{+}$ runs microwave-driven Mølmer–Sørensen ($R_{XX}$) gates of duration around $1\,\text{ms}$ with a composite process fidelity of $96.6\%$ \cite{pulido2024arbitrary}. By contrast, a logic gate on a classical CMOS hardware switches in $\sim 10\,\text{ps}$. The quantum-classical wall-clock gap is therefore three to eight orders of magnitude per gate, a constant overhead that any claim of ``quantum advantage" must overcome.
+
+\begin{figure}[ht]
+  \centering
+  \begin{quantikz}[row sep=0.7cm, column sep=0.45cm]
+  %
+  % Ancilla qubit 0 (MSB)
+    \lstick{$\ket{0}$}
+      & \gate[4, nwires={2}]{\textsc{Prep}_f}
+      & \qw
+      & \qw
+      & \qw
+      & \ctrl{4}
+      & \gate[4, nwires={2}]{\text{QFT}}
+      &
+      &
+      & \meter{} \\
+  %
+  % Ancilla qubit 1
+    \lstick{$\ket{0}$}
+      &
+      & \qw
+      & \qw
+      & \ctrl{3}
+      & \qw
+      &
+      &
+      &
+      & \meter{} \\
+  %
+  % Vdots row (invisible wire, just for the ellipsis)
+    \lstick{$\vdots$} \setwiretype{n}
+      &
+      & \vdots
+      &
+      &
+      &
+      &
+      &
+      &
+      & \vdots \\
+  %
+  % Ancilla qubit r-1 (LSB)
+    \lstick{$\ket{0}$}
+      &
+      & \ctrl{1}
+      & \qw
+      & \qw
+      & \qw
+      &
+      &
+      &
+      & \meter{} \\
+  %
+  % System register (bundled)
+    \lstick{$\ket{\psi}$}
+      & \qwbundle{}
+      & \gate{U}
+      & \ \ldots\ \qw
+      & \gate{U^{2^{r-2}}}
+      & \gate{U^{2^{r-1}}}
+      & \qw
+      & \qw
+      & \qw
+      & \rstick{$\ket{\psi}$} \qw
+  \end{quantikz}
+  \caption{Phase estimation
+  circuit $\mathcal{C}_f$ with $r$ ancilla qubits and a bundled system register $\ket{\psi}$. The
+  state-preparation block $\textsc{Prep}_f$ loads the time-domain window
+  $\ket{f} = \sum_{\bar t\in S_{t_0}} f(\bar t)\ket{\bar t}$ on the ancilla register. (i) The uniform window $f\equiv 1/\sqrt{N}$ is achieved by Hadamard gates on each qubit: this is the standard QPE. (ii) A Gaussian $f(\bar{t}) \propto \ee^{-\bar{t}^2 \sigma^2}$ leads to a more smeared phase estimate (albeit controlled) with the advantage of requiring less time evolution.}
+  \label{circ:qpe}
+\end{figure}
+
+\smallskip
+\subsection{Phase Estimation.} One of the key subroutines classical and quantum Gibbs sampling algorithms rest on is the phase (or energy) estimation. This allows us to label the system with an energy register on which a transition-rate $\gamma(\omega)$, satisfying the KMS condition \eqref{eq:KMS-condition}, can act in superposition. It was first introduced as \emph{Quantum phase estimation} (QPE) by Kitaev in \cite{kitaev1997quantum,cleve1998quantum}, and it was quickly applied to Hamiltonian eigenvalue problems \cite{abrams1999quantum}. It has underpinned not only recent developments in Gibbs sampling, but also the seminal quantum Metropolis algorithm of \cite{temme2011quantum}. As QPE is an already established textbook material, we only highlight the similarities and differences of it to the phase estimation we use later on: a one-parameter generalization of QPE, that can be used to compute \emph{Operator Fourier Transforms} (OFT).
+
+To make this shared structure visible, see the circuit in \hyperref[circ:qpe]{Fig.~\ref*{circ:qpe}}. Let the Hamiltonian $H$ have Bohr frequencies $\nu \in B_H$, fix the time unit $t_0>0$, and an ancilla register of $r$ qubits with time grid $S_{t_0} = \{0, t_0, 2t_0, \dots, (N{-}1)t_0\}$ and a dual frequency grid $S_{\omega_0}$ of spacing $\omega_0$ satisfying $t_0\,\omega_0 = 2\pi/N$. The three stages of the circuit are
+\begin{enumerate}
+    \item $\textbf{Prep}_f$ on the ancilla, preparing the filter state $\ket{f} := \sum_{\bar t \in S_{t_0}} f(\bar t)\,\ket{\bar t}$ for a chosen window $f : S_{t_0} \to \mathbb{C}$ with $\sum_{\bar t}|f(\bar t)|^2 = 1$.
+    \item \textbf{Controlled Hamiltonian evolution,} $\sum_{\bar t}\ket{\bar t}\!\bra{\bar t}\otimes U^{\bar t/t_0}$ with $U = \ee^{+\ii H t_0}$ (plus sign, so the readout register labels $\nu$ directly in our later applications \eqref{eq:oft}). This is achieved by the cascade of evolutions $U, U^2, \ldots, U^{2^{r-1}}$.
+    \item \textbf{Quantum Fourier Transform (QFT)}, $\ket{\bar t}\mapsto\frac{1}{\sqrt N}\sum_{\bar\omega}\ee^{-\ii\bar t\bar\omega}\ket{\bar\omega}$, maps the time register to the frequency register $\ket{\bar \omega}$ on $S_{\omega_0}$.
+\end{enumerate}
+On an eigenstate $H\ket{\psi_\nu} = \nu\ket{\psi_\nu}$ the three stages together act as
+\begin{equation} \label{eq:qpe-unified}
+    \mathcal{C}_f \,\bigl(\ket{0}^{\otimes r} \otimes \ket{\psi_\nu}\bigr)
+\;=\; \sum_{\bar\omega \in S_{\omega_0}} \hat f(\bar\omega - \nu)\,\ket{\bar\omega} \otimes \ket{\psi_\nu},
+\end{equation}
+where $\hat f(\bar\omega) := \frac{1}{\sqrt{N}} \sum_{\bar t \in S_{t_0}} \ee^{-\ii \bar\omega \bar t} f(\bar t)$ is the discrete Fourier transform of $f(\bar{t})$. Clearly, the choice of the filter function $f$ can significantly influence the result of the phase estimation. Let us consider
+the following two cases.
+
+\medskip 
+\noindent\textbf{(i) Uniform $f$ -- standard QPE.} To weight each label uniformly by $f(\bar t) = 1/\sqrt{N}$, the $\textsc{Prep}_f$ becomes a simultaneous application of \emph{Hadamard} gates on each of the time register ancillas. A Hadamard gate is defined as, 
+$$
+\mathsf{H} \;:=\; \tfrac{1}{\sqrt{2}} \begin{pmatrix} 1 & 1 \\ 1 & -1 \end{pmatrix},
+$$
+and it maps each ancilla $\ket 0 \mapsto (\ket 0 + \ket 1)/\sqrt 2$. The collective result is the uniform time register state $\frac{1}{\sqrt N}\sum_{\bar t}\ket{\bar t}$. The output kernel then becomes
+\begin{equation}
+    \hat f(\bar\omega - \nu) \;=\; \frac{1}{N}\,\frac{1 - \ee^{-\ii(\bar\omega-\nu)Nt_0}}{1 - \ee^{-\ii(\bar\omega-\nu)t_0}},
+\end{equation}
+or the squared form that we mostly see in QPE literature, 
+\begin{equation} \label{eq:QPE-prob-kernel}
+    \bigl|\hat f(\bar\omega-\nu)\bigr|^2 \;=\; \frac{\sin^2\!\bigl((\bar\omega-\nu)Nt_0/2\bigr)}{N^2\sin^2\!\bigl((\bar\omega-\nu)t_0/2\bigr)}
+\end{equation}
+i.e. the Dirichlet kernel, peaked at $\bar{\omega} = \nu$ with width $\sim 1 / (Nt_0)$ and polynomially decaying \cite[Fig. 8]{chen2023quantum}. Sampling the ancilla register returns an $r$-bit approximation of the scaled eigenphase $\varphi_\nu = \nu t_0/(2\pi)$. In order to resolve it up to $n$ accurate bits with failure probability $\delta$ requires, 
+\begin{equation} \label{eq:qpe-ancilla-count}
+    r \;=\; n + \left\lceil \log\!\left(2 + \frac{1}{2\delta}\right) \right\rceil
+\end{equation}
+ancilla qubits \cite[Sec.~5.2.1]{bible}, for a total controlled Hamiltonian evolution time $\sum_{k=0}^{r-1} 2^k t_0 = O(1/\varepsilon)$ at resolution $\varepsilon = 2^{-n}$.
+
+\medskip
+\noindent\textbf{(ii) Smoothly decaying $f$.} Replacing the uniform filter by a rapidly decaying one, e.g. a discretized Gaussian \eqref{eq:gaussian-filter-t}, or a Gevrey function \cite[text]{ding2025efficient}, turns $\hat{f}$ into a smooth kernel of tuneable width, smearing each eigenvalue into a packet of the window's width ($2\sigma$ for the Gaussian \eqref{eq:smoothed-jump}).
+
+Resolution can be similarly computed: for a Gaussian width $2\sigma$, truncating the discretized window to relative $\ell_2$-tail $\varepsilon$ requires time range $Nt_0 \gtrsim \sigma^{-1}\sqrt{2\log(1/\varepsilon)}$ and frequency spacing $\omega_0 = 2\pi/(Nt_0) \lesssim \sigma$, giving
+\begin{equation} \label{eq:gaussian-ancilla-count}
+    r \;\geq\; \left\lceil \log\!\frac{2\pi}{\sigma t_0} \;+\; \tfrac{1}{2}\log\ln\frac{1}{\varepsilon} \right\rceil,
+\end{equation}
+and total evolution time $Nt_0 = \mathcal{O}\!\bigl(\sigma^{-1}\sqrt{\log(1/\varepsilon)}\bigr)$, which is linear in the inverse resolution up to $\sqrt{\log(1/\varepsilon)}$ (Gevrey windows replace the square root by $\mathrm{polylog}(1/\varepsilon)$ \cite[text]{ding2025efficient}).
+
+Both case (i) and (ii) obey $T\cdot\Delta\omega \gtrsim 1$ with $T = Nt_0$ the total controlled Hamiltonian evolution time and $\Delta \omega$ the width of the frequency kernel $\hat{f}$. However, they have different qualities that are worth highlighting to understand what we gain (or lose) by choosing the latter one as our subroutine.
+
+(i) Standard QPE is optimal for the classical-output task: input the eigenstate $\ket{\psi_\nu}$, return an $r$-bit estimate $\hat{\nu}$ of the eigenphase. For this task a matching quantum query lower bound holds: any algorithm that accesses $H$ only through controlled $U = \ee^{\pm \ii H t_0}$ and returns $\varepsilon$-accurate estimate with constant success probability must use total controlled-evolution time $T = \Omega(1/\varepsilon)$ \cite{giovannetti2006quantum}. This is the \emph{Heisenberg limit} $\Delta E \cdot T \sim 1$ of quantum metrology and is a genuine quantum speed-up over the ``standard quantum limit" $T\sim1/\varepsilon^2$ obtainable from $M$ independent depth $t_0$ measurements followed by classical averaging. QPE's $U^1, U^2, \ldots, U^{2^{r-1}}$ cascade attains $T = \mathcal{O}(1 / \varepsilon)$ \cite{bible} and thus saturates this lower bound. Although its Dirichlet kernel has polynomially-decaying tails \eqref{eq:QPE-prob-kernel}, and is \emph{not} a minimizer of frequency spread in the sense of case (ii), the median estimation error still decays as $1 / T$, which is all the estimation task demands.
+
+(ii) The KMS detailed balanced Lindbladians of \hyperref[sec:kms-lindbladian]{Sec.~\ref*{sec:kms-lindbladian}} use Gaussian filtered phase estimates: by sandwiching a jump operator $A$ between filtered phases estimations, we can decompose jump operators into their Fourier components $\hat{A}(\bar{\omega})$ (\eqref{eq:oft}) and allow us to weigh them with the KMS transition rates $\gamma(\bar{\omega})$. The key metric is no longer estimation error but the $L^2$ width of $\bar{f}$. The governing bound then, is the classical Heisenberg inequality: for any $f\in L^2(\mathbb{R})$ of unit norm \cite{folland1997uncertainty}, 
+$$
+\sigma_t\,\sigma_\omega \;\geq\; \tfrac{1}{2},
+$$
+Under the circuit identification $\sigma_t \leftrightarrow T$, $\sigma_\omega \leftrightarrow \Delta\omega$ this becomes a lower bound on controlled-evolution time that no window can evade. The Gaussian \eqref{eq:gaussian-filter-t} uniquely saturates the above equality, while the Dirichlet does not. But this is a result coming from harmonic analysis, independent of any quantum metrological argument, and is not to be confused with the Heisenberg limit of (i). Although, recent results found that the Heisenberg-limit with shallower circuits are achievable \cite{ding2023even} (with just an ancilla combined with statistical phase-estimation protocols), these cannot be used in our setup since they collapse the ancilla to a classical sample, destroying the superposition of $\ket{\bar{\omega}}$.
+
+Since we will work with OFT-based Lindbladian generators, the inherent obstacle that arises is the classical Fourier bound, not Heisenberg limit. As the Bohr spectrum $B_H$ of a non-trivial many-body Hamiltonian is exponentially dense in $n$, an attempt to exactly resolve Bohr frequencies would require $T$ exponentially growing with $n$, and thus no choice of filter function can escape this. The smoothened generators of \hyperref[sec:kms-lindbladian]{Sec.~\ref*{sec:kms-lindbladian}} take this impossibility as the starting point: they fix a controlled resolution width $\sigma$ and arrange the dissipator and Lamb-Shift such that KMS detailed balance survives even this finite-resolution smearing.
+
+\smallskip
+\label{sec:prelim-trotter}
+\subsection{Trotterization.}
+\begin{figure}[ht]
+  \centering
+  \resizebox{\textwidth}{!}{%
+  \begin{quantikz}[
+    transparent, row sep=0.6cm, column sep=0.4cm,
+    /tikz/operator/.append style={inner sep=3pt, minimum height=6mm, font=\small}
+  ]
+    \lstick{$q_1$}
+  % A-block L (active)
+      & \gate[2]{R_{X_1X_2}}
+      & \gate[2]{R_{Y_1Y_2}}
+      & \gate[2]{R_{Z_1Z_2}}
+  % B-block L (q_1 idle)
+      & \qw & \qw & \qw
+  % C-block (boundary, q_1 leads the [3]-wide gate; R^2 = R applied twice = rotate by 2 dt)
+      & \gate[3, label style={yshift=0.4cm}]{R_{X_3X_1}^{2}}
+      & \gate[3, label style={yshift=0.4cm}]{R_{Y_3Y_1}^{2}}
+      & \gate[3, label style={yshift=0.4cm}]{R_{Z_3Z_1}^{2}}
+  % B-block R (q_1 idle)
+      & \qw & \qw & \qw
+  % A-block R (active)
+      & \gate[2]{R_{X_1X_2}}
+      & \gate[2]{R_{Y_1Y_2}}
+      & \gate[2]{R_{Z_1Z_2}}
+      & \qw \\
+  %
+    \lstick{$q_2$}
+  % A-block L (empty: consumed by q_1's gate[2])
+      & & &
+  % B-block L (active, q_2 leads)
+      & \gate[2]{R_{X_2X_3}}
+      & \gate[2]{R_{Y_2Y_3}}
+      & \gate[2]{R_{Z_2Z_3}}
+  % C-block: q_2 passes through unaffected
+      & \dashedthrough & \dashedthrough & \dashedthrough
+  % B-block R (active, q_2 leads)
+      & \gate[2]{R_{X_2X_3}}
+      & \gate[2]{R_{Y_2Y_3}}
+      & \gate[2]{R_{Z_2Z_3}}
+  % A-block R (empty: consumed by q_1's gate[2])
+      & & &
+      & \qw \\
+  %
+    \lstick{$q_3$}
+  % A-block L (q_3 idle)
+      & \qw & \qw & \qw
+  % B-block L (empty: consumed by q_2's gate[2])
+      & & &
+  % C-block (empty: consumed by q_1's gate[3])
+      & & &
+  % B-block R (empty: consumed by q_2's gate[2])
+      & & &
+  % A-block R (q_3 idle)
+      & \qw & \qw & \qw
+      & \qw
+  \end{quantikz}%
+  }
+  \caption{One second-order Strang Trotter step for the $n{=}3$ periodic
+  Heisenberg chain. The sum of Pauli strings in $H_\mathrm{Heis}$ turn into a product of 2-qubit unitary Pauli rotations,
+  $R_{\sigma_j\sigma_k}(\theta) \equiv \ee^{-\ii\theta\,\sigma_j\sigma_k/2}$, where $\theta$ encodes coupling strengths of the Hamiltonian and the required time step.
+  The boundary bond $(3,1)$ closes the ring and $q_2$ passes through unaffected
+  (dashed wire).}
+  \label{circ:trotter-strang}
+\end{figure}
+Up to this point we have concealed a fact that Hamiltonian time evolutions $U(t) = \ee^{\pm \ii H t}$ often cannot be exactly implemented by a quantum computer, and they have to be approximated by a product formula $S_p(t)$ instead. This is also true for the local (i.e. each term acts on a bounded number of qubits) and non-commuting Hamiltonians we care about: there is no known shallow circuit that would avoid the use of Trotterization. Here, we will give only the necessary details that are relevant for the thesis, based on the work of Childs et al. \cite{childs2021theory}.
+
+Let us write the Hamiltonian as a sum of $\Gamma$ non-commuting summands
+$$
+H \;=\; \sum_{\ell=1}^{\Gamma} H_\ell,
+$$
+where each $H_\ell$ is either a single Pauli string or a commuting family of such strings whose exponential $\ee^{-\ii t H_\ell}$ is easy to implement (typically because all terms in $H_\ell$ share support disjointly or pairwise commute). A $p$-th order product formula $S_p(t)$ is an ordered product of single-summand evolutions $\ee^{-\ii t H_\ell}$ that together approximates the full Hamiltonian evolution $\ee^{-\ii t H}$ up to error $\mathcal{O}(t^{p + 1})$ for small $t$ \cite{childs2021theory}. The simplest one for reference, with $p=1$ is called the Lie-Trotter formula, 
+\begin{equation}
+    S_1(t) \;:=\; \ee^{-\ii t H_\Gamma}\cdots \ee^{-\ii t H_1},
+\end{equation}
+but the one we mainly use for the numerical analysis is the Strang splitting with $p=2$:
+\begin{equation}\label{eq:strang}
+    S_2(t) \;:=\; \Bigl(\prod_{\ell=1}^{\Gamma} \ee^{-\ii (t/2) H_\ell}\Bigr)\Bigl(\prod_{k=\Gamma}^{1} \ee^{-\ii (t/2) H_\ell}\Bigr).
+\end{equation}
+The former leads to errors $\|S_1(t) - \ee^{-\ii H t}\| = \mathcal{O}(t^2)$ while the latter $\|S_2(t) - \ee^{-\ii H t}\| = \mathcal{O}(t^3)$. There is also a structural difference, namely that Strang splitting is palindromic, i.e. $S_2(t)^\dagger = S_2(-t)$ which is worth preserving to avoid additional deviations from detailed balance \hyperref[rem:palindromic]{Remark~\ref*{rem:palindromic}}. The circuit realization of $S_2$ for $n=3$ qubit, periodic Heisenberg chain $H_\mathrm{Heis}$ \eqref{eq:H_heis} is given in \hyperref[circ:trotter-strang]{Fig.~\ref*{circ:trotter-strang}}. Since each $H_k$ is Hermitian by construction, each factor $\ee^{-\ii t H_\ell}$ is unitary, so $S_p(t)$ and its iterate $S_p^{(M)}(t) := S_p(t/M)^M$ are unitary for every choice of $p$ and $M$. Notably, we see that an $n$ qubit unitary $U$ is broken down into 2-qubit gates. This is important for implementation since they can be easily transpiled to native 1-qubit and 2-qubit gates that a quantum hardware uses. To motivate it even more: transpiling a general $n$ qubit unitary to native gates in a brute-force manner is currently only possible up to $n = 9$ qubits \cite{rakyta2024highly}.
+
+Higher-order Suzuki formulas $S_{2r}$ can be built recursively from $S_2$ by the fractal construction $S_{2r}(t) = S_{2r-2}(u_r t)^2\,S_{2r-2}((1-4u_r)t)\,S_{2r-2}(u_r t)^2$ with $u_r = 1/(4 - 4^{1/(2r-1)})$, leading to errors of $\mathcal{O}(t^{2r+1})$ \cite{childs2021theory}.
+
+A naive Taylor truncation only controls the error through $\|H_k\|$, ignoring the commutativity of the summands. The key result of \cite{childs2021theory} is that the error of any $p$-th order formula is in fact controlled by nested commutators of the summands. For some real $t$ the error is given by \cite[Theorem 6]{childs2021theory}, 
+\begin{equation} \label{eq:childs-comm-bound}
+    \begin{split}
+        &\bigl\|S_p(t) - \ee^{-\ii H t}\bigr\|
+        \;=\; \mathcal{O}\!\bigl(\tilde\alpha_{\mathrm{comm}}\,|t|^{p+1}\bigr) \\ 
+        \text{with}\qquad &\tilde\alpha_{\mathrm{comm}}
+        \;:=\; \sum_{\ell_1,\dots,\ell_{p+1}=1}^{\Gamma}
+        \bigl\|\,[H_{\ell_{p+1}},\,\cdots\,[H_{\ell_2},H_{\ell_1}]\cdots]\,\bigr\|,
+    \end{split}
+\end{equation}
+where the constant $\tilde{\alpha}_\mathrm{comm}$ is universal (independent of $\Gamma$, $\|H_\ell\|$, and the ordering fixed by the particular formula). More concretely, for the second-order Strang splitting,
+\begin{equation} \label{eq:strang-explicit-error}
+        \bigl\|S_2(t) - \ee^{-\ii H t}\bigr\|
+    \;\leq\; \sum_{\ell_1 < \ell_2}\!\left(
+    \frac{t^3}{12}\bigl\|[H_{\ell_2},[H_{\ell_2},H_{\ell_1}]]\bigr\|
+    \;+\; \frac{t^3}{24}\bigl\|[H_{\ell_1},[H_{\ell_1},H_{\ell_2}]]\bigr\|
+    \right)
+    \;+\; \mathcal{O}(t^4).
+\end{equation}
+For longer time evolutions the target evolution $\ee^{-\ii H t}$ is split into $M$ Trotter steps of size $\delta t = t / M $. Then, a total error of $\varepsilon$ can be achieved if $M$ satisfies, 
+\begin{equation} \label{eq:trott-num-bound}
+    M \;\geq\; \Omega\!\left(\frac{\tilde\alpha_{\mathrm{comm}}^{1/p}\;t^{\,1+1/p}}{\varepsilon^{\,1/p}}\right).
+\end{equation}
+For $p=1$ this is the $\mathcal{O}(\tilde\alpha_{\mathrm{comm}}\, t^2/\varepsilon)$ worst-case count, and for Strang ($p = 2$) the $\mathcal{O}(\sqrt{\tilde\alpha_{\mathrm{comm}}}\, t^{3/2}/\sqrt{\varepsilon})$ bound is what is used for our specialized results in the Trotter error analysis of [REF] \todo{ref to trotter}
+
+One of the Hamiltonians we use for the numerical analysis (the same we have a sketched Trotter step for in \hyperref[circ:trotter-strang]{Fig.~\ref*{circ:trotter-strang}}) is the periodic Heisenberg chain on $n$ qubits, 
+\begin{equation} \label{eq:H_heis}
+    H_{\mathrm{Heis}}
+\;=\; J \sum_{i=1}^{n} \bigl( X_i X_{i+1} + Y_i Y_{i+1} + Z_i Z_{i+1} \bigr)
+\;+\; \sum_{i=1}^{n} \zeta_i Z_i,
+\end{equation}
+with coupling $J$ (if positive - antiferromagnetic, if negative - ferromagnetic) and disordering external fields $\zeta_i \in [-\zeta,\zeta]$. 
+
+In the following, we give more details about the commutant constant $\tilde{\alpha}_\mathrm{comm}$ for the family of \emph{geometrically local} Hamiltonians -- the family that the Heisenberg model \eqref{eq:H_heis} is also part of. These Hamiltonians can be written as
+$$
+ H \;=\; \sum_c h_c, \qquad \|h_c\| \le h_*, 
+$$
+where each local term $h_c$ is supported on at most $k$ sites, with maximum overlapping supports of degree $d$, making the Hamiltonian $H$ $(k, d)-$\emph{local} with $k, d = \mathcal{O}(1)$. Such an $H$ admits a partition into $\Gamma = \mathcal{O}(1)$ commuting classes, i.e. a sum of pair-wise commuting local terms. Expanding the $(p+1)$ nested commutator $[H_{\ell_{p+1}}, \cdots [H_{\ell_2}, H_{\ell_1}]]$ term-by-term over local terms, we obtain a sum over ordered $(p+1)$-tuples of bonds $(c_1, \dot, c_{p+1})$. The only surviving terms in this sum are the ones that have \emph{connected} bonds, i.e. where each $c_{i+1}$ overlaps with at least one of $c_1, \dots, c_i$, since the disjoint terms commute with each other. Therefore, an estimating $\tilde{\alpha}_\mathrm{comm}$ for $(k,d)$-local Hamiltonians reduces to the problem of counting these connected bonds. The number of connected $(p+1)$-tuples anchored at a pivot bond $c_1$ is at most $(2d)^p$, and there are $\Theta(n)$ choices of pivot bonds, giving
+\begin{equation} \label{eq:alpha-comm}
+\tilde\alpha^{(p)}_{\mathrm{comm}} \;\leq\; C_{d,p}\,n\,h_*^{p+1} \;=\; \mathcal{O}(n).
+\end{equation}
+Here, $C_{d,p} \le \Gamma^{p+1}\,(2d)^p$ is a combinatorial constant depending only on the bond-graph degree $d$ and the order $p$. The counting argument for this is present in \cite[Sec. V B]{childs2021theory} and goes as follows. The outer commuting-class grouping fixes $\Gamma = \mathcal{O}(1)$ and selects which classes contribute (e.g. even or odd sites), while inner bounded-degree bond counting yields the $\Theta(n)\cdot(2d)^p$ bound. It is the inner bond layer that carries the geometric locality assumption. For instance, an all-to-all interaction that has $\Gamma = 2$ summands but unbounded bond degree $d$, yields $\mathcal{O}(n^3)$ commutator constant rather than $\mathcal{O}(n)$ \cite[Sec. IV C]{childs2021theory}.
+
+The 1D (periodic) Heisenberg chain \eqref{eq:H_heis} is a canonical case for $(k,d)$-local Hamiltonian. Its terms can be grouped into a couple of commuting classes: odd and even sites in case $n$ is even (or into three classes if $n$ is odd due to the boundary.) As the interaction degree on the chain is $d=2$, and the number of commuting classes $\Gamma = 2$ (or $3$), it is possible to find some estimate for the combinatorial factor in \eqref{eq:alpha-comm}. Although, with numerical heuristics \cite{childs2021theory}, we can get that constant value, for us the scaling is already sufficient, i.e. for $p=2$: $\tilde\alpha^{(2)}_{\mathrm{comm}}(H_{\mathrm{Heis}}) = \mathcal{O}(|J|^3 n)$. The same principle applies to the periodic 1D transverse-field Ising model and the 2D Heisenberg model on a square lattice, again with $\tilde\alpha^{(2)}_{\mathrm{comm}} = \mathcal{O}(n)$ scaling and constant prefactors that change only with the bond-interaction degree $d$.
+
+\smallskip
+\subsection{Linear Combination of Unitaries.}\label{sec:prelim-LCU}
+
+\begin{figure}[ht]
+  \centering
+  \begin{quantikz}[row sep=0.75cm, column sep=0.55cm]
+    \lstick{$\ket{0^b}$}
+      & \qwbundle{}
+      & \gate{\text{PREP}}
+      & \ctrl{1}
+      & \gate{\text{PREP}^\dagger}
+      & \rstick{$\bra{0^b}$} \qw
+      \\
+    \lstick{$\ket{\psi}$}
+      & \qwbundle{}
+      & \qw
+      & \gate{U(t)}
+      & \qw
+      & \rstick{$\displaystyle\frac{1}{\|f\|_1}\sum_t f(t)\,U(t)\,\ket{\psi}$} \qw
+  \end{quantikz}
+  \caption{LCU block encoding $U_A$
+  of $A = \sum_t f(t)\,U(t)$: \textsc{Prep} writes the filter state
+  $\ket{f} = \frac{1}{\sqrt{\|f\|_1}}\sum_t \sqrt{f(t)}\ket{t}$, \textsc{Select}
+  applies $U(t)$ controlled on the ancilla, and \textsc{Prep}$^\dagger$
+  uncomputes. Post-selecting the ancilla on $\ket{0}$ leaves
+  $A\ket{\psi}/\|f\|_1$ on the system, with success probability
+  $\|A\ket{\psi}\|^2/\|f\|_1^2$.}
+  \label{circ:lcu}
+\end{figure}
+
+Another key subroutine we will make use of is the linear combination of unitaries (LCU), along with the transformation of these block encoded operators introduced in the subsequent section. For a comprehensive introduction, please see \cite{childs2012hamiltonian,berry2015simulating}.
+
+Fix a unitary family $\{U(t)\}_{t\in S_t}$ indexed by a discrete grid $S_t$ and a scalar weight $f : S \to \mathbb{R}_{\geq 0}$ with finite $\ell_1$ norm $\|f\|_1 = \sum_t f(t)$. The target operator
+$$
+A \;=\; \sum_{t \in S} f(t)\,U(t)
+$$
+is in general Hermitian but not unitary if $U(-t) = U(t)^\dagger$ and $f$ is real and symmetric. Its operator norm $\|A\|$ is at most $\|f\|_1$ by the triangle inequality. The LCU circuit in \hyperref[circ:lcu]{Fig.~\ref*{circ:lcu}} realises $A$ up to a known rescaling using an ancilla register of $b = \lceil \log|S_t|\rceil$ qubits and the following three ingredients: 
+\begin{enumerate}
+    \item \textsc{Prep} on the ancilla, prepares the filter state $\ket{f} := \frac{1}{\sqrt{\|f\|_1}}\sum_{t \in S} \sqrt{f(t)}\,\ket{t}$
+    \item \textsc{Select} picks out each $U(t)$ for a given $t$, i.e. $\sum_{t}\ket{t}\!\bra{t}\otimes U(t)$
+    \item $\textsc{Prep}^\dagger$ uncomputes the ancilla register.
+\end{enumerate}
+Writing the composite circuit as $U_A := (\textsc{Prep}^\dagger \otimes \idm)\, \textsc{Select}\, (\textsc{Prep} \otimes \idm)$, a direct calculation shows that its $\ket{0^b}$-$\ket{0^b}$ matrix element (the top left corner) is exactly, 
+\begin{equation} \label{eq:lcu}
+    \bra{0^b}\,U_A\,\ket{0^b} \;=\; \frac{A}{\|f\|_1},
+\end{equation}
+i.e. $U_A$ is a block encoding of $A$ with subnormalisation $\alpha:= \|f\|_1$ \cite{low2019hamiltonian}. The subnormalisation is the price for packing a non-unitary $A$ inside a unitary: $U_A$ acts as $A / \alpha$ on the block projector $\ket{0^b}\!\bra{0^b}$ and as an unspecified completion on its orthogonal subspace, and all complexity statements about simulation times and success probabilities scale with $\alpha$.
+
+This approach can be extended to cases where $f$ assumes signed or complex values. There are different solutions, but the one we end up using later is the following: split $\textsc{Prep}$ into an asymmetric left/right pair $\textsc{Prep}'$ / $\textsc{Prep}$. The prior writes the signed / phased amplitude $\sum_t \mathrm{sgn}(f(t))\sqrt{|f(t)|/\|f\|_1}\,\ket{t}$ on the left, and the latter writes the magnitude-only amplitude $\sum_t \sqrt{|f(t)|/\|f\|_1}\,\ket{t}$ on the right, so that the two amplitudes multiply to $f(t)/\|f\|_1$. \hyperref[circ:U_B_a]{Fig.~\ref*{circ:U_B_a}} adopts this with $\mathrm{sgn}(\cdot)$ is a unit-modulus phase in the complex case.
+
+Applying $U_A$ on $\ket{0^b}\otimes\ket{\psi}$ and \emph{post-selecting} the ancilla on $\ket{0^b}$ leaves, up to normalisation, the state $A \ket{\psi} / \alpha$ on the system, with success probability $\|A\ket{\psi}\|^2/\alpha^2$. When $\alpha \leq 1$, the block encoding can be taken as a deterministic implementation of $A$. In the case when $\alpha \geq 1$, however, the post-selection succeeds only with $\mathcal{O}(1 / \alpha^2)$, in which case LCU is \emph{not} deterministic. For bare applications of LCU, there are already remedies for this, e.g. a repeat-until-success procedure with $\mathcal{O}(\alpha^2)$ of repetitions, or the so-called oblivious amplitude amplifications which involves additional reflections. But in our thesis, an indeterministic LCU can only happen when we create a block encoding for a Hermitian operator $B$ and then directly transform it to a coherent evolution $\ee^{-\ii B t}$. This transformation goes hand in hand with block-encodings, which is the next subroutine we will introduce. There, it becomes clear what role the subnormalization factor $\alpha$ plays in the algorithm's complexity.
+
+\smallskip
+\subsection{Quantum Signal Processing.} \label{sec:prelim-QSP}
+\begin{figure}[ht]
+  \centering
+  \resizebox{1.1\textwidth}{!}{%
+  \begin{quantikz}[row sep=0.7cm, column sep=0.5cm]
+    \lstick{$\ket{0}_\mathrm{QSP}$}
+      & \qw
+      & \gate{R(\theta_0,\phi_0,\lambda_0)}
+      & \octrl{1}
+      \gategroup[3,steps=2,style={dashed,rounded corners,fill=black!6,inner sep=5pt},background,label style={label position=below,yshift=-0.45cm,align=center}]{\scriptsize Repeat $d$ times\\\scriptsize $j = 1,\dots,d$}
+      & \gate{R(\theta_j,\phi_j,0)}
+      & \qw
+      & \octrl{1}
+      \gategroup[3,steps=2,style={dashed,rounded corners,fill=black!6,inner sep=5pt},background,label style={label position=below,yshift=-0.45cm,align=center}]{\scriptsize \quad Repeat $d$ times\\\scriptsize $j = d{+}1,\dots,2d$}
+      & \gate{R(\theta_j,\phi_j,0)}
+      & \qw
+      & \rstick{$\bra{0}_\mathrm{QSP}$}\qw
+      \\
+    \lstick{$\ket{0^b}$}
+      & \qwbundle{}
+      & \gate{\textsc{Prep}}
+      & \gate[2]{W}
+      & \qw
+      & \qw
+      & \gate[2]{W^\dagger}
+      & \qw
+      & \gate{\textsc{Prep}^\dagger}
+      & \rstick{$\bra{0^b}$}\qw
+      \\
+    \lstick{$\ket{\psi}$}
+      & \qwbundle{}
+      & \qw
+      &
+      & \qw
+      & \qw
+      &
+      & \qw
+      & \qw
+      & \rstick{$\approx \ee^{-\ii\delta A}\ket{\psi}$}\qw
+  \end{quantikz}
+  }
+  \caption{Degree-$2d$ GQSP circuit realising $\ee^{-\ii\delta A}$
+  from the walk operator $W$ of \ref{eq:qsp-walk}.
+  The first $d$ signal calls are controlled-$W$ and the last $d$
+  are controlled-$W^\dagger$ (\cite[Thm. 6]{motlagh2024generalized}, $k = d$).
+  Post-selecting both ancillas on $\ket{0}$ yields
+  $\ee^{-\ii\delta A} + \mathcal{O}(\varepsilon_\mathrm{QSP})$.}
+  \label{circ:gqsp}
+\end{figure}
+
+Without spoiling too much of the coming theoretical discussions, let us simply claim, that for a detailed balanced Lindbladian we need to apply a coherent evolution $\ee^{-\ii\delta A}$ with respect to a Hermitian operator $A$. Although the method we are about to introduce here is not the only possibility, it certainly is a good fit for our setup. 
+
+The LCU circuit of the previous section \hyperref[circ:lcu]{Fig.~\ref*{circ:lcu}} delivers a block encoding $U_A$ on a $b$-qubit register of some Hermitian $A$ on an $n$-qubit register, 
+$$
+\langle 0^b |\,U_A\,|0^b \rangle \;=\; A/\alpha, \qquad \|A/\alpha\| \leq 1,
+$$
+with $A = \sum_j \alpha_j U_j$, $\alpha = \sum_j \alpha_j$, preparation unitary $\textsc{Prep}\ket{0} = \sum_j \sqrt{\alpha_j/\alpha}\,\ket{j}$, selection unitary $\textsc{Select} = \sum_j \ket{j}\!\bra{j}\otimes U_j$, and $U_A = (\textsc{Prep}^\dagger\otimes I)\,\textsc{Select}\,(\textsc{Prep}\otimes I)$. 
+
+What we want to apply to the system however is not purely $A$ but rather the coherent evolution $\ee^{-\ii\delta A}$. \emph{Generalized quantum signal processing} (GQSP) \cite{motlagh2024generalized} is the tool that transforms one into the other: interleaving controlled calls to an associated \emph{walk operator} -- consisting of $U_A$ and reflections -- with single-qubit rotations realises any polynomial transformation of $A$'s spectrum after post-selection. Choosing the polynomial $P$ as a good approximation to $\ee^{-\ii\delta\alpha\cos\theta}$ on the unit circle realises the Hamiltonian simulation unitary $\ee^{-\ii\delta A}$ up to a QSP truncation error. The circuit in \hyperref[circ:gqsp]{Fig.~\ref*{circ:gqsp}} shows a GQSP layer for an arbitrary degree $d$ polynomial approximation. 
+
+Following \cite[Cor. 8.]{motlagh2024generalized}, define the walk operator as a composition of \textsc{Select} and a reflection around the block-encoding ancillas,
+\begin{equation} \label{eq:qsp-walk}
+    W \;:=\; \bigl(2\,\textsc{Prep}\ket{0}\!\bra{0}\,\textsc{Prep}^\dagger \,-\, I\bigr)\,\textsc{Select}.
+\end{equation}
+For each eigenvector $\lambda$ of $A$ with $A\ket{\lambda} = \lambda\ket{\lambda}$, the two-dimensional subspace containing $\text{PREP}\ket{0}\ket{\lambda}$ (and some other orthogonal state) is invariant under $W$. In the suitable orthonormal basis $W$ acts as the $\mathrm{SU}(2)$ matrix
+$$
+W_\lambda \;=\; \begin{pmatrix} \lambda/\alpha & \sqrt{1-(\lambda/\alpha)^2} \\[2pt] -\sqrt{1-(\lambda/\alpha)^2} & \lambda/\alpha \end{pmatrix},
+$$
+Its eigenvalues form the conjugate pair $\ee^{\pm\ii\theta}$ with 
+$$
+\cos\theta \;=\; \lambda/\alpha, \qquad \lambda \in [-\alpha,\alpha], \qquad \theta \in [0,\pi].
+$$
+Any spectral transformation task on the $\lambda$-eigenspace of $A$ thus reduces to approximating the target function at $z = \ee^{\ii \theta}$ on the unit circle $\mathbb{T} = \{z\in\mathbb{C} : |z|=1\}$.
+
+A GQSP circuit \hyperref[circ:gqsp]{Fig.~\ref*{circ:gqsp}} alternates $\deg P$ (open-)controlled calls to $W$ or $W^\dagger$ with $\deg P + 1$ single-qubit rotations on the QSP ancilla $\ket{0}_\mathrm{QSP}$: starting with an initial rotation $R(\theta_0,\phi_0,\lambda_0)$ (with $\lambda_0\in\mathbb{R}$ the global-phase parameter), followed by $\deg P$ many rotations $R(\theta_j,\phi_j,0)$ for $j = 1, \dots, \deg P$. This procedure characterizes the top left block of the post-selected circuit on each qubitization subspace as \cite[Thm. 6]{motlagh2024generalized}
+\begin{equation} \label{eq:qsp-poly}
+    P'(W_\lambda) \;=\; W_\lambda^{-k}\,P(W_\lambda), \qquad P \in \mathbb{C}[z], \quad 0 \leq k \leq \deg P, \quad \|P\|_{\infty,\mathbb{T}} := \max_{z\in\mathbb{T}}|P(z)| \leq 1,
+\end{equation}
+where $k$ is the number of controlled-$W^\dagger$ slots (and $\deg P - k$ is the number of controlled-$W$ slots), i.e. any Laurent polynomial $P' \in \mathbb{C}[z,z^{-1}]$ whose ordinary factor $P$ has unit sup-norm on $\mathbb{T}$ is accessible. The rotation angles $\{(\theta_0,\phi_0,\lambda_0)\}\cup\{(\theta_j,\phi_j)\}_{j=1}^{\deg P}$ depend on $P$ only. The slot assignment encodes the negative exponents $z^{-k}$ present in the polynomial. 
+
+The Hamiltonian simulation target $\ee^{-\ii\delta\alpha\cos\theta}$ is a Laurent function of $\ee^{\ii\theta}$, and it is not expressible as a non-trivial ordinary polynomial. (An ordinary $P\in\mathbb{C}[z]$ satisfying $P(\ee^{\ii\theta}) = P(\ee^{-\ii\theta})$ on $\mathbb{T}$ has $P(z) = P(1/z)$ on $\mathbb{T}$, and matching Fourier coefficients forces $P$ to be constant.) Thus, \cite[Thm. 6]{motlagh2024generalized} is exactly what is needed. The bilateral Jacobi-Anger expansion gives, 
+\begin{equation} \label{eq:jacobi-anger}
+    \ee^{-\ii\delta\alpha\cos\theta} \;=\; \sum_{k=-\infty}^{\infty} (-\ii)^k\,J_k(\delta\alpha)\,\ee^{\ii k\theta}, \qquad \theta \in \mathbb{R}.
+\end{equation}
+Followed up by a truncation at $|k|\leq d < \infty$ yields the Laurent polynomial
+$$
+L_d(\ee^{\ii\theta}) \;:=\; \sum_{k=-d}^{d} (-\ii)^k\,J_k(\delta\alpha)\,\ee^{\ii k\theta} \;\in\; \mathbb{C}[z,z^{-1}],
+$$
+of bilateral degree $d$, where the $k$-th Bessel functions $J_k$ have a tail bound 
+$$
+\bigl\|\ee^{-\ii\delta\alpha\cos\theta} - L_d\bigr\|_{\infty,\mathbb{T}} \;\leq\; 2\!\!\sum_{|k|>d}\!|J_k(\delta\alpha)| \;\leq\; \mathcal{O}\!\left(\!\left(\frac{\ee\delta\alpha}{2(d+1)}\right)^{d+1}\right),
+$$
+justifying the use of a truncation. To realise $L_d$, introduce the underlying polynomial, 
+$$
+P(z) \;:=\; z^{d}\,L_{d}(z) \;=\; \sum_{m=0}^{2d} c_m\,z^m, \qquad c_m \;=\; (-\ii)^{m-d}\,J_{m-d}(\delta\alpha),
+$$
+of degree $2d$. Since $|z^d|=1$ on $\mathbb{T}$, $\|P\|_{\infty,\mathbb{T}} = \|L_d\|_{\infty,\mathbb{T}} \leq 1 + \mathcal{O}((\ee\delta\alpha/(2(d+1)))^{d+1})$, and a rescaling $(1-\varepsilon_\text{QSP})P$ enforces \eqref{eq:qsp-poly}. Applying \cite[Thm. 6]{motlagh2024generalized} with $\deg P = 2d$ and $k = d$ produces
+$$
+P'(z) \;=\; z^{-d}\,P(z) \;=\; L_d(z),
+$$
+so the post-selected top-left block directly realises the Jacobi–Anger Laurent truncation, giving $L_d(W_\lambda) = \ee^{-\ii\delta\alpha\cos\theta_\lambda}\,I_{2\times 2} + \mathcal{O}(\varepsilon_\text{QSP}) = \ee^{-\ii\delta\lambda}\,I_{2\times 2} + \mathcal{O}(\varepsilon_\text{QSP})$ on each qubitization subspace, and hence $\ee^{-\ii\delta A} + \mathcal{O}(\varepsilon_\text{QSP})$ on the system register.
+
+The truncation index $d$ that suffices for $\varepsilon_\mathrm{QSP}$-accuracy on $\mathbb{T}$ is \cite[Thm. 7]{motlagh2024generalized}, 
+\begin{equation} \label{eq:qsp-degree}
+    d \;=\; \mathcal{O}\!\left(\delta\alpha \;+\; \frac{\log(1/\varepsilon_\text{QSP})}{\log\log(1/\varepsilon_\text{QSP})}\right).
+\end{equation}
+One GQSP layer then makes $d$ controlled-$W$ calls, $d$ controlled-$W^\dagger$ calls, and $2d + 1$ single-qubit rotations on the QSP ancilla. In the regime $\delta\alpha \lesssim 1$, even $d=1$ suffices:
+$$
+L_1(\ee^{\ii\theta}) \;=\; J_0(\delta\alpha) \,-\, 2\ii\,J_1(\delta\alpha)\,\cos\theta,
+$$
+realised by one controlled-$W$, one controlled-$W^\dagger$, and three rotations $(R_0, R_1, R_2)$. Inserting $J_0(z) = 1 + \mathcal{O}(z^2)$ and $2J_1(z) = z + \mathcal{O}(z^3)$ yields
+$$
+L_1(\ee^{\ii\theta}) \;=\; 1 \,-\, \ii\,\delta\alpha\,\cos\theta \,+\, \mathcal{O}((\delta\alpha)^2) \;=\; \ee^{-\ii\delta\alpha\cos\theta} \,+\, \mathcal{O}((\delta\alpha)^2).
+$$
+Larger subnormalization $\alpha$ or a larger time step $\delta$ at fixed accuracy could push $d \geq 2$ \eqref{eq:qsp-degree}, and the cost grows linearly with $\delta \alpha$. 
+
+Given the polynomial coefficients $\{c_m\}_{m=0}^{2d}$, the angles $\{(\theta_0,\phi_0,\lambda_0)\}\cup\{(\theta_j,\phi_j)\}_{j=1}^{2d}$ are classically precomputed for the quantum circuit. First step is to construct a complementary polynomial $Q\in\mathbb{C}[z]$ with $\deg Q = 2d$ and on $\mathbb{T}$ satisfying
+$$
+|P(z)|^2 + |Q(z)|^2 \;=\; 1.
+$$
+The existence of such a polynomial is proven by \cite[Thm. 4]{motlagh2024generalized}. But we deviate from their proposed way, and use the contour-integral / FFT construction of \cite{berntson2025complementary}. Since they do not use optimization to solve the problem, they can evaluate $Q$ with explicit error bounds up front, in classical time $\tilde{O}(d)$. Once we have $Q$, using the recursive extraction of \cite[Alg. 1]{motlagh2024generalized} results in the $2d + 1$ rotation triplets from $(P, Q)$ in $\mathcal{O}(d^2)$ arithmetic operations. Both stages are performed once, before any quantum computation, for each value $\delta \alpha$. The same angles are then reused at every quantum call of the layer. 
+
+\smallskip
+\subsection{Weak measurement.} \label{sec:prelim-weak-meas}
+
+\begin{figure}[H]
+  \centering
+  \begin{quantikz}[row sep=0.85cm, column sep=0.55cm]
+    \lstick{$\ket{0}_\delta$}
+      & \qw
+      & \qw
+      & \qw
+      & \gate{Y_\delta}
+      & \octrl{1}
+      & \meter{}
+      \\
+    \lstick{$\ket{0^b}$}
+      & \qwbundle{}
+      & \gate[2]{U_L}
+      & \qw
+      & \octrl{-1}
+      & \gate[2]{U_L^{\dagger}}
+      & \rstick{$\bra{0^b}$} \qw
+      \\
+    \lstick{$\rho$}
+      & \qwbundle{}
+      &
+      & \qw
+      & \qw
+      &
+      & \rstick{$\approx\ \rho + \tfrac{\delta}{\alpha^{2}}\,\mathcal{D}_L(\rho) + \mathcal{O}(\delta^{2})$} \qw
+  \end{quantikz}
+  \caption{Weak measurement as a Lindblad dissipator, with
+  $\bra{0^b} U_L \ket{0^b} = L/\alpha$ a block encoding of the jump
+  $L$. The $Y_\delta$ rotation is controlled on the block register
+  $\ket{0^b}$, so that it fires only on the post-selectable branch of
+  $U_L$. Post-selecting $b$ on $\ket{0^b}$ and measuring $q_{\delta}$
+  realises one Euler step of $\mathcal{D}_L(\rho) = L\rho L^{\dagger}
+  - \tfrac{1}{2}\{L^{\dagger}L,\rho\}$ at rate
+  $\gamma = \delta/(\alpha^{2}\,\dd t)$.}
+  \label{circ:weak-measurement}
+\end{figure}
+
+There is no one-size-fits-all quantum simulation of Lindbladian evolutions. Based on the Lindbladian's specifics, one method could work while another one not. The \emph{weak measurement} scheme we introduce here, established by \cite[Thm. III.1]{chen2023quantum}, fits indeed best to the quantum algorithm in the centre of this thesis, \hyperref[alg:main]{Alg.\ref*{alg:main}}.
+A Lindbladian dissipator for a jump operator $L$ is given by $\mathcal{D}_L(\rho) := L\rho L^\dagger - \tfrac{1}{2}\{L^\dagger L,\rho\}$. It is a combination of a transition term and a reflection term, that together leads to a trace-preserving map $\rho \mapsto \ee^{t\mathcal{D}_L}\rho$. A unitary block-encoding $U_L$ like the LCU \hyperref[circ:lcu]{Fig.~\ref*{circ:lcu}} could already act as the transition term $L\rho L^\dagger$: post-select on the block-encoding ancillas as $|0^b\rangle$ to have $U_L$ imprint $L\ket{\psi} / \alpha$ on the system (with $\|L/\alpha\|\leq 1$). Clearly, the same technique could not deliver the remaining reflection part of the Lindbladian. Chen et al. solves this in \cite{chen2023quantum} by weaving a weak measurement ancilla $\ket{0}_\delta$ between $U_L$ and a conditional $U_L^\dagger$ in such a way that post-selecting on all ancillas to be zero implements an Euler step of $\ee^{\delta\mathcal{D}_L/\alpha^2}$ on $\rho$ up to $\mathcal{O}(\delta^2)$ (\hyperref[circ:weak-measurement]{Fig.~\ref*{circ:weak-measurement}}).
+
+The circuit walkthrough after initialising the three registers in $\ket{0}_\delta \otimes \ket{0^b} \otimes \rho$ is the following:
+\begin{enumerate}[(i)]
+    \item \emph{Block encoding.} $U_L$ acts on $(b, S)$ s.t. on the $\ket{0^b}$ block of the state imprints the amplitude $L/\alpha$ on $S$, leaving an orthogonal artefact on $(b, S)$:
+    $$
+    |\phi^\perp\rangle := \left(\idm - |0^b\rangle\!\langle0^b|\!\otimes\idm\right)\,U_L\,|0^b\rangle\!\ket\psi.
+    $$
+    \item \emph{Ancilla rotation.} $Y_\delta = R_Y(2\arcsin\sqrt\delta)$ is controlled on the block encoding being successful, i.e. $\ket{0^b}$, and leads to
+    \begin{equation}
+        \begin{split}
+            Y_\delta\,\left(\ket{0}_\delta\otimes|0^b\rangle\right) &\;=\; \left(\sqrt{1-\delta}\,\ket{0}_\delta + \sqrt{\delta}\,\ket{1}_\delta\right)\otimes |0^b\rangle, \\
+            Y_\delta\,\left(\ket{0}_\delta\otimes |\phi^\perp\rangle\right) &\;=\; \ket{0}_\delta\otimes|\phi^\perp\rangle.
+        \end{split}
+    \end{equation}
+    In other words, the weak measurement ancilla acquires amplitude $\sqrt{\delta}$ on $\ket{1}_\delta$ precisely where $U_L$ succeeded, and carries $\ket{0}_\delta$ unchanged on the leaked $\ket{\phi^\perp}$ branch.
+    \item \emph{Controlled undo.} The open-controlled $U_L^\dagger$ fires only on the $\ket{0}_\delta$ branch. On the $\ket{0^b}$-block of $U_L\ket{0^b}\ket\psi$ this uncomputes to $\ket{0^b}\ket\psi$. The artefact part $\ket{\phi^\perp}$ survives without any change to it. On the $\ket{1}_\delta$ branch $U_L^\dagger$ is absent, thus $\ket{0^b}\otimes(L/\alpha)\ket\psi$ stands.
+    \item \emph{Measure and post-select.} Finally, measure all ancillas, and post-select only on the block encoding ones as $\ket{0^b}$.
+\end{enumerate}
+
+We can understand what is happening in this construction by Kraus operators \eqref{eq:kraus}: in the \emph{no-jump} branch  ($\ket{0}_\delta$ outcome, $\ket{0^b}$ post-selected), the uncomputation $U_L^\dagger U_L = \idm$ acts on the block, while the $\ket{\phi^\perp}$ artefact has $\ket{0^b}$ post-selection failure probability $\|L\ket\psi\|^2/\alpha^2$. In the \emph{jump} branch ($\ket{1}_\delta$ outcome, $\ket{0^b}$ post-selected) the full amplitude $L\ket\psi/\alpha$ survives, weighted by the $\sqrt{\delta}$ of the weak rotation. The results for a given Lindblad operator $L$ derived by \cite{chen2023quantum} can be summarized as the Kraus jumps
+\begin{equation}
+    M_0 \;=\; \sqrt{1-\delta}\,\idm \;-\; \tfrac{1}{2}\,\tfrac{\delta}{\alpha^2}\,L^\dagger L \;+\; \mathcal{O}(\delta^2), \qquad M_1 \;=\; \sqrt{\delta}\;\frac{L}{\alpha}.
+\end{equation}
+By tracing out the ancillas (summing over the branches) and expanding in $\delta$,
+\begin{equation} \label{eq:weak-meas-euler}
+    \rho \;\mapsto\; M_0\,\rho\,M_0^\dagger + M_1\,\rho\,M_1^\dagger \;=\; \rho \;+\; \frac{\delta}{\alpha^{2}}\Bigl(L\rho L^\dagger - \tfrac{1}{2}\{L^\dagger L,\rho\}\Bigr) \;+\; \mathcal{O}(\delta^{2}).
+\end{equation}
+which is precisely one Euler step of $\dot\rho = (1/\alpha^2)\,\mathcal{D}_L(\rho)$ up to $\mathcal{O}(\delta^2)$ errors. The post-selection on $b$ succeeds with probability $1 - \delta\,\|L\ket\psi\|^2/\alpha^2 + \mathcal{O}(\delta^2) = 1 - \mathcal{O}(\delta)$, i.e. unlike the post-selection loss ($1/\alpha^2$) of LCU \eqref{eq:lcu}, here there is no need for oblivious amplitude amplificiation or any other trick to boost the success probability. The smallness of $\delta$ is enough to make this into a deterministic mechanism. Or put differently, even the artefact blocks contribute to the Lindbladian correctly -- as the reflection part -- up to $\mathcal{O}(\delta^2)$ errors. The extension to multiple jumps is straight-forward, which is precisely what we can see in \cite{chen2023quantum,chen2023efficient}, and also in our slightly modified variant \hyperref[alg:diss]{Alg.~\ref*{alg:diss}}.
+
+The Euler-step accuracy of \eqref{eq:weak-meas-euler} is only first order in $\delta$ so reaching a diamond-norm error $\varepsilon$ over the total time $T$ costs $T/\delta = \mathcal{O}(T^2 / \varepsilon)$ calls to $U_L$, i.e. polynomial in $1 / \varepsilon$. One might therefore ask why we do not instead pick a higher-order Lindblad simulator, such as the one proposed by \cite{li2022simulating} that uses Duhamel's principle. This could simulate a generator $\mathcal{L}(\rho) = -\ii[H,\rho] + \sum_{j=1}^m \mathcal{D}_{L_j}(\rho)$ with $\mathcal{O}(\tau\,\mathrm{polylog}(t/\varepsilon))$ block-encoding queries to $U_H$ and to $U_{L_j}$ and $\mathcal{O}(m\tau \mathrm{polylog}(t / \varepsilon))$ additional 1- and 2-qubit gates, where $\tau := t (\alpha_0 + \tfrac{1}{2}\sum_{j=1}^m \alpha_j^2)$. Accordingly, that higher-order simulators are meant to take in a \emph{finite} list $\{L_j\}_{j=1}^m$ of jump operators, each separately block encoded by $U_{L_j}$, leading to a cost linear in $m$. This breaks down in case the generator is of the form \eqref{eq:ckg-L}
+$$
+\mathcal{L}(\rho) \;=\;\int \dd\omega\;\gamma(\omega)\,\mathcal{D}_{L_j(\omega)}(\rho),
+$$
+with the continuously parametrized jump operators $L_j(\omega)$, that is used later to estimate the Bohr-frequencies jump components for the detailed balanced Davies generator \eqref{eq:davies-generator}. Even after a quadrature discretization of $\int \dd \omega$ to $\omega_0\sum_{\bar{\omega} \in \Omega}$, $m$ is at least the size of the frequency grid $\Omega$, and each grid point would need its own block encoding rather than being addressed coherently through the $\Omega$ register of the phase estimation \hyperref[circ:qpe]{Fig.~\ref*{circ:qpe}}. The weak measurement primitive is exactly what one uses when the integral cannot be separated from the block encodings. A single $U_L$ call already block-encodes the full sum of jumps $\{L_j(\omega)\}_{\omega\in\Omega}$. Then, one Euler step of \eqref{eq:weak-meas-euler} realises one step of the \emph{whole} Lindbladian per call, with cost that scales with the resolution of the phase estimations rather than with the number of effective jumps.
+
+Undeniably, there is a structural difference between the two Lindbladian simulations. The higher-order series scheme buys $\mathrm{polylog}(1/\varepsilon)$ accurate channel implementation via LCUs, but only when the jump set is finite, and preferably not a large set. In this sense, the continuously parametrized jumps $\{L_j(\omega)\}_{\omega\in\Omega}$ simply does not compress into this scheme. An alternative KMS detialed balanced Lindbladian construction \cite{ding2025efficient} that came after the Chen et al. results, manages to confine the jumps to a finite set. While that allows them to utilize the higher-order simulators of \cite{li2022simulating}, their construction introduces more cost at other parts of the algorithm, making it less clear which solution is better or worse in general. We discuss this in more details in [REF] \todo{IF you write the comparison section, ref to it.}
+

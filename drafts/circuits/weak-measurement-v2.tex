@@ -1,0 +1,129 @@
+% Circuit: Weak measurement as a Lindblad dissipator --- v2 (CORRECTED).
+% Generated for: QuantumFurnace.jl PhD thesis (preliminaries, sec:prelim-weak-meas).
+% Usage: \input{circuits/weak-measurement-v2.tex} in main thesis, or compile standalone.
+%
+% --------------------------------------------------------------------------
+% What is fixed in this v2 relative to the thesis figure at
+% 1_preliminaries.tex:1117-1167 (and the earlier drafts/circuits/weak-measurement.tex):
+%
+%   (1) A block-register OPEN CONTROL has been added on Y_delta:
+%       row 2 (block register b, bundled) now carries \octrl{-1} in the
+%       same column as \gate{Y_\delta} on row 1, so that Y_\delta fires
+%       only on the |0^b>-branch of U_L|0^b>|psi>.
+%
+%   (2) The rstick now writes D_L(rho) rather than D(rho), to
+%       distinguish the single-jump Lindblad dissipator
+%          D_L(rho) := L rho L^dag - (1/2){L^dag L, rho}
+%       from the KMS discriminant D(rho, L) used in sec:davies.
+%
+%   (3) The caption rate is the correct Euler-step reading
+%       gamma = delta/(alpha^2 dt),
+%       not the typo delta^2/(alpha^2 dt) in the current thesis caption.
+%       The rstick and the Chapter 5 convention (2_methods.tex:1910, :1929)
+%       are both linear in delta; the corrected caption is now consistent.
+%
+% --------------------------------------------------------------------------
+% WHY the block-control is load-bearing (Chen et al. 2023, Thm III.1, eq. (3.2)).
+%
+% Without the block-control on Y_delta (as in the current thesis figure), the
+% post-selected Kraus operators are
+%        M_0 = sqrt(1-delta) I,                       M_1 = sqrt(delta) L/alpha,
+% and the channel is rho |-> (1-delta) rho + (delta/alpha^2) L rho L^dag,
+% which is NOT a Lindblad Euler step unless L^dag L = alpha^2 I (i.e. L unitary).
+%
+% With the block-control on Y_delta, the post-selected Kraus operators are
+%        M_0 = sqrt(1-delta) I - (delta/(2 alpha^2)) L^dag L + O(delta^2),
+%        M_1 = sqrt(delta) L/alpha,
+% and the channel is rho |-> rho + (delta/alpha^2) D_L(rho) + O(delta^2),
+% which is exactly one Euler step of the Lindblad dissipator D_L at rate
+% gamma_eff = 1/alpha^2.  The derivation is at Chen 2023 eq. (3.2) (see their
+% Figure 3, which has the same block-control on Y_delta).
+%
+% --------------------------------------------------------------------------
+% Conventions match the thesis body:
+%   \ket{0}_\delta          weak-measurement ancilla           (1 qubit, row 1)
+%   \ket{0^b}               block register, bundled            (row 2)
+%   \rho                    system register, bundled           (row 3)
+%   U_L                     block encoding of the jump L       (<0^b|U_L|0^b> = L/alpha)
+%   Y_\delta                := R_Y(2 arcsin sqrt(delta))       (thesis shorthand, line 825)
+%   \octrl{\pm k}           open control (|0>-controlled)      (thesis convention, line 827)
+% --------------------------------------------------------------------------
+%
+\documentclass{article}
+\usepackage[margin=1cm]{geometry}
+\usepackage{tikz}
+\usetikzlibrary{quantikz2}
+\usepackage{amsmath,amssymb}
+\usepackage{braket}
+\usepackage{float}
+
+\newcommand{\ee}{\mathrm{e}}
+\newcommand{\ii}{\mathrm{i}}
+\newcommand{\dd}{\mathrm{d}}
+
+% Rounded corners on all gates globally (thesis convention).
+\tikzset{operator/.append style={rounded corners}}
+
+\begin{document}
+\pagestyle{empty}
+
+\begin{figure}[H]
+  \centering
+  \begin{quantikz}[row sep=0.85cm, column sep=0.55cm]
+  %
+  % Row 1: weak-measurement ancilla qubit q_delta.
+  % Idle through step (1); rotated by Y_delta in step (2), itself a TARGET
+  % of the block-register's open control (\octrl{-1} on row 2 below);
+  % becomes the open control for U_L^dag in step (3); measured at the end.
+  %
+    \lstick{$\ket{0}_\delta$}
+      & \qw
+      & \qw
+      & \qw
+      & \gate{Y_\delta}
+      & \octrl{1}
+      & \meter{}
+      \\
+  %
+  % Row 2: block-encoding register b (bundled).
+  % Enters in |0^b>; receives the upper half of U_L (cell 3) and the upper
+  % half of U_L^dag (cell 6); post-selected on |0^b> at the end (enforcing
+  % the block-encoding relation <0^b| U_L |0^b> = L/alpha).
+  % NEW: the \octrl{-1} in cell 5 is the block-register open control
+  % (upward to row 1) that fires Y_delta only on the |0^b>-branch.
+  %
+    \lstick{$\ket{0^b}$}
+      & \qwbundle{}
+      & \gate[2]{U_L}
+      & \qw
+      & \octrl{-1}
+      & \gate[2]{U_L^{\dagger}}
+      & \rstick{$\bra{0^b}$} \qw
+      \\
+  %
+  % Row 3: system register S (bundled).
+  % Empty cells in columns 3 and 6 are consumed by the two-wire U_L / U_L^dag
+  % gates on row 2.  The rstick gives the post-selected dissipator action,
+  % now written with D_L(rho) (subscript L) to disambiguate from the KMS
+  % discriminant D(rho, L) of sec:davies.
+  %
+    \lstick{$\rho$}
+      & \qwbundle{}
+      &
+      & \qw
+      & \qw
+      &
+      & \rstick{$\approx\ \rho + \tfrac{\delta}{\alpha^{2}}\,\mathcal{D}_L(\rho) + \mathcal{O}(\delta^{2})$} \qw
+  \end{quantikz}
+  \caption{Weak measurement as a Lindblad dissipator, with
+  $\bra{0^b} U_L \ket{0^b} = L/\alpha$ a block encoding of the jump
+  $L$. The $Y_\delta$ rotation is open-controlled on the block register
+  $\ket{0^b}$, so that it fires only on the post-selectable branch of
+  $U_L$. Post-selecting $b$ on $\ket{0^b}$ and measuring $q_{\delta}$
+  realises one Euler step of $\mathcal{D}_L(\rho) = L\rho L^{\dagger}
+  - \tfrac{1}{2}\{L^{\dagger}L,\rho\}$ at rate
+  $\gamma = \delta/(\alpha^{2}\,\dd t)$.}
+  \label{circ:weak-measurement}
+\end{figure}
+
+\end{document}

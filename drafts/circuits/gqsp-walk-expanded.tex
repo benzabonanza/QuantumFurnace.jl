@@ -1,0 +1,75 @@
+% Circuit: GQSP for e^{-i delta B} with the walk operator W = R_b . U_B
+% expanded explicitly per layer, so U_B and the reflection appear individually.
+% Generated for: QuantumFurnace.jl PhD thesis
+% Usage: \input{circuits/gqsp-walk-expanded.tex} or compile standalone
+%
+% Each Lambda(W) call is unrolled into Lambda(U_B) followed by Lambda(R_b),
+% where R_b = 2|0><0|_b - I is the reflection about |0>_b on the block register.
+% Compared with the compact version (gqsp-degree1.tex), this makes the
+% qubitization construction visible: the block encoding U_B appears explicitly,
+% and the cost of qubitization (the extra reflection R_b per layer) is shown.
+%
+% The PREP/PREP^dag pair is internal to U_B and is not drawn separately
+% (showing them would either misrepresent the circuit, since they cannot be
+% factored to the boundaries, or require expanding U_B itself --- another
+% level of detail). The 1/alpha normalisation lives inside U_B and enters
+% the Chebyshev coefficients c_k = i^k J_k(delta alpha) via the angles.
+%
+\documentclass{article}
+\usepackage[margin=1cm]{geometry}
+\usepackage{tikz}
+\usetikzlibrary{quantikz2}
+\usepackage{amsmath,amssymb}
+\usepackage{braket}
+
+\newcommand{\ee}{\mathrm{e}}
+\newcommand{\ii}{\mathrm{i}}
+
+\begin{document}
+\pagestyle{empty}
+
+\begin{figure}[ht]
+  \centering
+  \begin{quantikz}[row sep=0.7cm, column sep=0.5cm]
+  %
+  % Row 1: GQSP ancilla. R_0 has three parameters; per layer, two open-controls
+  % (one for U_B, one for R_b) and the two-parameter rotation R_k.
+  %
+    \lstick{$\ket{0}_a$}
+      & \gate{R(\theta_0,\phi_0,\lambda_0)}
+      & \octrl{1}
+      \gategroup[3,steps=3,style={dashed,rounded corners,fill=black!8,inner sep=4pt},background,label style={label position=below,yshift=-0.4cm}]{\scriptsize $\Lambda(W) = \Lambda(R_b)\cdot\Lambda(U_B)$ followed by $R(\theta_k,\phi_k,0)$ --- repeat $d$ times}
+      & \octrl{1}
+      & \gate{R(\theta_k,\phi_k,0)}
+      & \rstick{$\ket{0}$}\qw
+      \\
+  %
+  % Row 2: Block-encoding ancilla register b (bundled). U_B spans b and S;
+  % R_b acts on b only. PREP/SELECT/PREP^dag live inside the U_B box.
+  %
+    \lstick{$\ket{0}_b$}
+      & \qw
+      & \gate[2]{U_B}
+      & \gate{R_b}
+      & \qw
+      & \rstick{$\ket{0}$}\qw
+      \\
+  %
+  % Row 3: System register S. Empty cell at column 3 is consumed by U_B above.
+  %
+    \lstick{$\ket{\psi}_S$}
+      & \qw
+      &
+      & \qw
+      & \qw
+      & \rstick{$\ee^{-\ii\delta B}\ket{\psi}+\mathcal{O}(\delta^{d+1})$}\qw
+  \end{quantikz}
+  \caption{Generic-degree-$d$ GQSP realising $\ee^{-\ii\delta B}$ from the
+  walk operator $W = R_b\,U_B$, with $U_B$ the block encoding of $B$
+  ($\bra{0}_b U_B\ket{0}_b = B/\alpha$) and $R_b = 2\ket{0}\!\bra{0}_b - I$ the
+  reflection on the block register $b$; post-selecting both ancillas on $\ket{0}$
+  yields a degree-$d$ Chebyshev polynomial $P(W)\approx\ee^{-\ii\delta B}$.}
+  \label{fig:gqsp-walk-expanded}
+\end{figure}
+
+\end{document}

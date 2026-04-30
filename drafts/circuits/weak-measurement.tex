@@ -1,0 +1,103 @@
+% Circuit: Weak measurement via coherent undo, with U block encoding L_j
+% Generated for: QuantumFurnace.jl PhD thesis (preliminaries)
+% Usage: \input{circuits/weak-measurement.tex} in main thesis, or compile standalone
+%
+% Pedagogical introduction to weak measurement as the source of weak
+% dissipation, with U a (sub-normalised) block encoding of the Lindblad
+% jump operator L_j on a block-register b:
+%     <0|_b U |0>_b = L_j / alpha.
+% The "apply U, weakly rotate, controlled-undo U^dag" template of
+% Chen et al. 2023 is used.  The block-encoding structure is kept
+% visible (two ancilla registers) but no internal details of U --- no
+% LCU, no QSP, no PREP/SELECT --- are drawn; those belong to the
+% algorithm chapter.
+%
+% Construction.  Start in |0>_{q_delta} (x) |0>_b (x) |psi>_S.
+%   (1) apply U on (b,S):   |0>_{q_delta} (x) U|0>|psi>
+%   (2) Ry(delta) on q_delta:
+%         (cos(d/2)|0> + sin(d/2)|1>)_{q_delta} (x) U|0>|psi>
+%   (3) apply U^dag on (b,S), open-controlled by q_delta (fires when
+%       q_delta=|0>):
+%         cos(d/2) |0>_{q_delta} |0>_b |psi>_S  +  sin(d/2) |1>_{q_delta} U|0>|psi>.
+%   (4) measure q_delta and post-select b on |0>:
+%        - (q_delta, b) = (0, 0):  prob ~ 1 - delta^2/4,  system ~ |psi>             (no jump)
+%        - (q_delta, b) = (1, 0):  prob ~ delta^2/(4 alpha^2) * ||L_j|psi>||^2,
+%                                   system ~ L_j|psi> / alpha                        (jump)
+% Tracing out the ancillas yields the effective Kraus channel on S
+%   M_0 = cos(delta/2) I   +  O(delta^2),
+%   M_1 = sin(delta/2) L_j/alpha,
+% hence rho  ->  rho + (delta^2/(4 alpha^2))(L_j rho L_j^dag - (1/2){L_j^dag L_j, rho})
+%                    + O(delta^4),
+% which is one Euler step of a Lindblad evolution with jump operator L_j
+% and rate gamma = delta^2/(4 alpha^2 dt).
+%
+\documentclass{article}
+\usepackage[margin=1cm]{geometry}
+\usepackage{tikz}
+\usetikzlibrary{quantikz2}
+\usepackage{amsmath,amssymb}
+\usepackage{braket}
+\usepackage{float}
+
+\newcommand{\ee}{\mathrm{e}}
+\newcommand{\ii}{\mathrm{i}}
+
+% Rounded corners on all gates globally
+\tikzset{operator/.append style={rounded corners}}
+
+\begin{document}
+\pagestyle{empty}
+
+\begin{figure}[H]
+  \centering
+  \begin{quantikz}[row sep=0.85cm, column sep=0.55cm]
+  %
+  % Row 1: weak-measurement ancilla qubit q_delta.
+  % Idle through step (1), rotated by Ry(delta) in step (2), becomes the
+  % open control for U^dag in step (3), then measured.
+  %
+    \lstick{$\ket{0}_{q_{\delta}}$}
+      & \qw
+      & \qw
+      & \qw
+      & \gate{Y_{\delta}}
+      & \octrl{1}
+      & \meter{}
+      \\
+  %
+  % Row 2: block-encoding register b (bundled).
+  % Enters in |0>_b, receives the upper half of U and U^dag; post-selection
+  % on |0>_b at the end enforces the block-encoding relation
+  % <0|_b U |0>_b = L_j / alpha.
+  %
+    \lstick{$\ket{0}_{b}$}
+      & \qwbundle{}
+      & \gate[2]{U}
+      & \qw
+      & \qw
+      & \gate[2]{U^{\dagger}}
+      & \rstick{$\ket{0}_{b}$} \qw
+      \\
+  %
+  % Row 3: system register S (bundled).
+  % Empty cells in columns 3 and 6 are consumed by the two-wire U / U^dag
+  % gates above.  The rstick gives the post-selected dissipator action.
+  %
+    \lstick{$\rho_{\mathcal{S}}$}
+      & \qwbundle{}
+      &
+      & \qw
+      & \qw
+      &
+      & \rstick{$\approx\ \rho + \tfrac{\delta}{\alpha^{2}}\,\mathcal{D}[L_{j}](\rho) + \mathcal{O}(\delta^{2})$} \qw
+  \end{quantikz}
+  \caption{Weak measurement as a Lindblad dissipator, with
+  $\bra{0}_{b} U \ket{0}_{b} = L_{j}/\alpha$ a block encoding of the jump
+  $L_{j}$. Post-selecting $b$ on $\ket{0}$ and measuring $q_{\delta}$
+  realises one Euler step of
+  $\mathcal{D}[L_{j}](\rho) = L_{j}\rho L_{j}^{\dagger} - \tfrac{1}{2}\{L_{j}^{\dagger}L_{j},\rho\}$
+  at rate $\gamma = \delta/(\alpha^{2}\,\mathrm{d}t)$.}
+  \label{fig:weak-measurement}
+\end{figure}
+
+\end{document}

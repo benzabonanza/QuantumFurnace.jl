@@ -1,0 +1,1975 @@
+\part{Gibbs Sampling on a Quantum Computer}
+%\chapter{Quantum Metropolis Sampling}
+%We have now come to the point where we can turn our attention to recent developments in quantum Gibbs sampling. The moment we mentioned Gibbs sampling in the classical setting, we also learnt the recipe that researchers used for the past decades in all kinds of scenarios. So much so, that the \hyperref[parag:MH]{Metropolis-Hastings algorithm} is now a ubiquitous word of the sampling jargon, and it became one of the most important algorithms of the 20th century \cite{dongarra2000guest}. 
+%While we have no doubt the classical Metropolis algorithm will continue to advance and have even more successes, it naturally has scaling limitations, just as most algorithms do. The dimensional explosion of the state space in quantum systems and similarly in large classical systems can pose a problem for even the state-of-the-art implementations of the algorithm. \textcolor{purple}{[cite]} Now that quantum computers have been on the horizon for some years, it could be beneficial to explore its capabilities for (Gibbs) sampling. Then one of the natural questions to ask is,
+%$$\textit{Can we generalize the Metropolis algorithm to the quantum setting?}$$
+%The answer has only been recently given in a foundational work \cite{temme2011quantum}, that established the notion of the \textit{quantum Metropolis algorithm.} 
+
+%If we recall the steps of the classical algorithm, it becomes quickly evident why the quantum generalization kept the community waiting. We start in some initial state and then propose a new state: if the energy of the new configuration is lower accept it, otherwise reject it with probability given by the (local) Metropolis rule, $\exp(\beta(E_\text{old} - E_\text{new}))$. Classically, we can compute the energy of the new state, and if it has to be rejected, then we throw it away and use a copy of the previous state. In quantum mechanics however, we cannot copy, or \textit{clone} states \cite{wootters1982single}. This could pose a problem, because some operations in a quantum computer, like the energy measurement of states, are irreversible. One way to get around this, is to disturb the system as weakly as possible when we measure, such that the rejected state is still in some relation with the initial state. If some overlap between them survives, then using a Marriott-Watrous amplification scheme \cite{marriott2005quantum} could rewind back iteratively to the initial state. Crucially, this procedure together with the rest of the quantum subroutines, cannot break the detailed balanced condition, or else there is no guarantee for sampling from the Gibbs distribution. 
+
+\chapter{Dissipative Quantum Gibbs Sampling}
+
+In the previous chapter we have seen and analysed the very first breakthrough algorithm in quantum Gibbs sampling. The quantum Metropolis algorithm has kicked off a myriad of research, trying to better understand it, use it as a subroutine for other problems \todo{cites}, and also to possibly circumvent its main drawbacks, namely, the costly rewinds and the lack of exact detailed balance. There is no clear-cut, perfect solution to either of these problems. 
+
+One way to get rid of the rewinds, is to work with a continuous-time Markov sampling instead of a discrete one. In this case, we never have to worry about a subpar jump and its rewind, but rather worry about the rate of the jumps. As we will see in this chapter, we are constrained to use low rates for the jumps, or else the approximations would get out of hand. Nevertheless, this might be an improvement to the Metropolis algorithm, since the rewind itself required a weak measurement, i.e. a weakly disturbed system, as well. 
+
+Concerning the question of detailed balance, it must be stated that it is not a priori clear how and if at all $exact$ detailed balance is necessary for Gibbs sampling \textit{in practice}. Of course, if we have detailed balance we can work with well established techniques for reversible Markov semigroups; it gives guarantees that the sampling eventually reach the Gibbs state and thus helps with rigorous mixing time bound proofs. However, implementing an exact detailed balanced algorithm on a computer could easily break that nice, yet fragile symmetry. Even the algorithm we will introduce here, will break its proven detailed balance the moment we put it in quantum circuit form. The hope is that once there is an exact detailed balance framework established, it can be used as a blueprint for follow-up algorithms that break the symmetry in a controlled and rigorous way. 
+
+The goal for this chapter is to (i) introduce a recently proposed approximate and exact detailed balanced Lindbladians and their implementations from Chen et al. \cite{chen2023quantum,chen2023efficient}; (ii) Analyse it numerically to understand their $real$ complexity, e.g. mixing times for given systems, gate complexities, temperature dependencies; (iii) Work out how best can we implement them on a quantum device.
+
+\smallskip
+\subsection{Approximate GNS Lindbladian.} After learning that the Davies generator has a proven GNS detailed balance in \hyperref[subsec:davies]{Section \ref*{subsec:davies}}, it is clear that the crux is not only about having detailed balance, but also about having an efficient implementation for it. The main obstacle with the Davies generator was that it required perfect energy estimates for the jumps. For small systems this might even be possible, and we could distinguish each and every Bohr frequency component of a given jump, then weigh each of them  with the prescribed transition rates (that satisfy KMS condition). But as we increase the system size and consider more interesting systems, the Bohr frequencies get exponentially close to each other. This poses an inherent metrology problem for implementations, because of the energy-time uncertainty principle. Which means that the more precise an energy value needs to be estimated, the longer Hamiltonian time evolution is necessary to do in the quantum computer (e.g. with QPE), thus leading to exponential costs.
+
+A natural question to ask is, what happens with detailed balance if we allow a controlled error around the Bohr frequencies we need to estimate. As it turns out from \cite{chen2023quantum}, these smoothened Davies generators still \textit{approximately} satisfy detailed balance. To see why, let us start from the Davies generator, which fulfils exact GNS detailed balance \eqref{eq:davies-gns-db}. There, it was useful to work with the Heisenberg evolution of the jumps $A$:
+$$
+    A(t) = \ee^{\ii Ht} A \ee^{-\ii Ht} = \sum_{\nu\in B_H} A_\nu \ee^{\ii \nu t},
+$$
+where the Bohr frequencies $\nu\in B_H$ are all the energy differences in the Hamiltonian's spectrum, $\text{Spec}(H)$. The key step introduced in the Chen et al. papers is to use a filter function $f: \mathbb{R}\rightarrow \mathbb{C}$ and define the \textit{Operator Fourier Transform} (OFT) of a jump $A$ as
+\begin{equation}
+    \label{eq:oft}
+    \hat{A}(\omega) = \frac{1}{\sqrt{2\pi}} \int_{-\infty}^{\infty} f(t) A(t) \ee^{-\ii \omega t} \dd t = \sum_{\nu \in B_H} A_\nu \hat{f}(\omega - \nu),
+\end{equation}
+with the Fourier transform of $f(t)$,
+$$
+    \hat{f}(\omega) = \frac{1}{\sqrt{2\pi}} \int_{-\infty}^{\infty} f(t) \ee^{-\ii \omega t} \dd t.
+$$
+As a reminder: in a quantum computer we always have to work in the time domain, and the Fourier transform is to the tool that brings us to the energy domain. In order to implement the Davies generator, one would need a Fourier transform that maps exactly to $A_\nu$. That can be also understood as an OFT, but with $f(t) = 1$ and thus $\hat{f}(\omega) = \sqrt{2\pi} \delta(\omega)$:
+\begin{equation}
+    \hat{A}_{f=1}(\omega) = \sqrt{2\pi}\sum_{\nu \in B_H} A_\nu \delta(\omega - \nu).
+\end{equation}
+This can then only be exactly achieved if the Fourier transform is computed over the full, infinitely large time domain. Hence, the idea here is to choose an $f(t)$ such that it has some decaying tail that effectively truncates the Fourier transforms to some more manageable subdomains. From \eqref{eq:oft} we can see the effect of the non-trivial filter function: the OFT leads to $\hat{A}(\omega)$ instead of $A_\nu$, which includes neighbouring energy contributions centred around $A_\nu$. What happens with the Davies generator and its GNS detailed balance if we swap out the jump operators, to their smoothened out form? In \cite{chen2023quantum} it was shown, that it leads to an approximately GNS detailed balance Lindbladian. 
+
+There is some freedom in how we choose our filter function, but it necessarily has to be well-behaving $L^1$ integrable distribution. Clearly, for a not too costly implementation this function $f(t)$ has to decay rapidly in the time domain as $|t|\rightarrow \infty$, and its Fourier integral needs to be efficiently amenable to quadrature techniques. Moreover, its Fourier transform $\hat{f}(\omega)$ has to be smooth too.
+
+One possible choice that fulfils all the above requirements is, to use a Gaussian filter function,
+\begin{equation}
+    \label{eq:gaussian-filter-t}
+    f(t) := \left(\frac{2 \sigma^2}{\pi}\right)^{\frac{1}{4}}  \exp(-\sigma^2 t^2) \quad\text{with}\quad \int_{-\infty}^{\infty} |f(t)|^2 \dd t = 1.
+\end{equation}
+The width of the Gaussian $1 / (2 \sigma)$ is a tuneable parameter, that determines how strongly we smoothen the jumps and thus the generator, and it is directly affecting the cost of the quantum algorithm. Gaussians have the nice property, that their Fourier transforms are also Gaussians, but with inverse width $2\sigma$,
+\begin{equation} \label{eq:gaussian-filter-w}
+    \hat{f}(\omega) = \left(2\pi \sigma^2 \right)^{-\frac{1}{4}} \exp\left(-\frac{\omega^2}{4\sigma^2}\right).
+\end{equation}
+Then in this case, the smooth jump operators that the Fourier transforms are mapping to, can be understood as Gaussian distributions centred around each Bohr frequency $\nu$ with an uncertainty of $2\sigma$,
+\begin{equation}
+    \label{eq:smoothed-jump}
+    \hat{A}(\omega) = \left(2\pi \sigma^2 \right)^{-\frac{1}{4}} \sum_{\nu \in B_H} \exp\left(- \frac{(\omega - \nu)^2}{4\sigma^2}\right)A_\nu.
+\end{equation}
+\todo{figure for Gaussian smoothing around $\nu$}
+Note, that a Gaussian filter is not the only function that could be used here. Gevrey functions also fulfil the necessary requirements and have been successfully used for KMS detailed balanced Lindbladians in \cite{ding2025efficient} that we will look at later. Until then let us keep ourselves to Gaussians. 
+
+The Davies generator with the smoothened jump operators \eqref{eq:smoothed-jump} we will call after the authors, \textit{Chen-Kastoryano-Brandão-Gilyén} or \textit{CKBG Lindbladian}, and it takes the following form in the Schrödinger picture,
+\begin{equation}
+    \label{eq:L-ckbg}
+    \mathcal{L}_\text{CKBG}(\cdot) = \sum_{a} \int_{-\infty}^{\infty} \gamma(\omega)\left(\hat{A}^a(\omega)(\cdot)\hat{A}(\omega)^\dagger -\frac{1}{2}\left\{\hat{A}^a(\omega)^\dagger \hat{A}^a(\omega), \cdot \right\}\right)\dd\omega .
+\end{equation}
+
+The sum runs over the set of jumps, $\{A^a\}_{a\in\mathcal{A}}$, that can be chosen in any way that ensures ergodicity. Usually, with a varied enough set (breaking any symmetries that the Hilbert space might have) where each jump also has its adjoint included works well,
+\begin{equation}
+    \label{eq:ergodic-set-jumps}
+    \{A^a\}_{a\in\mathcal{A}} = \{(A^a)^\dagger\}_{a\in\mathcal{A}} \quad\text{and}\quad \left\|\sum_a A^{a\dagger} A^a\right\| \leq 1.
+\end{equation}
+Here, the norm will be used to normalize the jumps and its purpose is (i) to make block encodings (i.e. implementation) possible \todo{cite to block encoding} and (ii) it also helps in analysis since it fixes a variable, namely the "strength" of the Lindbladian for different number of jump operators.
+The naive set of single-site Pauli jumps work already quite well, and since they are unitary we can avoid using some block encodings and excess ancillas in the circuits. (In this case, the normalization factor in \eqref{eq:ergodic-set-jumps} becomes the total number of jumps $|\mathcal{A}|$.) Even if we choose a single-site jump as the core, the Kraus operators of the Lindbladian, $\{L_j\}_{j\in\mathcal{J}} = \{\sqrt{\gamma(\omega)}\hat{A}(\omega)\}$ will not be constraint to just that one site. We can see this from the OFT construction \eqref{eq:oft}, where it becomes clear, that as the Pauli operators evolve over time in the Heisenberg picture, its support will also spread out spatially. We can estimate this size by the Lieb-Robinson bound to see that for the small system sizes that we can numerically simulate, these jumps spread out over the whole lattice. See the Appendix for more details [APPENDIX] \todo{appendix LR bound}.
+
+The transition rates $\gamma(\omega)$ can be any bounded function, $\gamma(\omega) \in [0, 1]$, that satisfy the KMS condition \eqref{eq:KMS-condition}, which now has the form
+\begin{equation}
+    \label{eq:KMS-condition-2}
+    \frac{\gamma(\omega)}{\gamma(-\omega)} = \ee^{-\beta \omega}.
+\end{equation}
+Let us first choose a tuneable Gaussian for these transition rates,
+\begin{equation} \label{eq:gaussian-transition}
+    \gamma(\omega) = \exp\left( -\frac{(\omega + \omega_\gamma)^2}{2\sigma_\gamma^2} \right),
+\end{equation}
+where the centre of the Gaussian is at $\omega_\gamma$ and its width is given by $\sqrt{2}\sigma_\gamma.$ In other words, most of the jumps are suppressed in this case and only the ones that lead to an energy difference with $\omega \approx \omega_\gamma$ contribute meaningfully. The KMS condition \eqref{eq:KMS-condition-2} for this Gaussian $\gamma(\omega)$ actually fixes the following relation between the parameters $\beta, \omega_\gamma, \sigma_\gamma$
+\begin{equation} \label{eq:beta-approx-gns-gaussian}
+    \beta := \frac{2\omega_\gamma}{\sigma_\gamma^2}
+\end{equation}
+
+In [FIGURE] \todo{add figure of gammas} you can see how constraining it is compared to transitions that we will consider later on. But before we could do that, we need to see what kind of detailed balance, if any, we have with these Gaussian smoothed jump operators \eqref{eq:oft}. 
+
+In its current form \eqref{eq:L-ckbg} has been shown to satisfy \textit{approximate GNS detailed balance} in \cite{chen2023quantum}. Quantitatively, we have understood the severity of breaking detailed balance as the norm of the anti-Hermitian part $\|\mathcal{A}(\rho, \mathcal{L})\|_{2\rightarrow 2}$ of the generator's discriminant $\mathcal{D}(\rho, \mathcal{L})$, see \hyperref[def:approx-db]{Definition \ref*{def:approx-db}}. Thus, if we can choose algorithm parameters such that the norm of the anti-Hermitian part is below some $\varepsilon$, we can also bound how well does the fixed point $\rho_\text{fix}(\mathcal{L})$ approximate the target state $\rho$.
+
+\begin{corollary}
+    \textup{(Fixed point accuracy \cite{chen2023quantum})} If a Lindbladian $\mathcal{L}$ satisfies $\varepsilon$-approximate $\rho$-detailed balance condition, then its fixed point $\rho_\text{fix}(\mathcal{L})$ deviates from $\rho$ by at most $$\|\rho_\text{fix}(\mathcal{L}) - \rho\|_1 \leq 20 t_\text{mix}(\mathcal{L})\,\varepsilon .$$
+\end{corollary}
+Chen et al. provides the proof of this, which is indeed less than obvious. The core thought is that perturbations to the parent Hamiltonian $\mathcal{H}$ with $\mathcal{A}$, leads to only small changes for the eigenvectors with separated eigenvalues. In fact, one can show that the top eigenvalue of $\mathcal{H}$ will not deviate further from $0$ (its detailed balanced value) than $$|\lambda_1(\mathcal{H})| \leq \|\mathcal{A}\|_{2\rightarrow 2}.$$ We can combine all of this with the CKBG Lindbladian and find that it is approximately GNS detailed balanced.
+\begin{theorem}
+    \textup{(Approximate detailed balance for $\mathcal{L}_\text{CKBG}$  \cite{chen2023quantum})}. Any Lindbladian $\mathcal{L}_\textup{CKBG}$ of the form \eqref{eq:L-ckbg} with jumps \eqref{eq:ergodic-set-jumps}, satisfying the KMS condition \eqref{eq:KMS-condition-2}, and having Gaussian filter functions \eqref{eq:gaussian-filter-t} has an approximate detailed balance. Hence, its fixed point $\rho_\textup{fix}(\mathcal{L_\textup{CKBG}})$ is approximately the Gibbs state $\rho_\beta$
+    $$
+    \left\|\rho_\textup{fix}(\mathcal{L}_\textup{CKBG}) - \rho_\beta\right\|_1 = \mathcal{O}\left(\sigma \beta \sqrt{\log\frac{1}{\sigma \beta}}\,t_\textup{mix}(\mathcal{L}_\textup{CKBG})\right).
+    $$
+\end{theorem}
+The main takeaway of these results is that if some error appears on the generator level, it will get amplified with time, and can have significant impact on Gibbs sampling results.
+This is even worse for cases (usually the interesting ones) where fast or rapid mixing has not been proven, and thus can very well make $t_\text{mix}(\mathcal{L})$ exponentially scaling with system sizes and with inverse temperature $\beta$.
+
+One of the main culprits leading to deviations from the Gibbs state is the presence of non-secular terms in the CKBG Lindbladian \eqref{eq:L-ckbg}. For the \hyperref[subsec:davies]{Davies generator} we had to apply the secular approximation in order to get a correct, physical generator. But here, with the smoothened jump operators \eqref{eq:oft} we have reintroduced some off-diagonal entries in the Kossakowski matrix. To better see this, let us derive its analytical form by computing the integral over the energies in \eqref{eq:L-ckbg} for the transition part of the Lindbladian.
+\begin{equation} \label{eq:gauss-transition-part-of-lindbladian}
+    \begin{split}
+        \mathcal{T} = &\int_{-\infty}^\infty \gamma(\omega) \hat{A}(\omega) (\cdot) \hat{A}(\omega)^\dagger \dd \omega \\
+        &= \frac{1}{\sigma \sqrt{2\pi}} \sum_{\nu_1, \nu_2 \in B_H} \int_{-\infty}^{\infty} \ee^{-\frac{(\omega + \omega_\gamma)^2}{2\sigma_\gamma^2}}\ee^{-\frac{(\omega - \nu_1)^2}{4\sigma^2}}\ee^{-\frac{(\omega - \nu_2)^2}{4\sigma^2}}A_{\nu_1}(\cdot)A_{\nu_2}^\dagger \dd \omega \\
+        &=: \sum_{\nu_1, \nu_2 \in B_H} \alpha_{\nu_1, \nu_2} A_{\nu_1}(\cdot)A_{\nu_2}^\dagger \dd \omega
+    \end{split}
+\end{equation}
+with the Kossakowski matrix,
+\begin{equation} \label{eq:kossakowski-gaussian}
+    \alpha_{\nu_1,\nu_2} = \frac{\sigma_\gamma}{\sqrt{\sigma^2 + \sigma_\gamma^2}} \exp\left(-\frac{(\nu_1 + \nu_2 + 2\omega_\gamma)^2}{8(\sigma^2 + \sigma_\gamma^2)}\right)\exp\left(-\frac{(\nu_1 - \nu_2)^2}{8\sigma^2}\right).
+\end{equation}
+There are a few things we can read off from this expression: (i) There are non-secular terms present $\nu_1 \neq \nu_2$ due to the Gaussian smearing around the $\nu$'s; (ii) It is a positive semi-definite matrix (and Hermitian), which makes the generator $\mathcal{L}$ to be a Lindbladian generator; (iii) 
+The Gaussian filters are not only breaking the secular structure but also raising the temperature. To see this latter point, let us reconsider what we are aiming to approximate: the GNS detailed balance that was physically derived by retaining diagonal terms, and drops all off-diagonal ones via the secular approximation. Setting $\nu_1 = \nu_2 = \nu$ in \eqref{eq:kossakowski-gaussian} yields, 
+\begin{equation}
+    \alpha_{\nu, \nu} = \frac{\sigma_\gamma}{\sqrt{\sigma^2 + \sigma_\gamma^2}} \exp\left(-\frac{(\nu + \omega_\gamma)^2}{2(\sigma^2 + \sigma_\gamma^2)}\right).
+\end{equation}
+These diagonal entries have to satisfy the KMS condition,
+\begin{equation} \label{eq:kossakowski-diag-condition}
+    \frac{\alpha_{\nu, \nu}}{\alpha_{-\nu, -\nu}} = \exp\left(-\frac{2\nu\omega_\gamma}{\sigma^2 + \sigma_\gamma^2}\right) =: e^{-\beta_\text{eff} \nu}
+\end{equation}
+with 
+\begin{equation} \label{eq:beta-eff}
+    \beta_\text{eff} = \frac{2 \omega_\gamma}{\sigma^2 + \sigma_\gamma^2} < \beta = \frac{2\omega_\gamma}{\sigma_\gamma^2}.
+\end{equation}
+In other words, Gibbs sampling with the $\mathcal{L}_\text{CKBG}$ from \eqref{eq:L-ckbg} and with $\sigma > 0$, effectively leads to some higher temperature Gibbs state. Though because of the additional non-secular errors, the error structure is not as clear-cut as just "raised temperatures". It can now also be clearly seen, that by taking the $\sigma \rightarrow 0$ limit, all errors to the GNS detailed balance vanish as well: $\beta_\text{eff} \rightarrow \beta$ and as the Gaussian filters become delta peaks in this limit, they also eliminate any off-diagonal elements and only $\nu_1 = \nu_2$ remains. 
+
+\label{sec:kms-lindbladian}
+\smallskip
+\subsection{KMS Lindbladian} While the previous approximate GNS detailed balanced Lindbladian was a result on its own, its improvement is what got researchers (with myself included) thrilled about quantum Gibbs sampling. In \cite{chen2023efficient} Chen et al. have managed to come up with a structure for the Lindbladian where they do not fight the above-mentioned errors, but rather lean into them and fix them all at once with an additional coherent term. The result is an exact KMS detailed balanced Lindbladian instead of an approximation of the GNS detailed balance and the Davies generator with high costs. In order to better see how terms in the Lindbladian interact with each other to get KMS detailed balance, it will be useful to write the Lindbladian in this general form:
+\begin{equation}
+    \mathcal{L} = \mathcal{T} - \frac{1}{2}\mathcal{R} - \ii \mathcal{B}
+\end{equation}
+with the transition $\mathcal{T}$, decay $\mathcal{R}$ and coherent $\mathcal{B}$ parts, 
+\begin{alignat}{2} \label{eq:ckg-L-parts}
+\mathcal{T}(\cdot) 
+  &= \sum_a\sum_{\nu_1,\nu_2} \alpha_{\nu_1,\nu_2} A^a_{\nu_1}(\cdot)(A^a_{\nu_2})^\dagger
+  &\quad&\text{with}\quad
+  \mathcal{T}^\dagger(\cdot) = \sum_a\sum_{\nu_1,\nu_2} \bar\alpha_{\nu_1,\nu_2}(A^a_{\nu_1})^\dagger(\cdot)A^a_{\nu_2},
+  \\
+\mathcal{R}(\cdot) 
+  &= \sum_a\sum_{\nu_1,\nu_2} \alpha_{\nu_1,\nu_2}\{(A^a_{\nu_2})^\dagger A^a_{\nu_1},\,\cdot\,\}
+  &\quad&\text{with}\quad
+  \mathcal{R}^\dagger = \mathcal{R},
+  \\
+\mathcal{B}(\cdot) 
+  &= \sum_a[B_a,\,\cdot\,]
+  &\quad&\text{with}\quad
+  (-i\mathcal{B})^\dagger = i\mathcal{B}.
+\end{alignat}
+For $\mathcal{R}^\dagger$ we implicitly took the Kossakowski matrix to be positive semidefinite and thus Hermitian, $\alpha_{\nu_1, \nu_2} = \bar\alpha_{\nu_2, \nu_1}$. Though, this needs to be checked for new constructions, without it, we would not have a GKSL Lindbladian.
+
+Other than the additional coherent term $\mathcal{B}$, the rest of the setup is unchanged: we take the same Gaussian filter functions for the jump operators \eqref{eq:oft}; we keep the Gaussian transition weights $\gamma(\omega)$ \eqref{eq:gaussian-transition}; Consequently, we have the exact same Kossakowski matrix $\alpha_{\nu_1, \nu_2}$ too \eqref{eq:kossakowski-gaussian} with one small but pivotal difference, the temperature. We set the temperature such that the diagonal entries of $\alpha_{\nu_1,\nu_2}$ satisfy the KMS condition, i.e. as $\beta := \beta_\text{eff}$. This instantly makes $\gamma(\omega)$ itself break the original KMS condition, however, the goal here is to satisfy the condition \textit{with} the Gaussian filters together. From the relation \eqref{eq:beta-eff}, it is clear that the Gaussian parameters and the temperature are intertwined. In the KMS case, there is a convenient way to choose them to keep the Kossakowski matrix necessarily skew-symmetric, by 
+\begin{equation}
+    \sigma = \omega_\gamma = \sigma_\gamma = \frac{1}{\beta}.
+\end{equation}
+Nevertheless, we will keep the following expressions general, because it is not a priori clear how best to choose these parameters for a faster Gibbs state preparation. It is best to keep in mind, that since the mixing time and these Gaussian parameters are all temperature dependent, they can affect one another. This is one of the questions we have tackled in our numerical analysis, see \todo{ref to results: mixing time dependence on more or less off-diagonal terms.}
+
+Previously the off-diagonal terms $\nu_1 \neq \nu_2$ were either eliminated via secular approximations (Davies) or were the reason for deviation from GNS detailed balance (CKBG Lindbladian). Now these terms are part of the design. But that also means we must have a condition on how these off-diagonal terms relate to each other just like what we had for the diagonal part in \eqref{eq:kossakowski-diag-condition}, in order to attain KMS detailed balanced.
+In the following we will see parts of the Lindbladian \eqref{eq:ckg-L-parts} behave differently in this KMS space. In fact, while the transition part $\mathcal{T}$ keeps its structure under Gibbs conjugations, the decay $\mathcal{R}$ and coherent $\mathcal{B}$ parts mix together.
+
+Let us start with the transition part: for it to satisfy the KMS detailed balance condition, it needs to be self-adjoint with respect to the KMS inner product, or equivalently: 
+\begin{equation} \label{eq:transition-self-adjoint}
+    \mathcal{T}^\dagger = \Gamma_\rho^{-1}\, \circ \, \mathcal{T}\, \circ\, \Gamma_\rho^{1},
+\end{equation}
+with $\Gamma_\rho(\cdot) := \rho_\beta^{\frac{1}{2}} (\cdot) \rho_\beta^{\frac{1}{2}}$. The equality indeed holds if each jump $A^a$ has its Hermitian conjugate in the jumps set $\mathcal{A}$, and most importantly if the Kossakowski matrix has a specific skew-symmetry:
+\begin{equation} \label{eq:skew-symmetry}
+    \alpha_{\nu_1, \nu_2} = \alpha_{-\nu_2, -\nu_1} e^{-\beta(\nu_1 + \nu_2) / 2},
+\end{equation}
+which can even be thought of as the off-diagonal extension of the diagonal condition we found previously \eqref{eq:kossakowski-diag-condition}.
+This skew-symmetry has to be satisfied for any given combination of filter function $f(t)$, acceptance rates $\gamma(\omega)$ and $\beta$. For our current Gaussian case \eqref{eq:kossakowski-gaussian}, it was shown that the inverse temperature has to take its already introduced form, $\beta = \beta_\text{eff}$ from \eqref{eq:beta-eff}. 
+
+Now let us look at the remaining parts of the Lindbladian, $\mathcal{R}$ and $\mathcal{B}$. As a quick check, we can conjugate $\mathcal{R}$ with the Gibbs state to see what kinds of terms we get: 
+\begin{equation} \label{eq:decay-gibbs-conjugation}
+    \Gamma_\rho^{-1}\, \circ \, \mathcal{R}\, \circ\, \Gamma_\rho^{1}(\cdot) =\sum_{\nu_1, \nu_2} \left( e^{\beta(\nu_1 - \nu_2)/2}R_{\nu_1, \nu_2}(\cdot) + (\cdot) R_{\nu_1, \nu_2} e^{-\beta(\nu_1 - \nu_2)/2}\right),
+\end{equation}
+with $R_{\nu_1, \nu_2} := \sum_a \alpha_{\nu_1, \nu_2} (A^a_{\nu_2})^\dagger A^a_{\nu_1}$. This clearly shows, that the two terms pick up a different factor in the anti-commutator of $\mathcal{R}$ and thus no simple condition on $\alpha_{\nu_1, \nu_2}$ like the skew-symmetry, can lead to KMS detailed balance alone. However, the coherent term $\mathcal{B}$ leads to similar terms under the KMS conjugation as the decay part, 
+\begin{equation} \label{eq:coherent-gibbs-conjugation}
+    \Gamma_\rho^{-1}\circ\mathcal{B}\circ\Gamma_\rho(\cdot) = \sum_\nu \left(e^{+\beta\nu/2}\,B_\nu\, (\cdot) \;-\; (\cdot)\,B_\nu e^{-\beta\nu/2}\right),
+\end{equation}
+with the usual Bohr frequency decomposition $B = \sum_\nu B_\nu$. Then, one can dream up a form for $B$ such that all the detailed balance violating terms in the decay part in \eqref{eq:decay-gibbs-conjugation} cancel (while the skew-symmetry \eqref{eq:skew-symmetry} for the Kossakowski matrix holds). Which is exactly what Chen et al. did in \cite{chen2023efficient}.
+
+Then, the key equation that has to hold is
+\begin{equation}
+    \left(-\frac{1}{2}\mathcal{R} + \ii \mathcal{B}\right) = \Gamma_\rho^{-1}\circ\left(-\frac{1}{2}\mathcal{R} - \ii \mathcal{B}\right)\circ\Gamma_\rho.
+\end{equation}
+With the Hilbert-Schmidt adjoint on the LHS and the Gibbs conjugation on the RHS. In other words, we are looking for an expression of $\mathcal{B}$ such that $\mathcal{R}$ and $\mathcal{B}$ together are self-adjoint with respect to the KMS inner product. If we write all these terms out using \eqref{eq:decay-gibbs-conjugation} and \eqref{eq:coherent-gibbs-conjugation}, and identify $\nu = \nu_1 - \nu_2$, then we can match the prefactors of the same type of terms on both hands. For instance, the left-multiplication prefactors give: 
+\begin{equation}
+    -\frac{1}{2}R_{\nu} + \ii B_\nu = -\frac{1}{2} \ee^{\beta\nu / 2}R_{\nu} - \ii \ee^{\beta\nu / 2} B_\nu
+\end{equation}
+which rearranges to
+\begin{equation}
+    \ii B_\nu\left(1 + \ee^{\beta\nu / 2}\right) = -\frac{1}{2}\left(\ee^{\beta\nu / 2} - 1\right) R_{\nu}.
+\end{equation}
+This determines $B_\nu$ uniquely at each Bohr frequency,
+\begin{equation}
+    B_\nu = \frac{1}{2\ii}\,\frac{1 - \ee^{\beta\nu /2}}{1 + \ee^{\beta\nu /2}}\;R_\nu = \frac{1}{2\ii}\tanh\!\left(-\frac{\beta\nu}{4}\right)\,R_\nu,
+\end{equation}
+where we used the identity: $\frac{1 - \ee^x}{1 + \ee^x} = \tanh(-x / 2).$ The prefactors for the right-multiplications lead to the same result. Restoring the indices and summing up over them leads to the full coherent term
+\begin{equation} \label{eq:B-bohr-domain}
+    B = \frac{1}{2\ii}\sum_a\sum_{\nu_1,\nu_2}\tanh\!\left(-\frac{\beta(\nu_1-\nu_2)}{4}\right)\;\alpha_{\nu_1\nu_2}\;(A^a_{\nu_2})^\dagger A^a_{\nu_1}.
+\end{equation}
+Concluding this section, we have successfully found a unique and Hermitian $B$ which makes the decay and coherent parts of the Lindbladian, $\mathcal{R}$ and $\mathcal{B}$ KMS detailed balanced. Since $\alpha_{\nu_1, \nu_2}$ has been kept skew-symmetric, the translation part $\mathcal{T}$ is also correct. Combining everything together, we get a KMS detailed balanced Lindbladian, that we will call from now on as the CKG Lindbladian,
+\begin{equation}\label{eq:ckg-L}
+    \mathcal{L}_{\text{CKG}}(\cdot) = -\ii[B, \cdot\,] + \sum_a \int_{-\infty}^\infty \gamma(\omega) \left(\hat{A}^a(\omega)(\cdot)\hat{A}(\omega)^\dagger -\frac{1}{2}\left\{\hat{A}^a(\omega)^\dagger \hat{A}^a(\omega), \cdot \right\}\right)\dd\omega .
+\end{equation}
+
+\smallskip
+\subsection{Designing transition weights}
+\todo{plot for gammas}
+Only allowing transitions with energies concentrated as a Gaussian around some $\omega_\gamma$ can be very restricting, which inevitably leads to slow thermalization. The question is, \textit{can we come up with more accepting rates $\gamma(\omega)$ while keeping the KMS detailed balance of the CKG Lindbladians?} The answer is yes, by finding a clear connection between the condition on the transition weights $\gamma(\omega)$ and the necessary skew-symmetry of the Kossakowski matrix $\alpha_{\nu_1, \nu_2}$.
+\begin{lemma} \label{lem:shifted-kms-condition}
+    \textup{(Shifted KMS condition for detailed balance, \cite{ramkumar2024mixing})} If $\tilde{\gamma}(\omega)$ satisfies the KMS condition $\tilde{\gamma}(\omega) = \tilde{\gamma}(-\omega)e^{-\beta \omega},$ then the Kossakowski matrix 
+    $$
+    \alpha_{\nu_1, \nu_2} = \int_{-\infty}^\infty \gamma(\omega) \hat{f}(\omega - \nu_1) \hat{f}(\omega - \nu_2) \dd \omega \quad\textup{with}\quad \gamma(\omega) = \tilde{\gamma}\left(\omega + \frac{\beta \sigma^2}{2}\right),
+    $$
+    will be skew-symmetric by \eqref{eq:skew-symmetry}. Here, $\hat{f}$ is any filter with $|\hat{f}(\omega)|^2 = |\hat{f}(-\omega)|^2$, like the usual Gaussian filter from \eqref{eq:gaussian-filter-w}.
+\end{lemma}
+\noindent The proof from the authors follows by direct verification of the self-adjointness condition \eqref{eq:transition-self-adjoint} for $\mathcal{T}$. 
+
+Hence, we can take any transition weight function $\tilde{\gamma}(\omega)$ that satisfies the KMS condition, shift it to $\gamma(\omega)$ and find a KMS detailed balanced CKG Lindbladian. This is quite interesting, since we can import canonically well-working transition weights that has been used for Gibbs sampling in the past. One such function, is the \textit{Metropolis function}, which takes the following form after the prescribed shift from \hyperref[lem:shifted-kms-condition]{Lemma~\ref*{lem:shifted-kms-condition}}: 
+\begin{equation} \label{eq:shifted-metro-func}
+    \gamma_\text{M}(\omega)= \exp\left(-\beta \max\left(\omega + \frac{\beta\sigma^2}{2}, 0\right)\right).
+\end{equation}
+
+From Fig. \todo{fig} it becomes apparent why the Metropolis function would lead to better mixing compared to the previous Gaussian case. It accepts almost all transitions that lower the energy with probability 1, and only suppresses energy increasing jumps. Since the Metropolis function is the centrepiece of the Metropolis-Hastings algorithm \cite{metropolis1953equation, hastings1970monte} which is already decades old, the community had time to rigorously analyse why it works so well. 
+Peskun showed in \cite{peskun1973optimum} that among all reversible chains with the same proposal and target, the one with the pointwise maximal off-diagonal transition rates (between states $i \neq j$), has the smallest asymptotic variance for any estimator. The (unshifted) Metropolis acceptance is the unique pointwise maximum satisfying detailed balance with $\|\gamma\|_\infty\leq 1$. Then, Tierney extends these results in \cite{tierney1998note} by finding that the spectral gap among these reversible chains, the spectral gap is also the largest for the Metropolis transition, hence it is the fastest mixing of them all.
+
+These are strong results, but they apply only for classical Markov chains and as it turns out, they do not generally hold in the quantum case. It is an open question if there exists a quantum variant of the above results. But at the moment it is not clear if and how the off-diagonal elements of a Kossakowski matrix $\alpha_{\nu_1, \nu_2}$ improve upon the mixing times of quantum Markov semigroups. There are recent numerical evidences in the general KMS detailed balanced framework \cite{chen2024boosting,hahn2025efficient} suggesting that there is not one choice that fits all problems. But also shows a gap in analytical results.
+
+We can however look at just the CKG Lindbladian case and ask, for given Gaussian filter functions \eqref{eq:gaussian-filter-w}, would the Metropolis transition rate $\gamma_M$ lead to the fastest mixing?  
+
+\begin{proposition} \label{prop:optim-metro}
+    \textup{(Optimality of Metropolis weights for CKG Lindbladians)} Assume that the CKG Lindbladian $\mathcal{L}_\textup{CKG}^{\gamma_M}$ with transition weight $\gamma_M$ \eqref{eq:shifted-metro-func} is primitive. For any $\gamma: \mathbb{R} \rightarrow [0, \infty)$ that satisfies the shifted KMS condition \hyperref[lem:shifted-kms-condition]{Lemma~\ref*{lem:shifted-kms-condition}} and $\|\gamma\|_\infty \leq 1$: 
+    $$\textup{Gap}\left(\mathcal{L}_\textup{CKG}^{\gamma_M}\right) \geq \textup{Gap}\left(\mathcal{L}_\textup{CKG}^{\gamma}\right) \geq 0.$$
+\end{proposition}
+
+\begin{proof}
+    Define $\Delta := \gamma_M - \gamma$. We claim $\Delta \geq 0$. For the piece of the function where $\omega \geq -\beta\sigma^2 / 2$, the shifted KMS condition gives
+    $$
+    \gamma(\omega) = \gamma(-\omega - \beta\sigma^2)e^{-\beta(\omega + \beta\sigma^2/2)} \leq e^{-\beta(\omega + \beta\sigma^2 / 2)} \equiv \gamma_M(\omega),
+    $$
+    using $\|\gamma\|_\infty \leq 1$. For the other piece, $\omega < -\beta\sigma^2/2$, we directly have $\gamma(\omega) \leq 1 = \gamma_M(\omega)$. This argument is analogous to Peskun \cite{peskun1973optimum}. The CKG shifted KMS condition is a linear identity in $\gamma$: since both $\gamma_M, \gamma$ satisfy it, so does $\Delta$. Thus, $\mathcal{L}_\textup{CKG}^\Delta$ is a valid GKLS generator which satisfies KMS detailed balance.
+
+    Since the map $\gamma\rightarrow\mathcal{L}^\gamma$ is linear: for any non-negative $\gamma_1, \gamma_2$, both satisfying the CKG shifted KMS condition, and any $c_1, c_2 \geq 0$, we have $\mathcal{L}_\textup{CKG}^{c_1\gamma_1 + c_2\gamma_2} = c_1 \mathcal{L}_\textup{CKG}^{\gamma_1} + c_2 \mathcal{L}_\textup{CKG}^{\gamma_2}$. The reason behind this is that every construction in the CKG Lindbladian involves an integral linear in $\alpha_{\nu_1, \nu_2}$ and correspondingly linear in $\gamma$. Then we can write: $$\mathcal{L}_\textup{CKG}^{\gamma_M} = \mathcal{L}_\textup{CKG}^\gamma + \mathcal{L}_\textup{CKG}^\Delta, 
+    \quad\textup{or}\quad
+     \left(\mathcal{L}_\textup{CKG}^{\gamma_M}\right)^\dagger = \left(\mathcal{L}_\textup{CKG}^\gamma\right)^\dagger + \left(\mathcal{L}_\textup{CKG}^\Delta\right)^\dagger.$$
+    Recall that the spectral gap is defined as
+    $\textup{Gap}\left(\mathcal{L}^\dagger\right) = \inf_{X} \mathcal{E}(X, X) / \|X\|^2_\textup{KMS}$ with $X\neq 0$ and $\tr(\rho_\beta X) = 0$, and with the Dirichlet form $\mathcal{E}^\gamma(X, X) := -\langle X, (\mathcal{L}^\gamma)^\dagger(X) \rangle_\textup{KMS}$. See also [REF] \todo{refer to preliminaries} and note that the Dirichlet form is defined in the Heisenberg picture, hence the $\mathcal{L}^\dagger$. Consequently, the proof boils down to showing that $$\mathcal{E}^\Delta(X, X) \geq 0 \quad\forall X \in \mathcal{B(H)},$$
+    which is true since: (i) the Schrödinger and Heisenberg operators share the same spectra; (ii) $\mathcal{L}_\textup{CKG}^\Delta$ is a GKLS generator and thus has $\textup{Re}(\lambda) \leq 0$ for all eigenvalues $\lambda$; (iii) $\mathcal{L}_\textup{CKG}^\Delta$ has KMS detailed balance, i.e. it is self-adjoint with respect to the KMS inner-product which makes all eigenvalues on this space real. Combining all of this leads to $\langle X, (\mathcal{L}^\Delta)^\dagger(X) \rangle_\textup{KMS} \leq 0$ and finally to the above statement.
+    
+    The last step is to relate the Dirichlet forms and the spectral gaps. For all $X$ with $\tr(\rho_\beta X) = 0$, $X \neq 0$:
+    $$  
+    \mathcal{E}^{\gamma_M}(X, X) = \mathcal{E}^{\gamma}(X, X) + \mathcal{E}^{\Delta}(X, X) \geq \mathcal{E}^{\gamma}(X, X).
+    $$
+    Since $\|X\|^2_\textup{KMS}$ is independent of $\gamma$, dividing with it and taking the infimum yields:
+    $$
+    \textup{Gap}\left(\mathcal{L}_\textup{CKG}^{\gamma_M}\right) \geq \textup{Gap}\left(\mathcal{L}_\textup{CKG}^{\gamma}\right)
+    $$
+    The primitivity assumption ensures $\textup{Gap}\left(\mathcal{L}_\textup{CKG}^{\gamma_M}\right) > 0$.
+\end{proof}
+
+Although, we cannot say anything definite about optimal Kossakowski matrices, with the above proposition, we have at least the motivation to numerically analyse CKG Lindbladians with the Metropolis function $\gamma_M$ or (risking foreshadowing here) with its smoothened variants.
+
+There is however an interesting technique that is worth mentioning, as it can help us design transition functions and Kossakowski matrices.
+In \cite{chen2023efficient} the authors found this shifted Metropolis function $\gamma_M$ by different means. The idea is to take a linear combination of detailed balanced Lindbladians in order to speed up the mixing. Due to linearity, a linear combination of skew-symmetric Kossakowski matrices also respects the symmetry,
+\begin{equation}\label{eq:lin-comb-alpha}
+    \alpha_{\nu_1,\nu_2}^{(s, g)} := \int_{\frac{\beta\sigma^2}{2}(1 + s)}^\infty g(x) \alpha_{\nu_1,\nu_2}^{(\omega_\gamma, \sigma_\gamma)} \dd x \quad\text{with}\quad (\omega_\gamma(x), \sigma_\gamma(x)) = \left(x, \sqrt{\frac{2x}{\beta} - \sigma^2}\right).
+\end{equation}
+Where $g \in \ell_1(\mathbb{R})$ is necessary to keep the resulting Kossakowski matrix Hermitian. This is a linear combination of the skew-symmetric Gaussian-case Kossakowski matrices \eqref{eq:kossakowski-gaussian} by sweeping with the centre of the transition Gaussians $\omega_\gamma$. Hence, we find a transition that admits a larger set of energy differences.
+
+By choosing the $g$ as the inverse $\ell_1$ weight of the Gaussians, $g(x) = \frac{1}{\sqrt{2\pi}\sigma_\gamma}$ and $s = 0$, Chen et al. managed to find the shifted Metropolis function \eqref{eq:shifted-metro-func}, after applying the linear combination to the Gaussian transition weight $\gamma_G(\omega)$ with the same $\omega_\gamma(x), \sigma_\gamma(x)$ parameters as in \eqref{eq:lin-comb-alpha},
+\begin{equation} \label{eq:gamma_M-from-lin-comb-of-G}
+    \gamma_M(\omega) = \int_{\beta\sigma^2 / 2}^\infty g(x)\gamma_G(\omega) \dd x.
+\end{equation}
+But while this leads to better mixing than the Gaussian case, it has some problems the moment we want to implement it. 
+
+The source of all these problems is the fact that though $\gamma_M$ is Lipschitz continuous, it has a kink at $\omega = -\beta\sigma^2 / 2$ (and the unshifted variant at $\omega = 0$), see \todo{plot}. To be clear up front, the problems that this fact leads to are not dominating the asymptotic error / cost scalings of the algorithm, but they seem to be unnecessary costs, that for implementations prior fault-tolerance can be important. 
+\begin{itemize}
+    \item On one side this would lead to extra quantum circuit synthesis costs, since in the quantum algorithm at one point we have to apply a rotation onto an ancilla qubits based on $\gamma(\omega)$ \todo{refer to q. alg and circuit}. There are multiple ways to do this, but one is to use QSP, which has to approximate $\gamma_M$ via some polynomials. Due to the kink however we would need to have higher degree polynomial for approximations, and thus a higher gate cost \todo{refer to something possibly}. Chen et al. notes \cite[footnote 33.]{chen2023quantum} that we could do this also piecewise, if we check the energy register via a comparator circuit block (to decide between left and right of the kink) and then apply QSP on smoother pieces of functions. But the costs are higher if the kink is not exactly at $\omega = 0$, since the comparator circuit then has to check more bits in the register, not just the sign bit. 
+    \item The other problem is more important however: since there is an integral over $\omega$ in the CKBG and CKG Lindbladians, we would have to approximate this with a quadrature sum in the quantum computer. A classical result of Fourier analysis \cite[Chapter 2.]{stein2011fourier} states that if a function $f$ is $k$ times continuously differentiable with $f^{(k)}$, its Fourier transform decays as $\hat{f}(t) = \mathcal{O}(|t|^{-(k+1)})$. The Metropolis $\gamma_M$ has a discontinuous first derivative at the kink, and thus its Fourier transform decays only as $\mathcal{O}(1 / t)$. Of course the convolution with the Gaussian filters with width $ \sigma^{-1}$ smoothen this kink and improves the scaling, but the algebraic prefactor persists $\mathcal{O}(\frac{e^{-\sigma^2 t^2}}{\sigma^2 t^2})$. Hence, this algebraic tail requires a larger truncation range and a finer grid (more estimating ancilla qubits) to achieve the same precision as an analytic transition weight.
+    \item Finally, the existence of the kink is tightly connected to having a constant piece of the Metropolis function that equates to 1 for $\omega \leq \beta\sigma^2 / 2$. When passing to the time-domain representation of the Lindbladian (the one that runs in the quantum computer) via a Fourier transform, this constant piece produces a $\delta(t)$ singularity in the integral kernel. In practice this singularity has to be tamed by some regularization technique which incurs more costs as well. \todo{refer to Metropolis tame and maybe our taming}
+\end{itemize}
+
+But we can have our cake and eat it too, almost that is. We can have close to optimal transitions while not stumbling into all the additional implementation costs. The solution is to smoothen the kink of the Metropolis function $\gamma_M$, which eliminates the first two previously mentioned problems. After a long battle of trying to improve on \cite{chen2023quantum}'s way of regularizing the singularity in the time domain, it seems that the incurring additional costs cannot be made better. The remnants of the battle can be found in [REF to APPENDIX] \todo{appendix where parameter a is back in the lin comb.}.
+
+To designing a better transition function $\gamma$, we will make use of the linear combination that was introduced in \eqref{eq:lin-comb-alpha}. The key is to choose $s \neq 0$ to shift the lower limit of the integration away from the kink, in a tuneable manner, i.e. the larger $s$ is the stronger we smoothen. Explicitly writing out $\gamma_G$ and $g(x)$ yields,
+\begin{equation} \label{eq:smooth-metro-int-defi}
+    \gamma_M^{(s)}(\omega) = \int_{\frac{\beta\sigma^2}{2}(1 + s)}^\infty \frac{1}{\sqrt{2\pi \sigma_\gamma^2(x)}} \exp\left(\frac{-(\omega + x)^2}{2 \sigma_\gamma^2(x)}\right) \dd x.
+\end{equation}
+The resulting the transition function cleanly separates into the Metropolis function $\gamma_M$ with an additional factor dependent on $s, \beta, \sigma$:
+\begin{equation} \label{eq:smooth-metro}
+    \gamma_M^{(s)}(\omega) = \gamma_M^{(s=0)}(\omega) \times \frac{1}{2}\left[ \erfc\left(z_-\right) + e^{\beta |\tilde{\omega}|} \erfc\left(z_+\right) \right]
+\end{equation}
+with $\tilde{\omega} = \omega + \beta\sigma^2 / 2$ and 
+$$
+z_\pm := \frac{\beta \sigma \sqrt{s}}{2\sqrt{2}} \pm \frac{|\tilde{\omega}|}{\sigma\sqrt{2s}} 
+$$
+\todo{check with numerics, if these were the correct factors here.}
+Of course, there is a drawback here, since \hyperref[prop:optim-metro]{Proposition~\ref*{prop:optim-metro}} we know that any other choice of transition function $\gamma$ could lead to a smaller spectral gap. More concretely in our case, all $\gamma^{(s)}$ are pointwise smaller or equal to $\gamma_M$ since the right multiplying factor in \eqref{eq:smooth-metro} is $\leq 1$ for $s > 0$. But in practice we only need a small $s$, which is enough to tame quadrature errors (and circuit costs), while keeping almost the same spectral gap of the CKG Lindbladian, see the numerical analysis [REF] \todo{ref}. The parameter $s$ creates a family of Metropolis-like transitions, with $s\rightarrow 0^+$ recovering the Metropolis function $\gamma_M$ (the square bracket with the error functions equals 2 in this limit). Also, we get the Glauber-like transition weights if we choose $s = 2$, which has been found by Chen et al. in \cite{chen2023quantum}. But that is a stark smoothening, which leads to noticeably worse mixing times in the simulations.
+
+Let us state rigorously in what sense the smooth Metropolis $\gamma^{(s > 0)}_M$ improves upon its kinky version $\gamma^{(s = 0)}_M$. First, we have to recall the definition of Gevrey functions \cite{adwan2017global}.
+\begin{definition}
+    \textup{(Gevrey functions).} Let $\Omega \subseteq \mathbb{R}$. A $C^\infty$ function $h: \Omega \to \mathbb{C}$ is a Gevrey function of order $\kappa \geq 0$ if there exist constants $C_1, C_2 > 0$ such that
+    \[
+    \|h^{(n)}\|_{L^\infty(\Omega)} \leq C_1\, C_2^n\, n^{n \kappa} \quad \text{for all } n \geq 0,
+    \]
+    For the given constants $C_1, C_2, \kappa$, the set of Gevrey functions is denoted by $\mathcal{G}_{C_1, C_2}^\kappa(\Omega)$.
+\end{definition}
+Being in a Gevrey set tells us something about the regularity of a function. For instance, with order $\kappa = 0$ the set of real analytic functions is recovered. Gevrey order with finite $\kappa$ provides a quantitative interpolation: integrals over $\mathbb{R}$ admit quadrature errors decaying as $\exp(-c N^{1 / \kappa})$ under optimal truncation of the Euler-Maclaurin expansion, where $N$ is the number of quadrature nodes \cite{trefethen2014exponentially}.
+Conversely, if the integrand has only finite regularity, for instance due to a kink, the quadrature errors converge only at a polynomial rate $\mathcal{O}(N^{-k})$ determined by the order of smoothness $k$ \cite{trefethen2014exponentially}.
+
+In the following proposition we will denote the integrand in \eqref{eq:smooth-metro-int-defi} as $F(\omega, x)$, i.e. $\gamma_M^{(s)}(\omega) = \int_{x_0}^\infty F(\omega, x)\,dx$, with the lower limit $x_0 := \beta \sigma^2 (1 + s) / 2$.
+\begin{proposition} \label{prop:smooth-metro-gevrey}
+    \textup{(Smooth Metropolis is Gevrey-1/2).} For $s > 0, \beta > 0$, the smooth Metropolis weight $\gamma^{(s)}_M$ defined by \eqref{eq:smooth-metro-int-defi} satisfies:
+    \begin{enumerate}[(i)]
+        \item For all $n\geq 1$ and $\omega \in \mathbb{R}$:
+        \[
+        \left|\left(\gamma_M^{(s)}\right)^{(n)}(\omega)\right| \leq \frac{1}{2\pi}\left(\frac{2\beta^2}{s}\right)^{n/2} \Gamma\!\left(\frac{n}{2}\right),
+        \]
+        with $f^{(n)}$ denoting the $n$-th derivative, and $\Gamma(z) = \int_{0}^{\infty} t^{z - 1} \ee^{-t} \dd t$ is the Euler gamma function.
+        \item Consequently, $\gamma_M^{(s)} \in \mathcal{G}^{1/2}_{C_1, C_2}(\mathbb{R})$ with 
+        \[
+        C_1 = 1, \qquad C_2 = \frac{1}{\sigma\sqrt{\ee\,s}}.
+        \]
+        %\item For $s = 0$, the Metropolis weight $\gamma_M^{(0)}(\omega) = e^{-\beta\max(\omega + 1/(2\beta),\, 0)}$ is Lipschitz but not $C^1$, hence not in any Gevrey class.
+    \end{enumerate}
+\end{proposition}
+\begin{proof}
+    For a fixed $x \geq x_0$, the function $\omega \mapsto F(\omega, x)$ is a Gaussian with mean $-x$ and variance $\sigma_\gamma^2(x) \geq s \sigma^2 / 2 > 0$. Its Fourier transform in $\omega$ is
+    \[
+    \mathcal{F}[F(\cdot, x)](\xi) = \frac{1}{\sqrt{2\pi}}\,\ee^{\ii x\xi}\, \ee^{-\sigma_\gamma^2(x)\, \xi^2/2}.
+    \]
+    Substituting $\sigma_\gamma^2(x) = 2x / \beta  - \sigma^2$:
+    \[
+    \mathcal{F}[F(\cdot, x)](\xi) = \frac{1}{\sqrt{2\pi}}\,\ee^{\ii x\xi - (x/\beta - \sigma^2/2)\,\xi^2} = \frac{1}{\sqrt{2\pi}}\,\ee^{\sigma^2\xi^2/2}\, \ee^{x(\ii\xi - \xi^2/\beta)}.
+    \]
+    Then for, $n \geq 1$, differentiation under the integral is justified by the locally uniform integrability of $|\partial_\omega^n F(\omega, x)|$ over $x \in [x_0, \infty)$: the Gaussian decay $F(\omega, x) \lesssim e^{-\beta x/4}$ provides the domination, and $\sigma_\gamma > 0$ prevents singularities. Therefore:
+    \[
+    \left(\gamma_M^{(s)}\right)^{(n)}(\omega) = \int_{x_0}^\infty \frac{\partial^n F}{\partial \omega^n}(\omega, x)\, \dd x.
+    \]
+    Taking the Fourier transform of both sides in $\omega$ and applying Fubini's theorem:
+    We compute the integral for the linear combination. For real $\xi \neq 0$
+    \begin{equation*}
+        \begin{split}
+            \mathcal{F}\left[\left(\gamma_M^{(s)}\right)^{(n)}\right](\xi) &= \frac{(\ii\xi)^n}{\sqrt{2\pi}} \int_{x_0}^\infty \ee^{\sigma^2\xi^2/2}\, \ee^{x(\ii\xi - \xi^2/\beta)}\, \dd x. \\
+            &= \frac{(i\xi)^n \cdot \beta}{\sqrt{2\pi}} \cdot \frac{e^{\sigma^2\xi^2/2 + x_0(i\xi - \xi^2/\beta)}}{\xi(\xi - i\beta)}.
+        \end{split}
+    \end{equation*}
+    Where for computing the integral, $\mathrm{Re}(\xi^2/\beta - i\xi) = \xi^2/\beta > 0$, thus we do not run into singularities.
+    Substituting $x_0$ and doing some arithmetics we arrive at
+    \[
+    \mathcal{F}[(\gamma_M^{(s)})^{(n)}](\xi) = \frac{(i\xi)^{n-1} \cdot i\beta}{\sqrt{2\pi}} \cdot \frac{e^{-s\,\sigma^2\xi^2/2\; +\; i\beta\sigma^2(1+s)\xi/2}}{\xi - i\beta},
+    \]
+    with modulus:
+    \[
+    \left|\mathcal{F}[(\gamma_M^{(s)})^{(n)}](\xi)\right| = \frac{\beta\, |\xi|^{n-1}}{\sqrt{2\pi}\,\sqrt{\xi^2 + \beta^2}}\; e^{-s\,\sigma^2\xi^2/2}.
+    \]
+    Since $\mathcal{F}[(\gamma_M^{(s)})^{(n)}] \in L^1(\mathbb{R})$ for $n \geq 1$, we can now apply the Fourier inversion formula and bound the derivatives of the smooth Metropolis weights,
+    \[
+    \left|(\gamma_M^{(s)})^{(n)}(\omega)\right| \leq \frac{1}{\sqrt{2\pi}} \int_{\mathbb{R}} \left|\mathcal{F}[(\gamma_M^{(s)})^{(n)}](\xi)\right| d\xi = \frac{\beta}{2\pi} \int_{\mathbb{R}} \frac{|\xi|^{n-1}\, e^{-s\,\sigma^2\xi^2/2}}{\sqrt{\xi^2 + \beta^2}}\, d\xi.
+    \]
+    Using $\sqrt{\xi^2 + \beta^2} \geq \beta$ for all $\xi\in\mathbb{R}$ (which is a loose bound, but a tighter solution still would lead to the same Gevrey order):
+    \[
+    \left|(\gamma_M^{(s)})^{(n)}(\omega)\right| \leq \frac{1}{2\pi} \int_{\mathbb{R}} |\xi|^{n-1}\, e^{-s\,\sigma^2\xi^2/2}\, d\xi = \frac{1}{\pi} \int_0^\infty \xi^{n-1}\, e^{-s\,\sigma^2\xi^2/2}\, d\xi.
+    \]
+    This Gaussian integral can be evaluated with $\alpha := s \sigma^2 / 2$ and the identity $\int_0^\infty \xi^{n-1} e^{-\alpha \xi^2}\, d\xi = \frac{1}{2}\,\alpha^{-n/2}\,\Gamma(n/2)$:
+    \[
+    \left|\left(\gamma_M^{(s)}\right)^{(n)}(\omega)\right| \leq \frac{1}{2\pi}\left(\frac{2}{s\,\sigma^2}\right)^{n/2} \Gamma\!\left(\frac{n}{2}\right),
+    \] 
+    proving the part $(i)$ of the proposition.
+    The last step is to show that 
+    \[
+    \frac{1}{2\pi}(2/(s\sigma^2))^{n/2}\,\Gamma(n/2) \leq C_1\, C_2^n\, n^{n/2}
+    \]
+    for suitable constants $C_1, C_2$. Let us handle the different cases of $n$ separately: 
+    \begin{itemize}
+        \item $n = 0$: $\|\gamma_M^{(s)}\|_\infty \leq 1$ since $\gamma_M^{(s)} \leq \gamma_M^{(s=0)} \leq 1$.
+        \item $n = 1$: Substituting $\Gamma(1 / 2) = \sqrt{\pi}$ into (i) gives $\| (\gamma_M^{(s)})'\|_\infty \leq \frac{1}{\sqrt{2\pi} \sigma s}$ 
+        \item $n \geq 2$: in these cases the Stirling upper bound gives $\Gamma(z) \leq \sqrt{2\pi} (z / \ee)^z$. Applying this with $z = n /2 \geq 1$ to (i) gives, 
+        \[
+        \| (\gamma_M^{(s)})^{(n)}\|_\infty \leq \frac{1}{\sqrt{2\pi}}\left(\frac{1}{\ee s \sigma^2}\right)^{n / 2} n^{n / 2}
+        \]
+    \end{itemize}
+    From which we find that $C_1 = 1$ and $C_2 = \frac{1}{\sigma \sqrt{\ee s}}$ (where we could absorb the prefactor of $C_2$, since $1 / \sqrt{2\pi} < C_1$).
+\end{proof}
+\noindent An important remark here is that the Metropolis function $\gamma_M^{(s = 0)}$, has a left derivative at the kink $\omega + \beta\sigma^2 / 2$ equal to $0$, and a right derivative equal to $-\beta$, which makes it only $C^0$ but not $C^1$, and in particular it is not a Gevrey function of any order. This qualitative difference between transition rates will become important for our quadrature error discussions [REF] \todo{ref}.
+
+\smallskip
+\subsection{Improved Kossakowski matrices.}
+For bookkeeping and later analysis, it is worth to write down what form the Kossakowski matrix takes if instead of the Gaussian transition $\gamma_G$ we use the smoothened Metropolis functions $\gamma_M^{(s)}$. Similarly to \eqref{eq:kossakowski-gaussian}, integrating over $\omega$ with the kernel consisting of $\gamma_M^{(s)}$ and the Gaussian filters $\hat{f}(\omega - \nu)$, we find, 
+\begin{equation} \label{eq:kossakowski-smooth-metro}
+    \alpha_{\nu_1, \nu_2}^{(s)} = \frac{1}{2}e^{-\frac{\nu_-^2}{8\sigma^2}}e^{-\frac{\beta}{4}(\nu_+ +|\nu_+|)}\left[\text{erfc}(\zeta_-) + e^{\frac{\beta}{2}|\nu_+|}\text{erfc}(\zeta_+)\right]
+\end{equation}
+with $\nu_\pm := \nu_1 \pm  \nu_2$ and 
+$$
+\zeta_\pm := \frac{\beta \sigma \sqrt{1 + s}}{\sqrt{8}} \pm \frac{|\nu_+|}{\sigma\sqrt{8(1 + s)}}.
+$$
+A few things to note here:
+\begin{enumerate}[(i)]
+    \item $\alpha^{(s)}_{\nu_1,\nu_2}$ is positive semidefinite, since $\gamma_M^{(s)}\geq 0$ and $\hat{f}\geq 0$, guaranteeing GKSL form for the Lindbladian. It also satisfies the skew-symmetry \eqref{eq:skew-symmetry}, i.e. leads to a KMS detailed balanced Lindbladian as it was promised via linear combinations of detailed balanced Lindbladians.
+    \item In the limit of $s\rightarrow 1$ we again recover the Metropolis Kossakowski matrix that Chen et al. found \cite[Appendix B]{chen2023quantum}, exactly how we previously recovered $\gamma_M$ from $\gamma_M^{(s)}$.
+    \item In the $\sigma\rightarrow 0$ limit consistently finds the diagonal Kossakowski matrix, i.e. the Davies generator, since the off-diagonal suppression $e^{-\nu_-^2 / (8\sigma^2)}$ forces all terms with $\nu_1 \neq \nu_2$ to vanish.
+    \item Due to the factorizing Gaussian filter functions, $\alpha_{\nu_1,\nu_2}^{(s)}$ can be separated into to two parts, that each depend on either $\nu_+$ or $\nu_-$. This will be important for later, when we derive time-domain functions, since it allows for a double Fourier transformation. Note, that this is also true for the case with the Gaussian transition weight \eqref{eq:kossakowski-gaussian}.
+    \item Another implication of the factorizing Gaussian filters is a simple shift relation between the Kossakowski matrices for the GNS and KMS detailed balanced Lindbladians (i.e. between CKBG and CKG Lindbladians), analogous to \hyperref[lem:shifted-kms-condition]{Lemma~\ref*{lem:shifted-kms-condition}}:
+\end{enumerate}
+
+\begin{corollary} \label{cor:kossakowski-shift}
+    \textup{(Kossakowski shift between CKG and CKBG).}
+    Let $\tilde{\gamma}(\omega) = \tilde{\gamma}(-\omega)\,e^{-\beta\omega}$, and let
+    $\hat{f}$ be the Gaussian filter with width~$\sigma$ from
+    \eqref{eq:gaussian-filter-w}.
+    Denote by $\alpha^{\textup{KMS}}_{\nu_1,\nu_2}$ the Kossakowski matrix
+    of the CKG Lindbladian, which uses the shifted transition weight
+    $\gamma(\omega) = \tilde{\gamma}(\omega + \beta\sigma^2/2)$ from
+    \hyperref[lem:shifted-kms-condition]{Lemma~\ref*{lem:shifted-kms-condition}}:
+    %
+    $$
+      \alpha^{\textup{KMS}}_{\nu_1,\nu_2}
+      \;=\; \int_{-\infty}^{\infty}
+        \tilde{\gamma}\!\bigl(\omega + \tfrac{\beta\sigma^2}{2}\bigr)\,
+        \hat{f}(\omega - \nu_1)\,\hat{f}(\omega - \nu_2)\,\dd\omega.
+    $$
+    %
+    Then the Kossakowski matrix of the CKBG Lindbladian, which uses
+    $\tilde{\gamma}$ directly,
+    %
+    $$
+      \alpha^{\textup{GNS}}_{\nu_1,\nu_2}
+      \;=\; \int_{-\infty}^{\infty}
+        \tilde{\gamma}(\omega)\,
+        \hat{f}(\omega - \nu_1)\,\hat{f}(\omega - \nu_2)\,\dd\omega,
+    $$
+    %
+    satisfies
+    %
+    \begin{equation} \label{eq:kossakowski-shift}
+      \alpha^{\textup{GNS}}_{\nu_1,\nu_2}
+      \;=\;
+      \alpha^{\textup{KMS}}_{\,\nu_1 - \beta\sigma^2/2,\;\,\nu_2 - \beta\sigma^2/2}.
+    \end{equation}
+    %
+    Equivalently, with $\nu_{\pm} := \nu_1 \pm \nu_2$, the off-diagonal
+    suppression factor $e^{-\nu_-^2/(8\sigma^2)}$ is invariant under the
+    shift, while every occurrence of $\nu_+$ in
+    $\alpha^{\textup{KMS}}$ is replaced by $\nu_+ - \beta\sigma^2$.
+\end{corollary}
+
+\begin{proof}
+    Substitute $u = \omega + \beta\sigma^2/2$ in the defining integral of
+    $\alpha^{\textup{KMS}}_{\nu_1 - \beta\sigma^2/2,\;\nu_2 - \beta\sigma^2/2}$:
+    %
+    \begin{align*}
+      \alpha^{\textup{KMS}}_{\nu_1 - \beta\sigma^2/2,\;\nu_2 - \beta\sigma^2/2}
+      &= \int_{-\infty}^{\infty}
+        \tilde{\gamma}\!\bigl(\omega + \tfrac{\beta\sigma^2}{2}\bigr)\,
+        \hat{f}\!\bigl(\omega - \nu_1 + \tfrac{\beta\sigma^2}{2}\bigr)\,
+        \hat{f}\!\bigl(\omega - \nu_2 + \tfrac{\beta\sigma^2}{2}\bigr)\,
+        \dd\omega \\[4pt]
+      &= \int_{-\infty}^{\infty}
+        \tilde{\gamma}(u)\,
+        \hat{f}(u - \nu_1)\,\hat{f}(u - \nu_2)\,\dd u
+      \;=\; \alpha^{\textup{GNS}}_{\nu_1,\nu_2}.
+    \end{align*}
+    %
+    For the $\nu_\pm$ decomposition, the Gaussian filter gives
+    %
+    $$
+      \hat{f}(\omega - \nu_1)\,\hat{f}(\omega - \nu_2)
+      \;\propto\;
+      \exp\!\Bigl(-\frac{(\omega - \nu_+/2)^2}{2\sigma^2}\Bigr)\,
+      \exp\!\Bigl(-\frac{\nu_-^2}{8\sigma^2}\Bigr).
+    $$
+    %
+    The shift $(\nu_1, \nu_2) \mapsto
+    (\nu_1 - \beta\sigma^2/2,\;\nu_2 - \beta\sigma^2/2)$ sends
+    $\nu_- \mapsto \nu_-$ and $\nu_+ \mapsto \nu_+ - \beta\sigma^2$,
+    leaving the $\nu_-$-dependent factor unchanged, and shifting $\nu_+$ as prescribed.
+\end{proof}
+\noindent Though it is a simple corollary to \hyperref[lem:shifted-kms-condition]{Lemma~\ref*{lem:shifted-kms-condition}}, we will make use of it in our numerical analysis, where we look at the mixing performances of the approximately GNS detailed balanced CKBG Lindbladian [REF to num analysis of GNS] \todo{ref}.
+
+\smallskip
+\subsection{Time, time, time.} \todo{add norms and LCU subnormalizations here.}
+As we have seen, the energy-domain representation is natural for analysing detailed balance, but if we want to run any algorithm in a quantum computer, we have to understand and analyse the given algorithm also in the time-domain. We have already seen one of the core subroutines in the time-domain that \cite{chen2023efficient,chen2023quantum} used, the Operator Fourier Transform, \eqref{eq:oft} and its circuit form [REF to Quantum Circuits chapter] \todo{ref}. With this the dissipative part of the Lindbladians is more or less covered, though how one implements the corresponding open quantum system evolution, $\ee^{t\mathcal{L}}(\rho)$, will be left for the next paragraph.
+
+Then, we are left to work out what form the coherent part $G$ \eqref{eq:B-bohr-domain} takes in the time-domain. The factorization property that we have noted in the previous chapter is the key to derive the time-domain representation. For any transition weight $\gamma$ (e.g. $\gamma_G, \gamma_M^{(s)}$) and with the Gaussian filters \eqref{eq:gaussian-filter-w} the Kossakowski matrix splits as
+\begin{equation}
+    \frac{1}{2\pi}\alpha_{\nu_1,\nu_2} = \hat{f}_+(\nu_+)\,\hat{f}_-(\nu_-), \qquad \nu_{\pm} := \nu_1 \pm \nu_2,
+\end{equation}
+where the $\hat{f}_-$ factor encodes the off-diagonal suppression and the coherent-term structure ($\tanh$ piece), while $\hat{f}_+$ carries all dependence on the transition weight $\gamma$. By \cite[Corollary~A.1]{chen2023efficient}, the two-dimensional Fourier transform over the Bohr frequencies $(\nu_1,\nu_2)$ then decouples into two independent one-dimensional transforms, yielding a nested double integral in the time domain. 
+
+After executing the two independent Fourier transforms on $\hat{f}_\pm(\nu_\pm)$, we find that the coherent term $G$ takes the following general form in the time-domain \cite[Corollary III.1]{chen2023efficient}:
+\begin{equation} \label{eq:coherent-time-domain}
+    B = \sum_{a \in \mathcal{A}} \int_{-\infty}^{\infty} b_-(t)\, e^{-iHt / \sigma} \left[\int_{-\infty}^{\infty} b_+(t')\, A^{a\dagger}(\beta t')\, A^a(-\beta t')\,\dd t' \right] e^{iHt/\sigma}\,\dd t
+\end{equation}
+Here $b_-(t)$ comes from $\hat{f}_-(\nu_-)$, and it is universal across all $\gamma$ choices. It takes the following form:
+\begin{equation} \label{eq:b_minus}
+    b_-(t) = \frac{2\sqrt{\pi}}{\beta \sigma}e^{\beta^2\sigma^2/8}\left[\frac{1}{\cosh(\frac{2\pi t}{\beta \sigma})}\ast_t \sin(-\beta \sigma t) e^{-2t^2}\right] \quad\text{with}\quad \|b_-\|_1 \leq \frac{\pi}{\sqrt{2}}e^{\beta^2 \sigma^2 / 8},
+\end{equation}
+where $\ast_t$ denotes the convolution over the variable $t$, 
+$$
+    (f \ast_t g)(t) := \int_{-\infty}^{\infty} f(s) g(t - s)\dd s.
+$$
+Importantly, $b_-(t)$ is real function that has a support over $t = \mathcal{O}(\beta \sigma)$ due to the width of the $1 / \cosh$ kernel. The time evolution of the outer integral is $e^{\pm \beta H t / \sigma}$, which implies Hamiltonian simulation time of $\mathcal{O}(\beta)$.
+
+Since $b_+$ depends on $\gamma$, we will have to look at the Gaussian $\gamma_G$ and the smooth Metropolis $\gamma_M^{(s)}$ separately. The Gaussian case is definitely the simpler one out of the two. It takes the following form:
+\begin{equation} \label{eq:b_plus-gauss}
+    b_+(t) = \frac{2 \sigma_\gamma}{\pi\sqrt{\pi}}e^{-4t^2\beta^2 \omega_\gamma - 2it\beta\omega_\gamma} \quad\text{with}\quad \|b_+\|_1 = \frac{\beta}{\omega_\gamma} \sqrt{\frac{\sigma_\gamma}{2\pi}}.
+\end{equation}
+This is a rapidly decaying function with width $\mathcal{O}(1 / \sqrt{\beta \omega_\gamma}) = \mathcal{O}(1)$, if we use that $\omega_\gamma$ has a natural unit of $1 / \beta$. Hence, the inner integral also needs an $\mathcal{O}(\beta)$ amount of Hamiltonian simulation time in this case.
+
+The Metropolis case is slightly more complicated. But this should not surprise us after the foreshadowing in the discussions of \eqref{eq:gamma_M-from-lin-comb-of-G}. Since in the energy-domain the Metropolis function has a constant piece for most of the negative energies $\omega < -\beta\sigma^2 / 2$, the Fourier transform produces a $\delta(t)$ contribution in the time domain. In the smooth case $s \neq 0$, $\gamma_M^{(s)}$ is only asymptotically reaching that flat $\gamma = 1$ portion. Nevertheless, the near singularity behaviour also persists in these smoother cases. Despite the divergent $\ell_1$ norm of $b_+^{(s)}$ the operator $B_M$ is actually bounded. The key idea is that the $1/t$ singularity, when sandwiched between operator valued functions $A^\dagger(t)A(t)$, can be absorbed into $H \textup{sinc}(2Ht)$ terms that are bounded at $t=0$, \cite[Proposition B.2]{chen2023efficient}. Though mathematically this is sound, and implementing it would also be asymptotically efficient with the Quantum Singular Value Transformation (QSVT), but would also be cumbersome. Moreover, it would be a significant change to the LCU quantum circuit [ref]\todo{ref to quantum circuits section} that we use for the Gaussian case coherent term $B_G$. 
+For LCU circuits we care about the subnormalization of the operator we want to implement, as it determines the quantum circuit cost. For the exact Metropolis term $B_M$ it bounded by \cite[Proposition B.2]{chen2023efficient}
+\begin{equation}
+    \|B^{(s=0)}\| \equiv\|B_M\| \leq \left\|\sum_a A^{a\dagger}A^a\right\| \mathcal{O}\left(\log\left(\beta \| H \|\right)\right)
+\end{equation}
+Instead of implementing the Metropolis coherent term exactly, we can regularize $b_+^{(s)}$ around $t=0$ by replacing the singularity near $|t|\leq\eta$ with a smooth cutoff \cite[Proposition B.1]{chen2023efficient}, which leads to the following expression:
+\begin{equation} \label{eq:b_plus-s-eta}
+    b_+^{(s, \eta)}(t) = \frac{1}{2\sqrt{2}\pi^2}\frac{\ee^{-\sigma^2\beta^2 t(2t + \ii)(1 + s)} + \mathbb{I}(|t|\leq\eta)\ii(2t + \ii)}{t(2t + \ii)}, 
+\end{equation}
+with the $\ell_1$ norm, 
+$$
+\|b_+^{(s, \eta)}\|_1 < \frac{2}{5 \pi^{3/2}} - \frac{\ln(1 + s)}{2\sqrt{2}\pi^2}+ \frac{1}{\sqrt{2}\pi^2}\ln(1 / \eta).
+$$
+
+\todo{write somewhere: B M as A'A additional term in it}
+Consistency check: Chen's norm bound is recovered for $s=0$, albeit with the corrected prefactors. There was a slight prefactor discrepancy in their paper, the corrected norm is smaller by a factor of $1 / \pi^{3 / 2}$, which improves their implementation by a constant factor. For the $s$-family the log-term is negative for $s > 0$, the norm is strictly smaller than the Metropolis case with $s = 0$, which also helps by a $\ln(1 + s)$ decrease for the LCU implementations. 
+
+In \eqref{eq:b_plus-s-eta} it also becomes clear that smoothing with $s$ indeed does not shift the poles of the expression above $(t = 0, -\ii / 2)$, and thus the regularization is still necessary. 
+In \cite[Corollary III.2]{chen2023efficient} they have shown that the error between the regularized coherent term with $B^{(s = 0)}_\eta$ and the non-regularized one $B^{(s = 0)}$ is bounded. Their result also adapts to the smooth Metropolis variants since the error is purely due to the regularized region $|t| \leq \eta$ where the smoothening plays no role, 
+\begin{equation}
+    \|B^{(s)} - B_\eta^{(s)} \| \leq \left\|\sum_a A^{a\dagger}A^a\right\| \min\left(\frac{\eta\beta\|H\|}{\sqrt{2}\pi}, \mathcal{O}\left(\left(\eta \beta \|H\|\right)^3\right)\right).
+\end{equation}
+To achieve an $\varepsilon$ accuracy in this approximation, we would have to set
+\begin{equation}
+    \eta = \frac{\varepsilon}{\beta \|H\| \|\sum_a A^{a\dagger}A^a\|},
+\end{equation}
+which in turn leads to the following subnormalization for the LCU implementation
+\begin{equation} \label{eq:subnorm-eta-B}
+    \|b_-\|_1 \|b_+^{(s,\eta)}\|_1 = \mathcal{O}\left(\log\frac{\beta \|H\| \|\sum_a A^{a\dagger}A^a\| }{\varepsilon}\right).
+\end{equation}
+Combining it all, we end up with a Hamiltonian simulation time required for the coherent term $B^{(s, \eta)}$ of $\mathcal{O}(\beta \log(1 / \varepsilon))$. This is a $\log$ factor more than what we have seen for the Gaussian case
+
+We could try to use different regularization techniques, like the $\ii \varepsilon$ prescription from quantum field theory, i.e. to shift the pole away from the real time values to the imaginary ones, such that the integral of the time-domain would not run into it. In our case this would materialize by an exponentially decaying factor multiplying the weights of the linear combination, i.e. $\ee^{- \varepsilon \beta x} g(x)$. But while it does make both poles imaginary, avoiding Chen's regularization and its additional $\log$ costs, it does it at the price of an $e^{-\varepsilon \beta / 2}$ reduction in the transition weight near the kink, which degrades the spectral gap. As it turns out, this degradation would lead to higher costs asymptotically, than the $\eta$ regularization \eqref{eq:subnorm-eta-B}. Hence, our regularization has been tucked away in the appendix as a failed but hopefully constructive attempt \todo{ref}. For the main text, we will stick to the above form for $b_+^{(s)}$ \eqref{eq:b_plus-s-eta}.
+
+\label{sec:quad-errors-diss}
+\smallskip
+\subsection{Quadrature errors for $\mathcal{L}_\text{diss}$.}
+The next step towards implementation is the realization that every integral expression in the CKG Lindbladian \eqref{eq:ckg-L}, both the coherent term $B$ and the dissipative terms, have to be approximated via quadrature sums in the quantum computer. This introduces two types of errors that are interconnected with each other:
+\begin{enumerate}[(i)]
+    \item \emph{Truncation errors} occur due to the restriction of infinite integrals to a finite window $t\in[-T/2, T/2)$ and $\omega \in [-W/2, W/2)$. These errors are controlled by the decaying tail of the respective integrands.
+    \item \emph{Discretization / Aliasing errors} occur since the integrals are replaced by a sum on the finite grids. These are controlled by the smoothness of the integrand in the given truncated domain.
+\end{enumerate}
+We will tackle these errors for the dissipative and coherent parts separately. First let us cast the CKG Lindbladian \eqref{eq:ckg-L} into its discretized form. The dissipative part becomes,
+\begin{equation} \label{eq:discr-dissiative-L}
+    \mathcal{\bar{L}}_\text{diss}(\cdot) = \sum_a \sum_{\bar{\omega} \in S_{\omega_0}} \gamma(\bar{\omega}) \hat{A}(\bar{\omega})(\cdot)\hat{A}(\bar{\omega})^\dagger - \frac{1}{2}\left\{\hat{A}(\bar{\omega})^\dagger \hat{A}(\bar{\omega}), \cdot\right\},
+\end{equation}
+with the discretized OFT, 
+\begin{equation} \label{eq:oft-discr}
+    \hat{A}(\bar{\omega}) = \frac{1}{\sqrt{N}}\sum_{\bar{t}\in S_{t_0}} \bar{f}(\bar{t})\ee^{-\ii \bar{\omega} \bar{t}} A(\bar{t}) =  \frac{1}{\sqrt{N}}\sum_{\bar{t}\in S_{t_0}} \bar{f}(\bar{t})\ee^{-\ii \bar{\omega} \bar{t}} \ee^{\ii H \bar{t}} A \ee^{-\ii H \bar{t}}.
+\end{equation}
+Here, we merged the Riemann-sum prefactor $t_0$ into the \emph{discretized} filter function $\bar{f}(t) := \sqrt{t_0} f(t)$. This lets us work with the natural Discrete Fourier Transform prefactor $1 / \sqrt{N}$, with $N$ the number of grid points. (It is also the reason why there is no explicit $\omega_0$ in \eqref{eq:discr-dissiative-L}.)
+The infinite integrals are now replaced by discretized sums, where we will denote the discrete values by $\bar{t}, \bar{\omega}$ whose sums run over
+\begin{equation*}
+    \begin{split}
+    S^{\lceil N \rfloor} &:= \left\{-\lceil(N-1)/2\rceil, \dots, -1, 0, 1, \dots, \lfloor (N - 1) / 2 \rfloor\right\} \\
+    S^{\lceil N \rfloor}_{\omega_0} &:= \omega_0 S^{\lceil N \rfloor}, \quad S^{\lceil N \rfloor}_{t_0} := t_0 S^{\lceil N \rfloor},
+\end{split}
+\end{equation*}
+with $\omega_0t_0 = \frac{2\pi}{N}$, where $N = 2^r$ is determined by the number of estimating qubits $r$ in the quantum circuit. Hence, the resolution can be tuned by choosing a larger $r$. But there is an interplay between time- and energy-domains due to the Fourier duality. Since we have integrals in both domains, the ideal scenario is when the integrands and their Fourier transforms are both well-behaving, i.e. smooth and rapidly decaying, functions.
+
+In order to quantify the quadrature errors for the dissipative part of the Lindbladian (but also for the coherent part), we follow the strategy of \cite[Appendix C]{chen2023quantum}. All parts of the algorithm rely on the OFT, thus it is essential to understand how it behaves under discretization / truncation \eqref{eq:oft-discr}. The central difficulty here can be immediately revealed if we look at its decomposition $\hat{A}(\omega) = \sum_{\nu_\in B(H)} \hat{f}(\omega - \nu) A_\nu$. A sum over the Bohr frequencies $B(H)$ means, that a quadrature error in $\hat{f}$ would aggregate over all pairs of Bohr frequencies $|B(H)|^2$ -- a potentially exponentially large number. 
+
+Chen et al. circumvent this problem by introducing a \emph{rounding Hamiltonian} $\bar{H}$ whose eigenvalues are the result of rounding each eigenvalue of $H$ to the nearest integer multiple of some $\eta >0$. Then $\|H - \bar{H}\| \leq \eta$ and $|B(\bar{H})| \leq 4 \|H\| / \eta + 1$. To be clear, this is only a proof technique, neither the quantum circuit nor our numerical simulations ever use $\bar{H}$; both work with the true (but rescaled to $\|H\| = 0.5$ for the QFT) Hamiltonian $H$.
+
+Then, the total error between the continuous $\mathcal{L}_\text{diss}$ and the discretized $\mathcal{\bar{L}}_\text{diss}$ is bounded by the following triangle inequality,
+\begin{equation} \label{eq:main-lindbladian-tri-ineq-discr}
+    \begin{split}
+    \|\mathcal{L}_{(f,H)} &- \bar{\mathcal{L}}_{(f,H)}\|_{1 \to 1}
+\;\leq\; \\
+&\underbrace{\|\mathcal{L}_{(f,H)} - \mathcal{L}_{(f,\bar{H})}\|_{1 \to 1}}_{\text{(i) continuous: }H \to \bar{H}}
++\;
+\underbrace{\|\mathcal{L}_{(f,\bar{H})} - \bar{\mathcal{L}}_{(f,\bar{H})}\|_{1 \to 1}}_{\text{(ii) continuous} \leftrightarrow \text{discrete for }\bar{H}}
++\;
+\underbrace{\|\bar{\mathcal{L}}_{(f,\bar{H})} - \bar{\mathcal{L}}_{(f,H)}\|_{1 \to 1}}_{\text{(iii) discrete: }\bar{H} \to H}.
+\end{split}
+\end{equation}
+Terms (i) and (iii) are perturbation bounds comparing two Lindbladians that use the same grid but different Hamiltonians. They are controlled by \cite[Corollary A.1, A.2]{chen2023quantum},
+\begin{equation}
+    \text{(i), (iii)} \;\leq\; 
+8\big(\|f - f_T\|_2 + T\|H - \bar{H}\|\big) 
+\;\leq\; 8\big(\|f - f_T\|_2 + T\eta\big),
+\end{equation}
+where $f_T(t) := f(t) \mathbf{1}(t \in [-T/2, T/2))$ captures the truncation error. These terms are independent of the choice of $\gamma$, and depend only on the Gaussian filter tail and the rounding resolution.
+
+The term (ii) is where the smoothness of $\gamma$ enters. By \cite[Lemma C.1]{chen2023quantum}, the operator error decomposes into $|B(\bar{H})|^2$ - many scalar integrals of the form
+\begin{equation}
+    \begin{split}
+        &\left|\alpha_{\nu_1, \nu_2} - \bar{\alpha}_{\nu_1, \nu_2}\right| = \\
+        &\left|\int_{-\infty}^{\infty} \gamma(\omega)\,\hat{f}^*(\omega - \nu_1)\,\hat{f}(\omega - \nu_2)\,\mathrm{d}\omega
+\;-\;
+\sum_{\bar{\omega} \in S_{\omega_0}} 
+\tilde{\gamma}(\bar{\omega})\,
+\bar{\mathcal{F}}\!\big[\bar{f}_T \cdot e^{i\nu_1\bar{t}}\big]^*\!(\bar{\omega})\;
+\bar{\mathcal{F}}\!\big[\bar{f}_T \cdot e^{i\nu_2\bar{t}}\big](\bar{\omega})
+        \right|,
+    \end{split}
+\end{equation}
+with the discrete Fourier transform $\mathcal{\bar{F}}$.
+In other words, the problem reduces to how well we can estimate the exact Kossakowski matrix $\alpha_{\nu_1, \nu_2}$ by quadrature sums. The norm of this error can be split further into three parts via another triangle inequality: frequency-tail truncation due to the $W$ window, i.e. $\gamma_W(\omega) := \gamma(\omega)\mathbf{1}(\omega \in [-W/2, W/2))$ in both the continuous and discretized settings; and the Riemann-sum error for the truncated integral. The convergence of the Riemann sum is governed by the regularity of the integrand 
+\begin{equation}\label{eq:g-integrand}
+    g_{\nu_1, \nu_2}(\omega) = \gamma(\omega)\hat{f}^*(\omega - \nu_2) \hat{f}(\omega - \nu_1).
+\end{equation}
+Since $\hat{f}$ is our smooth Gaussian filter, all comes down to $\gamma$ and its smoothness. 
+
+We now go through each choice for the transition weight $\gamma$, clarifying what regularity each possesses and what quadrature error scaling it implies for their respective dissipative Lindbladians. In each case, we require the total discretization error to satisfy the following bound,
+\begin{equation}
+    \|\mathcal{L}^{(f,H)}_\text{diss} - \bar{\mathcal{L}}^{(f,H)}_\text{diss}\|_{1\to 1} \leq \varepsilon.
+\end{equation}
+
+\begin{enumerate}[(a)]
+    \item \textbf{Gaussian weight $\gamma_G$}
+    
+    For the Gaussian weight, the integrand \eqref{eq:g-integrand} in (ii) is a product of Gaussians. Since the Gaussian is Gevrey-1/2 \cite[Proposition B.1]{hoepfner2019global} and self-dual under the Fourier transform, the Riemann sum converges exponentially in the number of grid points $N$. Likewise, the Gaussian filter tail error $\|f - f_T\|_2$ decays as $\mathcal{O}(e^{-T^2/2\sigma^2})$, and so does the frequency-domain tail \cite[Proposition A.9]{chen2023quantum}. Then, for the dissipative part of the Lindbladian to achieve an $\varepsilon$ precision, it requires 
+    $$
+    r = \mathcal{O}\!\left(\log\!\left(|A|(\|H\|{+}1)(\sigma{+}1/\sigma)(\beta{+}1)\right) + \log^2(1/\varepsilon)\right)
+    $$
+    estimating qubits, i.e. a polylogarithmic in $1/\varepsilon$ \cite[Corollary C.2]{chen2023quantum}. The dependence on $\log(1/\varepsilon)$ arises from the interplay between the truncation window $T = \Theta(\sigma \sqrt{\log(1/\varepsilon)})$, the frequency bandwidth $W = \Theta(\sigma^{-1}\sqrt{\log(1/\varepsilon)} + 2\|H\|)$, and the Fourier label condition on $\omega_0, t_0$. 
+    
+   That $\log(1/\varepsilon)$ is optimal follows from the classical uncertainty principles. Any filter achieving $\varepsilon$ truncation error on both time and frequency domains simultaneously, the product $T\cdot W$ scales at least as $\log(1 \varepsilon)$. That the Gaussian uniquely saturates this uncertainty bound is a classical result, see \cite{folland1997uncertainty}.
+    
+    \item \textbf{Metropolis weight $\gamma_M^{(s=0)}$}
+    
+    For the Metropolis weight $\gamma_M$ (with $s = 0$), the Lipschitz kink at $\omega = -\beta\sigma^2 / 2$, with Lipschitz constant $\beta$, limits $\gamma_M$ to $C^{0, 1}$ (in Hölder's notation), i.e. Lipschitz but not $C^1$. 
+    
+    By \cite[Proposition C.1]{chen2023quantum}, the Lipschitz constant $\beta$ enters the grid spacing constraint as
+    $$
+        \omega_0 = \mathcal{O}\!\left(\frac{\varepsilon}{\beta\, T\, |B(\bar{H})|^2}\right),
+    $$
+    which forces the number of estimating qubits to scale polynomially in $1 / varepsilon$ \cite[Corollary C.2]{chen2023quantum}: 
+    $$
+        r = \mathcal{O}\left(\log\tfrac{|A|(\|H\|+1)(\sigma + 1/\sigma)(\beta+1)}{\varepsilon}\right).
+    $$
+    Thus, the kink causes a qualitative degradation: polynomial many estimating qubits (rather than polylogarithmic) are needed to achieve the same precision.
+    
+    To see the mechanism concretely: after splitting the integral at $\omega_\text{kink} = -\beta\sigma^2/2$ and applying the Euler-Maclaurin formula on each half, the trapezoidal error for the $(\nu_1, \nu_2)$ Kossakowski entry is 
+    $$
+       \frac{\omega_0^2}{12}\,|\Delta g'| = \frac{\beta\,\omega_0^2}{12}\,|\hat{f}(\omega_{\mathrm{kink}} - \nu_1)|\hat{f}(\omega_{\mathrm{kink}} - \nu_2)|, 
+    $$
+    Summing over rounded Bohr-frequency pairs via \cite[Lemma C.1]{chen2023quantum} and using that $\sum_\nu \|A_\nu\|^2 \leq 1$ together with $|\hat{f}| \leq \|\hat{f}\|_\infty$ this aggregates to a total quadrature error of $\mathcal{O}(\beta \omega_0^2)$. Every other error contributions in the triangle inequalities (e.g. Gaussian aliasing, time truncation, spectral leakage from off-grid Bohr frequencies) otherwise converges exponentially in $1 / \omega_0$, which makes this algebraic quadrature error scaling stick out.
+
+    \item \textbf{Metropolis weight $\gamma_M^{(s > 0)}$}
+    
+    In \hyperref[prop:smooth-metro-gevrey]{Proposition~\ref*{prop:smooth-metro-gevrey}}, we have shown that the smooth Metropolis function with $s > 0$ belongs to the Gevrey-1/2 class, the same regularity class as the Gaussian transition weights $\gamma_G$, albeit with different Gevrey constants $C_1, C_2$.
+    
+    An important property of Gevrey functions, is that their product is also Gevrey \cite[Lemma 26]{ding2025efficient}. Consequently, the Kossakowski integrand $g_{\nu_1, \nu_2}$ as a product of Gevrey-1/2 functions -- smooth Metropolis with $C_{1,2}^{(\gamma)}$ and Gaussian filters $\hat{f}$ with $C_{1,2}^{(\hat{f})}$ -- satisfies
+    \begin{equation} \label{eq:gevrey-product-integrand}
+        \begin{split}
+            \hat{g}_{\nu_1,\nu_2} \in G^{1/2}_{C_1^{(\hat{g})},\, C_2^{(\hat{g})}} \qquad\text{with}& \\
+            C_2^{(\hat{g})} = C_2^{(\gamma)} + 2\,C_2^{(\hat{f})} = \frac{1}{\sigma\sqrt{\ee\,s}} + \frac{\sqrt{2}}{\sigma \sqrt{\ee}} \quad\text{and}&\quad C_1^{(\hat{g})} = C_1^{(\gamma)}\left(C_1^{(\hat{f})}\right)^2.
+        \end{split}
+    \end{equation}
+    Where $C_1^{(\hat{g})}$ is just the squared normalization of the Gaussian filters $\hat{f}$, since $C_1^{(\gamma)} = 1$.
+
+    The trapezoidal quadrature error for this integrand is governed by the Poisson summation formula \cite[Chapter 5]{trefethen2014exponentially}, specifically for $g \in C^\infty(\mathbb{R}) \cap L^1(\mathbb{R})$ with all derivatives in $L^1(\mathbb{R})$ is
+    \begin{equation}
+        E_{\nu_1,\nu_2} := \omega_0 \sum_{n \in \mathbb{Z}} \hat{g}_{\nu_1,\nu_2}(n\omega_0) - \int_{\mathbb{R}} \hat{g}_{\nu_1,\nu_2}(\omega)\,\dd\omega = \sum_{k \neq 0} g_{\nu_1,\nu_2}\!\left(\frac{2\pi k}{\omega_0}\right).
+    \end{equation}
+    Bounding the Fourier transform $|g(\xi)|$ via $2K$-fold integration by parts gives $|g(\xi)| \leq |\xi|^{-2K}\,\|\hat{g}^{(2K)}\|_{L^1}$, hence
+    \begin{equation} \label{eq:remainder-g-discr-1}
+        |E_{\nu_1,\nu_2}| \leq 2\sum_{k=1}^{\infty}\left(\frac{\omega_0}{2\pi k}\right)^{2K}\|\hat{g}^{(2K)}\|_{L^1} \leq 4\left(\frac{\omega_0}{2\pi}\right)^{2K}\|\hat{g}^{(2K)}\|_{L^1},
+    \end{equation}
+    where we used $\sum_{k=1}^\infty k^{-2K} \leq \zeta(2) \leq 2$ for $K \geq 1$. 
+
+    But in its current form with $L^1$ we cannot use Gevrey properties yet which are formulated in $L^\infty$. Since the Gaussian filter factor confine the integrand $\hat{g}_{\nu_1, \nu_2}$ to an effective support of width $W_\text{eff} = \mathcal{O}(\sigma)$ (which is $K$ independent), we have $\|\hat{g}^{(2K)}\|_{L^1} \leq W_\mathrm{eff}\,\|\hat{g}^{(2K)}\|_{L^\infty}$. The Gevrey-1/2 bound from $g \in \mathcal{G}^{1/2}_{C_1^{(\hat{g})}, C_2^{(\hat{g})}}$ gives 
+    $$
+       \|\hat{g}^{(2K)}\|_{L^\infty} \leq C_1^{(\hat{g})}\,(C_2^{(\hat{g})})^{2K}\,(2K)^{K}. 
+    $$
+    Combining it with \eqref{eq:remainder-g-discr-1}, 
+    \begin{equation}
+        |E_{\nu_1,\nu_2}| \leq 4\,W_\mathrm{eff}\,C_1^{(\hat{g})}\left(\frac{C_2^{(\hat{g})}\,\omega_0}{2\pi}\right)^{2K}(2K)^K.
+    \end{equation}
+    Then, we can optimize in $K$ by the standard saddle-point method by first setting 
+    $$
+        \Phi(K) := 2K\ln\!\left(\frac{C_2^{(g)}\omega_0}{2\pi}\right) + K\ln(2K),
+    $$
+    and then using the condition $\Phi'(K^*) = 0$ leads to 
+    $$
+        2\ln\!\left(\frac{C_2^{(g)}\omega_0}{2\pi}\right) + \ln(2K^*) + 1 = 0 \qquad\Longrightarrow\qquad 2K^* = \frac{1}{e}\!\left(\frac{2\pi}{C_2^{(g)}\omega_0}\right)^{\!2}.
+    $$
+    Inserting $K^*$ back we find that the optimum evaluates to
+    $$
+        \Phi(K^*) = -K^* = -\frac{2\pi^2}{e\,(C_2^{(g)}\omega_0)^2}.
+    $$
+    Hence, the per $(\nu_1, \nu_2)$ entry Riemann-sum error satisfies:
+    \begin{equation}\label{eq:per-entry-error-smooth-metro}
+    |E_{\nu_1,\nu_2}| = \mathcal{O}\!\left(\exp\!\left(-\frac{2\pi^2}{e\,(C_2^{(g)}\,\omega_0)^2}\right)\right).
+    \end{equation}
+
+    In the regime $s \ll 1$ (close to the Metropolis limit), the transition weight contribution $C_2^{(\gamma)} = 1/(\sigma\sqrt{es})$ dominates the filter contribution $2C_2^{(\hat{f})} = \sqrt{2}/(\sigma\sqrt{e})$, since $C_2^{(\gamma)}/2C_2^{(\hat{f})} = 1/(\sqrt{2s}) \gg 1$. In this regime $C_2^{(g)} \approx C_2^{(\gamma)}$ and the bound simplifies to
+    \begin{equation}\label{eq:smooth-metro-dominant-regime}
+        |E_{\nu_1,\nu_2}| = \mathcal{O}\!\left(\exp\!\left(-\frac{2\pi^2\,s\,\sigma^2}{\omega_0^2}\right)\right),
+    \end{equation}
+    where the factor $e$ from $C_2^{(\gamma)} = 1/(\sigma\sqrt{es})$ cancels the $1/e$ from the saddle-point optimization. 
+
+    For the general regime where both $C_2^{(\gamma)}$ and $C_2^{(\hat{f})}$ contribute comparably, the full additive constant $C_2^{(g)} = C_2^{(\gamma)} + 2C_2^{(\hat{f})}$ must be retained. However, in general we have found that the smooth Metropolis requires the same polylogarithmic estimating qubit scaling as the Gaussian case (a), 
+    \begin{equation}
+        r = \mathcal{O}\!\left(\log\!\left(|A|(\|H\|{+}1)(\sigma{+}1/\sigma)(\beta{+}1)\right) + \frac{1}{s}\log^2(1/\varepsilon)\right).
+    \end{equation}
+
+    \begin{table}[ht]
+    \centering
+    \begin{tabular}{lll}
+    \toprule
+    Transition weight & Regularity & Quadrature error in $\omega_0$ \\
+    \midrule
+    Gaussian $\gamma_G$ & Gevrey-$1/2$ & $\mathcal{O}(e^{-c_G/\omega_0^2})$ — Gaussian \\
+    Smooth Metropolis $\gamma_M^{(s)}$, $s > 0$ & Gevrey-$1/2$ & $\mathcal{O}(e^{-c_s/\omega_0^2})$ — Gaussian ($c_s \leq c_G$) \\
+    Metropolis $\gamma_M$ ($s = 0$) & Lipschitz, not $C^1$ & $\mathcal{O}(\beta\,\omega_0^2)$ — algebraic \\
+    \bottomrule
+    \end{tabular}
+    \caption{Convergence hierarchy of the trapezoidal quadrature error for the three transition weights.}
+    \label{tab:quadrature-hierarchy}
+    \end{table}
+\end{enumerate}
+
+The above discussions can be summarized in a table of the convergence hierarchy \hyperref[tab:quadrature-hierarchy]{Table~\ref*{tab:quadrature-hierarchy}}. The Gaussian and smooth Metropolis fall in the same qualitative convergence class. However, the Gaussian case with $\gamma_G$ has an optimal constant $c_G$ because the Kossakowski integrand $\hat{g}_{\nu_1, \nu_2} = \gamma_G \cdot |\hat{f}|^2$ is itself a Gaussian, whose Poisson summation aliases are exactly Gaussian and therefore optimally localized. For the smooth Metropolis, the integrand is note a pure Gaussian, so $c_s$ is generally smaller. A qualitative difference can be found between the kinky Metropolis $\gamma_M$ with $s=0$ and its smooth variant: the latter converges super-algebraically (restoring polylogarithmic qubit scaling), while the former is limited to an algebraic convergence due to its derivative discontinuity. Thus, for the dissipative Lindbladian, the smooth Metropolis $\gamma_M^{(s)}$ with $s > 0$ needs less amount of estimating qubits in general, while maintaining the broad Metropolis-like transition window, which keeps the spectral gap (and thus mixing time) favourable.
+
+% Remark (comparison with DLL24). Ding, Li, and Lin [DLL24, Proposition 16] establish an analogous exponential quadrature rate $\exp(-c'((M{-}1)\tau)^{1/s}/(C\,e))$ for their Lindbladian, using compactly supported Gevrey filters and the Poisson summation formula for exact alias cancellation [DLL24, Lemma 31]. Their proof does not use Euler–Maclaurin optimization; instead, compact support gives exact cancellation of all aliases within the support bandwidth, so only the Paley–Wiener tail of the Fourier-domain kernel contributes [DLL24, Lemma 29]. Our setting differs: the Gaussian filter $\hat{f}$ is not compactly supported, so the DLL24 alias-cancellation technique yields no asymptotic gain over the CKBG23 rounding approach for our case ($a = 0$). However, both routes yield the same qualitative conclusion — Gevrey-$1/2$ regularity implies super-algebraic (Gaussian-type) convergence in the grid spacing.
+
+The following remark has to be made on the frequency register size $N$. In the algorithm from Chen et al. the DFT gird parameters $N, \omega_0, t_0$ are set by: (i) the frequency range $N\omega_0/2 \geq 2\|H\| + \mathcal{O}(\sigma^{-1}\sqrt{\log(1/\varepsilon)})$, (ii) the Gaussian truncation in time $Nt_0/2 \geq \mathcal{O}(\sigma\sqrt{\log(1/\varepsilon)})$, and (iii) the DFT aliasing condition \cite[Proposition A.7]{chen2023quantum}. None of these conditions involve $\gamma$. This is to say, that for analytically prescribed (fine) grids where all error sources are already exponentially small, the number of frequency-register qubits $\lceil\log_2 N\rceil$ is the same for all three transition weights. However, in practice quadrature errors can be slightly below the algorithmic errors e.g. prescribed by $\delta$ in the weak measurement scheme, and yet achieve good results. If we operate on such a coarser grid (larger $\omega_0$, fewer qubits), then the exponential terms remain small while $\mathcal{O}(\beta\omega_0^2)$ dominates for the Metropolis case, making the kink the actual bottleneck. Smoothing with $s > 0$ removes this bottleneck entirely.
+
+\todo{we might needs different structure than this paragraph / subsection..}
+\label{sec:quad-errors-B}
+\smallskip
+\subsection{Quadrature errors for $B$.}
+The remaining part in the CKG Lindbladian \eqref{eq:ckg-L} that has to be discretized is the coherent term $B$, which takes the following form
+\begin{equation} \label{eq:B-discr}
+    \bar{B} = \sum_a t_0\sum_{\bar{t}\in S_{t_0}} b_-(\bar{t}) \ee^{-\ii H \bar{t} / \sigma} \left[t_0'\sum_{\bar{t}' \in S_{t_0'}} b_+(\bar{t}') A^{a\dagger}(\beta \bar{t}') A^a(-\beta \bar{t}')\right]\ee^{\ii H \bar{t} / \sigma}.
+\end{equation}
+Note, that for the coherent term we keep the Riemann-sum factor explicit (since here there is no Fourier factors present). However, in quantum computer, the time registers have to then encode e.g. $\sqrt{t_0 b_-(\bar{t})} / \sqrt{\alpha_-}$, where $\alpha_- = t_0 \sum_{\bar{t}} |b_-(\bar{t})| \approx \|b_-\|_1$ is the subnormlaization of $b_-$.
+Due to the nested integral form (which arose from the factorizing Gaussian filters), the quadrature error $\|B - \bar{B}\|$ decomposes into independent contributions from the outer ($b_-$) and inner ($b_+$) integrals via a triangle inequality. Concretely, define the continuous inner operator,
+\begin{equation}
+    I_+^a := \int_{-\infty}^{\infty} b_+(t')\, A^{a\dagger}(\beta t')\, A^a(-\beta t')\,\dd t',
+\end{equation}
+whose discretized counterpart is $\bar{I}_+^a$, and its outer conjugated operator $O_a(t) := \ee^{-\ii H t / \sigma} I_+^a \ee^{\ii H t}$. Then, the quadrature error for the full nested integral can be written as
+\begin{equation} \label{eq:B-error-factorize}
+    \begin{split}
+        &\|B - \bar{B}\| \;\leq\; \\
+    &\underbrace{\sum_a\left\|\int_\mathbb{R} b_-(t)\,O_a(t)\,dt - t_0\sum_{\bar{t}\in S_{t_0}} b_-(\bar{t})\,O_a(\bar{t})\right\|}_{\text{outer quadrature error (with exact } I_+^a\text{)}}
+    \;+\;
+    \underbrace{\|b_-\|_1 \cdot \sum_a \|I_+^a - \bar{I}_+^a\|.}_{\text{inner quadrature error, weighted by } \|b_-\|_1}
+    \end{split}
+\end{equation}
+Although the errors factorize, a coupling between them arises nevertheless: 
+the outer Riemann-sum error involves $\|I^a_+\| \leq \|b_+\|_1 \|A^a\|^2 \leq \|b_+\|_1$ through the norm of the operator being conjugated via $O_a$. Thus, the outer grid requirement inherits the subnormalization from the inner integral. 
+
+We proceed by analysing the integrals one by one and then combine the results.
+
+\medskip
+\noindent\textbf{Outer integral ($b_-$).}
+The kernel $b_-(t)$ is universal across all transition weight choices $\gamma$ and takes the form \eqref{eq:b_minus}. It is a convolution of two entire functions: $1/\cosh(2\pi t / (\beta\sigma))$, which decays exponentially as $\sim 2\ee^{-2\pi |t| / (\beta\sigma)}$, and $\sin(-\beta\sigma t)\,\ee^{-2t^2}$, which decays as a Gaussian. The convolution inherits the slower (exponential) decay  rate, giving and effective width $\mathcal{O}(\beta\sigma)$ as noted in \cite[footnote 13]{chen2023efficient}.
+
+The outer integral involves Hamiltonian evolution $\ee^{\pm \ii H \bar{t} / \sigma}$, requiring simulation time of $\mathcal{O}(|t| / \sigma)$. Truncating to $|t| \leq T_-  / 2$ introduces a tail error that decays exponentially:
+\begin{equation}
+    \text{(outer truncation error)} = \mathcal{O}\!\left(\ee^{-c_-\, T_- / (\beta\sigma)}\right),
+\end{equation}
+for a constant $c_- > 0$ that depends on the $1/\cosh$ decay rate. Setting $T_- = \Theta(\beta\sigma\log(1/\varepsilon))$ controls this error to $\varepsilon$, corresponding to a Hamiltonian simulation time of $\mathcal{O}(\beta\log(1/\varepsilon))$ in the outer integral.
+
+For the Riemann-sum error, we apply the operator-valued discretization bound from \cite[Lemma III.1]{chen2023efficient}:
+\begin{equation}\label{eq:riemann-sum-operator}
+    \left\|\int_{-T/2}^{T/2} O(t)\,f(t)\,\dd t - \sum_{\bar{t}\in S_{t_0}} O(\bar{t})\,f(\bar{t})\,t_0\right\| \;\leq\; \frac{T^2}{2|S_{t_0}|}\!\left(\|[O, H_\text{eff}]\|\sup_t|f(t)| + \|O\|\sup_t|f'(t)|\right),
+\end{equation}
+with $O(t) = \ee^{-\ii H_\text{eff} t} \,O\, \ee^{\ii H_\text{eff} t}$. Specifically, for the outer integral we have $f = b_-$, $H_\text{eff} = H / \sigma$ and $O = \bar{I}^a_+$, i.e. the discretized inner block. So the outer operator-norm error $\delta_-^a$ for each $a$ is:
+\begin{equation}
+    \delta^a_- \;\leq\; \frac{T_-^2}{2N_-}\left( \left\|[\bar{I}^a_+, H / \sigma]\right\|\|b_-\|_\infty + \|\bar{I}^a_+ \|\; \|b_-'\|_\infty\right).
+\end{equation}
+Using the commutator bound $\left\|[\bar{I}^a_+, H / \sigma]\right\|\leq 2 \|H\|\; \|\bar{I}^a_+\| / \sigma$, and the norm bound of $\|\bar{I}^a_+\|$ we find the full discretization error for the outer integral after summing over $a$: 
+\begin{equation}
+    \delta_- \leq \frac{T_-^2 |\mathcal{A}| \|b_+\|_1}{2 N_-} \left(\frac{2\|H\|}{\sigma}\|b_-\|_\infty + \|b_-'\|_\infty\right).
+\end{equation}
+Setting $\delta \leq \varepsilon$ with $T_- = \Theta(\beta\sigma\log(1/\varepsilon))$:
+\begin{equation} \label{eq:r_-}
+    r_- = \mathcal{O}\!\left(\log\!\left(\frac{\beta\sigma\|H\|\,|\mathcal{A}|\,\|b_+\|_1 \log(1/\varepsilon)}{\varepsilon}\right)\right).
+\end{equation}
+For the Gaussian transition weight $\|b_+\|_1 = \mathcal{O}(1)$, and thus the inner integral does not lead to additional costs. However, for the Metropolis-like transitions (both smooth and non-smooth) we have $\|b_+\|_1 = \mathcal{O}(\log(\beta\|H\|/\varepsilon))$, contributing as an additive $\log\log(\beta\|H\|/\varepsilon)$ term to $r_-$ (which is indeed not the end of the world).
+
+\medskip
+\noindent\textbf{Inner integral ($b_+$).}
+Before discussing the different cases, we first have to establish the Riemann-sum bound for the inner integral \eqref{eq:B-discr}. Since 
+$$
+A^{a\dagger}(\beta t')\,A^a(-\beta t') = e^{i\beta H t'}\,A^{a\dagger}\,e^{-2i\beta H t'}\,A^a\,e^{i\beta H t'}
+$$
+is not of the Heisenberg conjugation form we cannot directly apply \cite[Lemma III.1]{chen2023efficient} like before. Instead, we use the general scalar Riemann-sum bound
+\begin{equation}
+    \begin{split}
+        &\left\|\int_{-T_+/2}^{T_+/2} b_+(t')A^{a\dagger}(\beta t')\,A^a(-\beta t')\,dt' - \sum_{S_{t_0'}} b_+(\bar{t}')A^{a\dagger}(\beta \bar{t}')\,A^a(-\beta \bar{t}')\,t_0'\right\| \\
+        &\leq \frac{T_+^2}{2N_+}\sup_{t'}\left\|\left(b_+(t')A^{a\dagger}(\beta t')\,A^a(-\beta t')\right)'(t')\right\|.
+    \end{split}
+\end{equation}
+Where the norm of the derivative can be upper-bounded by the derivative of the parts. Specifically if we use that $\|A^{a\dagger}(\beta t')\,A^a(-\beta t')\| \leq \|A^a\|^2 \leq 1$ and that via the Leibniz rule we get
+\begin{equation}
+    \left\|\left(A^{a\dagger}(\beta t')\,A^a(-\beta t')\right)'(t')\right\| \leq 4\beta\|H\|\,\|A^a\|^2,
+\end{equation}
+then combining everything leads to the bound, 
+\begin{equation}
+    \left\|\left(b_+(t')A^{a\dagger}(\beta t')\,A^a(-\beta t')\right)'(t')\right\| \leq \|A^a\|^2\left(|b_+'(t')| + 4\beta\|H\|\,|b_+(t')|\right).
+\end{equation}
+This yields a per-$a$ discretization error $\delta_+^a$:
+\begin{equation}
+    \delta_+^a \leq \frac{T_+^2\,\|A^a\|^2}{2N_+}\sup_{t'}\!\left(|b_+'(t')| + 4\beta\|H\|\,|b_+(t')|\right).
+\end{equation}
+Summing over $a$:
+\begin{equation} \label{eq:inner-discr-error}
+    \delta_+ \leq \frac{T_+^2\,|A|}{2N_+}\sup_{t'}\!\left(|b_+'(t')| + 4\beta\|H\|\,|b_+(t')|\right).
+\end{equation}
+\begin{enumerate}[(a)]
+    \item \textbf{Gaussian case}
+    
+    For the Gaussian weight $\gamma_G$, the time-domain kernel is given by a Gaussian \eqref{eq:b_plus-gauss} (surprise!) with width $\mathcal{O}(1)$. Hence, $\|b_+^{(G)}\|_\infty, \|(b_+^{(G)})'\|_\infty = \mathcal{O}(1)$.
+
+    Correspondingly, the Gaussian decay gives 
+    $$
+    \text{(inner truncation)} = \mathcal{O}\!\left(e^{-c_G\, T_+^2}\right),
+    $$
+    so $T_+ = \Theta(\sqrt{\log(1/\varepsilon)})$ suffices. The Hamiltonian simulation time for the inner integral is $\beta T_+ = \Theta(\beta\sqrt{\log(1/\varepsilon)})$.
+
+    Inserting $\|b_+^{(G)}\|_\infty, \|(b_+^{(G)})'\|_\infty$ into the general discretization error bound above \eqref{eq:inner-discr-error}:
+    \begin{equation}
+        \delta_+^{(G)} \leq \frac{T_+^2\,|\mathcal{A}|}{2N_+}\,\mathcal{O}(\beta\|H\|).
+    \end{equation}
+    Setting $\delta^{(G)}_+ \leq \varepsilon$, 
+    \begin{equation} \label{eq:r_+_gaussian}
+        r_+^{(G)} = \mathcal{O}\!\left(\log\!\left(\frac{\beta\|H\|\,|\mathcal{A}|\,\log(1/\varepsilon)}{\varepsilon}\right)\right).
+    \end{equation}
+    \item \textbf{Metropolis cases $(s \geq 0)$}
+    
+    Unlike for the dissipative case $\mathcal{\bar{L}}_\text{diss}$, here we find no qualitative difference between the smooth or kinky Metropolis variants, since both of them require the same $\eta$-regularization in the time-domain, which becomes the dominant factor. 
+
+    However, for completeness and also to ground all of our later numerical results via analytic forms, let us derive the necessary quantities here.
+
+    For $|t'|$ large enough that the indicator $\mathbb{I}(|t'|\leq\eta)$ is inactive, the kernel $b_+^{(s,\eta)}(t')$ is dominated by:
+    $$
+    |b_+^{(s,\eta)}(t')| \leq \frac{1}{2\sqrt{2}\pi^2}\,\frac{e^{-2\sigma^2\beta^2(1+s)\,t'^2}}{|t'|\,|2t'+i|} \quad\text{for } |t'| > \eta.
+    $$
+    The Gaussian decay rate $2\sigma^2\beta^2(1+s)$ increases with $s$, narrowing the effective support:
+    \begin{equation} \label{eq:T_+_metro}
+        T_+ = \Theta\!\left(\frac{\sqrt{\log(1/\varepsilon)}}{\sigma\beta\sqrt{1+s}}\right).
+    \end{equation}
+
+    Then, the required Hamiltonian simulation time for the inner integral in \eqref{eq:B-discr} is $\beta T_+$.
+
+    The indicator function $\mathbb{I}(|t'|\leq\eta)$ in $b_+^{(s,\eta)}$ introduces jump discontinuities at $|t'| = \eta$. Since the Riemann-sum bound requires smoothness of the integrand, we split the inner integral at $t' = \pm\eta$ into three pieces:
+
+    \textit{Central piece $[-\eta, \eta]$}: On the interval regularization removes the $1 / t'$ singularity by design, making $b_+^{(s,\eta)}$ bounded near the origin. Both $b_+^{(s,\eta)}$ and its derivatives are $\mathcal{O}(1)$ on $[-\eta,\eta]$. With a uniform grid of step size $t_0' = T_+/N_+$, the number of grid points in $[-\eta,\eta]$ is $\sim 2\eta N_+/T_+$, and the Riemann-sum error from this piece is
+    $$
+    \mathcal{O}\!\left(\frac{(2\eta)^2}{2\cdot (2\eta N_+/T_+)}\cdot \mathcal{O}(\beta\|H\|)\right) = \mathcal{O}\!\left(\frac{\eta T_+\beta\|H\|}{N_+}\right),
+    $$
+    which is a factor $\sim \eta/T_+$ of the outer-piece error and therefore negligible.
+
+    \textit{Outer pieces $[-T_+/2, -\eta] \cup [\eta, T_+/2]$}: On these intervals $b_+^{(s,\eta)}(t')$ is smooth, with the Gaussian envelope providing rapid decay. The kernel has the scaling $|b_+^{(s,\eta)}(\eta^+)| = \mathcal{O}(1/\eta)$, while its derivative satisfies $\|(b_+^{(s,\eta)})'\|_{L^\infty(|t'|>\eta)} = \mathcal{O}(1/\eta^2)$ near $t' = \eta$ with Gaussian decay for larger $|t'|$. Applying the general discretization bound \eqref{eq:inner-discr-error} to the outer pieces the dominant contribution (the derivative) gives:
+    \begin{equation}
+        \delta_+^a \leq \frac{T_+^2\,\|A^a\|^2}{2N_+}\,\mathcal{O}\!\left(\frac{1}{\eta^2}\right).
+    \end{equation}
+    Summing over $a$, substituting $T_+$ and setting $\eta = \varepsilon/(\beta\|H\|\|\sum_a A^{a\dagger}A^a\|)$ leads to the scaling of the necessary estimating qubits for the inner integral of $B$:
+    \begin{equation} \label{eq:r_+_metro}
+        r_+^{(s)} = \mathcal{O}\!\left(\log\!\left(\frac{\|H\|\left\|\sum_a A^{a\dagger}A^a\right\| |\mathcal{A}|\,\log(1/\varepsilon)}{\sigma(1+s)\,\varepsilon}\right)\right).
+    \end{equation}
+    This is a polylogarithmic in $1 / \varepsilon$ for all $s \geq 0$. The $s$-dependence appears only as a mild $\log(1 + s)$ reduction inside the algorithm.
+\end{enumerate}
+As we will see later in the algorithm section \todo{ref}, to implement the block encoding of the coherent term $B$, we need two time registers to compute the nested integrals in \eqref{eq:B-discr}. Accordingly, the total number of estimating qubits is the sum of the above, separately derived expressions, $r = r_- + r_+$. At this discretization / estimating-qubit level, the outer $r_-$ and inner $r_+$ integrals contribute essentially the same way. Where it will matter more that the Metropolis cases had to be regularized with $\eta$ is in their implementation via the LCU method. There the complexity depends on the subnormalizations for which $\|b^{(s)}_+\|_1$ indeed leads to additional costs. \todo{ref}
+
+% Comment on Ding's Poission technique that works for smooth variants but not for time singular Metropolis functions
+
+\smallskip
+\subsection{Hamiltonian Trotterization.} 
+
+\todo{could add a comment about childs constants for Heis or Isin}
+\todo{Add that discussion into the Trotter prelims}
+The CKG Lindbladian \eqref{eq:ckg-L} is abundant with exact Hamiltonian time evolutions $\ee^{\pm \ii H t}$. Any implementation on a quantum computer must approximate these using some product formula when $H = \sum_{k = 1}^K H_k$ has non-commuting terms. With this subsection we have managed to reach the deepest point of the dark, error-analysis-cave, where we quantify the incurring errors due to the replacement of $e^{\pm iH\bar{t}}$ in the discretized OFT and coherent term with a product formula $S_p^{(M)}(\bar{t}) := S_p(\bar{t}/M)^M$ of order $p$ with $M$ Trotter steps. 
+
+In \hyperref[sec:prelim-trotter]{Section~\ref*{sec:prelim-trotter}} the general Trotterization strategy and the approximation errors they lead to have been introduced using \cite{childs2021theory} as the main reference. Here, we make use of those results, namely that by \cite[Theorem 6]{childs2021theory} a $p$-th order product formula $S_p^{(M)}(t)$ for $\ee^{\ii Ht}$ satisfies the commutator-scaling bound:
+\begin{equation} \label{eq:childs-trotter-bound}
+    \bigl\|S_p^{(M)}(t) - e^{iHt}\bigr\|
+    = \mathcal{O}\!\left(\frac{\tilde{\alpha}_{\mathrm{comm}}\, |t|^{p+1}}{M^p}\right),
+\end{equation}
+where
+$$
+\tilde{\alpha}_{\mathrm{comm}}
+:= \sum_{k_1, k_2, \ldots, k_{p+1} = 1}^{K}
+\bigl\|\bigl[H_{k_{p+1}}, \cdots [H_{k_2}, H_{k_1}]\cdots\bigr]\bigr\|
+$$
+is the commutator-scaling constant. With $M$ Trotter steps of size $\delta t = t / M$, the total error is $\|S_p^{(M)}(t) - e^{iHt}\| \leq \varepsilon_p(t, M)$ with $\varepsilon_p(t, M) = O(\tilde{\alpha}_{\mathrm{comm}}\, |t|^{p+1}/M^p)$. 
+
+We use the following notation throughout: $\hat{A}(\bar{\omega})$ is the discretized OFT operator with \emph{exact} Hamiltonian evolution; $\tilde{A}(\bar{\omega})$ is the same object with every $\ee^{\pm \ii H\bar{t}}$ replaced by $S_p(\pm \bar{t})$. Similarly, $\mathcal{\bar{L}}_\text{diss}$ is built from $\hat{A}(\bar{\omega})$, while $\mathcal{\tilde{L}}_\text{diss}$ is its Trotterized counterpart built from $\tilde{A}(\bar{\omega})$.
+
+First, we tackle the dissipative part of the Lindbladian, i.e. the Trotter errors propagating from the OFTs \eqref{eq:oft-discr} within. The Trotterized version replaces $\ee^{\ii H\bar{t}} A_a \ee^{-\ii H\bar{t}}$ with $S_p^{(M)}(\bar{t})\, A_a\, S_p^{(M)}(\bar{t})^\dagger$:
+\begin{equation} \label{eq:trotter-oft}
+    \tilde{A}_a(\bar{\omega})
+    = \frac{1}{\sqrt{N}} \sum_{\bar{t} \in S_{t_0}} \ee^{-\ii\bar{\omega}\bar{t}}\, \bar{f}(\bar{t})\, S_p^{(M)}(\bar{t})\, A_a\, S_p^{(M)}(\bar{t})^\dagger.
+\end{equation}
+
+\begin{proposition} \label{prop:trotter-diss}
+    \textup{(Trotter error for $\mathcal{L}_\textup{diss}$).} Let $H = \sum_{k=1}^K H_k$ with non-commuting terms, and let $\{A_a\}_{a \in \mathcal{A}}$ satisfy the normalization $\|\sum_a A_a^\dagger A_a\| \leq 1$. Let $\bar{f} : S_{t_0} \to \mathbb{R}$ be some discretized filter function with $\|\bar{f}\|_2^2 := \sum_{\bar{t} \in S_{t_0}} |\bar{f}(\bar{t})|^2 = 1$, and let the transition weight $\gamma$ satisfy $\|\gamma\|_\infty \leq 1$. With the Trotter product formula defined by \eqref{eq:childs-trotter-bound} and the corresponding Trotterized OFT \eqref{eq:trotter-oft} the total incurring Trotter error for the $\mathcal{\bar{L}}_\textup{diss}$ can be bounded as:
+    $$
+    \bigl\|\bar{\mathcal{L}}_{\mathrm{diss}} - \tilde{\mathcal{L}}_{\mathrm{diss}}\bigr\|_{1 \to 1}
+    \leq 8\,\sqrt{\sum_{\bar{t} \in S_{t_0}} |\bar{f}(\bar{t})|^2\, \varepsilon_p^2(\bar{t}, M)},
+    $$
+    where $\varepsilon_p(\bar{t}, M) := \|S_p^{(M)}(\bar{t}) - \ee^{\ii H\bar{t}}\|$ is the product-formula error at time $\bar{t}$.
+
+    For the second-order Strang splitting ($p = 2$), define the explicit commutator-scaling constant
+    $$
+    \tilde{\alpha}_{\mathrm{comm}}^{(2)}
+    := \sum_{k_1 < k_2}
+    \left(
+      \frac{1}{12}\bigl\|[H_{k_2},[H_{k_2},H_{k_1}]]\bigr\|
+    + \frac{1}{24}\bigl\|[H_{k_1},[H_{k_1},H_{k_2}]]\bigr\|
+    \right),
+    $$
+    which is the leading-order prefactor from the tight second-order analysis of \cite[Proposition 10]{childs2021theory}. Then at leading order in $1 / M$:
+    $$
+    \bigl\|\bar{\mathcal{L}}_{\mathrm{diss}}
+          - \tilde{\mathcal{L}}_{\mathrm{diss}}\bigr\|_{1 \to 1}
+    \;\leq\;
+    \frac{\sqrt{15}\;\tilde{\alpha}_{\mathrm{comm}}^{(2)}}
+         {M^2\,\sigma^3}
+    \;+\; \mathcal{O}\!\left(\frac{1}{M^3\,\sigma^4}\right).
+    $$
+\end{proposition}
+\begin{proof}
+    \noindent\textbf{(i) Bound $\bigl\|\bar{\mathcal{L}}_{\mathrm{diss}} - \tilde{\mathcal{L}}_{\mathrm{diss}}\bigr\|_{1 \to 1}$.}
+    Define the Stinespring isometries with the discretized OFT \eqref{eq:oft-discr} and Trotterized OFT \eqref{eq:trotter-oft}, 
+    $$
+    \bar{V} := \sum_{a,\bar{\omega}} \sqrt{\gamma(\bar{\omega})}\, |\bar{\omega}, a\rangle\langle \bar{0}|\, \hat{A}_a(\bar{\omega}), \qquad
+    \tilde{V} := \sum_{a,\bar{\omega}} \sqrt{\gamma(\bar{\omega})}\, |\bar{\omega}, a\rangle\langle \bar{0}|\, \tilde{A}_a(\bar{\omega}).
+    $$
+    Both $\mathcal{\bar{L}}_\text{diss}$ and $\mathcal{\tilde{L}}_\text{diss}$ admit the Stinespring factorization 
+    $$
+    \mathcal{L}[{\rho}] = \tr_{\mathrm{anc}}(V \rho\, V^\dagger) - \frac{1}{2}\tr_{\bar{0}}\{V^\dagger V, \rho\}
+    $$
+    Writing $\delta V := \bar{V} - \tilde{V}$ and expanding both the transition and decay terms, a triangle inequality on the $1 \to 1$ norm gives (following the proof technique of \cite[Lemma A.1]{chen2023quantum}):
+    $$
+    \bigl\|\bar{\mathcal{L}}_{\mathrm{diss}} - \tilde{\mathcal{L}}_{\mathrm{diss}}\bigr\|_{1 \to 1}
+    \leq \|\delta V\|\bigl(\|\bar{V}\| + \|\tilde{V}\|\bigr) + \|\delta V\|\bigl(\|\bar{V}\| + \|\tilde{V}\|\bigr) = 2\,\|\delta V\|\bigl(\|\bar{V}\| + \|\tilde{V}\|\bigr).
+    $$
+    Both $\bar{V}$ and $\tilde{V}$ are sub-isometries with $\|V\| \leq 1$: this follows from the operator Parseval identity (\cite[Proposition A.1]{chen2023quantum}), $\|\gamma\|_\infty \leq 1$, $\|\bar{f}\|_2 = 1$, and the CKG normalization $\|\sum_a A_a^\dagger A_a\| \leq 1$. (For $\tilde{V}$, the same bound holds since $S_p^{(M)}(\bar{t})$ is unitary, so the Parseval identity applies identically with $S_p^{(M)}$ in place of $U$.) Therefore,
+    $$
+    \bigl\|\bar{\mathcal{L}}_{\mathrm{diss}} - \tilde{\mathcal{L}}_{\mathrm{diss}}\bigr\|_{1 \to 1}
+    \leq 4\,\|\bar{V} - \tilde{V}\|.
+    $$
+    Note, that the key thought here is to use the perturbation techniques introduced in Chen et al. for the error analysis of discretization, with the understanding that Trotterization is just another kind of perturbation in this picture.
+
+    \medskip
+    \noindent\textbf{(ii) Bound $\|\bar{V} - \tilde{V}\|$}. We claim that,
+    $$
+    \|\bar{V} - \tilde{V}\|^2 \leq \sum_{\bar{t} \in S_{t_0}} |\bar{f}(\bar{t})|^2 \, \left\|\sum_a \delta C_a(\bar{t})^\dagger\, \delta C_a(\bar{t})\right\|,
+    $$
+    where
+    $$
+    \delta C_a(\bar{t}) := U(\bar{t})^\dagger A_a\, U(\bar{t}) - S_p^{(M)}(\bar{t})^\dagger A_a\, S_p^{(M)}(\bar{t})
+    $$
+    is there per-time-point Heisenberg-picture error due to Trotterization.
+
+    By linearity, we can write,
+    $$
+    \bar{V} - \tilde{V} = \sum_{a,\bar{\omega}} \sqrt{\gamma(\bar{\omega})}\, |\bar{\omega}, a\rangle\langle \bar{0}|\, \delta A_a(\bar{\omega}),
+    $$
+    with $\delta A_a(\bar{\omega}) := \hat{A}_a(\bar{\omega}) - \tilde{A}_a(\bar{\omega}) = \frac{1}{\sqrt{N}} \sum_{\bar{t}} e^{-i\bar{\omega}\bar{t}}\, \bar{f}(\bar{t})\, \delta C_a(\bar{t})$
+    Using the orthonormality of the ancillas $\langle \bar{\omega}', a' | \bar{\omega}, a\rangle = \delta_{aa'}\delta_{\bar{\omega}\bar{\omega}'}$, we find
+    $$
+    (\bar{V} - \tilde{V})^\dagger(\bar{V} - \tilde{V}) = \sum_{a,\bar{\omega}} \gamma(\bar{\omega})\, \delta A_a(\bar{\omega})^\dagger\, \delta A_a(\bar{\omega}) \preceq \sum_{a,\bar{\omega}} \delta A_a(\bar{\omega})^\dagger\, \delta A_a(\bar{\omega}),
+    $$
+    In the last step we used $\gamma(\omega) \leq 1$. Then we can apply Parseval's identity from \cite[Proposition A.1]{chen2023quantum},
+    $$
+    \sum_{\bar{\omega}} \delta A_a(\bar{\omega})^\dagger\, \delta A_a(\bar{\omega}) = \sum_{\bar{t}} |\bar{f}(\bar{t})|^2\, \delta C_a(\bar{t})^\dagger\, \delta C_a(\bar{t}).
+    $$
+    Inserting this back we get, 
+    $$
+    (\bar{V} - \tilde{V})^\dagger(\bar{V} - \tilde{V}) \preceq \sum_{\bar{t}} |\bar{f}(\bar{t})|^2 \sum_a \delta C_a(\bar{t})^\dagger\, \delta C_a(\bar{t}).
+    $$
+    Each summand $|\bar{f}(\bar{t})|^2 \sum_a \delta C_a(\bar{t})^\dagger\, \delta C_a(\bar{t})$ is positive semidefinite, and after using triangle inequality, we find the claimed bound on $\|\bar{V} - \tilde{V}\|^2$. 
+
+    \medskip
+    \noindent\textbf{(iii) Bound $\left\|\sum_a \delta C_a(\bar{t})^\dagger\, \delta C_a(\bar{t})\right\|$}. We claim that,
+    $$
+    \Bigl\|\sum_a \delta C_a(\bar{t})^\dagger\, \delta C_a(\bar{t})\Bigr\| \leq 4\,\varepsilon_p^2(\bar{t}, M).
+    $$
+    Define $\Delta(\bar{t}) := U(\bar{t}) - S_p^{(M)}(\bar{t})$, and its norm (the Trotter error) satisfies $\|\Delta(\bar{t})\| \leq \varepsilon_p(\bar{t}, M)$. Decomposing $\delta C_a(\bar{t})$:
+    $$
+    \begin{aligned}
+        \delta C_a(\bar{t}) &= U^\dagger A_a\, U - (S_p^{(M)})^\dagger A_a\, S_p^{(M)} \\
+    &= (S_p^{(M)} + \Delta)^\dagger A_a\, U - (S_p^{(M)})^\dagger A_a (U - \Delta) \\
+    &= \Delta^\dagger A_a\, U + (S_p^{(M)})^\dagger A_a\, \Delta \\
+    &=: X_a + Y_a,
+    \end{aligned}
+    $$
+    Since $(X_a - Y_a)^\dagger(X_a - Y_a) \succeq 0$ implies $X_a^\dagger Y_a + Y_a^\dagger X_a \preceq X_a^\dagger X_a + Y_a^\dagger Y_a$, we get
+    $$
+    \delta C_a^\dagger\, \delta C_a = (X_a + Y_a)^\dagger(X_a + Y_a) \preceq 2\bigl(X_a^\dagger X_a + Y_a^\dagger Y_a\bigr).
+    $$
+    We can bound $\sum_a X_a^\dagger X_a$ by using that $\Delta\Delta^\dagger \preceq \|\Delta\|^2\, \mathbf{1} \preceq \varepsilon_p^2\, \mathbf{1}$, that $U$ is unitary and $\|\sum_a A_a^\dagger A_a\| \leq 1$,
+    $$
+    \sum_a X_a^\dagger X_a = \sum_a U^\dagger A_a^\dagger\, \Delta\Delta^\dagger\, A_a\, U
+    \preceq \varepsilon_p^2 \sum_a U^\dagger A_a^\dagger A_a\, U
+    \preceq \varepsilon_p^2\, \mathbf{1}.
+    $$
+    The result is the same for $\sum_a Y_a^\dagger Y_a$ but by using that $S_p^{(M)}$ is unitary.
+    Combining them gives, 
+    $$
+    \sum_a \delta C_a^\dagger\, \delta C_a \preceq 2\bigl(\varepsilon_p^2\, \mathbf{1} + \varepsilon_p^2\, \mathbf{1}\bigr) = 4\,\varepsilon_p^2\, \mathbf{1}.
+    $$
+    Taking the operator norm finally proves the upper-bound on $\left\|\sum_a \delta C_a(\bar{t})^\dagger\, \delta C_a(\bar{t})\right\|$.
+
+    \medskip
+    \noindent\textbf{(iv) Assemble the cake.} Putting steps (i)-(iii) together, we find that the Trotter error on the full superoperator $\mathcal{\bar{L}}_\text{diss}$ is bounded by
+    \begin{align*}
+        \bigl\|\bar{\mathcal{L}}_{\mathrm{diss}} - \tilde{\mathcal{L}}_{\mathrm{diss}}\bigr\|_{1 \to 1}
+    &\leq 4\,\|\bar{V} - \tilde{V}\| \tag{i}\\
+    &\leq 8 \,\sqrt{\sum_{\bar{t}} |\bar{f}(\bar{t})|^2\, \left\|\sum_a \delta C_a(\bar{t})^\dagger\, \delta C_a(\bar{t})\right\|} \tag{ii}\\
+    &\leq 8 \,\sqrt{\sum_{\bar{t}} |\bar{f}(\bar{t})|^2\, \varepsilon_p^2(\bar{t}, M)}. \tag{iii}
+    \end{align*}
+
+    \medskip
+    \noindent\textbf{(v) Strang splitting and Gaussian filters.} In our numerical analysis we will use Strang splitting, i.e. Trotterization of order $p = 2$. In this case, the error bound specializes as follows.
+    \begin{align*}
+    \bigl\|S_2(\delta t) - \ee^{\ii H \delta t}\bigr\|
+    &\leq \sum_{k_1 < k_2}
+    \left(
+      \frac{1}{12}\bigl\|[H_{k_2},[H_{k_2},H_{k_1}]]\bigr\|
+    + \frac{1}{24}\bigl\|[H_{k_1},[H_{k_1},H_{k_2}]]\bigr\|
+    \right)
+    + \mathcal{O}\bigl(|\delta t|^4\bigr) \\
+    &= \tilde{\alpha}_{\mathrm{comm}}^{(2)}\,|\delta t|^3
+    + \mathcal{O}\bigl(|\delta t|^4\bigr),
+    \end{align*}
+    where the leading-order coefficients $1/12$ and $1/24$ are tight, and the $\mathcal{O}(|\delta t|^4)$ correction arises from the multi-term bootstrapping of \cite[Proposition~9]{childs2021theory}.
+    With $M$ Trotter steps of size $\delta t = \bar{t}/M$ and a triangle inequality
+    over the $M$ steps:
+    $$
+    \varepsilon_2(\bar{t}, M)
+    \leq \tilde{\alpha}_{\mathrm{comm}}^{(2)}\,
+        \frac{|\bar{t}|^3}{M^2}
+    + \mathcal{O}\!\left(\frac{|\bar{t}|^4}{M^3}\right).
+    $$
+    Substituting the leading term into the assembled bound and evaluating the sixth moment of $|\bar{f}|^2$, where in the CKG case the filter is the Gaussian $f(t) = \ee^{-\sigma^2 t^2}\big/\bigl(\pi/(2\sigma^2)\bigr)^{1/4}$ with squared density $|f(t)|^2 \propto \ee^{-2\sigma^2 t^2}$, whose even moments evaluate to
+    $$
+    \int_{-\infty}^{\infty} |f(t)|^2\,t^{2k}\,\dd t
+    = \frac{(2k-1)!!}{(2\sigma)^{2k}}.
+    $$
+    The discrete sum $\sum_{\bar{t}} |\bar{f}(\bar{t})|^2\,|\bar{t}|^6$
+    agrees with its continuous counterpart up to an exponentially small
+    correction (by the quadrature analysis of the preceding subsection).
+    Setting $k = 3$ yields:
+    $$
+    \bigl\|\bar{\mathcal{L}}_{\mathrm{diss}}
+        - \tilde{\mathcal{L}}_{\mathrm{diss}}\bigr\|_{1 \to 1}
+    \leq \frac{8\,\tilde{\alpha}_{\mathrm{comm}}^{(2)}}{M^2}\;
+        \sqrt{\frac{15}{64\,\sigma^6}}
+    + \mathcal{O}\!\left(\frac{1}{M^3\,\sigma^4}\right)
+    = \frac{\sqrt{15}\;\tilde{\alpha}_{\mathrm{comm}}^{(2)}}
+        {M^2\,\sigma^3}
+    + \mathcal{O}\!\left(\frac{1}{M^3\,\sigma^4}\right).
+    $$
+    The $\mathcal{O}(1/(M^3\sigma^4))$ correction arises from the $\mathcal{O}(|\bar{t}|^4/M^3)$ sub-leading Trotter error propagated through the eighth moment of $|\bar{f}|^2$.
+\end{proof}
+\noindent The main takeaway here is that the Trotter errors from the OFT propagate to the superoperator level in an expected manner, but with a crucial realization: Since the natural unit of the Gaussian filter width is the temperature $\sigma \sim 1 / \beta$, that means the lower the temperature is the more the  number of Trotter steps $M$ have to compensate to control the errors. Not even higher-orders $ p>2$ can help here, as this relation between $M$ and $\sigma$ is independent of the order. This was to be expected since the lower the temperature, the better the resolution in the energy-domain has to be, and thus the longer the respective time-evolutions are in the time-domain. Nevertheless, this has not been written out explicitly for a Trotter-domain before. 
+
+\medskip
+With the Trotter errors for the dissipative part of the Lindbladian $\mathcal{L}_\text{diss}$ fully understood, it remains to see how Trotterization affects the coherent term $B$. Replacing all exact Hamiltonian time evolutions in \eqref{eq:B-discr} with the Trotterized evolution $S_p^{(M)}(-\bar{t})$ leads to
+\begin{equation} \label{eq:B-trotter}
+    \begin{split}
+         \tilde{B} &= \sum_a t_0\sum_{\bar{t}} b_-(\bar{t}) S_p^{(M)}(-\bar{t} / \sigma) \left[t_0'\sum_{\bar{t}'} b_+(\bar{t}') \tilde{A}_{a\dagger}(\beta \bar{t}') \tilde{A}_a(-\beta \bar{t}')\right]S_p^{(M)}(\bar{t} / \sigma) \\
+         &=: \sum_{a} t_0 \sum_{\bar{t} \in S_{t_0}} b_-(\bar{t})\, S_p^{(M)}(-\bar{t}/\sigma)\, \tilde{O}_a\, S_p^{(M)}(\bar{t}/\sigma),
+    \end{split}
+\end{equation}
+with $\tilde{O}_a$ denoting the inner Trotterized integral, and the Trotterized Heisenberg evolution of order $p$ and steps $M$, 
+$$
+\tilde{A}_a(t) := S_p^{(M)}(t) A_a S_p^{(M)}(-t).
+$$
+In the following we will use $\|b_-\|_{1} := t_0 \sum_{\bar{t}} |b_-(\bar{t})|$ and $\|b_+\|_{1} := t_0' \sum_{\bar{t}'} |b_+(\bar{t}')|$ for the discrete $\ell_1$ norms (with quadrature weights).
+
+\todo{ref to impl}
+There are a few ways to implement the evolution via the CKG Lindbladian, especially in terms of how we add the coherent evolution via $B$, but in all cases the core error boils down to controlling $\|\bar{B} - \tilde{B}\|$.
+\begin{proposition} \label{prop:trotter-B}
+    \textup{(Trotter error for the coherent term $B$).} Let $H = \sum_{k=1}^K H_k$ with non-commuting terms, let the jump operators satisfy $\bigl\|\sum_a A_a^\dagger A_a\bigr\| \leq 1$, and let $b_\pm$ be the time-domain weight functions of the coherent term with finite discrete norms $\|b_-\|_{1}, \|b_+\|_{1} < \infty$. Let $S_p^{(M)}(t)$ be a $p$-th order product formula with $M$ Trotter steps satisfying the commutator-scaling bound $\varepsilon_p(t, M) = \mathcal{O}(\tilde{\alpha}_{\mathrm{comm}}\,|t|^{p+1}/M^p)$.
+
+    Then the operator-norm Trotter error of the coherent term satisfies, 
+    $$
+    \|\bar{B} - \tilde{B}\|
+    \;\leq\;
+    2\,\|b_+\|_{1}\; t_0 \sum_{\bar{t}} |b_-(\bar{t})|\, \varepsilon_p\!\bigl(|\bar{t}|/\sigma,\, M\bigr)
+    \;+\;
+    4\,\|b_-\|_{1}\; t_0' \sum_{\bar{t}'} |b_+(\bar{t}')|\, \varepsilon_p\!\bigl(\beta|\bar{t}'|,\, M\bigr).
+    $$
+    Here, the first term captures the outer Trotter error (replacing the outer exact time evolution $\ee^{\pm \ii H \bar{t} / \sigma}$), while the second captures the inner Trotterization error (replacing $\ee^{\pm \ii H\beta\bar{t}'}$ inside $A_a(\beta \bar{t}')$).
+
+    For the special case of Strang splitting ($p = 2$), substituting $\varepsilon_2(t, M) \leq \tilde{\alpha}_{\mathrm{comm}}^{(2)}\,|t|^3/M^2 + \mathcal{O}(|t|^4/M^3)$ gives the following result at leading order:
+    $$
+    \|\bar{B} - \tilde{B}\|
+    \;\leq\;
+    \frac{\tilde{\alpha}_{\mathrm{comm}}^{(2)}}{M^2}
+    \left(
+    \frac{2\,\|b_+\|_1}{\sigma^3}\, \mu_3(|b_-|)
+    \;+\;
+    4\,\beta^3\,\|b_-\|_1\, \mu_3(|b_+|)
+    \right)
+    + \mathcal{O}\!\left(\frac{\beta^4}{M^3}\right),
+    $$
+    where $\mu_3(|b_\pm|) := t_0^{(\prime)} \sum |b_\pm(\bar{t})|\,|\bar{t}|^3$ denotes the third absolute moment of the respective weight function (with $t_0$ or $t_0'$).
+\end{proposition}
+\begin{proof}
+    \hfill\break
+    \noindent\textbf{(i) Decompose the Trotter error.}
+    For each outer grid point $\bar{t}$ and jump operator $a$, define:
+    $$
+    \bar{Q}_a(\bar{t}) := U(-\bar{t}/\sigma)\, \bar{O}_a\, U(\bar{t}/\sigma), \qquad
+    \tilde{Q}_a(\bar{t}) := S(-\bar{t}/\sigma)\, \tilde{O}_a\, S(\bar{t}/\sigma).
+    $$
+    Then, to bound an error between these two expressions, follow these steps in order: use the three-term telescoping identity for products of the form $PQR - P'Q'R'$, simplify, sum over $a$, use that $\|U\| = 1 = \|S\|$. At this point we arrive at
+    $$
+    \Bigl\|\sum_a \bigl[\bar{Q}_a(\bar{t}) - \tilde{Q}_a(\bar{t})\bigr]\Bigr\|
+    \leq
+    \varepsilon_p(|\bar{t}|/\sigma, M)\, \Bigl\|\sum_a \bar{O}_a\Bigr\|
+    + \Bigl\|\sum_a \bigl[\bar{O}_a - \tilde{O}_a\bigr]\Bigr\|
+    + \Bigl\|\sum_a \tilde{O}_a\Bigr\|\, \varepsilon_p(|\bar{t}|/\sigma, M),
+    $$
+
+    \noindent\textbf{(ii) Bound $\Bigl\|\sum_a \bar{O}_a\Bigr\|$ and $\Bigl\|\sum_a \tilde{O}_a\Bigr\|$.} The inner operator $O_a$ has the following general form: $A_a^\dagger W A_a$ for some unitary $W$ in both the Trotterized case \eqref{eq:B-trotter} and discretized causes \eqref{eq:B-discr}. Since, $-\mathbf{1} \preceq W \preceq \mathbf{1}$, we also have $-A_a^\dagger A_a \preceq A^\dagger_a W A_a \preceq A_a^\dagger A_a$. Summing over $a$ and taking norm then leads to:
+    $$
+    \Bigl\|\sum_a A_a^\dagger\, W\, A_a\Bigr\| \leq \Bigl\|\sum_a A_a^\dagger A_a\Bigr\| \leq 1,
+    $$
+    Therefore:
+    $$
+    \Bigl\|\sum_a \bar{O}_a\Bigr\| \leq t_0' \sum_{\bar{t}'} |b_+(\bar{t}')| = \|b_+\|_1.
+    $$
+    The identical bound holds for $\bigl\|\sum_a \tilde{O}_a\bigr\| \leq \|b_+\|_1$ since $S$ is also unitary.
+
+    \noindent\textbf{(ii) Bound $\Bigl\|\sum_a \bigl[\bar{O}_a - \tilde{O}_a\bigr]\Bigr\|$.} We have
+    $$
+    \sum_a [\bar{O}_a - \tilde{O}_a] = t_0' \sum_{\bar{t}'} b_+(\bar{t}') \sum_a \Bigl[\hat{A}_a^\dagger(\beta\bar{t}')\, \hat{A}_a(-\beta\bar{t}') - \tilde{A}_a^\dagger(\beta\bar{t}')\, \tilde{A}_a(-\beta\bar{t}')\Bigr],
+    $$
+    so it suffices to bound $\bigl\|\sum_a \bigl[\hat{A}_a^\dagger(\beta\bar{t}')\hat{A}_a(-\beta\bar{t}') - \tilde{A}_a^\dagger(\beta\bar{t}')\tilde{A}_a(-\beta\bar{t}')\bigr]\bigr\|$ for each $\bar{t}'$. Define $\delta_a(t) := \hat{A}_a(t) - \tilde{A}_a(t)$ for the per-operator Heisenberg-picture Trotter error. Then,
+    $$
+    \sum_a \Bigl[\hat{A}_a^\dagger(\beta\bar{t}')\hat{A}_a(-\beta\bar{t}') - \tilde{A}_a^\dagger(\beta\bar{t}')\tilde{A}_a(-\beta\bar{t}')\Bigr]
+    = \sum_a \delta_a(\beta\bar{t}')^\dagger\, \hat{A}_a(-\beta\bar{t}') + \sum_a \tilde{A}_a^\dagger(\beta\bar{t}')\, \delta_a(-\beta\bar{t}').
+    $$
+    We bound each sum using the operator Cauchy-Schwarz inequality, which in general can be written for operators $\{X_a\}, \{Y_a\}$ as
+    $$
+    \Bigl\|\sum_a X_a Y_a\Bigr\|^2 \leq \Bigl\|\sum_a X_a X_a^\dagger\Bigr\| \cdot \Bigl\|\sum_a Y_a^\dagger Y_a\Bigr\|.
+    $$
+    The first sum with $X_a = \delta_a(\beta\bar{t}')^\dagger$ and $Y_a = \hat{A}_a(-\beta\bar{t}')$ is bounded by two corresponding factors. The left one is
+    $$
+    \bigl\|\sum_a \delta_a(\beta\bar{t}')^\dagger\, \delta_a(\beta\bar{t}')\bigr\| \leq 4\,\varepsilon_p^2(\beta|\bar{t}'|, M),
+    $$
+    which was shown in step (iii) of \hyperref[prop:trotter-diss]{Proposition~\ref*{prop:trotter-diss}}. The right factor for the bound is 
+    $$
+    \bigl\|\sum_a \hat{A}_a(-\beta\bar{t}')^\dagger\, \hat{A}_a(-\beta\bar{t}')\bigr\| = \bigl\|\sum_a A_a^\dagger A_a\bigr\| \leq 1.
+    $$
+    Therefore, $\bigl\|\sum_a \delta_a(\beta\bar{t}')^\dagger\, \hat{A}_a(-\beta\bar{t}')\bigr\| \leq 2\,\varepsilon_p(\beta|\bar{t}'|, M).$ An identical bound holds for the second sum as well. Combining them via triangle inequality leads to,
+    $$
+    \Bigl\|\sum_a [\bar{O}_a - \tilde{O}_a]\Bigr\|
+    \leq 4\, t_0' \sum_{\bar{t}'} |b_+(\bar{t}')|\, \varepsilon_p(\beta|\bar{t}'|, M).
+    $$
+    \noindent\textbf{(iv) Assemble another cake.} From steps (i)-(iii):
+    $$
+    \Bigl\|\sum_a [\bar{Q}_a(\bar{t}) - \tilde{Q}_a(\bar{t})]\Bigr\|
+    \leq 2\,\|b_+\|_1\, \varepsilon_p(|\bar{t}|/\sigma, M)
+    + 4\, t_0' \sum_{\bar{t}'} |b_+(\bar{t}')|\, \varepsilon_p(\beta|\bar{t}'|, M).
+    $$
+    Taking the outer $b_-$-weighted sum of $\|\|\bar{B} - \tilde{B}\|\|$, then inserting the above bound in yields our result
+    \begin{align*}
+        \|\bar{B} - \tilde{B}\|
+    &= \Bigl\|t_0 \sum_{\bar{t}} b_-(\bar{t})\, \sum_a [\bar{Q}_a(\bar{t}) - \tilde{Q}_a(\bar{t})]\Bigr\|
+    \leq t_0 \sum_{\bar{t}} |b_-(\bar{t})| \cdot \Bigl\|\sum_a [\bar{Q}_a(\bar{t}) - \tilde{Q}_a(\bar{t})]\Bigr\| \\
+    & \leq 2\,\|b_+\|_1\, t_0 \sum_{\bar{t}} |b_-(\bar{t})|\, \varepsilon_p(|\bar{t}|/\sigma, M)
+    + 4\,\|b_-\|_1\, t_0' \sum_{\bar{t}'} |b_+(\bar{t}')|\, \varepsilon_p(\beta|\bar{t}'|, M).
+    \end{align*}    
+    \noindent\textbf{(v) Strang splitting specialization.} For $p = 2$, the leading-order Trotter error is $\varepsilon_2(t, M) \leq \tilde{\alpha}_{\mathrm{comm}}^{(2)}|t|^3/M^2$. Define the third absolute moment of a weight function $w$ on grid $S_{\tau}$:
+    $$
+    \mu_3(|w|) := \tau \sum_{\bar{t} \in S_\tau} |w(\bar{t})|\, |\bar{t}|^3.
+    $$
+    Then the outer term becomes, $t_0 \sum_{\bar{t}} |b_-(\bar{t})|\, \varepsilon_2(|\bar{t}|/\sigma, M) \leq \frac{\tilde{\alpha}_{\mathrm{comm}}^{(2)}}{M^2\, \sigma^3}\, \mu_3(|b_-|)$, while the inner term, $t_0' \sum_{\bar{t}'} |b_+(\bar{t}')|\, \varepsilon_2(\beta|\bar{t}'|, M) \leq \frac{\tilde{\alpha}_{\mathrm{comm}}^{(2)}\, \beta^3}{M^2}\, \mu_3(|b_+|)$. Hence, up to leading order we find
+    $$
+    \|\bar{B} - \tilde{B}\|
+    \leq \frac{\tilde{\alpha}_{\mathrm{comm}}^{(2)}}{M^2}
+    \left(
+    \frac{2\,\|b_+\|_1}{\sigma^3}\, \mu_3(|b_-|)
+    + 4\,\beta^3\, \|b_-\|_1\, \mu_3(|b_+|)
+    \right)
+    + \mathcal{O}\!\left(\frac{\beta^4}{M^3}\right).
+    $$
+\end{proof}
+The two terms present in the Trotter error bound of $\|\bar{B} - \tilde{B}\|$ arise from the nested outer and inner time-sums in $B$ \eqref{eq:B-discr}. Qualitatively they contribute similarly. The $\log$ scaling of $\|b^{(s, \eta)}_+\|_1$ \eqref{eq:b_plus-s-eta} that appears for Metropolis-like transitions (due to the $\eta$-regularization) is the only difference between the errors. Note that at leading-order, the third absolute moments $\mu_3(|b_\pm|)$ are $\mathcal{O}(1)$ for both Gaussian and (smooth) Metropolis-like weights: the reason is that the $|t|^3$ factor within renders the $1 / t$ singularity integrable. Thus, the moment decays dominantly as a Gaussian.
+
+In principle, we could compose the two Trotter error results of \hyperref[prop:trotter-diss]{Proposition~\ref*{prop:trotter-diss}} and \hyperref[prop:trotter-B]{Proposition~\ref*{prop:trotter-B}} into one complete generator level error bound by a simple triangle inequality. But this gives no additional insight: in our implementation we Trotter split the generator and apply the coherent evolution by $B$ separate from the dissipative part $\mathcal{L}_\text{diss}$. Moreover, in implementation we have the flexibility of choosing different number of Trotter steps for these two parts since to control Trotter errors on OFT's might be simpler than controlling it on some less regular functions $b_\pm$ in $B$.
+
+It is worth clarifying which structural properties of the CKG Lindbladian survive discretization and Trotterization. The three levels of approximation are: 
+\begin{itemize}
+    \item \textbf{Continuous} $\mathcal{L}$: exact KMS DB by construction  \hyperref[sec:kms-lindbladian]{KMS Lindbladian} based on \cite[Theorem I.1]{chen2023efficient}.
+    \item \textbf{Discretized} $\mathcal{\bar{L}}$: approximate KMS DB. Quadrature errors break detailed balance. The size of the violation is controlled by the analysis in \hyperref[sec:quad-errors-diss]{Quadrature errors for $\mathcal{L}_\text{diss}$} and \hyperref[sec:quad-errors-B]{Quadrature errors for $B$}.
+    \item \textbf{Trotterized} $\mathcal{\tilde{L}}$: further approximates KMS DB, with additional Trotter errors from \hyperref[prop:trotter-diss]{Proposition~\ref*{prop:trotter-diss}} and \hyperref[prop:trotter-B]{Proposition~\ref*{prop:trotter-B}} on top of the quadrature errors.
+\end{itemize}
+The exact KMS DB of the continuous Lindbladian relies on several ingredients acting in unison: the shifted KMS condition on the transition weight $\gamma$, the unique construction of the coherent term $B$ cancelling the anti-Hermitian residual of the quantum discriminant, the properties of the OFT construction. Not all of these are relevant at the discretized level, but one structural identity does remain exact here -- and the question is whether the imminent Trotterization preserves it. We cover this in the following remark.
+
+\begin{remark} \label{rem:palindromic}
+    \textup{(Palindromic product formulas).} The identity that survives discretization and can be made to survive Trotterization as well, is the \emph{OFT adjoint identity}:
+    $$
+    \hat{A}_{a'}(-\bar{\omega})^\dagger = \hat{A}_a(\bar{\omega}), \qquad \text{with } A_{a'} = A_a^\dagger \in \mathcal{A}.
+    $$
+    At the discretized level with exact Hamiltonian evolution, this identity holds exactly because the proof only requires that, (i) $\bar{f}(\bar{t}) \in \mathbb{R}$, (ii) $\bar{f}(-\bar{t}) = \bar{f}(\bar{t})$ (the used Gaussian filter is even), and (iii) $U(\bar{t})^\dagger = U(-\bar{t})$. All three hold for the discretized OFT \eqref{eq:oft-discr}. This identity ensures that the discriminant $\mathcal{D}_\beta$ from \eqref{eq:discriminant} satisfies $\mathcal{D}_\beta = \mathcal{D}_\beta^\dagger$, i.e. its anti-Hermitian part $\mathcal{A}(\rho_\beta, \mathcal{\bar{L}})$
+    -- the measure of DB violation -- from \hyperref[def:approx-db]{Definition~\ref*{def:approx-db}} vanishes.
+
+    At the Trotterized level, input (iii) must be replaced by $S_p^{(M)}(\bar{t})^\dagger = S_p^{(M)}(-\bar{t})$, which holds if and only if the product formula is \emph{palindromic} (or adjoint-symmetric).
+\end{remark}
+\begin{proof}
+    A product formula $S_p(\delta t) = \prod_{j=1}^{J} e^{-ic_j H_{\pi(j)} \delta t}$ is palindromic if $c_{J+1-j} = c_j$ and $\pi(J+1-j) = \pi(j)$ for all $j$. For such a formula:
+    $$
+    S_p(\delta t)^\dagger = \prod_{j=J}^{1} e^{ic_j H_{\pi(j)} \delta t} = \prod_{j=1}^{J} e^{ic_{J+1-j} H_{\pi(J+1-j)} \delta t} = \prod_{j=1}^{J} e^{ic_j H_{\pi(j)}\delta t} = S_p(-\delta t),
+    $$
+    where the second step is the palindromic reindexing. This naturally extends to $M$ steps $S_p^{(M)}(\bar{t})^\dagger = S_p^{(M)}(-\bar{t})$. Strang splitting (and all other even Trotter formulas) satisfies this by construction.
+    Then, we can explicitly check for $\tilde{A}_a(\bar{\omega})$ from \eqref{eq:trotter-oft}:
+    \begin{align*}
+        \tilde{A}_a(\bar{\omega})^\dagger &= \frac{1}{\sqrt{N}} \sum_{\bar{t} \in S_{t_0}} e^{i\bar{\omega}\bar{t}}\, \bar{f}(\bar{t})\, S_p^{(M)}(\bar{t})\, A_a^\dagger\, S_p^{(M)}(\bar{t})^\dagger \\
+        &= \frac{1}{\sqrt{N}} \sum_{\bar{t}} e^{-i\bar{\omega}\bar{t}}\, \bar{f}(\bar{t})\, S_p^{(M)}(\bar{t})^\dagger\, A_{a'}\, S_p^{(M)}(\bar{t}),
+    \end{align*}
+    where we sent $\bar{t} \to -\bar{t}$ on the symmetric grid $S_{t_0}$, applied $\bar{f}(-\bar{t}) = \bar{f}(\bar{t})$ and the palindromic identity $S_p^{(M)}(-\bar{t}) = S_p^{(M)}(\bar{t})^\dagger$. We can also compute $\tilde{A}_{a'}(-\bar{\omega})$ separately, 
+    \begin{align*}
+        \tilde{A}_{a'}(-\bar{\omega}) &= \frac{1}{\sqrt{N}} \sum_{\bar{t}} e^{i\bar{\omega}\bar{t}}\, \bar{f}(\bar{t})\, S_p^{(M)}(\bar{t})\, A_{a'}\, S_p^{(M)}(\bar{t})^\dagger \\
+        &= \frac{1}{\sqrt{N}} \sum_{\bar{t}} e^{-i\bar{\omega}\bar{t}}\, \bar{f}(\bar{t})\, S_p^{(M)}(\bar{t})^\dagger\, A_{a'}\, S_p^{(M)}(\bar{t}),
+    \end{align*}
+    and see that the two expressions coincide, $\tilde{A}_a(\bar{\omega})^\dagger = \tilde{A}_{a'}(-\bar{\omega})$.
+\end{proof}
+The anti-Hermitian part $\mathcal{A}(\rho_\beta, \mathcal{\bar{L}})$ of the quantum discriminant receives contributions from all sources of error: quadrature, Trotter, and possibly from non-palindromic product formulas (e.g. Lie-Trotter) violating the OFT adjoint identity. A palindromic formula eliminates the last channel entirely, leaving the Trotter contribution to the DB violation coming solely from the failure of $S_p^{(M)}(\bar{t})$ to commute with $\rho_\beta^{1/2}$ (defined with the exact Hamiltonian $H$).
+For a non-palindromic formula (necessarily odd-order) formula of order $p$, the violation can be quantified with the commutator constant $\tilde{\alpha}_\text{comm}$ from \cite{childs2021theory} as 
+$$
+\|S_p^{(M)}(\bar{t})^\dagger - S_p^{(M)}(-\bar{t})\| = \mathcal{O}\left(\frac{\tilde{\alpha}_\text{comm} |\bar{t}|^{p + 1}}{M^p}\right), 
+$$
+so the violation enters at the same order as the Trotter error itself. In other words, the asymptotic scaling of the total incurring Trotter errors $\mathcal{O}(1 / M^p)$ is the same for both palindromic and non-palindromic formulas, but the constant prefactor is strictly smaller in the former case.
+
+For commuting Hamiltonians, the product formula is exact for any $M$ and there is no Trotterization error. But the CKG framework was designed to handle non-commuting Hamiltonians. The commuting case is more naturally handles by the Davies generator directly \cite[text]{kastoryano2016quantum,bardet2023rapid}, for which the CKG Gaussian-smearing and coherent term $B$ are unnecessary.
+
+\smallskip
+\subsection{Generator splitting.}
+In the implementation we use two distinct decomposition of the CKG generator \eqref{eq:ckg-L}. 
+
+(i) First, the full generator is decomposed into per-jump contributions $\mathcal{L}_a$,
+$$
+\mathcal{L} = \sum_a \mathcal{L}_a.
+$$
+There are two ways to do this, each of them preserves the Gibbs state as the fixed point. We can either sweep over $A_a \in \mathcal{A}$ or randomly sample the jumps $A_a$ with probability $p_a$, where each contribution is rescaled by $1 / p_a$ such that after many samples we find the full generator $\mathcal{L}$ on average. Asymptotically both strategies give the same complexity, but there is some qualitative differences between the two. While the sequential Lie-Trotter splitting breaks KMS DB in general, at leading order it does so by an antisymmetric term which does not change the spectral gap. On the other hand, the random sampling is essentially a convex combination of KMS DB Lindbladians which leads to an KMS DB evolution on average [REF] \todo{ref}. Even though this sounds advantageous, it also means that the leading order errors do perturb the spectral gap. Since these errors are of the same order as errors from other sources in the algorithm, it made no significant difference which strategy we chose for our numerical simulations. But it is hard to argue against the better error scaling for an implementation, so we will mainly discuss the sequential Lie-Trotter splitting. (For other theoretical works, where implementation via discretization, Trotterization, etc. is not relevant, then keeping KMS DB might be more appealing since it keeps the quantum discriminant Hermitian.)
+
+(ii) Second, for each fixed $a$, the generator $\mathcal{L}_a$ is further split into a coherent and a dissipative part, each implemented as their own, separate primitive:
+$$
+ \mathcal L_a = \mathcal L_{a,\mathrm{coh}} + \mathcal L_{a,\mathrm{diss}},
+    \qquad
+    \mathcal L_{a,\mathrm{coh}}(\cdot) := - i [B_a,\cdot].
+$$
+These two splittings are qualitatively different from each other: while the jump-wise splitting preserves the Gibbs state as the fixed point, the coherent-dissipative splitting generally does not. Consequently, the former introduces errors in the spectrum that can slow the mixing time, while the latter produces a genuine fixed-point bias. In either case, we analyse the incurring errors here and find a suiting way to control them for our purposes.
+
+It is important to keep in mind that for the implementation cost, the relevant baseline error comes from the weak measurement simulation of the dissipative part $\mathcal{L}_\mathrm{diss}$. This primitive is only first-order accurate in the step size, i.e. for a step $\delta$ it has a local error $\mathcal{O}(\delta^2)$, and over the total simulated time $t_\text{mix}$ the accumulated error is $\mathcal{O}(t_\text{mix} \delta)$. Accordingly, all the generator decomposition we introduce in (i) and (ii) should respect this scaling as well.
+
+\medskip
+\noindent\textbf{(i) Jump-wise splitting.} Each of the Lindbladians $\mathcal{L}_a$ individually satisfies exact KMS DB for $\rho_\beta$, i.e. they are self-adjoint with respect to the KMS inner product ($\mathcal{L}_a^* = \mathcal{L}_a$). Consequently, the Gibbs state is the fixed point of each generator $\mathcal{L}_a(\rho_\beta) = 0$, and hence also of each semigroup channel $e^{\delta\mathcal{L}_a}(\rho_\beta) = \rho_\beta$. Note that, the kernel of an individual $\mathcal{L}_a$ is generically larger than $\mathrm{Span}\{\rho_\beta\}$. Primitivity is a property of the full generator $\mathcal{L} = \sum_a \mathcal{L}_a$ only, not of each summand.
+
+The simplest (yet sufficient) way to split the generator sequentially, is to use the first-order Lie-Trotter splitting:
+\begin{equation}
+    \Phi_{\mathcal{A}} := \ee^{\delta \mathcal{L}_{M_\mathcal{A}}} \circ \cdots \circ \ee^{\delta \mathcal{L}_2} \circ \ee^{\delta \mathcal{L}_1},
+\end{equation}
+with $M_\mathcal{A} := |\mathcal{A}|$ denoting the number of jump operators. By the standard first-order product formula bound, applied to the superoperators $\mathcal{L}_a$, we can write  
+\begin{equation} \label{eq:gen-split-approx-error}
+    \left\|\Phi_{\mathcal{A}} - e^{\delta \mathcal{L}}\right\|_{1\to 1} \leq \frac{\delta^2}{2} \left\|\sum_{a < b} [\mathcal{L}_a, \mathcal{L}_b]\right\|_{1\to 1} + O(\delta^3).
+\end{equation}
+Under the normalization $\|\sum_a A_a^\dagger A_a\| \leq 1$, each per-jump Lindbladian has norm
+\begin{equation}
+    \|\mathcal{L}_a\|_{1 \to 1} = O\!\left(\frac{\log(\beta\|H\|)}{M_\mathcal{A}}\right),
+\end{equation}
+where the $\log(\beta\|H\|)$ factor originates from the Metropolis-like coherent term $B_a$ [REF within thesis]\todo{ref}. The dissipative part alone satisfies $\|\mathcal{L}_{a,\mathrm{diss}}\|_{1\to 1} \leq 4\|A_a^\dagger A_a\|$, so the coherent contribution dominates. Applying the triangle inequality to the commutator sum in \eqref{eq:gen-split-approx-error}:
+\begin{equation}
+    \left\|\sum_{a<b} [\mathcal{L}_a, \mathcal{L}_b]\right\|_{1\to 1} 
+    \leq \binom{M_\mathcal{A}}{2} \cdot 2 \max_{a,b} \|\mathcal{L}_a\|_{1\to 1}\|\mathcal{L}_b\|_{1\to 1} 
+    = O\!\left(\log^2(\beta\|H\|)\right),
+\end{equation}
+for which the $M_\mathcal{A}$ dependence cancelled. The per-step approximation error is therefore
+\begin{equation} \label{eq:gen-split-explicit-bound}
+    \left\|\Phi_{\mathcal{A}} - e^{\delta \mathcal{L}}\right\|_{1\to 1} = O\!\left(\delta^2 \log^2(\beta\|H\|)\right),
+\end{equation}
+independently of $M_\mathcal{A}$. For Gaussian transition weights, where the $\eta$-regularization of the coherent term is unnecessary, the $\log^2$ factor is absent and the bound simplifies to $O(\delta^2)$.
+
+There is some structure to this error however, that is worth exploring.
+Since each $\ee^{\delta \mathcal{L}_a}$ is KMS DB, and the KMS adjoint reverses the composition, $({\Phi_1 \circ \Phi_2})^* = \Phi_2^* \circ \Phi_1^*$, we obtain: 
+\begin{equation}
+    \Phi_{\mathcal{A}}^* = e^{\delta \mathcal{L}_1} \circ e^{\delta \mathcal{L}_2} \circ \cdots \circ e^{\delta \mathcal{L}_{M_\mathcal{A}}} \neq \Phi_{\mathcal{A}}.
+\end{equation}
+This is the same kind of DB violation as what we have seen for non-palindromic Trotter products for the Hamiltonian time evolutions in the previous section: the choice of ordering in the product formula breaks time-reversal symmetry. The DB violation is quantified by the difference between the forward and reverse orderings. By Baker-Campbell-Hausdorff (BCH), the effective generators of the two orderings differ in the sign of the leading commutator term, 
+$$
+\delta \sum_a \mathcal{L}_a \pm \frac{\delta^2}{2}\sum_{a < b}[\mathcal{L}_a, \mathcal{L}_b] + O(\delta^3),
+$$
+yielding the DB violation at leading order, 
+\begin{equation}
+    \left\|\Phi_{\mathcal{A}} - \Phi_{\mathcal{A}}^*\right\|_{1\to 1} = O\!\left(\delta^2 \left\|\sum_{a<b}[\mathcal{L}_a, \mathcal{L}_b]\right\|_{1\to 1}\right),
+\end{equation}
+which is of the same order as the approximation error \eqref{eq:gen-split-approx-error}. Crucially, even though the sequential product breaks detailed balance, it still has the Gibbs state as its fixed point exactly: since each factor fixes $\rho_\beta$, so does $\Phi_{\mathcal{A}}(\rho_\beta) = \rho_\beta$. Moreover, the DB violation has a definite algebraic structure: the commutator of any two KMS self-adjoint generators is KMS anti-self-adjoint: 
+$$
+[\mathcal{L}_a, \mathcal{L}_b]^* = [\mathcal{L}_b^*, \mathcal{L}_a^*] = -[\mathcal{L}_a, \mathcal{L}_b].
+$$
+Hence, the leading BCH correction involving the commutator is a purely antisymmetric perturbation of the generator. This has a direct spectral consequence. Since $\mathcal{L}$ is KMS self-adjoint, its eigenvalues in the KMS inner product are real. By standard perturbation theory, an anti-self-adjoint term can only lead to a purely imaginary perturbation to the spectrum $\{\lambda_i\}$ of $\mathcal{L}$ or written out:
+\begin{equation} \label{eq:gen-split-imaginary-delta2-errors}
+    \Delta\lambda_k = \frac{\delta}{2}\langle \psi_k, \sum_{a<b}[\mathcal{L}_a, \mathcal{L}_b](\psi_k) \rangle_{\mathrm{KMS}} \in \ii\mathbb{R},
+\end{equation}
+where $\{\psi_k\}$ are the KMS-orthonormal eigenvectors of $\mathcal{L}$. Therefore, the jump-wise generator splitting is less harmful than a generic first-order product formula: for the $\delta$ step channel it lets the spectral gap of $\Phi_\mathcal{A}$ agree with that of $\ee^{\delta \mathcal{L}}$ up to $\mathcal{O}(\delta^3)$.
+
+The sequential product $\Phi_\text{seq}$ leading to this specific structure for the error terms, raises a question, namely: could this anti-KMS-adjoint error term accelerate the convergence to the Gibbs state? The only reason we would even ask such a question is because this is precisely the structure that has been shown to accelerate mixing in the continuous generator setting. For classical diffusions, \cite{hwang2005accelerating} showed that such an antisymmetric addition can only improve the spectral gap. A similar fact for the quantum case was established by \cite{li2025speeding}, showing that for a DB QMS this could mean an up to quadratic speed-up in mixing. But none of these papers are one-to-one applicable to our case, nor did the simulations show any noticeable speed-up. It seems that turning these pesky errors into an advantage keeps eluding us.
+\todo{ref, we could check this numerically.}
+
+As a final note to the jump-wise splitting: higher order product formulas would make no meaningful difference here, especially if the weak measurement scheme within $\mathcal{L}_a$ already introduces errors of $\mathcal{O}(\delta^2)$ per step.
+
+\medskip
+\noindent\textbf{(ii) Coherent--Dissipative}
+Splitting the coherent term from the dissipative one and implementing their respective evolutions separately from each other, is a qualitatively different process compared to the jump-wise splitting. The coherent part is chosen precisely such that the sum of the coherent and dissipative parts are exactly KMS DB. Unlike in the previous case (i), now the separate terms do not satisfy KMS DB, thus the emerging errors already shift the fixed point at leading orders. To see this let us write out the first-order splitting:
+\begin{equation}
+    \ee^{\delta \mathcal L_{a,\mathrm{coh}}}\ee^{\delta \mathcal L_{a,\mathrm{diss}}}
+    = \exp\!\left(
+        \delta \mathcal L_a
+        + \frac{\delta^2}{2}[\mathcal L_{a,\mathrm{coh}},\mathcal L_{a,\mathrm{diss}}]
+        + O(\delta^3)
+    \right),
+\end{equation}
+so that the effective generator is 
+\begin{equation} \label{eq:gen-split-coh-diss}
+    \mathcal L_{a,\mathrm{eff}}
+    = \mathcal L_a
+    + \frac{\delta}{2}[\mathcal L_{a,\mathrm{coh}},\mathcal L_{a,\mathrm{diss}}]
+    + O(\delta^2).
+\end{equation}
+Since neither $L_{a,\mathrm{coh}}$ nor $L_{a,\mathrm{diss}}$ satisfy KMS DB, their commutator does not become KMS anti-self-adjoint. Therefore, the fixed point is now shifted, and the leading perturbation now has an impact even on the real part of the spectrum. 
+
+The already used and convenient way to express this is via the fixed-point perturbation bound of \cite[Lemma II.1]{chen2023quantum} \todo{ref to where we used this} 
+\begin{equation}
+        \|\rho_{\mathrm{fix}}(\mathcal L_1)-\rho_{\mathrm{fix}}(\mathcal L_2)\|_1
+    \le 4\, \|\mathcal L_1-\mathcal L_2\|_{1\to1}\, t_{\mathrm{mix}}(\mathcal L_1).
+\end{equation}
+Applying this with $\mathcal L_1=\mathcal L_a$ and $\mathcal L_2=\mathcal L_{a,\mathrm{eff}}$ yields a fixed-point shift of order $\mathcal O\left(t_\text{mix}\, \delta\right)$. If the substeps (coherent evolution via $B$ and weak measurement scheme for $\mathcal{L}_\text{diss}$) were implemented exactly, then a Strang splitting would improve this BCH error to second order in the effective generator:
+\begin{equation}
+    e^{\frac{\delta}{2}\mathcal L_{a,\mathrm{coh}}}
+    e^{\delta \mathcal L_{a,\mathrm{diss}}}
+    e^{\frac{\delta}{2}\mathcal L_{a,\mathrm{coh}}}
+    = \exp\!\left(\delta \mathcal L_a + O(\delta^3)\right),
+\end{equation}
+which would reduce the induced fixed-point bias to $\mathcal O(t_{\mathrm{mix}}\delta^2)$ over the full evolution. However, this improvement is not useful in our implementation, since any more accuracy beyond $\mathcal O\left(t_\text{mix}\, \delta\right)$ is washed away by the errors due to the weak measurement subroutine. 
+
+For this reason, higher-order coherent-dissipative product formulas do not improve the asymptotic end-to-end scaling in our setting. If the weak measurement scheme were to be replaced by some more accurate variant, then we could always adjust all the above product formulas to a higher order variant to comply with the baseline error. \eqref{eq:relative-entropy}
+
+% Use Trotter splitting also for coherent and dissipative parts. t_mix scaling becomes poly with this compared to linear for Chen's, but doesn't need QSVT, doesn't need a ton of repetitions due to subnorm, coherent ancillas are independent and incoherent from dissipative ancillas. It is a valid realization with NISQ in mind, even if asymptotically it's worse.
+
+\smallskip
+\label{sec:algorithm}
+\subsection{Algorithm.}
+
+\begin{algorithm}[H]
+\caption{\textsc{CKG-GibbsSampler}}
+\label{alg:main}
+\begin{algorithmic}[1]
+\small
+\Require
+  System Hamiltonian $H = \sum_{k=1}^{K} H_k$ on $n$ qubits;
+  jump set $\{A_a\}_{a\in\mathcal{A}}$ with $\bigl\lVert\sum_a A_a^\dagger A_a\bigr\rVert \le 1$;
+  inverse temperature $\beta$;
+  Gaussian filter width $\sigma$ for filter function $f$ \eqref{eq:gaussian-filter-t};
+  transition weight $\gamma$ (e.g.\ $\gamma_M^{(s)}$ from~\eqref{eq:smooth-metro});
+  functions $b_\pm$ for the coherent term \eqref{eq:b_plus-s-eta} and \eqref{eq:b_minus};
+  step size $\delta$;
+  target trace-distance accuracy $\varepsilon$
+\Ensure System register $S$ in state
+  $\rho \approx \rho_\beta = \ee^{-\beta H}/\mathrm{tr}(\ee^{-\beta H})$
+\Statex
+\State $L \gets \bigl\lceil t_{\mathrm{mix}}(\mathcal{L})\,
+       \log(2/\varepsilon)\,/\,\delta \bigr\rceil$
+       \Comment{total Lindbladian steps}
+\State Initialise $S$ in an arbitrary state $\rho_0$
+\For{$\ell = 1, \ldots, L$}
+  \For{$a = 1, \ldots, M_{\mathcal{A}}$}
+       \Comment{sequential sweep over jumps}
+    \State \Call{CoherentStep}{$S, a, \delta, b_\pm$}
+           \Comment{$\ee^{-\mathrm{i}\delta B_a}$, Alg.~\ref{alg:coh}}
+    \State \Call{DissipativeStep}{$S, a, \delta, f, \gamma$}
+           \Comment{$\ee^{\delta\mathcal{L}_{a,\mathrm{diss}}}$, Alg.~\ref{alg:diss}}
+  \EndFor
+\EndFor
+\State \Return $S$
+\end{algorithmic}
+\end{algorithm}
+
+
+\begin{figure}[ht]
+  \centering
+  \resizebox{\textwidth}{!}{%
+  \begin{quantikz}[row sep=0.6cm, column sep=0.5cm]
+  %
+  % Cell-by-cell layout (15 cells per row):
+  %   1: \lstick          (left label)
+  %   2: wire decl        (\qw or \qwbundle{r})
+  %   3: R_0 / qw         (coherent: first QSP rotation)
+  %   4: octrl / U_{B_a}  (Lambda(U_{B_a}))
+  %   5: octrl / R_T      (Lambda(R_T))
+  %   6: R_k / qw         (coherent: inner-loop QSP rotation)
+  %   7: meter / qw       (terminate coherent ancilla)
+  %   8: setwiretype{n}   (transition cell A: hide outgoing wire)
+  %   9: new lstick       (transition cell B: re-init wire as dissipative ancilla)
+  %  10: U_{diss} / qw    (dissipative forward)
+  %  11: Y_delta / octrl  (weak measurement rotation)
+  %  12: U_{diss}^dag     (dissipative reverse, 0-ctrl by q_delta)
+  %  13: meter / rstick   (terminate dissipative ancilla / system output)
+  %
+  % Meter and setwiretype{n} are placed in SEPARATE cells so that the
+  % wire leading into the meter stays visible (otherwise quantikz2 applies
+  % {n} retroactively to the incoming wire and breaks the meter).
+  %
+  % ==================================================================
+  % Row 1:  q_QSP  (coherent, cells 3-7)  -->  q_delta  (dissipative, cells 9-13)
+  % ==================================================================
+    \lstick{$\ket{0}_{\mathrm{QSP}}$}
+      & \qw
+      & \gate{R(\theta_0,\phi_0,\lambda_0)}
+      & \octrl{1}
+      \gategroup[4,steps=3,style={dashed,rounded corners,fill=blue!6,inner sep=5pt},
+                 background,label style={label position=above,yshift=0.30cm,anchor=south}]
+        {\scriptsize \textsc{CoherentStep}: repeat $d$ times with angles $(\theta_k,\phi_k)\Rightarrow\ee^{-\ii\delta B_a}$}
+      & \octrl{1}
+      & \gate{R(\theta_k,\phi_k,0)}
+      & \meter{}
+      & \setwiretype{n}
+      & \lstick{$\ket{0}_\delta$} \setwiretype{q} \wireoverride{n}
+      & \qw
+      & \qw
+      \gategroup[4,steps=4,style={dashed,rounded corners,fill=red!6,inner sep=5pt},
+                 background,label style={label position=below,yshift=-0.40cm,anchor=north}]
+        {\scriptsize \textsc{DissipativeStep}: weak measurement simulation of $\ee^{\delta\mathcal{L}_{a,\mathrm{diss}}}$}
+      & \gate{Y_\delta}
+      & \octrl{1}
+      & \meter{}
+      \\
+  %
+  % ==================================================================
+  % Row 2:  T_+  -->  q_gamma  (holds the multi-row gate labels in both phases:
+  %         U_{B_a}/R_T on coherent, U_{diss}/U_{diss}^dag on dissipative.
+  %         q_gamma sits directly under q_delta so the weak measurement
+  %         control is the minimal \octrl{-1}.)
+  % ==================================================================
+    \lstick{$\ket{0}_{T_+}$}
+      & \qwbundle{r_+}
+      & \qw
+      & \gate[3]{U_{B_a}}
+      & \gate[2]{R_T}
+      & \qw
+      & \meter{}
+      & \setwiretype{n}
+      & \lstick{$\ket{0}_\gamma$} \setwiretype{q} \wireoverride{n}
+      & \qw
+      & \gate[3]{U_{\mathrm{diss}}}
+      & \octrl{-1}
+      & \gate[3]{U_{\mathrm{diss}}^\dagger}
+      & \meter{}
+      \\
+  %
+  % ==================================================================
+  % Row 3:  T_-  -->  Omega  (bundled throughout; cells 4, 5, 10, 12 empty as
+  %         they are consumed by the multi-row gates sitting on row 2 above.)
+  % ==================================================================
+    \lstick{$\ket{0}_{T_-}$}
+      & \qwbundle{r_-}
+      & \qw
+      &
+      &
+      & \qw
+      & \meter{}
+      & \setwiretype{n}
+      & \lstick{$\ket{0}_\Omega$} \setwiretype{q} \wireoverride{n}
+      & \qwbundle{r}
+      &
+      & \qw
+      &
+      & \meter{}
+      \\
+  %
+  % ==================================================================
+  % Row 4:  S  (system register, active throughout with no wire-type change)
+  % ==================================================================
+    \lstick{$\rho$}
+      & \qwbundle{n}
+      & \qw
+      &
+      & \qw
+      & \qw
+      & \qw
+      & \qw
+      & \qw
+      & \qw
+      &
+      & \qw
+      &
+      & \qw
+      & \rstick{$\ee^{\delta\mathcal{L}_a}(\rho)+\mathcal{O}(\delta^2)$}\qw
+  \end{quantikz}%
+  }
+  \caption{Algorithm~\ref*{alg:main}: one $\delta$-step of the CKG Lindbladian
+  $\ee^{\delta\mathcal{L}_a} = \ee^{-\ii\delta B_a}\cdot
+  \ee^{\delta\mathcal{L}_{a,\mathrm{diss}}}+\mathcal{O}(\delta^2)$ for a fixed
+  jump $A_a$, split into a GQSP \emph{coherent block} (blue, $d$ repetitions
+  of $\Lambda(U_{B_a}),\Lambda(R_T),R(\theta_k,\phi_k,0)$) and a
+  weak measurement \emph{dissipative block} (red).  Mid-circuit measurements
+  mark ancilla reuse: $q_{\mathrm{QSP}}, T_\pm \!\to q_\delta, q_\gamma, \Omega$.}
+  \label{circ:algorithm-delta-step}
+\end{figure}
+
+It is time to assemble the subroutines discussed in the preceding subsections into a complete quantum algorithm for Gibbs state preparation via the CKG Lindbladian \eqref{eq:ckg-L}. The resulting procedure, Algorithm~\eqref{alg:main}, simulates the continuous-time Markov semigroup $\ee^{t \mathcal{L}}$ by repeated application of small $\delta$-step channels that approximate $\ee^{\delta \mathcal{L}_a}$ for each jump $a\in\mathcal{A}_a$. Its structure draws on three key ingredients: the \emph{weak measurement simulation scheme} of \cite{chen2023quantum}, which implements the dissipative channels $\ee^{\delta \mathcal{L}_{a, \text{diss}}} + \mathcal{O}(\delta^2)$; The \emph{coherent correction term} $B_a$ \eqref{eq:coherent-time-domain} introduced in \cite{chen2023efficient} (or its Trotterized version \eqref{eq:B-trotter}), that makes the CKG generator $\mathcal{L}$ exactly KMS detailed balanced; and \emph{Generalized Quantum Signal Processing} (GQSP) from \cite{motlagh2024generalized}, which provides a near-optimal method to realize the unitary $\ee^{-\ii \delta B_a}$ up to $\mathcal{O}(\delta^2)$ errors from the block encoding of $B_a$.
+The end result is a quantum channel that, after $L$ iterations of the outer loop, produces a state $\rho$ that is at most $\varepsilon$ trace distance from the Gibbs state $\rho_\beta$.
+
+We now give a few comments on Algorithm~\eqref{alg:main}. 
+\begin{itemize}
+    \item The system register $S$ can be initalised in any arbitrary state $\rho_0$, due to the primitivity of $\mathcal{L}$: $\rho_\beta$ is the unique fixed point and the semigroup is ergodic, thus any initial state converges to $\rho_\beta$ at the same asymptotic rate. In practice however, it is ideal to choose a state that has a reasonable overlap with $\rho_\beta$ (and is not too costly to prepare), e.g. the maximally mixed state $\mathbf{1} / d$, to eliminate part of the initial sampling steps, related to the factor $1/\sqrt{\lambda_{\min}(\rho_\beta)}$.
+    \item From the mixing time definition \eqref{eq:mixing-time-defi} and the spectral bound \eqref{eq:quantum-spectral-bound}, after evolving some initial state $\rho_0$ for a total Lindbladian time $t = t_{\mathrm{mix}}(\mathcal{L})\,\log(2/\varepsilon)$ we are guaranteed to have $\|e^{t\mathcal{L}}(\rho_0) - \rho_\beta\|_1 \leq \varepsilon$.
+    \item For each $\delta$ step of the outer-loop we perform a sequential sweep over all $M_\mathcal{A} = |\mathcal{A}|$ jumps. This is a Lie-Trotter splitting of $e^{\delta\mathcal{L}}$ to $\Phi_\mathcal{A} := e^{\delta\mathcal{L}_{M_\mathcal{A}}} \circ \cdots \circ e^{\delta\mathcal{L}_1}$, introducing approximation errors of $\mathcal{O}(\delta^2)$ \eqref{eq:gen-split-approx-error} but perturbing the real part of the spectrum only at $\mathcal{O}(\delta^3)$ \eqref{eq:gen-split-imaginary-delta2-errors}.
+    \item In the inner-loop for a fixed $a$ we split the generator further as $\mathcal{L}_a = \mathcal{L}_{a,\mathrm{coh}} + \mathcal{L}_{a,\mathrm{diss}}$, introducing an error to the channel $\ee^{\delta \mathcal{L}_a}$ of order $\mathcal{O}(\delta^2)$ order \eqref{eq:gen-split-coh-diss}.
+    \item \textsc{CoherentStep} is the subalgorithm that implements the unitary $\ee^{-\ii \delta B_a} + \mathcal{O}(\delta^2)$ via GQSP, see Alg.~\eqref{alg:coh}.
+    \item \textsc{DissipativeStep} is the subalgorithm that implements the dissipation $e^{\delta\mathcal{L}_{a,\mathrm{diss}}}(\rho) + \mathcal{O}(\delta^2)$ via the weak measurement scheme, see Alg.~\eqref{alg:diss}.
+\end{itemize}
+\medskip 
+
+%% ---------------------------------------------------------------
+\setcounter{algorithm}{0}
+\renewcommand{\thealgorithm}{\arabic{algorithm}a}
+\begin{algorithm}[!htbp]
+\caption{\textsc{CoherentStep}: Hamiltonian simulation of
+         $e^{-\mathrm{i}\delta B_a}$ via block encoding and QSP}
+\label{alg:coh}
+\begin{algorithmic}[1]
+\small
+\Require System register $S$, jump index $a$, step size $\delta$
+\Ensure  $S$ evolved by $e^{-\mathrm{i}\delta B_a}$
+  up to QSP and Trotter precision of $\mathcal{O}(\delta^2)$
+\Statex
+\State \textbf{Ancillas:}
+  outer time register $T_-$ ($r_-$ qubits),
+  inner time register $T_+$ ($r_+$ qubits),
+  QSP signal qubit $q_{\mathrm{QSP}}$
+\Statex
+\Statex\textit{--- Block encoding $U_{B_a}$ of
+  $B_a/\alpha$~\eqref{eq:B-discr}, with
+  $\alpha := \lVert b_-\rVert_1\,\lVert b_+\rVert_1$ ---}
+\Statex\textit{Forward pass:}
+\State \textsc{StatePrep}$(T_-)$:
+  $|0\rangle \to |b_-\rangle :=
+   \displaystyle\sum_{\bar{t}}
+   \sqrt{\frac{t_0\,|b_-(\bar{t})|}{\alpha_-}}\;
+   \mathrm{sgn}\bigl(b_-(\bar{t})\bigr)\,|\bar{t}\rangle$
+  \Comment{outer kernel~\eqref{eq:b_minus}; $\alpha_- = \lVert b_-\rVert_1$}
+\State \textsc{Ctrl-Trott}$(T_-, S)$: apply
+  $S_2^{(M_-)}(-\bar{t}/\sigma)$ on $S$, controlled on $T_-$
+  \Comment{outer: $\approx e^{-\mathrm{i}H\bar{t}/\sigma}$}
+\State \textsc{StatePrep}$(T_+)$:
+  $|0\rangle \to |b_+\rangle :=
+   \displaystyle\sum_{\bar{t}'}
+   \sqrt{\frac{t_0'\,|b_+(\bar{t}')|}{\alpha_+}}\;
+   \mathrm{sgn}\bigl(b_+(\bar{t}')\bigr)\,|\bar{t}'\rangle$
+  \Comment{inner kernel~\eqref{eq:b_plus-s-eta}; $\alpha_+ = \lVert b_+\rVert_1$}
+\Statex
+\Statex \textit{Inner Heisenberg evolution}
+  $$\tilde{A}_a^\dagger(\beta\bar{t}')\,\tilde{A}_a(-\beta\bar{t}')
+  = S_2^{(M_+)}(\beta\bar{t}')\,A_a^\dagger\,
+    S_2^{(M_+)}(-2\beta\bar{t}')\,A_a\,
+    S_2^{(M_+)}(\beta\bar{t}'),$$
+  \textit{controlled on $T_+$}:
+\State \textsc{Ctrl-Trott}$(T_+, S)$: apply
+  $S_2^{(M_+)}(+\beta\bar{t}')$ on $S$
+  \Comment{$\approx e^{+\mathrm{i}\beta H\bar{t}'}$}
+\State Apply $A_a^\dagger$ on $S$
+\State \textsc{Ctrl-Trott}$(T_+, S)$: apply
+  $S_2^{(M_+)}(-2\beta\bar{t}')$ on $S$
+  \Comment{$\approx e^{-2\mathrm{i}\beta H\bar{t}'}$}
+\State Apply $A_a$ on $S$
+\State \textsc{Ctrl-Trott}$(T_+, S)$: apply
+  $S_2^{(M_+)}(+\beta\bar{t}')$ on $S$
+  \Comment{$\approx e^{+\mathrm{i}\beta H\bar{t}'}$}
+\Statex
+\State \textsc{StatePrep}$^\dagger(T_+)$:
+  $|b_+\rangle \to |0\rangle$
+  \Comment{reflect / uncompute inner register}
+\State \textsc{Ctrl-Trott}$(T_-, S)$: apply
+  $S_2^{(M_-)}(+\bar{t}/\sigma)$ on $S$
+  \Comment{undo outer evolution}
+\State \textsc{StatePrep}$^\dagger(T_-)$:
+  $|b_-\rangle \to |0\rangle$
+  \Comment{reflect / uncompute outer register}
+\Statex \Comment{Block encoding:
+  $\langle 0|_{T_-}\!\langle 0|_{T_+}\;
+   U_{B_a}\;
+   |0\rangle_{T_-}\!|0\rangle_{T_+}
+   \;=\; B_a\,/\,\alpha$
+  acting on $S$}
+\Statex
+\Statex \textit{--- QSP: implement $e^{-\mathrm{i}\delta B_a}$
+  from the block encoding ---}
+\State Apply QSP~\cite{motlagh2024generalized} with precomputed rotation angles     
+    $\{(\theta_k,\phi_k)\}_{k=0}^{d}$ for the Laurent polynomial $P(e^{i\theta}) \approx e^{-\mathrm{i}\delta\alpha\,\sin\theta}$
+\Statex \Comment{Degree                                        
+    $d = 1$ calls to $U_{B_a}$}
+\State Measure and reset ancillas $q_{\mathrm{QSP}}$, $T_\pm$
+\end{algorithmic}
+\end{algorithm}
+\renewcommand{\thealgorithm}{\arabic{algorithm}}
+%% ---------------------------------------------------------------
+\begin{figure}[ht]
+  \centering
+  \resizebox{1.05\textwidth}{!}{%
+  \begin{quantikz}[row sep=0.9cm, column sep=0.42cm]
+  % Row 1:  T_-  (outer time register; controls cells 4 and 12)
+  % ==================================================================
+    \lstick{$\ket{0}_{T_-}$}
+      & \qwbundle{r_-}
+      & \gate{\text{PREP}'_-}
+      & \ctrl[style=halfctrl]{2}
+      & \qw
+      & \qw
+      & \qw
+      & \qw
+      & \qw
+      & \qw
+      & \qw
+      & \ctrl[style=halfctrl]{2}
+      & \gate{\text{PREP}_-^\dagger}
+      & \rstick{$\bra{0}_{T_-}$}\qw
+      \\
+  %
+  % ==================================================================
+  % Row 2:  T_+  (inner time register; controls cells 6, 8, 10;
+  %              prepared in cell 5, uncomputed in cell 11)
+  % ==================================================================
+    \lstick{$\ket{0}_{T_+}$}
+      & \qwbundle{r_+}
+      & \qw
+      & \qw
+      & \gate{\text{PREP}'_+}
+      \gategroup[2,steps=7,style={dashed,rounded corners,fill=blue!6,inner sep=5pt},
+                 background,label style={label position=below,yshift=-0.35cm,anchor=north}]
+        {\scriptsize \textsc{Inner sum}:
+         $\sum_{\bar{t}'} b_+(\bar{t}')\tilde{A}_a^\dagger(\beta\bar t')\,\tilde{A}_a(-\beta\bar t')$
+         controlled on $T_+$}
+      & \ctrl[style=halfctrl]{1}
+      & \qw
+      & \ctrl[style=halfctrl]{1}
+      & \qw
+      & \ctrl[style=halfctrl]{1}
+      & \gate{\text{PREP}_+^\dagger}
+      & \qw
+      & \qw
+      & \rstick{$\bra{0}_{T_+}$}\qw
+      \\
+  %
+  % ==================================================================
+  % Row 3:  S  (system register; target of every controlled evolution
+  %             and of the two jump applications A_a^dag, A_a)
+  % ==================================================================
+    \lstick{$\ket{\psi}$}
+      & \qwbundle{n}
+      & \qw
+      & \gate{S_2\left(\frac{\bar t}{\sigma}\right)}
+      & \qw
+      & \gate{S_2(\beta\bar t')}
+      & \gate{A_a}
+      & \gate{S_2(-2\beta\bar t')}
+      & \gate{A_a^\dagger}
+      & \gate{S_2(\beta\bar t')}
+      & \qw
+      & \gate{S_2\left(-\frac{\bar t}{\sigma}\right)}
+      & \qw
+      & \rstick{$\tilde{B}_a\ket{\psi} / \alpha$}\qw
+  \end{quantikz}%
+  }
+  \caption{Block encoding $U_{B_a}$ of the Trotterized coherent
+  Metropolis term $\tilde{B}_a/\alpha$ with $\alpha=\lVert b_-\rVert_1\lVert b_+\rVert_1$
+  (Alg.~\ref*{alg:coh}, \eqref{eq:B-block-encoding}), on outer/inner time
+  registers $T_\mp$. Half-filled controls denote uniform (SELECT) control
+  over the bundled time registers.
+  $\text{PREP}'_\pm$ prepares the signed state
+  $\sum_{\bar t}[b_\pm(\bar t)/\sqrt{|b_\pm(\bar t)|}]\ket{\bar t}/\sqrt{\lVert b_\pm\rVert_1}$
+  and $\text{PREP}_\pm$ the magnitude state
+  $\sum_{\bar t}\sqrt{|b_\pm(\bar t)|/\lVert b_\pm\rVert_1}\ket{\bar t}$,
+  so that amplitudes multiply to the signed kernel $b_\pm(\bar t)$. Controlled
+  evolutions are Trotterized with the second-order Strang splitting $S_2$ with $M_\pm$ Trotter steps respectively.}
+  \label{circ:U_B_a}
+\end{figure}
+
+\medskip
+\noindent \textsc{CoherentStep:} \textbf{Coherent evolution of $B$ with QSP.} The \textsc{CoherentStep}, \hyperref[alg:coh]{Algorithm~\ref*{alg:coh}}, implements the unitary evolution $\ee^{-\ii \delta B_a}$ generated by the per-jump Hermitian term $B_a$. This is the component that distinguishes the CKG algorithm from the CKBG one: without it (and without the shifted transitions weights) the algorithm reduces to the CKBG Gibbs sampler [ref to text \todo{ref}], which satisfies only approximate GNS detailed balance. Recall from the \hyperref[sec:kms-lindbladian]{KMS Lindbladian~\ref*{sec:kms-lindbladian}} subsection that the coherent term $B$ was derived \eqref{eq:B-bohr-domain} to cancel the emergent anti-Hermitian part of the quantum discriminant, upgrading the Lindbladian to exact KMS detailed balance. Its per-jump contribution $B_a$ enters the coherent-dissipative splitting \eqref{eq:gen-split-coh-diss} as the generator $\mathcal{L}_{a,\mathrm{coh}}(\cdot) = -i[B_a, \cdot\,]$, with the first-order splitting error of $\mathcal{O}(\delta^2)$ already matched by the weak measurement error of the dissipative step. Of course, discretization and Trotterization errors analysed in the preceding subsections will re-introduce controlled violations of the detailed balance, but these are precisely the errors we have learned to bound.
+
+The subalgorithm breaks down to two steps: first we construct a block encoding $U_B$, satisfying
+\begin{equation} \label{eq:B-block-encoding}
+    \langle 0|_{T_-}\langle 0|_{T_+}\,U_{B_a}\,|0\rangle_{T_-}|0\rangle_{T_+} = B_a/\alpha,
+\end{equation}
+where $\alpha = \|b_-\|_1\,\|b_+\|_1$ is the subnormalisation factor of $B_a$. Then, we use GQSP \cite{motlagh2024generalized} (in most cases with degree $d = 1$) to implement $\ee^{-\ii \delta B_a}$ from $U_{B_a}$. In the following, we will give a few more details about each of the steps.
+
+The block encoding of the coherent term \eqref{eq:B-block-encoding} containing the nested time integrals of \eqref{eq:coherent-time-domain} is done by a nested LCU. [Ref to prelims \todo{ref}]. This has been established in the CKG paper \cite[Proposition III.1]{chen2023efficient}, where they also prove its asymptotic scaling. The full nested double-integral structure with two time registers has been left implicit by them. Here we unpack it completely.
+
+The starting point is the nested integral form of $B_a$ \eqref{eq:coherent-time-domain} which is discretized by nested Riemann-sums \eqref{eq:B-discr} with prefactors $t_0, t_0'$. In the LCU framework \cite{childs2012hamiltonian,berry2015simulating} this manifests as a state preparation / controlled-evolution / unpreparation on two separate ancilla registers: an outer time register $T_-$ of $r_-$ qubits, and an inner time register $T_+$ of $r_+$ qubits. 
+
+Steps 2 and 4 of \hyperref[alg:coh]{Algorithm~\ref*{alg:coh}} prepare these registers by
+\begin{equation}
+    \begin{split}
+        |0\rangle_{T_-} &\;\longrightarrow\; |b_-\rangle := \sum_{\bar t}\, \sqrt{\frac{t_0\,|b_-(\bar t)|}{\alpha_-}}\;\mathrm{sgn}\!\big(b_-(\bar t)\big)\,|\bar t\rangle, \qquad \alpha_- = \|b_-\|_1, \\
+        |0\rangle_{T_+} &\;\longrightarrow\; |b_+\rangle := \sum_{\bar t'}\, \sqrt{\frac{t_0'\,|b_+(\bar t')|}{\alpha_+}}\;\mathrm{sgn}\!\big(b_+(\bar t')\big)\,|\bar t'\rangle, \qquad \alpha_+ = \|b_+\|_1.
+    \end{split}
+\end{equation}
+Here, the absolute values go into the amplitudes (ensuring normalization $\langle b_\pm | b_\pm \rangle = 1$) and the signs go into the phases. For the outer kernel $b_-$ \eqref{eq:b_minus}, which is real-valued, $\mathrm{sgn}(b_-(\bar t)) \in \{-1,+1\}$ is the usual sign function. For the inner kernel $\mathrm{sgn}(b_+(\bar t'))$ \eqref{eq:b_plus-s-eta}, which is complex-valued in general, the notation $\mathrm{sgn}(b_+(\bar t'))$ should be understood as the unit-modulus phase $b_+(\bar t')/|b_+(\bar t')|$. The same convention applies to the Gaussian case \eqref{eq:b_plus-gauss}. 
+
+The state preparation costs for $\ket{b_\pm}$ depend on the register sizes and the regularity of the kernels. For actual costs it is best to look at our numerical analysis [REF, \todo{ref}], but we can already say something qualitative here based on our quadrature error results for $r_-$ \eqref{eq:r_-}, and $r_+$ in the Gaussian case \eqref{eq:r_+_gaussian}, in the Metropolis case \eqref{eq:r_+_metro}. For our parameter regimes (moderate temperatures $\beta \leq 20$ and system sizes $n \leq 12$) the register sizes $r_- = 5-8$ and $r_+ = 10-15$ are already sufficient for our purposes to block encode $B_a$. There are several ways to prepare a quantum state, and as usual, the question boils down to space-time trade-offs: either with ancillas and fewer gates, or no ancillas and more gates. Since we are aiming to specify details for an implementation on a partially fault-tolerant quantum hardware which would likely not have an abundance of qubits, the ideal state preparation is one that uses no ancillas and its gate complexity is subdominant to the other parts of the Gibbs preparation. One such algorithm is to use uniformly controlled rotations \cite{mottonen2004transformation,shende2008cnot,plesch2011quantum} at cost $\mathcal{O}(2^r)$ gates. At $r \leq 12$, this is at most a few thousand gates, definitely below the cost of implementing controlled Hamiltonian evolutions. But for lower temperatures, or higher precisions for Gibbs sampling (smaller $\delta$) we would likely find ourselves in the regimes where the exponential scaling of the state preparation becomes dominant. In this case, we would suggest using the QSP-based method from \cite{mcardle2022quantum} that achieves $\mathcal{O}(r \cdot \log(1 / \varepsilon))$ gate complexity at the cost of 3-4 ancilla qubits by exploiting the (possibly piecewise) smoothness of $b_\pm$ via polynomial approximation. [REF \todo{ref to prelims}]
+
+After preparing the time registers, we proceed to apply the controlled Hamiltonian evolutions. As written in \hyperref[alg:coh]{Algorithm~\ref*{alg:coh}}, all of these time evolutions are implemented by second order Trotterization [Ref to prelims \todo{ref}]: $S_2^{(M_-)}(\pm \bar{t}/\sigma)$ for the outer-, and $S_2^{(M_+)}(\pm \beta\bar{t})$ for the inner time sum (with $M_\pm$ many Trotter steps). For the desired quadrature errors, we need to retain contributions to the time sums up to $T_- = \Theta(\beta\sigma\log(1/\varepsilon))$ and $T_+ = \Theta(\sqrt{\log(1/\varepsilon)}/(\sigma\beta\sqrt{1+s}))$ (in the Metropolis case \eqref{eq:T_+_metro}). Hence, the maximum Hamiltonian simulation times are $\mathcal{O}(\beta\log(1/\varepsilon))$ and $\mathcal{O}(\sqrt{\log(1/\varepsilon)}/(\sigma\sqrt{1+s}))$ respectively. Note, that we decided for the Strang splitting opposed to the Lie-Trotter splitting because: (i) for these time scales its second order nature actually leads to less gate complexity, and (ii) it also avoids some additional errors to the detailed balance since it is palindromic $S_p(t)^\dagger = S_p(-t)$, see \hyperref[rem:palindromic]{Remark~\ref*{rem:palindromic}}.
+
+The subnormalisation $\alpha = \|b_-\|_1\,\|b_+\|_1$ is a critical parameter: it enters both the QSP degree (see below) and the success probability of the block encoding. Its value depends on the choice of transition weight $\gamma$. More concretely, $b_-$ is universal for all cases and its norm is upper bounded, $\|b_-\|_1 \leq (\pi/\sqrt{2})\,e^{\beta^2\sigma^2/8}$ \eqref{eq:b_minus}. While this is ideal, and so is $b_+$ in the Gaussian case with $\|b_+\|_1 = (\beta/\omega_\gamma)\sqrt{\sigma_\gamma/(2\pi)}$ \eqref{eq:b_plus-gauss}, the same cannot be said about $b_+$ in the Metropolis cases \eqref{eq:b_plus-s-eta}. There, due to the singularity in the time-domain, we have an additional factor, and have
+$$
+\alpha = \|b_-\|_1\,\|b_+^{(s,\eta)}\|_1 = \mathcal{O}\!\left(\log\frac{\beta\|H\|\,\|\textstyle\sum_a A^{a\dagger}A^a\|}{\varepsilon}\right).
+$$
+How this effectively enters the total simulation time for the coherent evolution, we will see in the following QSP section.
+
+\medskip
+Given the block encoding $U_{B_a}$, with $\langle 0|U_{B_a}|0\rangle = B_a/\alpha$, we wish to implement the unitary $\ee^{-\ii\delta B_a}$. Since $U_{B_a}$ is a unitary that block-encodes a Hermitian operator $B_a/\alpha$ with $\|B_a/\alpha\| \leq 1$, its eigenvalues come in conjugate pairs $\ee^{\pm \ii\theta}$ where $\sin\theta = \lambda$ for each eigenvalue $\lambda$ of $B_a/\alpha$.  Thus, implementing $\ee^{-\ii\delta B_a}$ on the eigenspaces of $U_{B_a}$ reduces to finding a Laurent polynomial $P(\ee^{\ii\theta}) \approx \ee^{-\ii\delta\alpha\sin\theta}$ on the unit circle. We use GQSP of \cite{motlagh2024generalized} for this task. The basics were already covered in [REF to prelims \todo{ref}]. Here we only clarify the specific features to our application.
+
+The degree of the Laurent polynomial required for $\varepsilon_\text{QSP}$-approximation of $\ee^{-\ii\delta\alpha\sin\theta}$ is given by \cite[Theorem 7.]{motlagh2024generalized} as
+$$
+d = \mathcal{O}\!\left(\delta\,\alpha + \frac{\log(1/\varepsilon_\mathrm{QSP})}{\log\log(1/\varepsilon_\mathrm{QSP})}\right),
+$$
+which in turn means this amount of applications of $U_{B_a}$. Indeed, $\delta$ in our cases is quite small, so much so, that even for lower temperatures $\beta = 20$ (for which $\alpha$ becomes larger) we can effectively use $d = 1$ and still have better precisions than what is set as a baseline by the weak measurement scheme. Of course, for larger systems moderate temperatures would manifest for larger $\beta$ than for smaller systems. Meaning, that though for the humble system sizes that we can classically simulate it seems that degree $d = 1$ is sufficient for the QSP, the same would not hold for larger systems. There, the irregularity of the Metropolis case function $b_+^{(s, \eta)}$ would eventually require higher QSP degrees and with it longer simulation times.
+
+\setcounter{algorithm}{0}
+\renewcommand{\thealgorithm}{\arabic{algorithm}b}
+\begin{algorithm}[!htbp]
+\caption{\textsc{DissipativeStep}: weak measurement simulation of
+         $e^{\delta\mathcal{L}_{a,\mathrm{diss}}}$}
+\label{alg:diss}
+\begin{algorithmic}[1]
+\small
+\Require System register $S$, jump index $a$, step size $\delta$, filter function $f$, transition weight $\gamma$
+\Ensure  $S$ evolved by
+  $e^{\delta\mathcal{L}_{a,\mathrm{diss}}}(\rho) + \mathcal{O}(\delta^2)$
+\Statex
+\State \textbf{Ancillas:}
+  frequency register $\Omega$ ($r$ qubits),
+  Boltzmann qubit $q_\gamma$,
+  weak measurement qubit $q_\delta$
+  \Comment{all initialised to $|0\rangle$}
+\Statex
+\Statex \hfill \textit{--- Forward: Trotterized OFT~\eqref{eq:trotter-oft} ---}
+\State \textsc{StatePrep}$(\Omega)$:
+  $|0\rangle^{\otimes r} \;\longrightarrow\;
+   |f\rangle := \sum_{\bar{t}\in S_{t_0}^{[N]}}
+   \bar{f}(\bar{t})\,|\bar{t}\rangle$
+   \Comment{Gaussian filter amplitudes~\eqref{eq:gaussian-filter-t}}
+\State \textsc{Ctrl-Trott}$^{-}(\Omega, S)$:
+  $|\bar{t}\rangle\,|\psi\rangle \;\longrightarrow\;
+   |\bar{t}\rangle\; S_p^{(M)}(\bar{t})^\dagger \,|\psi\rangle$
+   \Comment{$\approx e^{-\mathrm{i}H\bar{t}}$}
+\State Apply $A_a$ on $S$
+   \Comment{jump operator (e.g.\ single-site Pauli)}
+\State \textsc{Ctrl-Trott}$^{+}(\Omega, S)$:
+  $|\bar{t}\rangle\,|\psi'\rangle \;\longrightarrow\;
+   |\bar{t}\rangle\; S_p^{(M)}(\bar{t})\,|\psi'\rangle$
+   \Comment{$\approx e^{+\mathrm{i}H\bar{t}}$}
+\State \textsc{QFT}$(\Omega)$
+  \Comment{time $\to$ energy: register now encodes $|\bar{\omega}\rangle$}
+\Statex \Comment{Joint state:
+  $\displaystyle\sum_{\bar\omega}
+   |\bar\omega\rangle \otimes
+   \tilde{A}_a(\bar\omega)\,|\psi\rangle$}
+\Statex
+\Statex \textit{--- Boltzmann filter ---}
+\State Controlled on $|\bar\omega\rangle$, rotate $q_\gamma$:\;
+  $R_Y\!\Bigl(2\arcsin\!\sqrt{1-\gamma(\bar\omega)}\Bigr)$
+  \Comment{see [REF to text]}
+\Statex \Comment{$|0\rangle_{q_\gamma} \to
+   \sqrt{\gamma(\bar\omega)}\,|0\rangle
+   + \sqrt{1 - \gamma(\bar\omega)}\,|1\rangle$}
+\Statex
+\Statex \textit{--- Weak measurement ---}
+\State Controlled on $q_\gamma = |0\rangle$, rotate $q_\delta$:\;
+  $R_Y\!\bigl(2\arcsin\!\sqrt{\delta}\bigr)$
+  \Comment{step-size acceptance}
+\Statex \Comment{In the $q_\gamma\!=\!|0\rangle$ branch:
+  $|0\rangle_{q_\delta} \to
+   \sqrt{1-\delta}\,|0\rangle + \sqrt{\delta}\,|1\rangle$;
+  \quad net jump probability $= \gamma(\bar\omega)\,\delta$}
+\Statex
+\Statex \textit{--- Reverse: uncompute $U$ (controlled on $q_\delta = |0\rangle$) ---}
+\Statex \Comment{No-jump branch ($q_\delta\!=\!|0\rangle$): full uncomputation;
+  jump branch ($q_\delta\!=\!|1\rangle$): $\Omega, q_\gamma, S$ remain entangled}
+\State Undo Boltzmann rotation on $q_\gamma$
+  \Comment{undo step~7}
+\State \textsc{QFT}$^\dagger(\Omega)$
+  \Comment{undo step~6}
+\State \textsc{Ctrl-Trott}$^{-}(\Omega, S)$
+  \Comment{undo step~5}
+\State Apply $A_a^\dagger$ on $S$
+  \Comment{undo step~4; for Pauli jumps $A_a^\dagger = A_a$}
+\State \textsc{Ctrl-Trott}$^{+}(\Omega, S)$
+  \Comment{undo step~3}
+\State \textsc{StatePrep}$^\dagger(\Omega)$:
+  $|f\rangle \to |0\rangle^{\otimes r}$
+  \Comment{undo step~2}
+\Statex
+\Statex \textit{--- Discard ancillas ---}
+\State Measure and reset $q_\delta$, $q_\gamma$, and $\Omega$
+  \Comment{discard outcomes}
+\Statex \Comment{Net channel on $S$:
+  $\;\rho \;\mapsto\; e^{\delta\mathcal{L}_{a,\mathrm{diss}}}(\rho)
+   + \mathcal{O}(\delta^2)$}
+\end{algorithmic}
+\end{algorithm}
+\renewcommand{\thealgorithm}{\arabic{algorithm}}
+\setcounter{algorithm}{1}
+%% ---------------------------------------------------------------
+\begin{figure}[ht]
+  \centering
+  \resizebox{1.05\textwidth}{!}{%
+  \begin{quantikz}[row sep=0.9cm, column sep=0.42cm]
+  % ==================================================================
+    \lstick{$\ket{0}_\gamma$}
+      & \qw
+      & \qw
+      & \qw
+      & \qw
+      & \qw
+      & \qw
+      & \gate{Y_{1-\gamma}}
+      & \rstick{$\bra{0}_\gamma$}\qw
+      \\
+  %
+  % ==================================================================
+  % Row 2:  Omega  (time/frequency register, middle wire;
+  %                  controls cells 4, 6 (downward to S) and cell 8 (upward to q_gamma),
+  %                  prepared in cell 3, QFT'd in cell 7)
+  % ==================================================================
+    \lstick{$\ket{0}_\Omega$}
+      & \qwbundle{r}
+      & \gate{\text{PREP}}
+      \gategroup[2,steps=5,style={dashed,rounded corners,fill=red!6,inner sep=5pt},
+                 background,label style={label position=below,yshift=-0.40cm,anchor=north}]
+        {\scriptsize $U_\mathrm{OFT}$}
+      & \ctrl[style=halfctrl]{1}
+      & \qw
+      & \ctrl[style=halfctrl]{1}
+      & \gate{\text{QFT}}
+      & \ctrl[style=halfctrl]{-1}
+      & \rstick{$\ket{\bar\omega}_\Omega$}\qw
+      \\
+  %
+  % ==================================================================
+  % Row 3:  S  (system register, bottom wire; target of the two controlled
+  %             Trotters and of the bare jump A_a in between)
+  % ==================================================================
+    \lstick{$\ket{\psi}_S$}
+      & \qwbundle{n}
+      & \qw
+      & \gate{S_2(-\bar t)}
+      & \gate{A_a}
+      & \gate{S_2(\bar t)}
+      & \qw
+      & \qw
+      & \rstick{$\sqrt{\gamma(\bar{\omega})}\tilde A_a(\bar\omega)\ket{\psi}$}\qw
+  \end{quantikz}%
+  }
+  \caption{Dissipative unitary $U_{\mathrm{diss}}$ (Alg.~\ref*{alg:diss}) on
+  $q_\gamma\otimes\Omega\otimes S$ with PREP that prepares the time register as the Gaussian filter $\ket{\bar{f}(\bar{t})}_\Omega$, and with Boltzmann rotation
+  $Y_{1-\gamma(\bar{\omega})}$.
+  The red dashed block is the OFT,
+  $\bra{\bar\omega}_\Omega U_{\mathrm{OFT}}\ket{0}_\Omega = \tilde A_a(\bar\omega)$.}
+  \label{circ:u-diss}
+\end{figure}
+
+\medskip
+\noindent\textsc{DissipativeStep:} \textbf{Weak measurement simulation.}
+The \textsc{DissipativeStep}, described in \hyperref[alg:diss]{Algorithm~\ref*{alg:diss}}, implements the dissipative channel $\ee^{\delta\mathcal{L}_{a,\mathrm{diss}}}(\rho) + \mathcal{O}(\delta^2)$ for a single jump $A_a$. This part is inherited from \cite[Theorem III.1]{chen2023quantum} up to some small changes that we will highlight here. 
+
+The forward pass (steps 2--6) that encodes the Trotterized OFT $\tilde{A}_a(\bar{\omega})$ \eqref{eq:trotter-oft} is denoted by the unitary $U_\mathrm{diss}$ that acts on the joint system $\Omega \otimes S$. Concretely, 
+\begin{equation}
+    U_{\mathrm{diss}} := \mathrm{QFT}(\Omega) \cdot \mathrm{Ctrl\text{-}Trott}^+(\Omega, S) \cdot A_a \cdot \mathrm{Ctrl\text{-}Trott}^-(\Omega, S) \cdot \mathrm{StatePrep}(\Omega),
+\end{equation}
+where $\mathrm{StatePrep}(\Omega)$ prepares the Gaussian filter state $\ket{f}$ on the time/frequency register, and the Heisenberg evolutions are implemented by Trotterized evolutions $S_2^{(M)}(\bar t)$. The net effect is then, 
+\begin{equation}
+    |0\rangle_\Omega |\psi\rangle_S \mapsto U_{\mathrm{diss}}\,|0\rangle_\Omega\,|\psi\rangle_S = \sum_{\bar\omega} |\bar\omega\rangle_\Omega \otimes \tilde{A}_a(\bar\omega)\,|\psi\rangle_S.
+\end{equation}
+The unitary $U_\mathrm{diss}$ is the dissipative analogue of the block encoding of the coherent part $U_{B_a}$, with a small difference: it is a unitary on the full $\Omega \otimes S$ space, and projecting onto a given $\ket{\bar{\omega}}$ selects the corresponding filtered jump component $\tilde{A}_a(\bar{\omega})$, i.e. $\langle \bar\omega|U_{\mathrm{diss}}|0\rangle = \tilde{A}_a(\bar\omega)$. 
+
+\todo{this maybe at the end?}
+Our construction is a simplified version of the one presented in \cite{chen2023quantum}. We split the generator jump-wise and implement dissipation of just $A_a$ in a given $\delta$ step, and use only single-site Pauli operators that are unitary ($A^2_a = \mathbf{1}$) and Hermitian ($A_a^\dagger = A_a$) jumps. Hence, we  do not need ancillas to block encode the sum of jumps, or to block encode non-unitary jumps either. A caveat here is that we would not apply the sum of jumps $\sum_a A_a$ at once, which has an effect on the mixing of the effective generator, but these errors are controlled to relevant orders \eqref{eq:gen-split-approx-error}, \eqref{eq:gen-split-imaginary-delta2-errors}. The other caveat, is that we certainly do not know what is a \emph{good} set of jump operators, ones that would mix the system quicker than other sets. However, after trying out different jump sets and seeing no real difference for our setup, we ended up sticking with the naive choice of single Pauli jumps. Then, the only ancillas we need are the ones for the time/frequency register $\Omega$, the Boltzmann qubit $q_\gamma$, and the weak measurement qubit $q_\delta$, a total of $r+2$ ancilla qubits.
+
+Given the energy-resolved state after $U_\mathrm{diss}$, the remaining steps are the following:
+\begin{enumerate}
+    \item \emph{Boltzmann filter} (step 7): controlled on the energy register $\ket{\bar{\omega}}$, rotate the Boltzmann ancilla qubit $q_\gamma$ by $R_Y(2\arcsin\sqrt{1 - \gamma(\bar\omega)})$. This maps 
+    $$|0\rangle_{\gamma} \to \sqrt{\gamma(\bar\omega)}\,|0\rangle_\gamma + \sqrt{1-\gamma(\bar\omega)}\,|1\rangle_\gamma,
+    $$
+    encoding the transition weight $\gamma$ into the amplited of the $\ket{0}_\gamma$ branch.
+    \item \emph{Weak measurement} (step 8): controlled on $q_\gamma = \ket{0}_\gamma$ rotate the weak measurement ancilla qubit $q_\delta$ by $R_Y(2\arcsin\sqrt\delta)$. In the acceptance branch,
+    $$
+    |0\rangle_{\delta} \to \sqrt{1-\delta}\,|0\rangle_\delta + \sqrt\delta\,|1\rangle_\delta. 
+    $$
+    The net probability of the "jump" outcome ($q_\gamma = \ket{1}_\gamma$) is $\gamma(\bar{\omega}) \cdot \delta$, i.e. first-order in $\delta$ which is required by the weak measurement approximation $e^{\delta\mathcal{L}_{a,\mathrm{diss}}} = \mathrm{id} + \delta\mathcal{L}_{a,\mathrm{diss}} + \mathcal{O}(\delta^2)$. 
+\end{enumerate}
+The small jump probability is precisely what makes this a \emph{weak} measurement: the system state is only weakly disturbed per step, such that the accumulated effect of $L \cdot M_\mathcal{A}$ steps reproduces the dissipative semigroup to the desired accuracy.  The $\mathcal{O}(\delta^2)$ local error per step is the baseline that all other error sources (Trotterisation, quadrature, generator splitting) are tuned to match.
+
+A comment has to be made regarding the Boltzmann rotation, as it could also lead to additional circuit costs. It requires a circuit that, controlled on the $r$-qubit energy register $\ket{\bar{\omega}}$ rotates $q_\gamma$ by the angle $\theta(\bar\omega) = 2\arcsin\sqrt{1 - \gamma(\bar\omega)}$. Crucially, this is a \emph{function-controlled} rotation: the classical function $\gamma$ must be compiled into the quantum circuit and its cost depends on the regularity of $\gamma$ and on the register size $r$.
+
+For large $r$ (say $r \geq 15$) the standard approach is to use QSP/QSVT \cite{gilyen2019quantum} to implement a polynomial approximation of $\sqrt{\gamma(\bar{\omega})}$ as a function of the block-encoded normalised energy $\bar\omega / (\omega_0 N/2)$. The required polynomial degree $d_\gamma$ depends on which transition weight $\gamma$ we pick:
+\begin{itemize}
+    \item For the Gaussian $\gamma_\mathrm{G}$ (analytic) or the smooth Metropolis $\gamma_\mathrm{M}^{(s)}$ with $s>0$ (Gevrey-1/2, \hyperref[prop:smooth-metro-gevrey]{Propositon~\ref*{prop:smooth-metro-gevrey}}): $d_\gamma = \mathcal{O}(\mathrm{polylog}(1/\varepsilon_\gamma))$, since Gevrey-1/2 functions admit super-algebraically converging polynomial approximations.
+    \item For the kinky Metropolis $\gamma_\mathrm{M}$ ($s = 0$, only Lipschitz at $\omega = -\beta\sigma^2 / 2$): $d_\gamma = \mathcal{O}(\mathrm{poly}(1/\varepsilon_\gamma))$, since Lipschitz functions require polynomially many terms. This can indeed be circumvented by splitting the domain piecewise (via a comparator circuit block on $\ket{\bar{\omega}}$) as \cite{chen2023quantum} notes, but that is still some additional circuit cost compared to the smooth Metropolis family $s>0$.
+\end{itemize}
+
+For moderate $r$ (around $r \leq 12)$, one can bypass QSP and just use uniformly controlled $R_Y$ rotations \cite{mottonen2004transformation,shende2008cnot}, the same we proposed for $\ket{b_\pm}$ in the \textsc{CoherentStep}. Although the number of CNOT gates in this case is exponentially growing $\mathcal{O}(2^r)$, at these moderate regimes, the cost is still subdominant to the other parts of the circuit. This is the approach that we use in practice. 
+
+In either case the Boltzmann rotation is not a bottleneck: for smooth $\gamma$ and large $r$, QSP gives polylogarithmic overhead. For moderate $r$, the brute-force decomposition is cheap. 
+
+\todo{maybe need better structuring with subsections...}
+After the weak measurement, we apply the reverse pass $U_{\mathrm{diss}}^\dagger$ controlled on $q_\delta = |0\rangle$. Then after measuring and resetting all ancillas, it has been shown in \cite[Theorem III.1]{chen2023quantum} that the resulting state is 
+$$
+\rho \mapsto \rho + \delta\,\mathcal{L}_{a,\mathrm{diss}}(\rho) + \mathcal{O}(\delta^2),
+$$
+which is the first-order expansion of the dissipative semigroup channel we want to implement. 
+
+Compared to the CoherentStep, the DissipativeStep is structurally simpler: it uses a single time/frequency register $\Omega$ (versus the nested $T_-, T_+$ of the coherent term), involves no QSP, and its Hamiltonian simulation time per step is $\mathcal{O}(\sigma\sqrt{\log(1/\varepsilon)})$ (set by the Gaussian filter truncation $T = \Theta(\sigma\sqrt{\log(1/\varepsilon)})$ and the controlled Trotter evolutions). 
+
+\todo{add circuit figures}
+
+\smallskip
+\subsection{Parent Hamiltonian.} Beyond its role as a design principle for the algorithm, KMS detailed balance carries another analytical payoff that we have already touched upon: the similarity transformation leads to a \emph{Hermitian} quantum discriminant $\mathcal{D}(\rho_\beta, \mathcal{L})$ \eqref{eq:discriminant}. This transformation preserves the spectrum of the Lindbladian $\mathcal{L}$, which also keeps it negative semi-definite. Hence, to define a PSD parent Hamiltonian, we flip the signs, 
+\begin{equation} \label{eq:parent-ham-defi}
+    \mathcal{H}_\beta \;:=\; -\mathcal{D}(\rho_\beta, \mathcal{L}) \;\geq\; 0.
+\end{equation}
+Its ground state is the purified Gibbs state (since $\mathcal{H}_\beta$ acts on the double Hilbert space $\mathcal{H}\otimes\mathcal{H}$),
+\begin{equation}
+    |\sqrt{\rho_\beta}\rangle\rangle := \frac{1}{\sqrt{Z}}\sum_i e^{-\beta E_i/2}|\psi_i\rangle
+   \otimes |\psi_i^*\rangle \in \mathcal{H}\otimes\mathcal{H},
+\end{equation}
+where $\{|\psi_i\rangle\}$ are the energy eigenstates and $|\psi_i^*\rangle$ denotes the entry-wise complex conjugate. As the spectrum is preserved, the spectral gap of the parent Hamiltonian equals that of the Lindbladian, $\lambda_\text{gap}(\mathcal{H}_\beta) = \lambda_\text{gap}(\mathcal{L})$. Consequently, the question of mixing time, reduces to bounding the spectral gap of a Hermitian PSD operator, based on the quantum spectral bound \eqref{eq:quantum-spectral-bound},
+\begin{equation}\label{eq:parent-ham-gap-mixing}
+    t_\text{mix}(\varepsilon) \;\leq\; \frac{1}{\lambda_\text{gap}(\mathcal{H}_\beta)} \ln \left( \frac{1}{\varepsilon\sqrt{\lambda_{\min}(\rho_\beta)}} \right).
+\end{equation}
+By reformulating the problem as a Hermitian spectral gap, we can tap into a well-developed research area of Hamiltonian spectral theory, e.g. perturbation theory for gapped self-adjoint operators \cite{kato1966perturbation}, detectability lemma \cite{aharonov2009detectability,anshu2016simple}, or specialized variational (min-max) principles \cite{bhatia2013matrix}.
+
+But having a Hermitian parent Hamiltonian for detailed balanced generators is nothing new [REF]. But the parent Hamiltonians of CKG Lindbladians were also shown to have an additional structural property \cite[Proposition I.1]{chen2023efficient}: they are \emph{frustration-free}. Intuitively, this can be understood by the fact that the CKG Lindbladian decomposes as $\mathcal{L} = \sum_{a\in\mathcal{A}} \mathcal{L}_a$, where each per-jump term $\mathcal{L}_a$ individually satisfies the KMS DB condition $\mathcal{L}_a(\rho_\beta) = 0$. The discriminant transformation carries this over to the parent Hamiltonian as well,
+\begin{equation}
+    \mathcal{H}_\beta = \sum_{a\in\mathcal{A}} \mathcal{H}_\beta^a, \qquad \mathcal{H}_\beta^a \geq 0, \qquad \mathcal{H}_\beta^a\,|\sqrt{\rho_\beta}\rangle\!\rangle = 0 \quad\text{for each}\;\; a\in\mathcal{A}.
+\end{equation}
+In other words, every local term $\mathcal{H}_\beta^a$ is PSD and has (only) the purified Gibbs state in its kernel. For lattice Hamiltonians with local jumps $A_a$, the parent Hamiltonian even inherits the quasi-locality of the Lindbladian, making each $\mathcal{H}_\beta^a$ to act on a patch of radius $\tilde{\mathcal{O}}(\beta)$ of radius around the support of $A_a$. Frustration-freeness has the following three concrete analytical uses:
+\begin{enumerate}
+    \item \emph{Spectral gap stability.} In \cite{rouze2025efficient} Rouzé et al. proved that for 1D lattice Hamiltonians, the CKG parent Hamiltonian satisfies local topological quantum order at $\beta = 0$ where the gap is explicitly computable. Using the Michalakis-Zwolak stability theorem for frustration-free gapped Hamiltonians \cite{michalakis2013stability}, they showed that the gap persists at all sufficiently small inverse temperatures $\beta$, establishing the first unconditional rapid mixing results for a KMS DB Lindbladian with non-commuting $H$. This was recently strengthened by \cite{bergamaschi2024quantum}, who showed that 1D spin chains mix rapidly at \emph{all} finite temperatures ($\beta < \infty$), not just in the high-temperature regime. Without frustration-freeness, the stability theorem simply does not apply.
+    \item \emph{Detectability lemma and gap amplification.} Since the ground state projector factorizes into local projectors (one per kernel of $\mathcal{H}_\beta^a$), the detectability lemma of \cite{anshu2016simple} provides a way to amplify the spectral gap via coarse-graining: grouping the local terms into $\mathcal{O}(1)$ layers of commuting projectors yields a product of projections whose spectral gap lower-bounds that of $\mathcal{H}_\beta$ up to a constant factor. This is also a key ingredient in the proof of \cite{rouze2025efficient}.
+
+    In an even more recent paper \cite{fang2026quantum} the authors took this one step further, using the detectability lemma \cite{aharonov2009detectability,anshu2016simple}. They could circumvent the Lindbladian simulation and prepare the Gibbs state from the parent Hamiltonian. Their construction yields an $\mathcal{O}(|\mathcal{A}|)$-factor gate saving over simulation-based methods in general, and when the parent Hamiltonian is strictly local (e.g. for commuting $H$), a quadratic improvement in the spectral-gap dependence via QSVT. 
+
+    \item \emph{Gap-to-MLSI upgrade and rapid mixing.} As we have discussed in the preliminaries [REF] the spectral bound \eqref{eq:parent-ham-gap-mixing} could in principle be upgraded to a tighter MLSI bound (albeit the MLSI constant has only been found to a few special cases so far). The frustration-free decomposition of $\mathcal{H}_\beta$ can help with this conversion, which is exactly what the authors used in \cite{kochanowski2025rapid}: they proved such a gap-to-MLSI equivalence for 1D Davies dynamics (GNS DB) of commuting Hamiltonians at all positive temperatures, strengthening earlier 1D rapid-mixing results. Indeed, the analogous statement in the non-commuting KMS DB setting remains open.
+\end{enumerate}
+
+Beyond proving mixing time bounds, the Hermitian and frustration-free structure of $\mathcal{H}_\beta$ also allows for some numerical techniques that could help with classical simulations as well. 
+
+Without any special structure the Lindblad dynamics can already be simulated without having to retain the full eigenspace: in \cite{minganti2022arnoldi} the authors apply Arnoldi iteration directly to the non-Hermitian Liouvillian $\mathcal{L}$ of dimension $d^2$, maintaining a full upper-Hessenberg matrix and reorthogonalising against all $K$ Krylov basis vectors accumulated basis vectors at every step. This procedure has a cost of $\mathcal{O}(K d^2)$. Non-normality of $\mathcal{L}$ however further complicates the relationship between its spectral gap and the iteration count. 
+
+\emph{Hermeticity}, obtained by the discriminant transformation $\mathcal{L} \mapsto \mathcal{H}_\beta$ reduces Arnoldi to the Lánczos iteration. The Hessenberg matrix becomes tridiagonal, and the iterations involve only the last two basis vectors, reducing the per-step cost to $\mathcal{O}(d^2)$. Moreover, the convergence of the Ritz values is now controlled directly by the spectral gap $\lambda_\text{gap}(\mathcal{H}_\beta)$ and the overlap of the starting vector with the kernel. 
+
+\emph{Frustration-freeness} adds a structural layer on top due to the detectability lemma \cite{aharonov2009detectability,anshu2016simple}. Because the purified Gibbs state lies in the common kernel of the PSD local terms $\{\mathcal{H}_\beta^a\}$, the lemma turns this collection into an explicit operator (as the product of the corresponding local kernel projectors) whose repeated action drives any state towards $|\rho_\beta \rangle\rangle$ at a rate set by $\lambda_\text{gap}(\mathcal{H}_\beta)$. As we have already noted, on the quantum side this has been recently used by \cite{fang2026quantum}. On the classical side, the same lemma can be used in tensor network methods, where it is the analytical backbone of the polynomial-time ground state algorithms for 1D gapped local Hamiltonians \cite{landau2015polynomial, arad2017rigorous}.
+
+\newpage

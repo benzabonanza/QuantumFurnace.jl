@@ -82,6 +82,7 @@ export compute_oft_trotter_error, compute_oft_trotter_error_all_jumps
 export fit_exponential_decay, FitResult
 export fit_biexponential_decay, BiexpFitResult
 export estimate_mixing_time, MixingTimeEstimate
+export SimulationTimeBudget, compute_simulation_time
 # STAGING: LSIFramework, compute_LSI_alpha2
 
 # --- Internal Implementation ---
@@ -111,5 +112,6 @@ include("results.jl")
 include("fitting.jl")
 include("mixing.jl")
 include("errors.jl")
+include("simulation_time.jl")
 
 end

@@ -1,0 +1,181 @@
+% !TEX root = main.tex
+\documentclass[11pt, a4paper, openany]{book}
+
+\usepackage[
+  a4paper,
+  left=3.5cm,
+  right=2.5cm,
+  top=3.5cm,
+  bottom=3.5cm
+]{geometry}
+
+\usepackage{setspace}
+\setstretch{1.1}
+
+\raggedbottom
+
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{tikz}                
+\usetikzlibrary{quantikz2}
+\tikzset{operator/.append style={rounded corners}}
+\tikzset{
+    dashed line/.style={path picture={
+        \draw[densely dashed]
+            (path picture bounding box.west) -- (path picture bounding box.east);
+    }}
+}
+\tikzset{
+  halfctrl/.style={
+    circle, draw=black, line width=0.4pt,
+    fill=white, minimum size=6pt, inner sep=0pt,
+    path picture={
+      \fill[black]
+        (path picture bounding box.south west) --
+        (path picture bounding box.south east) --
+        (path picture bounding box.north east) -- cycle;
+      \draw[black, line width=0.3pt]
+        (path picture bounding box.south west) --
+        (path picture bounding box.north east);
+    }
+  }
+}
+\newcommand{\dashedthrough}{|[dashed line,thickness, inner ysep=3pt]| }
+\usepackage{enumerate}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{amsthm}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+\renewcommand{\topfraction}{0.9}
+\renewcommand{\bottomfraction}{0.9}               
+\renewcommand{\textfraction}{0.1}
+\renewcommand{\floatpagefraction}{0.8}
+
+% \DeclarePairedDelimiter\bra{\langle}{\rvert}
+% \DeclarePairedDelimiter\ket{\lvert}{\rangle}
+% \DeclarePairedDelimiterX\braket[2]{\langle}{\rangle}{#1\,\delimsize\vert\,\mathopen{}#2}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{remark}[theorem]{Remark}
+
+\usepackage{todonotes}
+
+\usepackage{titlesec}
+
+\setcounter{secnumdepth}{1} 
+\setcounter{tocdepth}{2}    
+
+% 3. Redefine \subsection to look like a "run-in" paragraph
+\titleformat{\subsection}[runin]{\normalfont\bfseries}{}{0pt}{}\titlespacing*{\subsection}{0pt}{12pt}{1em}
+
+\usepackage{dsfont}
+\newcommand{\idm}{\mathds{1}}
+
+\DeclareMathOperator{\tr}{Tr}
+\DeclareMathOperator{\id}{id}
+\DeclareMathOperator{\erfc}{erfc}
+\newcommand{\dd}{\mathop{}\!\mathrm{d}}
+\newcommand{\ii}{\mathrm{i}}
+\newcommand{\ee}{\mathrm{e}}
+
+\usepackage[
+    backend=biber,      % The modern backend, better than bibtex
+    style=alphabetic,   % This is the key! It creates labels like [Knu84]
+    sorting=anyt,        % Sorts by author, year, title
+    maxalphanames=4
+]{biblatex}
+
+\usepackage[toc, page]{appendix}
+\usepackage{xcolor}
+  \definecolor{pinegreen}{HTML}{2D5A3D}                           
+  \definecolor{bordeaux}{HTML}{7A2E39}       
+  \definecolor{dustyplum}{HTML}{8E6F8C}
+  \definecolor{deepplum}{HTML}{735874}
+  \definecolor{aubergine}{HTML}{4F3B5C}                      
+  \definecolor{slateblue}{HTML}{5C7794}                          
+  \definecolor{sage}{HTML}{8B9F7E}                                  
+  \definecolor{ochre}{HTML}{B89143}
+  \definecolor{terracotta}{HTML}{B5654A}                       
+  \definecolor{dustyteal}{HTML}{5F8B8E}                         
+  \definecolor{mustard}{HTML}{C9A86A}
+  
+  \usepackage[                                                                                      
+      colorlinks=true,
+      linkcolor=deepplum,            
+      citecolor=bordeaux,
+      urlcolor=deepplum,                  
+  ]{hyperref}  
+\usepackage{bookmark}
+
+\addbibresource{references.bib}
+
+% \include{1_preliminaries}
+% \include{2_methods}
+
+% --- DOCUMENT INFO ---
+\title{Quantum Gibbs Sampling: Theory, Algorithms, and Numerical Analysis}
+\author{Bence Temesi}
+\date{\today}
+
+% --- DOCUMENT BODY ---
+\begin{document}
+
+\maketitle
+\clearpage
+\thispagestyle{empty}
+
+% Abstract ----
+\clearpage
+\chapter*{Abstract}
+Your abstract text here...
+
+% Borges epigraph ----
+\clearpage
+\vspace*{\fill}
+\vspace{3cm} % push slightly below center
+
+\hfill
+\begin{minipage}{0.65\textwidth}
+\raggedleft
+\textit{%
+``I imagined a labyrinth of labyrinths, amaze of mazes, a twisting, turning, ever-widening labyrinth that contained both past and future and somehow implied the stars.''}
+
+\vspace{0.8em}
+\normalfont
+-- Jorge Luis Borges, \textit{The Garden of Forking Paths}
+\end{minipage}
+
+\vspace*{\fill}
+
+% Acknowledgment ----
+\clearpage
+\chapter*{Acknowledgment}
+
+\tableofcontents
+% --- CHAPTERS ---
+\include{1_preliminaries}
+
+\include{2_methods}
+% \include{results}
+
+\part{Review}
+\part[QuantumFurnace.jl]{\textmd{\textsc{QuantumFurnace.jl}}}
+
+% --- BIBLIOGRAPHY ---
+\printbibliography[title={References}, heading=bibintoc]
+
+\begin{appendices}
+    \chapter{Quantum this quantum that, la la la}
+
+\end{appendices}
+
+\end{document}

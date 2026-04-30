@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls /Users/bence/code/QuantumFurnace.jl/.claude/skills/*/SKILL.md)",
+      "Bash(bd init:*)",
+      "Bash(bd list:*)",
+      "Read(//usr/local/bin/**)",
+      "Read(//home/agent/.local/bin/**)",
+      "Bash(bd:*)",
+      "Bash(curl -fsSL https://github.com/dolthub/dolt/releases/latest/download/install.sh)",
+      "Bash(sudo bash:*)",
+      "Bash(dolt version:*)",
+      "WebSearch",
+      "Bash(cp /Users/bence/code/QuantumFurnace.jl/drafts/circuits/block-encoding-ba-halfctrl.tex /tmp/)",
+      "Read(//tmp/**)",
+      "Bash(pdflatex -interaction=nonstopmode -halt-on-error block-encoding-ba-halfctrl.tex)",
+      "Bash(pdftoppm -r 200 block-encoding-ba-halfctrl.pdf preview -png)",
+      "Bash(ls preview*)",
+      "Bash(rm -f block-encoding-ba-halfctrl.aux block-encoding-ba-halfctrl.log block-encoding-ba-halfctrl.pdf)",
+      "Bash(ls block-encoding-ba-halfctrl*)",
+      "Bash(rm -f main.aux main.log main.toc main.out main.bcf main.run.xml)",
+      "Bash(ls main.*)",
+      "Bash(pdflatex -interaction=nonstopmode -halt-on-error qpe-canonical.tex)",
+      "Bash(rm -f qpe-canonical.aux qpe-canonical.log qpe-canonical.pdf)",
+      "Bash(rm -f .git/index)",
+      "Bash(git reset *)"
+    ]
+  }
+}

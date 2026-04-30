@@ -1,0 +1,169 @@
+# Weak-measurement (v5)
+
+> **Insertion target:** `supplementary-informations/1_preliminaries.tex`, body of `\subsection{Weak-measurement.} \label{sec:prelim-weak-meas}` — text goes between the `\subsection{...}\label{...}` line at line 1116 and `\begin{figure}[ht]` at line 1117 (the figure `circ:weak-measurement` sits at lines 1117–1167).
+> **Figure replacement:** the thesis figure at `1_preliminaries.tex:1117–1167` must be replaced with `drafts/circuits/weak-measurement-v2.tex` — the current figure draws $Y_\delta$ as unconditional (inconsistent with Chen 2023 Thm III.1, the construction the body follows), and the new file adds the missing block-register open control and fixes the caption typo.
+> **Depends on labels already in the chapter:** `sec:prelim-LCU`, `eq:kraus` (Kraus form of CPTP maps at `1_preliminaries.tex:47`-ish), `circ:weak-measurement`, and the $Y_\theta := R_Y(2\arcsin\sqrt\theta)$ shorthand at `1_preliminaries.tex:825`.
+> **Required upstream patch in `1_preliminaries.tex`:** the `\subsection{Phase Estimation.}` at line 911 currently has no `\label{}`; before insertion, add `\label{sec:prelim-QPE}` to that subsection so that the new section's two `\ref{sec:prelim-QPE}` cross-refs resolve. (This patch is also implicitly required by every prior v3 reference to `sec:prelim-QPE`.)
+> **Forward references:** `alg:diss` (the `DissipativeStep` algorithm) in Chapter 5 at `2_methods.tex:1744`, and `sec:algorithm` at `2_methods.tex:1620`-ish.
+> **Bib keys used, already in `references.bib`:** `chen2023quantum`, `chen2023efficient`. **New keys introduced in v4:** `liwang2023`, `ding2024efficient` — bibtex stubs at the bottom.
+
+---
+
+A Lindblad dissipator $\mathcal{D}_L(\rho) := L\rho L^\dagger - \tfrac{1}{2}\{L^\dagger L,\rho\}$ combines a *transition* term $L\rho L^\dagger$ with an anti-Hermitian *drain* $-\tfrac12\{L^\dagger L,\rho\}$ whose interplay is what makes $\rho \mapsto \ee^{t\mathcal{D}_L}\rho$ trace-preserving. The LCU of §sec:prelim-LCU delivers the transition term: its post-selection on $\ket{0^b}$ of the block-encoded $U_L$ imprints $L\ket\psi/\alpha$ on $S$ (with $\|L/\alpha\|\leq 1$ by §sec:prelim-LCU). What LCU alone does *not* deliver is the drain. The coherent-undo construction of [Chen et al. 2023] [CITE: chen2023quantum] fills this gap by weaving a single weak-measurement ancilla $\ket{0}_\delta$ between $U_L$ and a conditional $U_L^\dagger$, in such a way that post-selecting $b$ on $\ket{0^b}$ and measuring $\ket{0}_\delta$ implements exactly one Euler step of $\ee^{\delta\mathcal{D}_L/\alpha^2}$ on $\rho$, up to $\mathcal{O}(\delta^2)$ (Fig. circ:weak-measurement). It is this primitive that reappears as the dissipative step of Chapter 5's Lindblad simulation (Alg. alg:diss). (The present $\mathcal{D}_L$ is distinct from the KMS discriminant $\mathcal{D}(\rho,\mathcal{L})$ of (Eq. eq:discriminant) in §sec:davies; the jump argument keeps the two apart.)
+
+## Circuit walkthrough
+
+Initialise the three registers in $\ket{0}_\delta \otimes \ket{0^b} \otimes \rho$ and apply the four operations of Fig. circ:weak-measurement in turn.
+
+*(i) Block encoding.* $U_L$ acts on $(b,S)$; on the $\ket{0^b}$-block of the combined state it imprints the amplitude $L/\alpha$ on $S$, leaving an orthogonal component $\ket{\phi^\perp}_{bS} := (\idm - \ket{0^b}\!\bra{0^b}\!\otimes\idm)\,U_L\,\ket{0^b}\!\ket\psi$ outside the block.
+
+*(ii) Ancilla rotation, controlled on the block.* The $Y_\delta$ of the thesis's $Y_\theta := R_Y(2\arcsin\sqrt\theta)$ shorthand at line 825 is *open-controlled on the block register*, i.e. it fires only on the $\ket{0^b}$-branch of (i):
+
+$$Y_\delta\,\bigl(\ket{0}_\delta\otimes\ket{0^b}\bigr) \;=\; \bigl(\sqrt{1-\delta}\,\ket{0}_\delta + \sqrt{\delta}\,\ket{1}_\delta\bigr)\otimes\ket{0^b},\qquad Y_\delta\,\bigl(\ket{0}_\delta\otimes\ket{\phi^\perp}_{bS}\bigr) \;=\; \ket{0}_\delta\otimes\ket{\phi^\perp}_{bS},$$
+
+so the weak-measurement ancilla acquires amplitude $\sqrt{\delta}$ on $\ket{1}_\delta$ precisely where $U_L$ succeeded, and carries $\ket{0}_\delta$ untouched on the leaked $\ket{\phi^\perp}_{bS}$ branch.
+
+*(iii) Open-controlled undo.* The open-controlled $U_L^\dagger$ fires only on the $\ket{0}_\delta$ branch. On the $\ket{0^b}$-block of $U_L\ket{0^b}\ket\psi$ this uncomputes to $\ket{0^b}\ket\psi$; the leaked $\ket{\phi^\perp}_{bS}$ is *not* uncomputed and survives as an out-of-block residual. On the $\ket{1}_\delta$ branch $U_L^\dagger$ is absent, and $\ket{0^b}\otimes(L/\alpha)\ket\psi$ stands.
+
+*(iv) Post-selection and measurement.* Post-select $b$ on $\ket{0^b}$ and measure $\ket{0}_\delta$.
+
+## Kraus operators
+
+The two outcomes of step (iv) give two Kraus operators on $S$ (in the sense of (Eq. eq:kraus)). In the *no-jump* branch ($\ket{0}_\delta$ outcome, $\ket{0^b}$ post-selected), the uncomputation $U_L^\dagger U_L = \idm$ acts on the block, while the $\ket{\phi^\perp}_{bS}$ residual has $\ket{0^b}$ post-selection failure probability $\|L\ket\psi\|^2/\alpha^2$; bookkeeping the trace loss reconstitutes the anti-Hermitian drain. In the *jump* branch ($\ket{1}_\delta$ outcome, $\ket{0^b}$ post-selected), the full amplitude $L\ket\psi/\alpha$ survives, weighted by the $\sqrt\delta$ of the rotation. The Chen et al. 2023 amplitude bookkeeping [CITE: chen2023quantum][CHEN23-EQ3.2] gives
+
+$$M_0 \;=\; \sqrt{1-\delta}\,\idm \;-\; \tfrac{1}{2}\,\tfrac{\delta}{\alpha^2}\,L^\dagger L \;+\; \mathcal{O}(\delta^2), \qquad M_1 \;=\; \sqrt{\delta}\;\frac{L}{\alpha}.$$
+
+## One Euler step
+
+Summing the two branches and expanding in $\delta$,
+
+$$\rho \;\mapsto\; M_0\,\rho\,M_0^\dagger + M_1\,\rho\,M_1^\dagger \;=\; \rho \;+\; \frac{\delta}{\alpha^{2}}\Bigl(L\rho L^\dagger - \tfrac{1}{2}\{L^\dagger L,\rho\}\Bigr) \;+\; \mathcal{O}(\delta^{2}),$$ <!-- \label{eq:weak-meas-euler} -->
+
+which is one Euler step of $\dot\rho = (1/\alpha^2)\,\mathcal{D}_L(\rho)$ — the rstick of Fig. circ:weak-measurement. Identifying $\delta = \gamma_{\mathrm{eff}}\,\dd t$ with $\gamma_{\mathrm{eff}} := 1/\alpha^2$ the effective Lindblad rate of the block-encoded generator (per unit time), the post-selected channel implements one Euler step of $\dot\rho = \gamma_{\mathrm{eff}}\,\mathcal{D}_L(\rho)$. The post-selection on $b$ succeeds with probability $1 - \delta\,\|L\ket\psi\|^2/\alpha^2 + \mathcal{O}(\delta^2) = 1 - \mathcal{O}(\delta)$, so — unlike the $1/\alpha^2$ post-selection loss of §sec:prelim-LCU — no oblivious amplitude amplification is needed: $\delta$-smallness replaces amplification as the deterministic-acceptance mechanism. In effect, the coherent-undo construction turns the LCU's $1-1/\alpha^2$ block-failure amplitude into signal: the leaked projection becomes the Lindblad drain. The extension to the multi-jump sum $\mathcal{L} = \sum_a \mathcal{D}_{L_a}$ and to the KMS-weighted filtered jumps of [Chen et al. 2025] [CITE: chen2023efficient] that replace $L$ in Chapter 5 is the dissipative step of (Alg. alg:diss).
+
+## Choice of Lindblad simulator: continuous vs discrete jumps
+
+The Euler-step accuracy of (Eq. eq:weak-meas-euler) is only first order in $\delta$, so reaching diamond-norm error $\varepsilon$ over total time $T$ costs $T/\delta = \mathcal{O}(T^2/\varepsilon)$ calls to $U_L$ — polynomial, not poly-logarithmic, in $1/\varepsilon$. One might therefore ask why we do not instead pick a higher-order Lindblad simulator, such as the Duhamel-principle / scaled-Gaussian-quadrature scheme of [Li and Wang 2023] [CITE: liwang2023], which simulates a generator $\mathcal{L}(\rho) = -\ii[H,\rho] + \sum_{j=1}^m \mathcal{D}_{L_j}(\rho)$ with $\widetilde{\mathcal{O}}(\tau\,\mathrm{polylog}(t/\varepsilon))$ block-encoding queries to $U_H$ and to the $U_{L_j}$, where $\tau := t\,\|\mathcal{L}\|_{\mathrm{be}}$ (Theorem 1) (plus $\widetilde{\mathcal{O}}(m\tau\,\mathrm{polylog}(t/\varepsilon))$ additional 1- and 2-qubit gates, which is what makes the total cost linear in $m$). The constraint hidden in the "$j = 1, \dots, m$" of that theorem is the answer: higher-order series simulators ingest a *finite* list $\{L_j\}_{j=1}^m$ of jump operators, each supplied as its own block-encoding $U_{L_j}$, and their cost is linear in $m$. They do not absorb a generator of the form
+
+$$\mathcal{L}(\rho) \;=\; \sum_{a \in \mathcal{A}} \int \dd\omega\;\gamma(\omega)\,\mathcal{D}_{\hat A_a(\omega)}(\rho),$$ <!-- \label{eq:oft-lindbladian-shape} -->
+
+with the continuously $\omega$-parametrized OFT $\hat A_a(\omega)$, of which the discretized $\tilde A_a(\bar\omega)$ used in §sec:algorithm is the quadrature on the $\Omega$-register grid. Its jump operators $\hat A_a(\omega)$ are *continuously parametrized* by a Bohr-frequency variable $\omega \in \mathbb{R}$ — even after a fine quadrature discretisation, $m$ is at least the size of the frequency grid, and each grid point would need its own block encoding rather than being addressed coherently through the $\Omega$ register built up in §sec:prelim-QPE. The weak-measurement primitive is precisely what one uses when the integral cannot be peeled off the block encoding: a single $U_L$ call already block-encodes the full OFT-coherent jump $\sum_a \int \dd\omega\,\sqrt{\gamma(\omega)}\,\hat A_a(\omega)$, and one Euler step of (Eq. eq:weak-meas-euler) realises one step of the *whole* Lindbladian per call, with cost that scales with the resolution of the OFT rather than with the number of effective jumps.
+
+The trade-off between the two routes is therefore one of compile-time vs run-time jump-set resolution. The higher-order series scheme buys $\mathrm{polylog}(1/\varepsilon)$-accurate channel-as-LCU implementation, but only for jump sets that have been collapsed to a small finite list at compile time; reformulating the KMS-DB Lindbladian so that $\gamma(\omega)$ is a discrete sum of $\delta$-functions and the integral becomes a finite sum [CITE: ding2024efficient] gives back exactly the finite-$m$ regime in which the higher-order route applies, at the cost of working with a different jump ensemble. The weak-measurement Euler step, conversely, accepts an arbitrary block-encoded $L$ — including the OFT-coherent superposition over $\omega$ — in exchange for first-order accuracy in $\delta$. Since the construction the rest of this thesis follows keeps $\gamma(\omega)$ continuous, the weak-measurement primitive is the only one of the two that applies.
+
+## Generality of the control structure
+
+The figure above depicts the *minimal* LCU-block-encoded jump: a single block register $\ket{0^b}$ plays the role of "$U_L$ succeeded", and $Y_\delta$ is open-controlled on $\ket{0^b}$ to restrict the weak rotation to the post-selection branch. Chapter 5's dissipative step (Alg. alg:diss, §sec:algorithm) replaces this minimal block register with a richer ancilla structure: the frequency register $\Omega$ and the Boltzmann qubit $q_\gamma$ together encode the KMS-weighted jump $\sqrt{\gamma(\bar\omega)}\,\tilde{A}_a(\bar\omega)$ on the system, and $Y_\delta$ is then open-controlled on $q_\gamma = \ket{0}_\gamma$ in place of the generic $\ket{0^b}$ (Alg. alg:diss step 8, `2_methods.tex:1789`). The mechanism is the same — $Y_\delta$ always fires on the ancilla branch flagging successful application of the effective jump — and the Euler-step identity (Eq. eq:weak-meas-euler) persists with $L$ replaced by the OFT-filtered jump $\sqrt{\gamma(\bar\omega)}\,\tilde{A}_a(\bar\omega)$. In Chapter 5's picture, $\Omega$ is not post-selected but coherently uncomputed together with $q_\gamma$ on the no-jump branch (Alg. alg:diss steps 9–14), so the role of the block register's post-selection is taken over by the controlled uncomputation $U_{\mathrm{diss}}^\dagger$; the $Y_\delta$-control structure is inherited verbatim.
+
+---
+
+## Citations
+
+`chen2023quantum` and `chen2023efficient` already exist in `references.bib` — no new bibtex entries for them.
+
+- **`chen2023quantum`** — Chen, C.-F., Kastoryano, M. J., Brandão, F. G. S. L., Gilyén, A., *"Quantum Thermal State Preparation"*, arXiv:2303.18224 (2023). Theorem III.1 and Eq. (3.2) in their proof establish the weak-measurement implementation of a Lindblad dissipator from a block-encoded jump; the circuit of Fig. circ:weak-measurement is the single-jump ($|J|=1$) restriction of their construction, and their Fig. 3 is the canonical drawing of the block-controlled $Y_\delta$ convention.
+- **`chen2023efficient`** — Chen, C.-F., Kastoryano, M. J., Gilyén, A., *"An Efficient and Exact Noncommutative Quantum Gibbs Sampler"*, arXiv:2311.09207 (2023). The same weak-measurement primitive survives in the KMS-exact variant; only the jumps fed into $U_L$ change.
+
+**New for v4:**
+
+- **`liwang2023`** — Li, X., Wang, C., *"Simulating Markovian open quantum systems using higher-order series expansion"*, arXiv:2212.02051 (2023). Theorem 1: given block-encodings $U_H$ of $H$ and $U_{L_j}$ of $L_j$ ($j=1,\dots,m$), simulates $\ee^{\mathcal{L} t}$ in diamond norm to error $\varepsilon$ using $\widetilde{\mathcal{O}}(\tau\, \mathrm{polylog}(t/\varepsilon))$ block-encoding queries with $\tau = t \|\mathcal{L}\|_{\mathrm{be}}$, via Duhamel's principle and scaled Gaussian quadrature.
+- **`ding2024efficient`** — Ding, Z., Li, B., Lin, L., *"Efficient quantum Gibbs samplers with Kubo–Martin–Schwinger detailed balance condition"*, arXiv:2404.05998 (2024). Constructs a family of KMS-DB Lindbladians whose Kossakowski function $\gamma(\omega)$ may be a *discrete* sum of $\delta$ functions, yielding a finite jump set that can then be simulated by any high-order Lindblad simulator (cf. their Sec. 1.1, p. 2 last paragraph and Sec. 1.2, p. 3 first paragraph).
+
+```bibtex
+@article{liwang2023,
+  author        = {Li, Xiantao and Wang, Chunhao},
+  title         = {Simulating {M}arkovian open quantum systems using higher-order series expansion},
+  journal       = {arXiv preprint},
+  year          = {2023},
+  eprint        = {2212.02051},
+  archivePrefix = {arXiv},
+  primaryClass  = {quant-ph},
+  url           = {https://arxiv.org/abs/2212.02051},
+  note          = {Theorem~1: $\widetilde{\mathcal{O}}(\tau\,\mathrm{polylog}(t/\varepsilon))$ queries to block-encodings of $H$ and finitely many $L_j$.}
+}
+
+@article{ding2024efficient,
+  author        = {Ding, Zhiyan and Li, Bowen and Lin, Lin},
+  title         = {Efficient quantum {G}ibbs samplers with {K}ubo--{M}artin--{S}chwinger detailed balance condition},
+  journal       = {arXiv preprint},
+  year          = {2024},
+  eprint        = {2404.05998},
+  archivePrefix = {arXiv},
+  primaryClass  = {quant-ph},
+  url           = {https://arxiv.org/abs/2404.05998},
+  note          = {KMS-DB Lindbladian family; $\gamma(\omega)$ may be a discrete sum of $\delta$-functions, yielding finitely many jump operators amenable to high-order Lindblad simulation.}
+}
+```
+
+---
+
+## Writing notes
+
+<!-- For the author, not for the thesis -->
+
+### Style / notation decisions
+
+- **`\ket{0}_\delta`** single-qubit label and **`\ket{0^b}`** bundled block-register label: verbatim from the circuit figure's `\lstick` labels at `1_preliminaries.tex:1125, 1139`.
+- **$Y_\delta$**: used throughout as the shorthand $R_Y(2\arcsin\sqrt\delta)$ per `1_preliminaries.tex:825`. The amplitude imprinted on $\ket{1}_\delta$ is $\sqrt\delta$ (not $\sin(\delta/2)\approx\delta/2$), which is why the dissipator prefactor is $\delta$ — not $\delta^2$ — in the rstick. The convention is made explicit inline when $Y_\delta$ is first used, with a pointer back to line 825.
+- **Block-control as open control on a bundle.** The block register's control on $Y_\delta$ is the *open* control (`\octrl`), firing on $\ket{0^b}$ — matching the thesis's open-dot convention at line 827. On the bundled wire this reads operationally as "all qubits of $b$ are zero", i.e. the post-selectable branch. Chen 2023 Fig. 3 draws the same control as a filled disk because their register labels are ket-carrying (they write "controlled on the $\ket{0^b}$ state" in the proof); both conventions are standard, and the thesis's open-dot notation is the internally consistent one.
+- **Dissipator symbol**: $\mathcal{D}_L(\rho)$ throughout, to (a) differ visibly from the KMS discriminant $\mathcal{D}(\rho,\mathcal{L})$ already used at `1_preliminaries.tex:647, 655, 656` and `2_methods.tex:1940`, and (b) keep the jump argument as a subscript, parallel to $L \to L_a$ in Chapter 5 where the specialisation $\mathcal{D}_{L_a}$ writes itself naturally. The corrected figure's rstick now writes $\mathcal{D}_L(\rho)$ (matching the body); the caption does too.
+- **Macros used**: `\ee`, `\ii`, `\dd`, `\idm` (all defined at `main.tex:83–90`).
+- **$L$ versus $L_a$**: the figure and preliminaries discuss a single abstract jump $L$; Chapter 5's $L_a = \sqrt{\gamma(\bar\omega)}\,\tilde{A}_a(\bar\omega)$ is the concrete instantiation. The subsection sticks to $L$ throughout to match the figure caption.
+- **"First Chen citation" pedagogical pointer**: the $M_0/M_1$ display carries a footnote-style tag `[CHEN23-EQ3.2]` in the draft, which expands in the `.tex` to `\cite[Eq.~(3.2)]{chen2023quantum}` (or the biblatex equivalent). This gives the reader a specific equation handle rather than a fifty-page-paper citation.
+- **Continuous-vs-discrete language in the new §"Choice of Lindblad simulator"**: the new section deliberately stays in fully general Lindblad-simulation terms ("continuously parametrized jumps", "finite list of $L_j$", "discrete sum of $\delta$-functions"). It does not name "Chen 2025 KMS" or "Ding–Li–Lin" inside the body — these names appear only in the Citations entries — because at the position of the prelims subsection the reader has not yet been introduced to either Lindbladian variant. The two BibKeys it does use (`liwang2023` for the high-order simulator, `ding2024efficient` for the discrete-jump option) are matched to the referenced *technique*, not to any thesis-bookkeeping forward pointer.
+- **Hat-vs-tilde OFT bridge clause in the new §"Choice of Lindblad simulator"**: the new section names the continuously $\omega$-parametrized OFT as $\hat A_a(\omega)$ to distinguish it from the discretized, $\Omega$-register-quadratured $\tilde A_a(\bar\omega)$ used by §"Generality of the control structure" (and by `2_methods.tex`'s algorithm). A one-clause inline bridge — *"with the continuously $\omega$-parametrized OFT $\hat A_a(\omega)$, of which the discretized $\tilde A_a(\bar\omega)$ used in §sec:algorithm is the quadrature on the $\Omega$-register grid"* — is placed immediately after (Eq. eq:oft-lindbladian-shape) so that both notations coexist in the section without colliding. This costs one clause and prevents the apparent v4-internal hat-vs-tilde mismatch flagged in the v4 review (I1).
+
+### Length
+
+5 short body paragraphs + 1 generality paragraph + 1 "Choice of simulator" two-paragraph section + 4 display equations (one labelled `eq:weak-meas-euler`, one labelled `eq:oft-lindbladian-shape` in the new section). The v4 → v5 patches are local: the I1 bridge clause adds ~1 line, the F2 parenthetical adds ~1 line, the I3+I4 cleanup nets ~1 line *shorter*, and the insertion-target header expansion adds ~2 lines. Net body change: well under one extra paragraph. Rendered length is approximately 1.3 pages at the thesis font size — still the shortest of the three preliminaries circuit subsections.
+
+### Forward link
+
+The subsection closes its body with an explicit pointer to (Alg. alg:diss), which at `2_methods.tex:1744` is labelled `alg:diss` and whose commentary at `2_methods.tex:1884–1931` already uses the coherent-undo pattern established here. The new generality paragraph adds a forward pointer to `sec:algorithm` and to Alg. 1b steps 8 and 9–14. The new §"Choice of Lindblad simulator" deliberately does *not* add a forward pointer — it stands as a self-contained technical observation about block-encoding granularity.
+
+### Figure-replacement note
+
+The thesis figure `circ:weak-measurement` at `1_preliminaries.tex:1117–1167` should be *replaced* by the contents of `drafts/circuits/weak-measurement-v2.tex` (verbatim, minus the standalone-document preamble). The fixes included in the new file are:
+
+1. **Block-register open control on $Y_\delta$** — `\octrl{-1}` on row 2 at the $Y_\delta$ column (new).
+2. **Caption typo fix** — $\gamma = \delta/(\alpha^{2}\,\dd t)$ (was $\delta^{2}/(\alpha^{2}\,\dd t)$).
+3. **Rstick notation** — $\mathcal{D}_L(\rho)$ (was $\mathcal{D}(\rho)$), matching the body's dissipator-vs-discriminant disambiguation.
+4. **Caption sentence on the control** — one sentence added to the caption documenting that $Y_\delta$ is block-controlled on $\ket{0^b}$.
+
+No other changes to the drawing; `row sep`, `column sep`, bundling conventions, and label placement are identical to the thesis's original.
+
+### Suggestions
+
+1. **Rstick alignment between figure and body**: the figure's rstick uses $\mathcal{D}_L(\rho)$ per the corrected file; the body uses $\mathcal{D}_L(\rho)$ throughout; and the body's opening line defines $\mathcal{D}_L$ explicitly. These are all aligned in v3/v4/v5. No action required beyond adopting the new figure.
+
+2. **Multi-jump extension deferred**: the generalisation $\mathcal{L} = \sum_a \mathcal{D}_{L_a}$ is stated in one forward-pointing sentence at the end of §"One Euler step", not developed here. Developing it would duplicate Chapter 5's Alg. 1b commentary verbatim; defer stands.
+
+3. **Optional label rename `eq:weak-meas-euler` → `eq:weak-meas`**: to match the naming style of `eq:qpe-unified` and `eq:B-block-encoding`. Both labels are fine; the longer one flags the Euler reading explicitly. Low priority.
+
+4. **Optional link to classical Metropolis-Hastings** (not adopted in v3/v4/v5): the two ancilla outcomes $\ket{0}_\delta, \ket{1}_\delta$ map to MH's accept/propose; a one-sentence remark would reinforce the pedagogical arc from classical MCMC to quantum dissipation. Chapter 5's Alg. 1b commentary already makes this parallel, so duplicating it here would add words without new information.
+
+5. **Optional reference to Lin 2025 / Fang et al. 2026** (not adopted in v3/v4/v5): these works apply the weak-measurement primitive to dissipative ground-state preparation with detectability-lemma arguments. Adding them here would place the construction in the broader landscape but dilute the preliminaries' focus; their natural home is Chapter 5 or a literature-review section.
+
+6. **Cost-comparison table** (considered, *not adopted in v5*): the new §"Choice of Lindblad simulator" could be tightened into a two-row table (Euler vs Li–Wang, columns: jump-set type / $\varepsilon$-scaling / block-encoding count). The user's brief explicitly asked for "1-2 paragraphs", not a table; the v4 review's S3 advocated revisiting this, but the v5 brief explicitly skipped S3, so the prose form is locked in. A table would also jut out visually as the only such object in the subsection. Re-evaluate only if the new section grows significantly in a later revision.
+
+---
+
+## Review-driven choices applied (v4 → v5)
+
+The following changes were made from `drafts/weak-measurement-subsection-v4.md` to v5, prompted by `drafts/weak-measurement-subsection-v4-review.md`. The v3-inherited body (§"Circuit walkthrough", §"Kraus operators", §"One Euler step" up to its closing sentence, and §"Generality of the control structure") is character-for-character identical to v4; only the new "Choice of Lindblad simulator" section, the bibtex stub, the insertion-target header, and the writing-notes/footer sections are touched.
+
+- **F1 (line 45 of v4 body, sentence 2 of new section §"Choice of Lindblad simulator")**: replaced "$\widetilde{\mathcal{O}}(t \,\mathrm{polylog}(1/\varepsilon))$ block-encoding queries (Theorem 1, with $\tau := t \|\mathcal{L}\|_{\mathrm{be}}$)" with the corrected "$\widetilde{\mathcal{O}}(\tau\,\mathrm{polylog}(t/\varepsilon))$ block-encoding queries to $U_H$ and to the $U_{L_j}$, where $\tau := t\,\|\mathcal{L}\|_{\mathrm{be}}$ (Theorem 1)". Polylog argument is now $t/\varepsilon$, leading factor is $\tau$. Body sentence now agrees with the bibtex stub's `note` field at v4 line 81.
+- **F2 (immediately after F1, same sentence)**: appended the parenthetical "(plus $\widetilde{\mathcal{O}}(m\tau\,\mathrm{polylog}(t/\varepsilon))$ additional 1- and 2-qubit gates, which is what makes the total cost linear in $m$)". Makes the linear-in-$m$ claim of the next sentence quantitatively visible from the cost expression itself.
+- **I1 (line 47–49 of v4, new section paragraph 1)**: added the bridge clause "with the continuously $\omega$-parametrized OFT $\hat A_a(\omega)$, of which the discretized $\tilde A_a(\bar\omega)$ used in §sec:algorithm is the quadrature on the $\Omega$-register grid" immediately after the new (Eq. eq:oft-lindbladian-shape). Prevents the v4-internal hat-vs-tilde notation collision.
+- **I2 (lines 3–7 of v4, insertion-target header)**: removed `sec:prelim-QPE` from the "Depends on labels already in the chapter" bullet (it was listed there as if it existed) and added a new bullet "Required upstream patch in `1_preliminaries.tex`: the `\subsection{Phase Estimation.}` at line 911 currently has no `\label{}`; before insertion, add `\label{sec:prelim-QPE}` to that subsection so that the new section's two `\ref{sec:prelim-QPE}` cross-refs resolve." Telegraphs to the user the one-line patch they need to apply upstream of insertion.
+- **I3 + I4 (line 51 of v4, closing sentence of new section paragraph 2)**: replaced "Since the construction the rest of this thesis follows keeps $\gamma(\omega)$ continuous (Chapter 5; the OFT machinery of §sec:prelim-QPE is only useful if it is exercised), the weak-measurement primitive is the only one of the two that applies." with the cleaner "Since the construction the rest of this thesis follows keeps $\gamma(\omega)$ continuous, the weak-measurement primitive is the only one of the two that applies." Drops both the "Chapter 5" forward pointer and the "only useful if it is exercised" rhetorical flourish.
+- **I5 (line 51 of v4, mid-sentence of new section paragraph 2)**: replaced "typical workarounds for the continuous-$\omega$ case — e.g. replacing $\gamma(\omega)$ with a discrete sum of $\delta$-functions so that the integral becomes a finite sum [CITE: ding2024efficient] — give back exactly the finite-$m$ regime in which the higher-order route applies, at the cost of working with a different jump ensemble." with the more accurate "reformulating the KMS-DB Lindbladian so that $\gamma(\omega)$ is a discrete sum of $\delta$-functions and the integral becomes a finite sum [CITE: ding2024efficient] gives back exactly the finite-$m$ regime in which the higher-order route applies, at the cost of working with a different jump ensemble." Drops the mildly pejorative "workaround" framing; minor grammar cleanup after the cut.
+- **I6 (line 45 of v4, sentence 1 of new section)**: changed "$T/\delta = \widetilde{\mathcal{O}}(T^2/\varepsilon)$" to "$T/\delta = \mathcal{O}(T^2/\varepsilon)$". Bare $\mathcal{O}$ is the right symbol for the Euler-step count (no polylog factors absorbed); sharpens the contrast with Li-Wang's $\widetilde{\mathcal{O}}$ in the same paragraph.
+- **S1 (line 74 of v4, bibtex stub)**: changed `Simulating {M}arkovian open quantum systems using higher order series expansion` to `Simulating {M}arkovian open quantum systems using higher-order series expansion` (insert hyphen between "higher" and "order" to match the canonical title).
+- **S2 (line 51 of v4, mid-sentence of new section paragraph 2)**: reworded "*The trade-off between the two routes is therefore architectural rather than numerical.*" to "*The trade-off between the two routes is therefore one of compile-time vs run-time jump-set resolution.*" Same length, more concrete; foreshadows the next sentence's "collapsed at compile time" framing.
+- **S4 (line 47 of v4, display equation in new section)**: added the HTML-comment label hint `<!-- \label{eq:oft-lindbladian-shape} -->` after the closing `$$` of the OFT-Lindbladian display, so the equation is `\eqref{}`-able if a future revision needs a back-pointer.
+
+The following items were *not* adopted:
+
+- **S3 (cost-comparison table)**: the v5 brief explicitly skipped S3. The user's "1-2 paragraphs" directive is honoured; Suggestion 6 in the writing-notes Suggestions list now records the table form as "considered, not adopted in v5".
+- **v3 → v4 review-driven choices**: the v4 ↔ v5 delta consists *only* of the items above. All v3 → v4 additions (the new section's existence, the wholly general framing, the two new bibkeys, the verification-against-source-papers note in the writing notes) remain in place verbatim; the v4 → v5 review only refines them.

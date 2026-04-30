@@ -1,0 +1,130 @@
+% Circuit: 2nd-order Strang splitting Trotter step for 3-qubit periodic Heisenberg chain
+% Generated for: QuantumFurnace.jl PhD thesis
+% Usage: \input{circuits/trotter-strang-3q.tex} in main thesis, or compile standalone
+%
+% Matches src/trotter_domain.jl:_trotterize2 for n=3 periodic.
+% Bond groups: odd (1,2), even (2,3), boundary (3,1).
+% Each bond Hamiltonian H_{jk} = J_x X_jX_k + J_y Y_jY_k + J_z Z_jZ_k is further
+% decomposed into three commuting two-qubit exponentials. Because [X_jX_k, Y_jY_k]
+% = [Y_jY_k, Z_jZ_k] = [Z_jZ_k, X_jX_k] = 0 on the same bond, this factorisation
+% is exact — it adds no additional Trotter error, and each factor is a native
+% two-qubit gate on most hardware (R_{XX}, R_{YY}, R_{ZZ}).
+%
+% Strang palindrome (combining adjacent boundary terms):
+%   e^{-iH_{12} dt/2} e^{-iH_{23} dt/2} e^{-iH_{31} dt} e^{-iH_{23} dt/2} e^{-iH_{12} dt/2}
+%
+\documentclass{article}
+\usepackage[margin=1cm]{geometry}
+\usepackage{tikz}
+\usetikzlibrary{quantikz2}
+\usepackage{amsmath,amssymb}
+\usepackage{braket}
+\usepackage{graphicx}
+
+\newcommand{\ee}{\mathrm{e}}
+\newcommand{\ii}{\mathrm{i}}
+
+% Rounded corners on all gates globally
+\tikzset{operator/.append style={rounded corners}}
+
+% NOTE: \dashedthrough (and its `dashed line` tikz style) is assumed to be
+% defined already in the including thesis preamble. Re-declare here only
+% if you want this file to compile standalone.
+
+\begin{document}
+\pagestyle{empty}
+
+\begin{figure}[ht]
+  \centering
+  % [transparent] makes gate boxes see-through so \dashedthrough is visible
+  % inside the 3-qubit boundary gates. \resizebox ensures the figure always
+  % fits \textwidth regardless of the (inherently wide) 15-column layout.
+  % Tight gate padding is applied *locally* via /tikz/operator/.append style,
+  % so it does not affect other circuits in the thesis.
+  % Local tweaks (do not leak to other circuits):
+  %  * font=\scriptsize inside gate boxes shrinks natural box width ~30%
+  %  * column sep is large enough that gates don't overlap at natural size
+  %    (resizebox preserves overlap, so non-overlap must hold pre-scale)
+  %  * resizebox then scales the whole picture down to \textwidth
+  % Label size is tuned relative to natural picture width:
+  %  * \resizebox scales the whole picture uniformly, so growing font AND
+  %    column sep together does nothing. To get bigger labels in the final
+  %    PDF, grow the font more than the column spacing.
+  %  * \small (9pt) renders noticeably larger than \scriptsize (7pt); we
+  %    keep column sep modest so \resizebox does not over-shrink.
+  \resizebox{\textwidth}{!}{%
+  \begin{quantikz}[
+    transparent, row sep=0.6cm, column sep=0.4cm,
+    /tikz/operator/.append style={inner sep=3pt, minimum height=6mm, font=\small}
+  ]
+  %
+  % Column layout (15 gate cols + final \qw = 16 cells per row):
+  %   cols  1-3 : A-block L  = H_{12} dt/2  (q_1, q_2)
+  %   cols  4-6 : B-block L  = H_{23} dt/2  (q_2, q_3)
+  %   cols  7-9 : C-block    = H_{31} dt    (q_1, q_3; q_2 dashed)
+  %   cols 10-12: B-block R  = H_{23} dt/2  (q_2, q_3)
+  %   cols 13-15: A-block R  = H_{12} dt/2  (q_1, q_2)
+  % All rows must have the same number of cells; inactive bond groups
+  % on a given row are filled with plain \qw (empty cells under a
+  % \gate[n]{...} are consumed by the multi-row gate box).
+  %
+    \lstick{$q_1$}
+  % A-block L (active)
+      & \gate[2]{R_{X_1X_2}}
+      & \gate[2]{R_{Y_1Y_2}}
+      & \gate[2]{R_{Z_1Z_2}}
+  % B-block L (q_1 idle)
+      & \qw & \qw & \qw
+  % C-block (boundary, q_1 leads the [3]-wide gate; R^2 = R applied twice = rotate by 2 dt)
+      & \gate[3, label style={yshift=0.3cm}]{R_{X_3X_1}^{2}}
+      & \gate[3, label style={yshift=0.3cm}]{R_{Y_3Y_1}^{2}}
+      & \gate[3, label style={yshift=0.3cm}]{R_{Z_3Z_1}^{2}}
+  % B-block R (q_1 idle)
+      & \qw & \qw & \qw
+  % A-block R (active)
+      & \gate[2]{R_{X_1X_2}}
+      & \gate[2]{R_{Y_1Y_2}}
+      & \gate[2]{R_{Z_1Z_2}}
+      & \qw \\
+  %
+    \lstick{$q_2$}
+  % A-block L (empty: consumed by q_1's gate[2])
+      & & &
+  % B-block L (active, q_2 leads)
+      & \gate[2]{R_{X_2X_3}}
+      & \gate[2]{R_{Y_2Y_3}}
+      & \gate[2]{R_{Z_2Z_3}}
+  % C-block: q_2 passes through unaffected
+      & \dashedthrough & \dashedthrough & \dashedthrough
+  % B-block R (active, q_2 leads)
+      & \gate[2]{R_{X_2X_3}}
+      & \gate[2]{R_{Y_2Y_3}}
+      & \gate[2]{R_{Z_2Z_3}}
+  % A-block R (empty: consumed by q_1's gate[2])
+      & & &
+      & \qw \\
+  %
+    \lstick{$q_3$}
+  % A-block L (q_3 idle)
+      & \qw & \qw & \qw
+  % B-block L (empty: consumed by q_2's gate[2])
+      & & &
+  % C-block (empty: consumed by q_1's gate[3])
+      & & &
+  % B-block R (empty: consumed by q_2's gate[2])
+      & & &
+  % A-block R (q_3 idle)
+      & \qw & \qw & \qw
+      & \qw
+  \end{quantikz}%
+  }
+  \caption{One second-order Strang Trotter step for the $n{=}3$ periodic
+  isotropic Heisenberg chain with $\delta t = t/r$, using the hardware notation
+  $R_{\sigma_j\sigma_k}(\theta) \equiv \ee^{-\ii\theta\,\sigma_j\sigma_k/2}$ and
+  the abbreviation $R_{\sigma_j\sigma_k} \equiv R_{\sigma_j\sigma_k}(\delta t)$.
+  The boundary bond $(3,1)$ closes the ring and $q_2$ passes through unaffected
+  (dashed wire).}
+  \label{fig:trotter-strang-3q}
+\end{figure}
+
+\end{document}

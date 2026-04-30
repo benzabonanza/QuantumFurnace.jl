@@ -1,0 +1,167 @@
+% Circuit: Dissipative unitary U_diss of Algorithm 1b
+%          (new convention: Boltzmann rotation Y_{1-gamma} absorbed into U_diss,
+%           matching Chen et al. 2023 Fig. 3 and Alg. 1 circuit).
+% Generated for: QuantumFurnace.jl PhD thesis (Chapter 5, Methods; Alg. 1b / alg:diss).
+% Usage: \input{circuits/u-diss.tex} in the main thesis, or compile standalone.
+%
+% Implements, on the input |0>_gamma |0>_Omega |psi>_S, the 3-register unitary
+%
+%     U_diss := Y_{1-gamma} . QFT(Omega) . Ctrl-Trott^+(Omega, S) . A_a
+%               . Ctrl-Trott^-(Omega, S) . StatePrep(|f>, Omega),
+%
+% so that
+%
+%     U_diss |0>_gamma |0>_Omega |psi>_S
+%       = sum_{bar omega}
+%         [sqrt(gamma(bar omega)) |0> + sqrt(1-gamma(bar omega)) |1>]_gamma
+%         (x) |bar omega>_Omega
+%         (x) tilde A_a(bar omega) |psi>_S,
+%
+% i.e. the gamma-branch amplitude on q_gamma already carries the Boltzmann
+% weight associated with bar omega, so no extra rotation is needed before the
+% weak-measurement step of Alg. 1b (see fig:algorithm1-delta-step).
+%
+% Wire order top-to-bottom:  q_gamma, Omega, S.  Placing q_gamma above
+% Omega makes Ctrl-Y_{1-gamma} a single-row upward control (\ctrl{-1})
+% and keeps Omega adjacent to S for the bundled Ctrl-Trott controls.
+%
+% The red dashed group is the *full* Operator Fourier Transform (OFT),
+% spanning StatePrep |f>, the controlled Heisenberg sandwich, and QFT:
+%
+%     <bar omega|_Omega  U_OFT  |0>_Omega  =  tilde A_a(bar omega)  on S,
+%     with U_OFT = QFT . Ctrl-Trott^+ . A_a . Ctrl-Trott^- . StatePrep(|f>).
+%
+% (Grouping only the Heisenberg sandwich would mislabel it: that piece alone
+% realises the controlled operator |bar t><bar t| (x) tilde A_a(bar t), not
+% the Fourier-transformed jump tilde A_a(bar omega).)
+%
+% Notation matches the thesis (Sec. 2 / Alg. 1b):
+%   q_gamma        : Boltzmann qubit, 1 qubit
+%   Omega          : time/frequency register, r qubits          (bundle)
+%   S              : system register, n qubits                  (bundle)
+%   |f>            : discretized Gaussian filter state  sum_t  bar f(bar t) |bar t>,
+%                    bar f(bar t) = sqrt(t_0) f(bar t) / ||f||_2 (eq:gaussian-filter-t)
+%   Ctrl-Trott^-   : |bar t>|psi> -> |bar t> S_2(-bar t) |psi>   approx  e^{-i H bar t}
+%   Ctrl-Trott^+   : |bar t>|psi> -> |bar t> S_2(+bar t) |psi>   approx  e^{+i H bar t}
+%   QFT(Omega)     : discrete Fourier transform  bar t -> bar omega
+%   tilde A_a(bar omega) := (1/sqrt(N)) sum_{bar t} bar f(bar t) e^{-i bar omega bar t}
+%                           S_2(+bar t) A_a S_2(-bar t)            (eq:trotter-oft)
+%   Y_{1-gamma}    := R_Y(2 arcsin sqrt(1 - gamma(bar omega))), controlled on Omega:
+%                    |bar omega>|0> -> |bar omega>[sqrt(gamma)|0> + sqrt(1-gamma)|1>]
+%   S_2            : second-order (Strang) product formula with M Trotter steps;
+%                    palindromicity gives S_2(t)^dag = S_2(-t), so we write
+%                    signed arguments instead of daggers.
+%
+\documentclass{article}
+\usepackage[margin=1cm]{geometry}
+\usepackage{tikz}
+\usetikzlibrary{quantikz2}
+\usepackage{amsmath,amssymb}
+\usepackage{braket}
+
+\newcommand{\ee}{\mathrm{e}}
+\newcommand{\ii}{\mathrm{i}}
+
+% Rounded corners on all gates globally
+\tikzset{operator/.append style={rounded corners}}
+
+% Half-filled control: disk split by a / diagonal,
+% lower-right triangle black, upper-left triangle white.
+% Denotes a SELECT-style control that is *uniform* over a bundled register.
+\tikzset{
+  halfctrl/.style={
+    circle, draw=black, line width=0.4pt,
+    fill=white, minimum size=6pt, inner sep=0pt,
+    path picture={
+      \fill[black]
+        (path picture bounding box.south west) --
+        (path picture bounding box.south east) --
+        (path picture bounding box.north east) -- cycle;
+      \draw[black, line width=0.3pt]
+        (path picture bounding box.south west) --
+        (path picture bounding box.north east);
+    }
+  }
+}
+
+\begin{document}
+\pagestyle{empty}
+
+\begin{figure}[ht]
+  \centering
+  \resizebox{1.05\textwidth}{!}{%
+  \begin{quantikz}[row sep=0.9cm, column sep=0.42cm]
+  %
+  % Cell-by-cell layout (9 cells per row):
+  %   1: \lstick                               (left label)
+  %   2: wire decl                             (\qwbundle{...} or \qw)
+  %   3: StatePrep |f> on Omega                (time-domain Gaussian filter)   -- OFT start
+  %   4: Ctrl-Trott^-(Omega, S)                (S_2(-bar t) on S, ctrl on Omega)
+  %   5: A_a on S                              (single-site Pauli jump, no ancillas)
+  %   6: Ctrl-Trott^+(Omega, S)                (S_2(+bar t) on S, ctrl on Omega)
+  %   7: QFT on Omega                          (time -> energy)                 -- OFT end
+  %   8: Ctrl-Y_{1-gamma}(Omega, q_gamma)      (Boltzmann rotation, ctrl on Omega)
+  %   9: \rstick                               (output labels)
+  %
+  % ==================================================================
+  % Row 1:  q_gamma  (Boltzmann qubit, top wire; target of
+  %                    Ctrl-Y_{1-gamma} in cell 8, controlled upward from Omega)
+  % ==================================================================
+    \lstick{$\ket{0}_\gamma$}
+      & \qw
+      & \qw
+      & \qw
+      & \qw
+      & \qw
+      & \qw
+      & \gate{Y_{1-\gamma}}
+      & \rstick{$\sqrt{\gamma(\bar\omega)}\ket{0}+\sqrt{1-\gamma(\bar\omega)}\ket{1}$}\qw
+      \\
+  %
+  % ==================================================================
+  % Row 2:  Omega  (time/frequency register, middle wire;
+  %                  controls cells 4, 6 (downward to S) and cell 8 (upward to q_gamma),
+  %                  prepared in cell 3, QFT'd in cell 7)
+  % ==================================================================
+    \lstick{$\ket{0}_\Omega$}
+      & \qwbundle{r}
+      & \gate{\text{PREP}\ket{f}}
+      \gategroup[2,steps=5,style={dashed,rounded corners,fill=red!6,inner sep=5pt},
+                 background,label style={label position=below,yshift=-0.40cm,anchor=north}]
+        {\scriptsize \textsc{Operator Fourier Transform} on $\Omega\otimes S$:
+         $\bra{\bar\omega}_\Omega U_{\mathrm{OFT}}\ket{0}_\Omega = \tilde A_a(\bar\omega)$
+         $= \tfrac{1}{\sqrt{N}}\sum_{\bar t}\bar f(\bar t)\,\ee^{-\ii\bar\omega\bar t}\,S_2(\bar t)\,A_a\,S_2(-\bar t)$}
+      & \ctrl[style=halfctrl]{1}
+      & \qw
+      & \ctrl[style=halfctrl]{1}
+      & \gate{\text{QFT}}
+      & \ctrl[style=halfctrl]{-1}
+      & \rstick{$\ket{\bar\omega}_\Omega$}\qw
+      \\
+  %
+  % ==================================================================
+  % Row 3:  S  (system register, bottom wire; target of the two controlled
+  %             Trotters and of the bare jump A_a in between)
+  % ==================================================================
+    \lstick{$\ket{\psi}_S$}
+      & \qwbundle{n}
+      & \qw
+      & \gate{S_2(-\bar t)}
+      & \gate{A_a}
+      & \gate{S_2(\bar t)}
+      & \qw
+      & \qw
+      & \rstick{$\tilde A_a(\bar\omega)\ket{\psi}$}\qw
+  \end{quantikz}%
+  }
+  \caption{Dissipative unitary $U_{\mathrm{diss}}$ (Alg.~\ref*{alg:diss}) on
+  $q_\gamma\otimes\Omega\otimes S$ with the Boltzmann rotation
+  $Y_{1-\gamma} = R_Y\!\bigl(2\arcsin\sqrt{1-\gamma(\bar\omega)}\bigr)$
+  absorbed after the QFT (Fig.~\ref*{fig:algorithm1-delta-step} convention).
+  The red dashed block is the Operator Fourier Transform,
+  $\bra{\bar\omega}_\Omega U_{\mathrm{OFT}}\ket{0}_\Omega = \tilde A_a(\bar\omega)$;
+  half-filled circles denote SELECT control over the bundled register $\Omega$.}
+  \label{fig:u-diss}
+\end{figure}
+
+\end{document}

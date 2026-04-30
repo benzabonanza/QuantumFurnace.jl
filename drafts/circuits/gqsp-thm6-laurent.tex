@@ -1,0 +1,72 @@
+% Circuit: GQSP for e^{-i delta A} via Motlagh-Wiebe Theorem 6.
+% Matches notation in sec:prelim-QSP body text of 1_preliminaries.tex.
+%
+% Two dashed gategroups following the MW "last k" convention:
+%   Box 1: d controlled-W calls (slots 1..d)
+%   Box 2: d controlled-W^dag calls (slots d+1..2d)
+% with a gap column between boxes to prevent visual overlap.
+% PREP and PREP^dag shown as explicit gates on the b register.
+%
+\documentclass{article}
+\usepackage[margin=1cm]{geometry}
+\usepackage{tikz}
+\usetikzlibrary{quantikz2}
+\usepackage{amsmath,amssymb}
+\usepackage{braket}
+
+\newcommand{\ee}{\mathrm{e}}
+\newcommand{\ii}{\mathrm{i}}
+
+\tikzset{operator/.append style={rounded corners}}
+
+\begin{document}
+\pagestyle{empty}
+
+\begin{figure}[ht]
+  \centering
+  \begin{quantikz}[row sep=0.7cm, column sep=0.5cm]
+    \lstick{$\ket{0}_\mathrm{QSP}$}
+      & \qw
+      & \gate{R(\theta_0,\phi_0,\lambda_0)}
+      & \octrl{1}
+      \gategroup[3,steps=2,style={dashed,rounded corners,fill=black!6,inner sep=5pt},background,label style={label position=below,yshift=-0.45cm,align=center}]{\scriptsize Repeat $d$ times\\\scriptsize $j = 1,\dots,d$}
+      & \gate{R(\theta_j,\phi_j,0)}
+      & \qw
+      & \octrl{1}
+      \gategroup[3,steps=2,style={dashed,rounded corners,fill=black!6,inner sep=5pt},background,label style={label position=below,yshift=-0.45cm,align=center}]{\scriptsize Repeat $d$ times\\\scriptsize $j = d{+}1,\dots,2d$}
+      & \gate{R(\theta_j,\phi_j,0)}
+      & \qw
+      & \rstick{$\bra{0}_\mathrm{QSP}$}\qw
+      \\
+    \lstick{$\ket{0}_b$}
+      & \qwbundle{}
+      & \gate{\textsc{Prep}}
+      & \gate[2]{W}
+      & \qw
+      & \qw
+      & \gate[2]{W^\dagger}
+      & \qw
+      & \gate{\textsc{Prep}^\dagger}
+      & \rstick{$\bra{0}_b$}\qw
+      \\
+    \lstick{$\ket{\psi}$}
+      & \qwbundle{}
+      & \qw
+      &
+      & \qw
+      & \qw
+      &
+      & \qw
+      & \qw
+      & \rstick{$\ee^{-\ii\delta A}\ket{\psi} + \mathcal{O}(\varepsilon_\mathrm{QSP})$}\qw
+  \end{quantikz}
+  \caption{Degree-$2d$ GQSP circuit realising $\ee^{-\ii\delta A}$
+  from the walk operator $W$ of Eq.~\ref{eq:qsp-walk}.
+  The first $d$ signal calls are controlled-$W$ and the last $d$
+  are controlled-$W^\dagger$ (MW Thm.~6, $k = d$);
+  post-selecting both ancillas on $\ket{0}$ yields
+  $\ee^{-\ii\delta A} + \mathcal{O}(\varepsilon_\mathrm{QSP})$.}
+  \label{circ:gqsp}
+\end{figure}
+
+\end{document}

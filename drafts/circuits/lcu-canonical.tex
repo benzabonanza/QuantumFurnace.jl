@@ -1,0 +1,81 @@
+% Circuit: Linear Combination of Unitaries (LCU) --- canonical block encoding
+% Generated for: QuantumFurnace.jl PhD thesis
+% Usage: \input{circuits/lcu-canonical.tex} in main thesis, or compile standalone
+%
+% Block-encodes A = sum_t f(t) U(t) via the textbook PREP / SELECT / PREP^dag
+% sandwich on an ancilla time register. Post-selecting the ancilla on |0>
+% yields A|psi>/||f||_1 on the system (un-normalised), where
+% ||f||_1 = sum_t |f(t)| is the subnormalisation factor.
+%
+% Conventions (Childs-Wiebe 2012, Berry et al. 2015, Low-Chuang qubitization 2019):
+%   PREP  :  |0>_a  ->  |f>_a = sum_t sqrt(f(t)/||f||_1) |t>_a         (f(t) >= 0)
+%   SELECT:  sum_t |t><t|_a  otimes  U(t)                               (controlled-U(t))
+%   PREP^dag:  |f>_a  ->  |0>_a                                         (uncompute)
+% For signed/complex f, absorb the phase into SELECT via U~(t) = sgn(f(t)) U(t)
+% and use |f~|_1 = sum_t |f(t)|; the circuit is otherwise unchanged.
+%
+% In the thesis this template is instantiated in two places:
+%  (i) Coherent block encoding of B_a (Algorithm 1a, Section 2.3.1):
+%      nested LCU with two time registers T_-, T_+ preparing the signed kernels
+%      |b_-> and |b_+> that sandwich a Heisenberg-evolved jump operator.
+%  (ii) Dissipative forward pass (Algorithm 1b, Section 2.3.2):
+%      f = Gaussian filter on a single time register Omega; the "PREP^dag" role
+%      is played by QFT because the relevant output is a *superposition* over
+%      Bohr frequencies omega, not a single post-selected block.
+% Here we show the canonical, non-nested template ---  one ancilla register,
+% one filter kernel f(t), SELECT = controlled-U(t) --- as the introductory
+% building block.
+%
+\documentclass{article}
+\usepackage[margin=1cm]{geometry}
+\usepackage{tikz}
+\usetikzlibrary{quantikz2}
+\usepackage{amsmath,amssymb}
+\usepackage{braket}
+
+\newcommand{\ee}{\mathrm{e}}
+\newcommand{\ii}{\mathrm{i}}
+
+% Rounded corners on all gates globally
+\tikzset{operator/.append style={rounded corners}}
+
+\begin{document}
+\pagestyle{empty}
+
+\begin{figure}[ht]
+  \centering
+  \begin{quantikz}[row sep=0.75cm, column sep=0.55cm]
+  %
+  % Row 1: ancilla "time" register (r qubits, bundled). PREP writes |f>,
+  % the bundled ctrl feeds SELECT, PREP^dag uncomputes, post-select on |0>.
+  %
+    \lstick{$\ket{0}_b$}
+      & \qwbundle{}
+      & \gate{\text{PREP}}
+      & \ctrl{1}
+      & \gate{\text{PREP}^\dagger}
+      & \rstick{$\ket{0}$} \qw
+      \\
+  %
+  % Row 2: system register. SELECT is realised as a single controlled gate
+  % off the bundled ancilla: the ancilla basis label t selects which U(t)
+  % acts on the system (mathematically, sum_t |t><t|_a otimes U(t)).
+  %
+    \lstick{$\ket{\psi}_S$}
+      & \qw
+      & \qw
+      & \gate{U(t)}
+      & \qw
+      & \rstick{$\displaystyle\frac{1}{\|f\|_1}\sum_t f(t)\,U(t)\,\ket{\psi}$} \qw
+  \end{quantikz}
+  \caption{Canonical LCU block encoding
+  of $A = \sum_t f(t)\,U(t)$: \textsc{Prep} writes the filter state
+  $\ket{f} = \frac{1}{\sqrt{\|f\|_1}}\sum_t \sqrt{f(t)}\ket{t}$, \textsc{Select}
+  applies $U(t)$ controlled on the ancilla, and \textsc{Prep}$^\dagger$
+  uncomputes. Post-selecting the ancilla on $\ket{0}$ leaves
+  $A\ket{\psi}/\|f\|_1$ on the system, with success probability
+  $\|A\ket{\psi}\|^2/\|f\|_1^2$~\cite{childs2012hamiltonian,berry2015simulating}.}
+  \label{fig:lcu-canonical}
+\end{figure}
+
+\end{document}

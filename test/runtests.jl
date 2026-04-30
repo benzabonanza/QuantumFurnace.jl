@@ -28,6 +28,7 @@ include("test_helpers.jl")
     include("test_krylov_crossvalidation.jl")
     include("test_fitting.jl")
     include("test_mixing.jl")
+    include("test_simulation_time.jl")
     include("test_smooth_metro_eta.jl")
 
     # Trajectory validation (slow: ~minutes, gated behind env variable)
