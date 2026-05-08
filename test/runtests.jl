@@ -57,7 +57,6 @@ include("test_helpers.jl")
     include("test_non_hermitian_jumps.jl")
     include("test_validate_jump_pairing.jl")
     include("test_qf_bm1_kwarg_threading.jl")
-    include("test_oft_prefactors_energy.jl")
 
     # Trajectory validation (slow: ~minutes, gated behind env variable)
     if get(ENV, "QUANTUMFURNACE_FULL_TESTS", "false") == "true"

@@ -160,11 +160,6 @@ function _build_trajectory_workspace(
     else
         nothing
     end
-    oft_pref_energy = if hasproperty(precomputed_data, :oft_prefactors_energy)
-        precomputed_data.oft_prefactors_energy
-    else
-        nothing
-    end
 
     # Build TrajectoryScratch
     sc = TrajectoryScratch(CT, dim)
@@ -174,7 +169,7 @@ function _build_trajectory_workspace(
         nothing,                                     # dll_lindblads (Trajectory path)
         nothing, nothing, nothing, nothing,  # G fields
         nothing, nothing, nothing, Float64(alpha), Float64(delta),  # channel: K0/U_residual/U_coherent=nothing, alpha, delta
-        transition_fn, gamma_norm_factor, energy_labels_vec, nothing, oft_nufft_pref, oft_pref_energy,  # domain precomputed
+        transition_fn, gamma_norm_factor, energy_labels_vec, nothing, oft_nufft_pref,  # domain precomputed
         nothing, nothing, nothing, nothing, nothing, nothing,  # bohr/b fields
         nothing,  # coherent_unitaries
         ham_or_trott, n_jumps, Float64(scaled_prefactor), Float64(config.sigma),  # trajectory fields
@@ -202,7 +197,7 @@ function _copy_workspace_for_thread(ws::Workspace{Trajectory,D,C,T}) where {D,C,
         ws.dll_lindblads,
         ws.G_left, ws.G_right, ws.G_left_adj, ws.G_right_adj,
         ws.K0, ws.U_residual, ws.U_coherent, ws.alpha, ws.delta,
-        ws.transition, ws.gamma_norm_factor, ws.energy_labels, ws.oft_domain_prefactor, ws.oft_nufft_prefactors, ws.oft_prefactors_energy,
+        ws.transition, ws.gamma_norm_factor, ws.energy_labels, ws.oft_domain_prefactor, ws.oft_nufft_prefactors,
         ws.bohr_alpha, ws.bohr_keys, ws.bohr_is, ws.bohr_js, ws.b_minus, ws.b_plus,
         ws.coherent_unitaries,
         ws.ham_or_trott, ws.n_jumps, ws.scaled_prefactor, ws.sigma,
@@ -234,7 +229,7 @@ function _precompute_R(
     scratch::ThermalizeScratch{<:Complex},
     )
     dim = size(hamiltonian.data, 1)
-    (; transition, gamma_norm_factor, energy_labels, oft_prefactors_energy) = precomputed_data
+    (; transition, gamma_norm_factor, energy_labels) = precomputed_data
 
     n_labels = length(energy_labels)
     if Threads.nthreads() > 1 && n_labels >= OMEGA_THREAD_THRESHOLD
@@ -242,6 +237,7 @@ function _precompute_R(
     end
 
     base_prefactor = precomputed_data.oft_domain_prefactor * gamma_norm_factor
+    inv_4sigma2 = 1.0 / (4 * config.sigma^2)
 
     fill!(scratch.R, 0)
 
@@ -253,8 +249,7 @@ function _precompute_R(
                 w = abs(w_raw)
 
                 # Aw := A .* exp(-(w-nu)^2/(4sigma^2))   (elementwise in eigenbasis)
-                pref_view = _prefactor_view(oft_prefactors_energy, w)
-                @. scratch.jump_oft = jump.in_eigenbasis * pref_view
+                oft!(scratch.jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
 
                 # Positive-frequency contribution: rate2(w) * (Aw^dagger Aw)
                 rate2_pos = base_prefactor * transition(w)
@@ -272,8 +267,7 @@ function _precompute_R(
         else
             # Non-Hermitian jump: full grid, no mirroring shortcut.
             for w in energy_labels
-                pref_view = _prefactor_view(oft_prefactors_energy, w)
-                @. scratch.jump_oft = jump.in_eigenbasis * pref_view
+                oft!(scratch.jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
 
                 rate2 = base_prefactor * transition(w)
                 mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)
@@ -430,6 +424,7 @@ function _precompute_R_threaded_energy!(
     dim = size(hamiltonian.data, 1)
     (; transition, gamma_norm_factor, energy_labels) = precomputed_data
     base_prefactor = precomputed_data.oft_domain_prefactor * gamma_norm_factor
+    inv_4sigma2 = 1.0 / (4 * config.sigma^2)
 
     fill!(scratch.R, 0)
 
@@ -452,9 +447,9 @@ function _precompute_R_threaded_energy!(
         try
             @sync for (idx, chunk) in enumerate(chunks)
                 Threads.@spawn _precompute_R_chunk_energy!(
-                    task_scratches[idx], jump, precomputed_data,
+                    task_scratches[idx], jump, hamiltonian, precomputed_data,
                     half_indices[chunk];
-                    base_prefactor=base_prefactor)
+                    base_prefactor=base_prefactor, inv_4sigma2=inv_4sigma2)
             end
         finally
             BLAS.set_num_threads(old_blas)
@@ -473,19 +468,20 @@ end
 function _precompute_R_chunk_energy!(
     scratch::ThermalizeScratch{CT},
     jump::JumpOp,
+    hamiltonian::HamHam,
     precomputed_data,
     label_indices::AbstractVector{Int};
     base_prefactor::Real,
+    inv_4sigma2::Real,
 ) where {CT<:Complex}
-    (; transition, energy_labels, oft_prefactors_energy) = precomputed_data
+    (; transition, energy_labels) = precomputed_data
     fill!(scratch.R, 0)
 
     @inbounds for li in label_indices
         w_raw = energy_labels[li]
         w = abs(w_raw)
 
-        pref_view = _prefactor_view(oft_prefactors_energy, w)
-        @. scratch.jump_oft = jump.in_eigenbasis * pref_view
+        oft!(scratch.jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
 
         rate2_pos = base_prefactor * transition(w)
         mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)
@@ -1357,8 +1353,7 @@ end
     step_along_trajectory!(psi, ws, rng [, a])  for D == EnergyDomain
 
     Per-operator Lie-Trotter splitting for EnergyDomain.
-    Same logic as Time/Trotter variant but A_{a,w} is generated by reading
-    the `EnergyDomainPrefactors` cache (`ws.oft_prefactors_energy`, qf-e60).
+    Same logic as Time/Trotter variant but A_{a,w} is generated by `oft!(...)`.
     See the Time/TrotterDomain method for the `a` argument semantics.
 """
 function step_along_trajectory!(
@@ -1432,15 +1427,16 @@ function step_along_trajectory!(
         chosen = false
         last_norm2 = 0.0
 
-        oft_prefactors_energy = ws.oft_prefactors_energy::EnergyDomainPrefactors{Float64, Array{Float64, 3}}
+        ham = ws.ham_or_trott
+        @assert ham isa HamHam
+        inv_4sigma2 = 1.0 / (4 * sigma^2)
 
         @inbounds if jump.hermitian
             for w_raw in energy_labels
                 w_raw > 1e-12 && continue
                 w = abs(w_raw)
 
-                pref_view = _prefactor_view(oft_prefactors_energy, w)
-                @. sc.jump_oft = jump.in_eigenbasis * pref_view
+                oft!(sc.jump_oft, jump.in_eigenbasis, ham.bohr_freqs, w, inv_4sigma2)
 
                 mul!(sc.Rpsi, sc.jump_oft, psi)
                 n2 = _norm2(sc.Rpsi)
@@ -1470,8 +1466,7 @@ function step_along_trajectory!(
             end
         else
             for w in energy_labels
-                pref_view = _prefactor_view(oft_prefactors_energy, w)
-                @. sc.jump_oft = jump.in_eigenbasis * pref_view
+                oft!(sc.jump_oft, jump.in_eigenbasis, ham.bohr_freqs, w, inv_4sigma2)
 
                 mul!(sc.Rpsi, sc.jump_oft, psi)
                 n2 = _norm2(sc.Rpsi)

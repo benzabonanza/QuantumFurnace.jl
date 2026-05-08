@@ -513,7 +513,6 @@ struct Workspace{S<:AbstractSimulation, D<:AbstractDomain, C<:AbstractConstructi
     energy_labels::Union{Nothing, Vector{Float64}}
     oft_domain_prefactor::Union{Nothing, Float64}
     oft_nufft_prefactors::Any  # NUFFTPrefactors or Nothing
-    oft_prefactors_energy::Any # EnergyDomainPrefactors or Nothing (qf-e60.1)
     bohr_alpha::Any            # BohrDomain alpha function (renamed to avoid clash with CPTP alpha)
     bohr_keys::Any             # BohrDomain keys
     bohr_is::Any               # BohrDomain row indices
@@ -525,7 +524,7 @@ struct Workspace{S<:AbstractSimulation, D<:AbstractDomain, C<:AbstractConstructi
     coherent_unitaries::Union{Nothing, Vector{Matrix{Complex{T}}}}
 
     # Trajectory-specific fields (per-operator Lie-Trotter splitting)
-    ham_or_trott::Any          # HamHam or TrottTrott (carried alongside cached prefactors)
+    ham_or_trott::Any          # HamHam or TrottTrott (needed for EnergyDomain oft!())
     n_jumps::Union{Nothing, Int}
     scaled_prefactor::Union{Nothing, Float64}
     sigma::Union{Nothing, Float64}

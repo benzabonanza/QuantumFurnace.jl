@@ -54,7 +54,7 @@ function _jump_contribution!(
     coherent_term::Union{Nothing, AbstractMatrix{<:Complex}} = nothing,
     )
 
-    (; transition, gamma_norm_factor, energy_labels, oft_prefactors_energy) = precomputed_data
+    (; transition, gamma_norm_factor, energy_labels) = precomputed_data
 
     B = coherent_term
     if B !== nothing
@@ -63,14 +63,14 @@ function _jump_contribution!(
 
     jump_oft = ws.scratch.jump_tmp
     prefactor = precomputed_data.oft_domain_prefactor * gamma_norm_factor
+    inv_4sigma2 = 1.0 / (4 * config.sigma^2)
 
     if jump.hermitian
         for w_raw in energy_labels
             # iterate only half-grid (w<=0) and mirror manually
             w_raw > 1e-12 && continue
             w = abs(w_raw)
-            pref_view = _prefactor_view(oft_prefactors_energy, w)
-            @. jump_oft = jump.in_eigenbasis * pref_view
+            oft!(jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
             scalar_w = prefactor * transition(w)
             _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
             if w > 1e-12
@@ -80,8 +80,7 @@ function _jump_contribution!(
         end
     else
         for w in energy_labels
-            pref_view = _prefactor_view(oft_prefactors_energy, w)
-            @. jump_oft = jump.in_eigenbasis * pref_view
+            oft!(jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
             scalar_w = prefactor * transition(w)
             _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
         end
@@ -408,7 +407,7 @@ function _jump_contribution!(
     )
 
     dim = size(evolving_dm, 1)
-    (; transition, gamma_norm_factor, energy_labels, oft_prefactors_energy) = precomputed_data
+    (; transition, gamma_norm_factor, energy_labels) = precomputed_data
 
     jump_weight_scaling = rescale_by_inv_prob ? (gamma_norm_factor / jump_prob) : gamma_norm_factor
 
@@ -416,6 +415,7 @@ function _jump_contribution!(
 
     # --- Dissipative part ---
     base_prefactor = precomputed_data.oft_domain_prefactor * jump_weight_scaling
+    inv_4sigma2 = 1.0 / (4 * config.sigma^2)
 
     fill!(scratch.R, 0)
     fill!(scratch.rho_jump, 0)
@@ -426,8 +426,7 @@ function _jump_contribution!(
             w = abs(w_raw)
 
             # Aw
-            pref_view = _prefactor_view(oft_prefactors_energy, w)
-            @. scratch.jump_oft = jump.in_eigenbasis * pref_view
+            oft!(scratch.jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
 
             rate2_pos = base_prefactor * transition(w)
 
@@ -452,8 +451,7 @@ function _jump_contribution!(
         end
     else
         @inbounds for w in energy_labels
-            pref_view = _prefactor_view(oft_prefactors_energy, w)
-            @. scratch.jump_oft = jump.in_eigenbasis * pref_view
+            oft!(scratch.jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
 
             rate2 = base_prefactor * transition(w)
 
@@ -605,7 +603,7 @@ function _accumulate_rho_jump!(
     precomputed_data;
     jump_weight_scaling::Real,
 )
-    (; transition, energy_labels, oft_prefactors_energy) = precomputed_data
+    (; transition, energy_labels) = precomputed_data
 
     n_labels = length(energy_labels)
     if Threads.nthreads() > 1 && n_labels >= OMEGA_THREAD_THRESHOLD
@@ -613,6 +611,7 @@ function _accumulate_rho_jump!(
     end
 
     base_prefactor = precomputed_data.oft_domain_prefactor * jump_weight_scaling
+    inv_4sigma2 = 1.0 / (4 * config.sigma^2)
 
     fill!(scratch.rho_jump, 0)
 
@@ -621,8 +620,7 @@ function _accumulate_rho_jump!(
             w_raw > 1e-12 && continue
             w = abs(w_raw)
 
-            pref_view = _prefactor_view(oft_prefactors_energy, w)
-            @. scratch.jump_oft = jump.in_eigenbasis * pref_view
+            oft!(scratch.jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
 
             rate2_pos = base_prefactor * transition(w)
 
@@ -640,8 +638,7 @@ function _accumulate_rho_jump!(
         end
     else
         @inbounds for w in energy_labels
-            pref_view = _prefactor_view(oft_prefactors_energy, w)
-            @. scratch.jump_oft = jump.in_eigenbasis * pref_view
+            oft!(scratch.jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
 
             rate2 = base_prefactor * transition(w)
 
@@ -799,6 +796,7 @@ function _accumulate_rho_jump_threaded_energy!(
 ) where {CT<:Complex}
     (; transition, energy_labels) = precomputed_data
     base_prefactor = precomputed_data.oft_domain_prefactor * jump_weight_scaling
+    inv_4sigma2 = 1.0 / (4 * config.sigma^2)
 
     # For Hermitian jumps, pre-filter to half-grid indices for balanced partitioning
     if jump.hermitian
@@ -820,9 +818,9 @@ function _accumulate_rho_jump_threaded_energy!(
     try
         @sync for (idx, chunk) in enumerate(chunks)
             Threads.@spawn _accumulate_rho_jump_chunk_energy!(
-                task_scratches[idx], evolving_dm, jump,
+                task_scratches[idx], evolving_dm, jump, hamiltonian,
                 config, precomputed_data, half_indices[chunk];
-                base_prefactor=base_prefactor)
+                base_prefactor=base_prefactor, inv_4sigma2=inv_4sigma2)
         end
     finally
         BLAS.set_num_threads(old_blas)
@@ -841,20 +839,21 @@ function _accumulate_rho_jump_chunk_energy!(
     scratch::ThermalizeScratch{CT},
     evolving_dm::Matrix{CT},
     jump::JumpOp,
+    hamiltonian::HamHam,
     config::Config{Thermalize, EnergyDomain},
     precomputed_data,
     label_indices::AbstractVector{Int};
     base_prefactor::Real,
+    inv_4sigma2::Real,
 ) where {CT<:Complex}
-    (; transition, energy_labels, oft_prefactors_energy) = precomputed_data
+    (; transition, energy_labels) = precomputed_data
     fill!(scratch.rho_jump, 0)
 
     @inbounds for li in label_indices
         w_raw = energy_labels[li]
         w = abs(w_raw)
 
-        pref_view = _prefactor_view(oft_prefactors_energy, w)
-        @. scratch.jump_oft = jump.in_eigenbasis * pref_view
+        oft!(scratch.jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
 
         rate2_pos = base_prefactor * transition(w)
         mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft')

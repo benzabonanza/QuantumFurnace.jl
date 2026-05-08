@@ -62,7 +62,6 @@ function Workspace(
     pd_el = hasproperty(precomputed_data, :energy_labels) ? precomputed_data.energy_labels : nothing
     pd_odp = hasproperty(precomputed_data, :oft_domain_prefactor) ? precomputed_data.oft_domain_prefactor : nothing
     pd_nufft = hasproperty(precomputed_data, :oft_nufft_prefactors) ? precomputed_data.oft_nufft_prefactors : nothing
-    pd_oft_pre_energy = hasproperty(precomputed_data, :oft_prefactors_energy) ? precomputed_data.oft_prefactors_energy : nothing
     pd_alpha = hasproperty(precomputed_data, :alpha) ? precomputed_data.alpha : nothing
     pd_bkeys = hasproperty(precomputed_data, :bohr_keys) ? precomputed_data.bohr_keys : nothing
     pd_bis = hasproperty(precomputed_data, :bohr_is) ? precomputed_data.bohr_is : nothing
@@ -85,7 +84,7 @@ function Workspace(
         nothing,  # dll_lindblads (CKG/GNS path; populated by DLL specialised constructor)
         G_left, G_right, G_left_adj, G_right_adj,
         nothing, nothing, nothing, nothing, nothing,  # channel fields
-        pd_transition, pd_gnf, pd_el, pd_odp, pd_nufft, pd_oft_pre_energy,
+        pd_transition, pd_gnf, pd_el, pd_odp, pd_nufft,
         pd_alpha, pd_bkeys, pd_bis, pd_bjs, pd_bminus, pd_bplus,
         nothing,  # coherent_unitaries
         nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # trajectory fields
@@ -113,15 +112,17 @@ function _accumulate_R_total!(
     config::Config{<:Any, EnergyDomain},
     hamiltonian::HamHam,
 ) where {T<:Complex}
-    (; transition, gamma_norm_factor, energy_labels, oft_prefactors_energy) = precomputed_data
+    (; transition, gamma_norm_factor, energy_labels) = precomputed_data
+    bohr_freqs = hamiltonian.bohr_freqs
+    inv_4sigma2 = 1.0 / (4 * config.sigma^2)
     prefactor = precomputed_data.oft_domain_prefactor * gamma_norm_factor
 
     n_labels = length(energy_labels)
     n_jumps  = length(ws_eigenbases)
     if Threads.nthreads() > 1 && n_jumps * n_labels >= OMEGA_THREAD_THRESHOLD
         return _accumulate_R_total_threaded_energy!(
-            R, ws_eigenbases, ws_hermitian, oft_prefactors_energy, energy_labels,
-            transition, prefactor)
+            R, ws_eigenbases, ws_hermitian, bohr_freqs, energy_labels,
+            transition, prefactor, inv_4sigma2)
     end
 
     dim = size(R, 1)
@@ -134,8 +135,7 @@ function _accumulate_R_total!(
             for w_raw in energy_labels
                 w_raw > 1e-12 && continue
                 w = abs(w_raw)
-                pref_view = _prefactor_view(oft_prefactors_energy, w)
-                @. jump_oft = eigenbasis * pref_view
+                oft!(jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
                 rate2 = prefactor * transition(w)
                 mul!(LdagL, jump_oft', jump_oft)
                 @. R += rate2 * LdagL
@@ -147,8 +147,7 @@ function _accumulate_R_total!(
             end
         else
             for w in energy_labels
-                pref_view = _prefactor_view(oft_prefactors_energy, w)
-                @. jump_oft = eigenbasis * pref_view
+                oft!(jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
                 rate2 = prefactor * transition(w)
                 mul!(LdagL, jump_oft', jump_oft)
                 @. R += rate2 * LdagL
@@ -286,10 +285,11 @@ function _accumulate_R_total_threaded_energy!(
     R::Matrix{T},
     ws_eigenbases::Vector{Matrix{T}},
     ws_hermitian::Vector{Bool},
-    oft_prefactors_energy::EnergyDomainPrefactors{Float64, Array{Float64, 3}},
+    bohr_freqs::AbstractMatrix{<:Real},
     energy_labels::AbstractVector{Float64},
     transition,
     prefactor::Float64,
+    inv_4sigma2::Float64,
 ) where {T<:Complex}
     work = _build_R_total_work_list(ws_hermitian, energy_labels)
     n_work = length(work)
@@ -310,8 +310,8 @@ function _accumulate_R_total_threaded_energy!(
         @sync for (idx, chunk) in enumerate(chunks)
             Threads.@spawn _accumulate_R_total_chunk_energy!(
                 R_partials[idx], jump_ofts[idx], LdagLs[idx],
-                ws_eigenbases, ws_hermitian, oft_prefactors_energy, energy_labels,
-                work, chunk, transition, prefactor)
+                ws_eigenbases, ws_hermitian, bohr_freqs, energy_labels,
+                work, chunk, transition, prefactor, inv_4sigma2)
         end
     finally
         BLAS.set_num_threads(old_blas)
@@ -329,12 +329,13 @@ function _accumulate_R_total_chunk_energy!(
     LdagL::Matrix{T},
     ws_eigenbases::Vector{Matrix{T}},
     ws_hermitian::Vector{Bool},
-    oft_prefactors_energy::EnergyDomainPrefactors{Float64, Array{Float64, 3}},
+    bohr_freqs::AbstractMatrix{<:Real},
     energy_labels::AbstractVector{Float64},
     work::Vector{Tuple{Int, Int}},
     chunk::UnitRange{Int},
     transition,
     prefactor::Float64,
+    inv_4sigma2::Float64,
 ) where {T<:Complex}
     @inbounds for w_idx in chunk
         (k, li) = work[w_idx]
@@ -344,8 +345,7 @@ function _accumulate_R_total_chunk_energy!(
         w_raw = energy_labels[li]
         w = is_herm ? abs(w_raw) : w_raw
 
-        pref_view = _prefactor_view(oft_prefactors_energy, w)
-        @. jump_oft = eigenbasis * pref_view
+        oft!(jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
         rate2 = prefactor * transition(w)
         mul!(LdagL, jump_oft', jump_oft)
         @. R_partial += rate2 * LdagL
@@ -696,7 +696,7 @@ function Workspace(
         dll_lindblads,
         G_left, G_right, G_left_adj, G_right_adj,
         nothing, nothing, nothing, nothing, nothing,  # channel fields
-        nothing, nothing, nothing, nothing, nothing, nothing,  # transition/gnf/energy_labels/odp/nufft/oft_prefactors_energy
+        nothing, nothing, nothing, nothing, nothing,  # transition/gnf/energy_labels/odp/nufft
         nothing, nothing, nothing, nothing, nothing, nothing,  # bohr_alpha/bohr_keys/bohr_is/bohr_js/b_minus/b_plus
         nothing,  # coherent_unitaries
         nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # trajectory fields
@@ -788,7 +788,6 @@ function Workspace(
     pd_el = hasproperty(precomputed_data, :energy_labels) ? precomputed_data.energy_labels : nothing
     pd_odp = hasproperty(precomputed_data, :oft_domain_prefactor) ? precomputed_data.oft_domain_prefactor : nothing
     pd_nufft = hasproperty(precomputed_data, :oft_nufft_prefactors) ? precomputed_data.oft_nufft_prefactors : nothing
-    pd_oft_pre_energy = hasproperty(precomputed_data, :oft_prefactors_energy) ? precomputed_data.oft_prefactors_energy : nothing
     pd_alpha = hasproperty(precomputed_data, :alpha) ? precomputed_data.alpha : nothing
     pd_bkeys = hasproperty(precomputed_data, :bohr_keys) ? precomputed_data.bohr_keys : nothing
     pd_bis = hasproperty(precomputed_data, :bohr_is) ? precomputed_data.bohr_is : nothing
@@ -811,7 +810,7 @@ function Workspace(
         nothing,  # dll_lindblads (Thermalize path)
         G_left, G_right, G_left_adj, G_right_adj,
         channel.K0, channel.U_residual, U_coherent, nothing, Float64(delta),
-        pd_transition, pd_gnf, pd_el, pd_odp, pd_nufft, pd_oft_pre_energy,
+        pd_transition, pd_gnf, pd_el, pd_odp, pd_nufft,
         pd_alpha, pd_bkeys, pd_bis, pd_bjs, pd_bminus, pd_bplus,
         nothing,  # coherent_unitaries
         nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # trajectory fields

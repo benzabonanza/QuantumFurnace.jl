@@ -378,9 +378,10 @@ function _run_threaded_lindbladian!(ws, rho, config, ham; adjoint::Bool=false)
 
     prefactor = ws.oft_domain_prefactor * ws.gamma_norm_factor
     if config.domain isa EnergyDomain
+        inv_4sigma2 = 1.0 / (4 * config.sigma^2)
         QuantumFurnace._apply_lindbladian_threaded_energy!(
             sc, rho, ws.jump_eigenbases, ws.jump_hermitian,
-            ws.oft_prefactors_energy, ws.energy_labels, config, prefactor;
+            ham.bohr_freqs, ws.energy_labels, config, prefactor, inv_4sigma2;
             adjoint=adjoint)
     else
         nufft = ws.oft_nufft_prefactors
@@ -473,13 +474,14 @@ end
 
         sc = ws.scratch
         prefactor = ws.oft_domain_prefactor * ws.gamma_norm_factor
+        inv_4sigma2 = 1.0 / (4 * config.sigma^2)
 
         # Pre-fill rho_out with a sentinel value
         fill!(sc.rho_out, ComplexF64(7.0))
         # Empty energy labels -> empty work list
         QuantumFurnace._apply_lindbladian_threaded_energy!(
             sc, rho, ws.jump_eigenbases, ws.jump_hermitian,
-            ws.oft_prefactors_energy, Float64[], config, prefactor;
+            TEST_HAM.bohr_freqs, Float64[], config, prefactor, inv_4sigma2;
             adjoint=false)
         @test all(sc.rho_out .== ComplexF64(7.0))
     else
