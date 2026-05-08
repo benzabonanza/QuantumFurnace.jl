@@ -525,7 +525,7 @@ struct Workspace{S<:AbstractSimulation, D<:AbstractDomain, C<:AbstractConstructi
     coherent_unitaries::Union{Nothing, Vector{Matrix{Complex{T}}}}
 
     # Trajectory-specific fields (per-operator Lie-Trotter splitting)
-    ham_or_trott::Any          # HamHam or TrottTrott (needed for EnergyDomain oft!())
+    ham_or_trott::Any          # HamHam or TrottTrott (carried alongside cached prefactors)
     n_jumps::Union{Nothing, Int}
     scaled_prefactor::Union{Nothing, Float64}
     sigma::Union{Nothing, Float64}
