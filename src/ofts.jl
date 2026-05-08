@@ -4,8 +4,21 @@
 Compute the Operator Fourier Transform A(omega) in-place:
     out[i,j] = eigenbasis[i,j] * exp(-(energy - bohr_freqs[i,j])^2 * inv_4sigma2)
 
-This is the optimized concrete-typed signature for all simulation paths.
-EnergyDomain only (Time/TrotterDomain uses NUFFT prefactors).
+# Role after qf-e60
+
+Mainline EnergyDomain paths (`apply_lindbladian!`, `_jump_contribution!`,
+`_accumulate_jump_sandwich!`, `_accumulate_R_total!`, `_precompute_R!`,
+`step_along_trajectory!`, `_accumulate_rho_jump!`) no longer call `oft!` —
+they read the precomputed `EnergyDomainPrefactors` table built once at
+`Workspace` construction time (`ws.oft_prefactors_energy`,
+`_prepare_oft_prefactors_energy` in `src/energy_domain.jl`) and apply it
+via `_prefactor_view` plus an element-wise broadcast. The cache stores
+the closed-form `exp(-(ω - bohr_freqs)^2 / 4σ²)` envelope as
+`Array{Float64, 3}`.
+
+`oft!` is retained as the **gold-standard reference implementation** for
+the per-(jump, ω) bit-equivalence harness in `test_oft_prefactors_energy.jl`.
+Use the cache (`_prefactor_view(ws.oft_prefactors_energy, ω)`) in new code.
 """
 @inline function oft!(
     out::Matrix{T},
