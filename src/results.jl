@@ -38,9 +38,22 @@ function _config_to_dict(config::Config)
     d[:gaussian_parameters]     = config.gaussian_parameters
     d[:a]                       = config.a
     d[:s]                       = config.s
+    # Per-register triples (qf-9z0). Legacy single-register kwargs retained
+    # for old caches: dual-schema reader in `_dict_to_config_kwargs` promotes
+    # `num_energy_bits/t0/w0` -> all three triples when only the legacy keys
+    # are present.
     d[:num_energy_bits]         = config.num_energy_bits
     d[:t0]                      = config.t0
     d[:w0]                      = config.w0
+    d[:num_energy_bits_D]       = config.num_energy_bits_D
+    d[:t0_D]                    = config.t0_D
+    d[:w0_D]                    = config.w0_D
+    d[:num_energy_bits_b_minus] = config.num_energy_bits_b_minus
+    d[:t0_b_minus]              = config.t0_b_minus
+    d[:w0_b_minus]              = config.w0_b_minus
+    d[:num_energy_bits_b_plus]  = config.num_energy_bits_b_plus
+    d[:t0_b_plus]               = config.t0_b_plus
+    d[:w0_b_plus]               = config.w0_b_plus
     d[:eta]                     = config.eta
     d[:num_trotter_steps_per_t0] = config.num_trotter_steps_per_t0
 
@@ -100,8 +113,17 @@ function _dict_to_config_kwargs(d::Dict, domain)
     kwargs[:beta]                    = d[:beta]
     kwargs[:sigma]                   = d[:sigma]
 
-    # Optional fields (only set if present and non-nothing)
-    for key in (:a, :s, :num_energy_bits, :t0, :w0, :eta, :num_trotter_steps_per_t0)
+    # Optional fields (only set if present and non-nothing). Per-register
+    # fields (qf-9z0) added alongside legacy `num_energy_bits/t0/w0` kwargs.
+    # Older BSON caches without per-register keys fall through to the legacy
+    # kwargs and the Config helper accessors then promote them.
+    for key in (
+        :a, :s, :eta, :num_trotter_steps_per_t0,
+        :num_energy_bits, :t0, :w0,
+        :num_energy_bits_D, :t0_D, :w0_D,
+        :num_energy_bits_b_minus, :t0_b_minus, :w0_b_minus,
+        :num_energy_bits_b_plus, :t0_b_plus, :w0_b_plus,
+    )
         val = get(d, key, nothing)
         if val !== nothing
             kwargs[key] = val

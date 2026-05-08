@@ -1,27 +1,57 @@
 {
-  "model": "claude-opus-4-7",
   "hooks": {
-    "SessionStart": [
+    "PreCompact": [
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "bash -c 'MEMORY_SRC=$(pwd)/.claude-memory && MEMORY_DST=$HOME/.claude/projects/$(pwd | sed \"s|[/.]|-|g\")/memory && mkdir -p \"$MEMORY_SRC\" \"$(dirname \"$MEMORY_DST\")\" && [ -d \"$MEMORY_DST\" ] && [ ! -L \"$MEMORY_DST\" ] && cp -rn \"$MEMORY_DST\"/* \"$MEMORY_SRC/\" 2>/dev/null; rm -rf \"$MEMORY_DST\" && ln -sf \"$MEMORY_SRC\" \"$MEMORY_DST\" || true'"
-          },
+            "command": "bd prime",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
           {
-            "type": "command",
-            "command": "bash .beads/bin/install-bd-wrapper.sh 2>/dev/null || true"
+            "command": "bash -c 'command -v bd \u003e/dev/null 2\u003e\u00261 \u0026\u0026 bd dolt stop 2\u003e/dev/null || true'",
+            "statusMessage": "Stopping dolt server...",
+            "type": "command"
           }
         ]
       }
     ],
-    "TaskCreated": [
+    "SessionStart": [
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "bash -c 'INPUT=$(cat) && SUBJECT=$(echo \"$INPUT\" | jq -r \".task.subject // empty\") && [ -n \"$SUBJECT\" ] && command -v bd >/dev/null 2>&1 && bd create \"$SUBJECT\" -t task -p 2 2>/dev/null || true'",
-            "statusMessage": "Syncing task to beads..."
+            "command": "bash -c 'MEMORY_SRC=$(pwd)/.claude-memory \u0026\u0026 MEMORY_DST=$HOME/.claude/projects/$(pwd | sed \"s|[/.]|-|g\")/memory \u0026\u0026 mkdir -p \"$MEMORY_SRC\" \"$(dirname \"$MEMORY_DST\")\" \u0026\u0026 [ -d \"$MEMORY_DST\" ] \u0026\u0026 [ ! -L \"$MEMORY_DST\" ] \u0026\u0026 cp -rn \"$MEMORY_DST\"/* \"$MEMORY_SRC/\" 2\u003e/dev/null; rm -rf \"$MEMORY_DST\" \u0026\u0026 ln -sf \"$MEMORY_SRC\" \"$MEMORY_DST\" || true'",
+            "type": "command"
+          },
+          {
+            "command": "bash .beads/bin/install-bd-wrapper.sh 2\u003e/dev/null || true",
+            "type": "command"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "command": "bd prime",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "bash -c 'cd \"$CLAUDE_PROJECT_DIR\" 2\u003e/dev/null \u0026\u0026 bd export \u003e .beads/issues.jsonl.tmp 2\u003e/dev/null \u0026\u0026 [ -s .beads/issues.jsonl.tmp ] \u0026\u0026 mv .beads/issues.jsonl.tmp .beads/issues.jsonl || rm -f .beads/issues.jsonl.tmp'",
+            "statusMessage": "Syncing beads to issues.jsonl...",
+            "type": "command"
           }
         ]
       }
@@ -30,20 +60,20 @@
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "bash -c 'INPUT=$(cat) && SUBJECT=$(echo \"$INPUT\" | jq -r \".task.subject // empty\") && [ -n \"$SUBJECT\" ] && command -v bd >/dev/null 2>&1 && ISSUE_ID=$(bd search \"$SUBJECT\" 2>/dev/null | head -1 | awk \"{print \\$1}\") && [ -n \"$ISSUE_ID\" ] && bd close \"$ISSUE_ID\" -r \"completed\" 2>/dev/null || true'",
-            "statusMessage": "Closing beads issue..."
+            "command": "bash -c 'INPUT=$(cat) \u0026\u0026 SUBJECT=$(echo \"$INPUT\" | jq -r \".task.subject // empty\") \u0026\u0026 [ -n \"$SUBJECT\" ] \u0026\u0026 command -v bd \u003e/dev/null 2\u003e\u00261 \u0026\u0026 ISSUE_ID=$(bd search \"$SUBJECT\" 2\u003e/dev/null | head -1 | awk \"{print \\$1}\") \u0026\u0026 [ -n \"$ISSUE_ID\" ] \u0026\u0026 bd close \"$ISSUE_ID\" -r \"completed\" 2\u003e/dev/null || true'",
+            "statusMessage": "Closing beads issue...",
+            "type": "command"
           }
         ]
       }
     ],
-    "SessionEnd": [
+    "TaskCreated": [
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "bash -c 'command -v bd >/dev/null 2>&1 && bd dolt stop 2>/dev/null || true'",
-            "statusMessage": "Stopping dolt server..."
+            "command": "bash -c 'INPUT=$(cat) \u0026\u0026 SUBJECT=$(echo \"$INPUT\" | jq -r \".task.subject // empty\") \u0026\u0026 [ -n \"$SUBJECT\" ] \u0026\u0026 command -v bd \u003e/dev/null 2\u003e\u00261 \u0026\u0026 bd create \"$SUBJECT\" -t task -p 2 2\u003e/dev/null || true'",
+            "statusMessage": "Syncing task to beads...",
+            "type": "command"
           }
         ]
       }

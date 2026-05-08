@@ -124,7 +124,7 @@ function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float6
         throw(ArgumentError("Number of disordering terms must match number of coefficient vectors"))
     end
 
-    base_hamiltonian = _construct_base_ham(terms, coeffs, num_qubits)
+    base_hamiltonian = _construct_base_ham(terms, coeffs, num_qubits; periodic=periodic)
     disordering_hamiltonian = _construct_disordering_terms(disordering_terms, disordering_coeffs, num_qubits)
     disordered_ham = base_hamiltonian + disordering_hamiltonian
 
@@ -247,7 +247,7 @@ end
 
 """find_ideal_heisenberg(num_qubits::Int, coeffs::Vector{Float64};
     batch_size::Int=1, periodic::Bool=true,
-    disordering_terms=[[Z]]) -> NamedTuple
+    disordering_terms=[[Z]], disorder_strength=1.0) -> NamedTuple
 
     Constructs and optimizes a disordered 1D Heisenberg Hamiltonian to maximize the minimum level spacing (smallest Bohr frequency).
 
@@ -255,7 +255,7 @@ end
     ```math
     H = H_{base} + H_{disorder}
     ```
-    where ``H_{base}`` is the Heisenberg chain defined by `coeffs` (XX, YY, ZZ interaction strengths) and ``H_{disorder}`` is the sum of all disordering terms with random per-site coefficients.
+    where ``H_{base}`` is the Heisenberg chain defined by `coeffs` (XX, YY, ZZ interaction strengths) and ``H_{disorder}`` is the sum of all disordering terms with random per-site coefficients drawn from `[0, disorder_strength)`.
 
     The Hamiltonian is rescaled and shifted to ensure the spectrum fits within specific bounds.
 
@@ -268,6 +268,8 @@ end
     - `periodic`: If `true`, applies periodic boundary conditions to the chain.
     - `disordering_terms`: A vector of Pauli terms for disorder, e.g. `[[Z]]` (default) or `[[Z], [Z,Z]]`.
       Each term gets its own random per-site coefficients.
+    - `disorder_strength`: Scale factor for the random coefficients (default 1.0). Use ε ≈ 1e-3
+      for "clean + ε-disorder" Hamiltonians where disorder only lifts exact degeneracies.
 
     # Returns
     - `NamedTuple`: Raw Hamiltonian data with fields: `matrix`, `terms`, `base_coeffs`,
@@ -276,14 +278,83 @@ end
 """
 function find_ideal_heisenberg(num_qubits::Int64,
     coeffs::Vector{Float64}; batch_size::Int64 = 1, periodic::Bool = true,
-    disordering_terms::Vector{Vector{Matrix{ComplexF64}}} = [[Z]])
+    disordering_terms::Vector{Vector{Matrix{ComplexF64}}} = [[Z]],
+    disorder_strength::Float64 = 1.0)
 
-    dim = 2^num_qubits
     terms = [[X, X], [Y, Y], [Z, Z]]
-
     base_hamiltonian = _construct_base_ham(terms, coeffs, num_qubits; periodic=periodic)
 
-    # Find best config for smallest bohr frequency
+    return _optimize_disordered_heisenberg(base_hamiltonian, terms, coeffs, num_qubits,
+        disordering_terms; batch_size=batch_size, periodic=periodic,
+        disorder_strength=disorder_strength)
+end
+
+"""find_ideal_2d_heisenberg(Lx::Int, Ly::Int, coeffs::Vector{Float64};
+    batch_size::Int=1, periodic_x::Bool=true, periodic_y::Bool=true,
+    disordering_terms=[[Z]], disorder_strength=1e-3) -> NamedTuple
+
+    Constructs and optimizes a 2D anisotropic Heisenberg Hamiltonian on an `Lx × Ly`
+    square lattice. Bonds are placed along the right neighbour (x-direction) and the
+    up neighbour (y-direction); periodic boundary conditions wrap each direction.
+
+    The Hamiltonian is
+    ```math
+    H = \\sum_{\\langle i,j\\rangle} \\big(J_x X_i X_j + J_y Y_i Y_j + J_z Z_i Z_j\\big)
+        + \\sum_{q,k} c_{k,q} P^{(k)}_q,
+    ```
+    where ``\\langle i,j\\rangle`` runs over nearest-neighbour bonds in the 2D lattice.
+    For Ising-anisotropic couplings (``J_z > J_x = J_y``) the bulk model has a finite-
+    temperature thermal phase transition into a Néel-ordered ground state. The 2D
+    isotropic model (XXX) does not exhibit a finite-T transition due to Mermin–Wagner.
+
+    Site-to-qubit ordering: site ``(i, j)`` with ``1 \\le i \\le L_x``, ``1 \\le j \\le L_y``
+    is mapped to qubit index ``q = (i-1) \\, L_y + (j-1) + 1``. Adjacent ``j`` values
+    correspond to consecutive qubit indices; adjacent ``i`` values are separated by ``L_y``.
+
+    # Arguments
+    - `Lx`, `Ly`: Lattice dimensions; total qubit count is `num_qubits = Lx * Ly`.
+    - `coeffs`: Uniform exchange couplings ``[J_x, J_y, J_z]``.
+
+    # Keywords
+    - `batch_size`: Random-disorder realisations to sample (default 1). For very weak
+      disorder the optimisation surface is flat — use `batch_size ≥ 200`.
+    - `periodic_x`, `periodic_y`: Periodic boundary conditions per direction.
+    - `disordering_terms`: Pauli terms used as on-site/two-site disorder (default `[[Z]]`).
+    - `disorder_strength`: Per-coefficient scale (default 1e-3 for the "clean + ε" use case).
+
+    # Returns
+    - `NamedTuple` with the same schema as `find_ideal_heisenberg` so it is
+      compatible with `HamHam(raw, beta)`. The boolean `periodic` field is set to
+      `periodic_x && periodic_y`.
+"""
+function find_ideal_2d_heisenberg(Lx::Int64, Ly::Int64,
+    coeffs::Vector{Float64}; batch_size::Int64 = 1,
+    periodic_x::Bool = true, periodic_y::Bool = true,
+    disordering_terms::Vector{Vector{Matrix{ComplexF64}}} = [[Z]],
+    disorder_strength::Float64 = 1e-3)
+
+    if Lx < 1 || Ly < 1
+        throw(ArgumentError("Lx and Ly must be at least 1; got Lx=$Lx, Ly=$Ly"))
+    end
+
+    num_qubits = Lx * Ly
+    terms = [[X, X], [Y, Y], [Z, Z]]
+    base_hamiltonian = _construct_2d_heisenberg_base(Lx, Ly, terms, coeffs;
+        periodic_x=periodic_x, periodic_y=periodic_y)
+
+    return _optimize_disordered_heisenberg(base_hamiltonian, terms, coeffs, num_qubits,
+        disordering_terms; batch_size=batch_size, periodic=(periodic_x && periodic_y),
+        disorder_strength=disorder_strength)
+end
+
+# Shared inner kernel for find_ideal_heisenberg and find_ideal_2d_heisenberg:
+# generate `batch_size` random realisations of the disorder field, keep the one
+# with the largest minimum Bohr gap after rescaling/shifting.
+function _optimize_disordered_heisenberg(base_hamiltonian::Hermitian{ComplexF64},
+    terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64},
+    num_qubits::Int64, disordering_terms::Vector{Vector{Matrix{ComplexF64}}};
+    batch_size::Int64, periodic::Bool, disorder_strength::Float64)
+
     best_nu_min = -1.0
     best_ham_matrix = Matrix{ComplexF64}(undef, 0, 0)
     best_eigvals = Float64[]
@@ -293,10 +364,11 @@ function find_ideal_heisenberg(num_qubits::Int64,
     best_disordering_coeffs = [Float64[] for _ in disordering_terms]
     all_disordering_coeffs = [zeros(Float64, num_qubits) for _ in disordering_terms]
 
-    p = Progress(batch_size; desc="Optimizing Heisenberg Hamiltonian...")
+    p = Progress(batch_size; desc="Optimizing disordered Heisenberg Hamiltonian...")
     for _ in 1:batch_size
         for dc in all_disordering_coeffs
             rand!(dc)
+            dc .*= disorder_strength
         end
         disordering_ham = _construct_disordering_terms(disordering_terms, all_disordering_coeffs, num_qubits)
 
@@ -306,7 +378,6 @@ function find_ideal_heisenberg(num_qubits::Int64,
         rescaled_ham = (total_ham ./ rescaling_factor) + shift * I
 
         rescaled_eigvals, rescaled_eigvecs = eigen(Hermitian(rescaled_ham))
-        # Check all differences between consecutive eigenvalues
         nu_min = minimum(diff(rescaled_eigvals))
         if nu_min > best_nu_min
             best_nu_min = nu_min
@@ -360,19 +431,98 @@ function _construct_base_ham(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::
     return Hermitian(Matrix(hamiltonian))
 end
 
-function _construct_disordering_terms(term::Vector{Matrix{ComplexF64}},
-    coeffs::Vector{Float64}, num_qubits::Int64)
+"""
+    _pad_two_site_op(term, num_qubits, q1, q2) -> SparseMatrixCSC{ComplexF64}
 
-    if length(coeffs) != num_qubits
-        throw(ArgumentError("The number of disordering coeffs must be equal to the number of qubits"))
+Place a two-site Pauli term `[op_a, op_b]` at distinct qubit indices `q1, q2`,
+padding the remaining sites with identities. Used by the 2D builder where
+nearest-neighbour qubit indices may not be consecutive (right-neighbour bonds
+have index step `Ly`, not 1).
+
+The returned operator is `op at q1` ⊗ `op at q2` in the natural left-to-right
+qubit ordering of `kron`. For symmetric terms (`op_a == op_b`, e.g. `[X, X]`)
+the placement order does not matter.
+"""
+function _pad_two_site_op(term::Vector{Matrix{ComplexF64}}, num_qubits::Int, q1::Int, q2::Int)
+    if length(term) != 2
+        throw(ArgumentError("_pad_two_site_op expects a 2-site term, got length $(length(term))"))
+    end
+    if q1 == q2
+        throw(ArgumentError("q1 and q2 must be distinct, got q1=q2=$q1"))
+    end
+    if !(1 <= q1 <= num_qubits) || !(1 <= q2 <= num_qubits)
+        throw(ArgumentError("q1 and q2 must be in 1:$num_qubits, got q1=$q1, q2=$q2"))
     end
 
-    disordering_hamiltonian::SparseMatrixCSC{ComplexF64} = spzeros(2^num_qubits, 2^num_qubits)
-    for q in 1:num_qubits
-        disordering_hamiltonian += coeffs[q] * pad_term(term, num_qubits, q)
+    # WLOG a < b in tensor order; assign the matching operator to each side
+    if q1 < q2
+        a, b = q1, q2
+        op_a, op_b = term[1], term[2]
+    else
+        a, b = q2, q1
+        op_a, op_b = term[2], term[1]
     end
 
-    return Hermitian(Matrix(disordering_hamiltonian))
+    id_before  = sparse(I, 2^(a - 1), 2^(a - 1))
+    id_between = sparse(I, 2^(b - a - 1), 2^(b - a - 1))
+    id_after   = sparse(I, 2^(num_qubits - b), 2^(num_qubits - b))
+
+    return kron(id_before, sparse(op_a), id_between, sparse(op_b), id_after)
+end
+
+"""
+    _construct_2d_heisenberg_base(Lx, Ly, terms, coeffs; periodic_x=true, periodic_y=true)
+        -> Hermitian{ComplexF64, Matrix{ComplexF64}}
+
+Build the dense base Hamiltonian for a 2D Heisenberg-family model on an
+`Lx × Ly` square lattice. `terms` is `[[X,X], [Y,Y], [Z,Z]]` (or any subset)
+and `coeffs` carries the uniform exchange strengths `[J_x, J_y, J_z]`.
+
+Bond placement: for each site `(i, j)`, add bonds to its right neighbour
+`(i+1, j)` (along x) and up neighbour `(i, j+1)` (along y). Periodic flags
+wrap each direction. `Lx == 1` (resp. `Ly == 1`) skips x-direction (resp.
+y-direction) bonds even when the periodic flag is true — wrapping a
+single-cell direction would create self-bonds.
+
+When the lattice has `Lx == 2` or `Ly == 2` with periodic BC, the wrap-around
+bond coincides with the original bond and is added twice, matching the
+double-counting convention of `_construct_base_ham` for 1D `n=2` chains.
+"""
+function _construct_2d_heisenberg_base(Lx::Int64, Ly::Int64,
+    terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64};
+    periodic_x::Bool = true, periodic_y::Bool = true)
+
+    if length(terms) != length(coeffs)
+        throw(ArgumentError("The number of terms and coefficients must be equal"))
+    end
+
+    num_qubits = Lx * Ly
+    site_index(i, j) = (i - 1) * Ly + (j - 1) + 1
+
+    hamiltonian::SparseMatrixCSC{ComplexF64} = spzeros(2^num_qubits, 2^num_qubits)
+    for (k, term) in enumerate(terms)
+        for i in 1:Lx, j in 1:Ly
+            # Right neighbour (x-direction): (i, j) -> (i+1, j)
+            if i < Lx
+                hamiltonian += coeffs[k] * _pad_two_site_op(term, num_qubits,
+                    site_index(i, j), site_index(i + 1, j))
+            elseif periodic_x && Lx > 1
+                hamiltonian += coeffs[k] * _pad_two_site_op(term, num_qubits,
+                    site_index(Lx, j), site_index(1, j))
+            end
+
+            # Up neighbour (y-direction): (i, j) -> (i, j+1)
+            if j < Ly
+                hamiltonian += coeffs[k] * _pad_two_site_op(term, num_qubits,
+                    site_index(i, j), site_index(i, j + 1))
+            elseif periodic_y && Ly > 1
+                hamiltonian += coeffs[k] * _pad_two_site_op(term, num_qubits,
+                    site_index(i, Ly), site_index(i, 1))
+            end
+        end
+    end
+
+    return Hermitian(Matrix(hamiltonian))
 end
 
 function _construct_disordering_terms(terms::Vector{Vector{Matrix{ComplexF64}}},

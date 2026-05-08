@@ -166,20 +166,62 @@ end
     # Transition/alpha values are now computed via dispatched 2-arg methods
     # (pick_transition(config, w) / _pick_alpha(config, nu1, nu2)) instead of
     # stored closures, eliminating the Union{Nothing, Function} boxing overhead.
-    MATVEC_ALLOC_BUDGET = 0  # bytes (EnergyDomain / BohrDomain)
-    MATVEC_ALLOC_BUDGET_NUFFT = 0  # bytes (TimeDomain / TrotterDomain)
+    #
+    # qf-in3.4 update: when `Threads.nthreads() > 1` and `n_labels >=
+    # OMEGA_THREAD_THRESHOLD`, the matvec dispatches to the threaded ω-loop
+    # which has fixed overhead from `Threads.@spawn` Task allocations
+    # (~1 kB / spawn). The work_list and per-thread sandwich scratches are
+    # pre-allocated, so the only remaining cost is the spawn itself plus the
+    # `_partition_range` chunks vector. Budget below covers nthreads ≤ 8 and
+    # is the price of the 2–3× wall-time speedup.
+    _running_threaded() = Threads.nthreads() > 1
+    MATVEC_ALLOC_BUDGET       = _running_threaded() ? 8192 : 0  # bytes (EnergyDomain / BohrDomain)
+    MATVEC_ALLOC_BUDGET_NUFFT = _running_threaded() ? 8192 : 0  # bytes (TimeDomain / TrotterDomain)
 
     @testset "Near-zero allocations in matvec hot path" begin
         config = make_config(Lindbladian(),EnergyDomain(); construction=KMS())
         ws = Workspace(config, TEST_HAM, TEST_JUMPS)
         rho = Matrix(random_density_matrix(NUM_QUBITS))
 
-        # Threshold rationale: hot-path matvec must be zero-allocation for Krylov iteration performance.
+        # Threshold rationale: serial path must be zero-alloc; threaded path
+        # incurs `Threads.@spawn` Task overhead (~1 kB × nthreads).
         allocs, allocs_adj = _measure_matvec_allocs(ws, rho, config, TEST_HAM)
         @test allocs <= MATVEC_ALLOC_BUDGET
         @info "apply_lindbladian! allocations (EnergyDomain)" allocs_bytes=allocs threshold=MATVEC_ALLOC_BUDGET
         @test allocs_adj <= MATVEC_ALLOC_BUDGET
         @info "apply_adjoint_lindbladian! allocations (EnergyDomain)" allocs_bytes=allocs_adj threshold=MATVEC_ALLOC_BUDGET
+    end
+
+    # qf-lkb.11.4: EnergyDomain matvec at the production-sweep config
+    # (smooth Metropolis a=0, s=0.25) must remain on the zero-alloc fast path.
+    # Different (a, s) regime than make_config (a=BETA/30, s=0.4) — pick_transition
+    # branches into the same smooth-Metropolis arm (s != 0) but with tighter
+    # smoothing; defensively retest the allocation budget.
+    @testset "Allocation regression: EnergyDomain CKG @ a=0, s=0.25 (qf-lkb.11.4)" begin
+        config = Config(;
+            sim = Lindbladian(),
+            domain = EnergyDomain(),
+            construction = KMS(),
+            num_qubits = NUM_QUBITS,
+            with_linear_combination = true,
+            beta = BETA,
+            sigma = SIGMA,
+            a = 0.0,
+            s = 0.25,
+            num_energy_bits = NUM_ENERGY_BITS,
+            w0 = W0,
+            t0 = T0,
+            num_trotter_steps_per_t0 = NUM_TROTTER_STEPS_PER_T0,
+        )
+        ws = Workspace(config, TEST_HAM, TEST_JUMPS)
+        rho = Matrix(random_density_matrix(NUM_QUBITS))
+        allocs, allocs_adj = _measure_matvec_allocs(ws, rho, config, TEST_HAM)
+        # Budget rationale: serial-path 0 bytes; threaded path (qf-in3.4)
+        # has @spawn Task overhead (~1 kB × nthreads).
+        budget = MATVEC_ALLOC_BUDGET
+        @test allocs <= budget
+        @test allocs_adj <= budget
+        @info "EnergyDomain CKG (a=0, s=0.25) allocations" forward_bytes=allocs adjoint_bytes=allocs_adj
     end
 
     # ========================================================================
@@ -434,9 +476,14 @@ end
         complex_jumps = JumpOp[complex_jump]
 
         # Testset 20: Round-trip with complex jump (EnergyDomain forward)
+        # qf-bm1 Q1: unpaired non-Hermitian jump — flagged with the
+        # `allow_unpaired_nonhermitian` kwarg because this test compares
+        # serial dense vs Krylov matvec on the same physics; KMS-DB is
+        # not asserted here.
         @testset "Round-trip: complex jump forward (EnergyDomain)" begin
             config = make_config(Lindbladian(),EnergyDomain(); construction=KMS())
-            L_dense = construct_lindbladian(complex_jumps, config, TEST_HAM)
+            L_dense = construct_lindbladian(complex_jumps, config, TEST_HAM;
+                allow_unpaired_nonhermitian=true)
             ws = Workspace(config, TEST_HAM, complex_jumps)
             # Threshold rationale: complex non-Hermitian jump validates conj(J) convention.
             # Same algebraic exactness as real jumps, FP accumulation only.
@@ -453,9 +500,11 @@ end
         end
 
         # Testset 21: Round-trip with complex jump (EnergyDomain adjoint)
+        # qf-bm1 Q1 — see preamble of testset 20.
         @testset "Round-trip: complex jump adjoint (EnergyDomain)" begin
             config = make_config(Lindbladian(),EnergyDomain(); construction=KMS())
-            L_dense = construct_lindbladian(complex_jumps, config, TEST_HAM)
+            L_dense = construct_lindbladian(complex_jumps, config, TEST_HAM;
+                allow_unpaired_nonhermitian=true)
             ws = Workspace(config, TEST_HAM, complex_jumps)
             # Threshold rationale: adjoint path for complex jumps, same FP accumulation.
             max_err = 0.0
@@ -492,9 +541,11 @@ end
         end
 
         # Testset 23: Round-trip with complex jump (TimeDomain forward + adjoint)
+        # qf-bm1 Q1 — see preamble of testset 20.
         @testset "Round-trip: complex jump (TimeDomain)" begin
             config_td = make_config(Lindbladian(),TimeDomain(); construction=KMS())
-            L_dense_td = construct_lindbladian(complex_jumps, config_td, TEST_HAM)
+            L_dense_td = construct_lindbladian(complex_jumps, config_td, TEST_HAM;
+                allow_unpaired_nonhermitian=true)
             ws_td = Workspace(config_td, TEST_HAM, complex_jumps)
             # Threshold rationale: complex jump + TimeDomain NUFFT path, FP accumulation only.
             max_err_fwd = 0.0
@@ -511,6 +562,37 @@ end
             @info "Matvec round-trip (complex jump, TimeDomain fwd)" max_error=max_err_fwd n_samples=10 threshold=1e-12
             @info "Adjoint round-trip (complex jump, TimeDomain adj)" max_error=max_err_adj n_samples=10 threshold=1e-12
         end
+    end
+
+    # ========================================================================
+    # include_coherent=false round-trip tests (dissipator-only Lindbladian)
+    # ========================================================================
+
+    @testset "include_coherent=false: $dname forward+adjoint" for (dname, cfg, ham, jumps_used) in [
+        ("EnergyDomain", make_config(Lindbladian(), EnergyDomain(); construction=KMS()), TEST_HAM, TEST_JUMPS),
+        ("TimeDomain",   make_config(Lindbladian(), TimeDomain(); construction=KMS()),   TEST_HAM, TEST_JUMPS),
+        ("TrotterDomain", make_config(Lindbladian(), TrotterDomain(); construction=KMS()), TEST_HAM, TEST_TROTTER_JUMPS),
+        ("BohrDomain",   make_config(Lindbladian(), BohrDomain(); construction=KMS()),   TEST_HAM, TEST_JUMPS),
+    ]
+        trotter_kw = cfg.domain isa TrotterDomain ? (; trotter=TEST_TROTTER) : (;)
+        L_diss = construct_lindbladian(jumps_used, cfg, ham; include_coherent=false, trotter_kw...)
+        ws = Workspace(cfg, ham, jumps_used; trotter_kw...)
+
+        max_fwd = 0.0
+        max_adj = 0.0
+        for _ in 1:10
+            rho = Matrix(random_density_matrix(NUM_QUBITS))
+            L_rho = apply_lindbladian!(ws, rho, cfg, ham; include_coherent=false)
+            err_fwd = norm(L_diss * vec(rho) - vec(L_rho))
+            @test err_fwd < 1e-12
+            max_fwd = max(max_fwd, err_fwd)
+
+            L_adj_rho = apply_adjoint_lindbladian!(ws, rho, cfg, ham; include_coherent=false)
+            err_adj = norm(L_diss' * vec(rho) - vec(L_adj_rho))
+            @test err_adj < 1e-12
+            max_adj = max(max_adj, err_adj)
+        end
+        @info "include_coherent=false ($dname)" max_fwd max_adj
     end
 
 end  # @testset "Krylov Matvec"

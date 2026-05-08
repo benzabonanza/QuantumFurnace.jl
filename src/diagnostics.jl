@@ -235,22 +235,10 @@ part of D. An advisory warning is emitted when the ratio exceeds 0.1.
 """
 function compute_anti_hermitian_defect(L::Matrix{ComplexF64}, gibbs::Hermitian;
                                         eps_trunc::Float64=1e-12)
-    # Extract Gibbs diagonal (Gibbs is diagonal in Hamiltonian eigenbasis)
-    gibbs_diag = real.(diag(Matrix(gibbs)))
-    gibbs_diag_safe = max.(gibbs_diag, eps_trunc)
-
-    rho_quarter = gibbs_diag_safe .^ 0.25
-    rho_inv_quarter = gibbs_diag_safe .^ (-0.25)
-
-    # Diagonal KMS transform: D_ij = d_left[i] * L_ij * d_right[j]
-    d_right = kron(rho_quarter, rho_quarter)
-    d_left = kron(rho_inv_quarter, rho_inv_quarter)
-
-    D_matrix = d_left .* L .* d_right'
-
-    # Hermitian / anti-Hermitian split
-    H_part = (D_matrix + D_matrix') / 2
-    A_part = (D_matrix - D_matrix') / 2
+    # Materialise the discriminant and split into Hermitian / anti-Hermitian
+    # parts.  See src/discriminant.jl for the column-stacking convention.
+    D_matrix = materialize_discriminant(L, gibbs; eps_trunc=eps_trunc)
+    H_part, A_part = hermitian_antihermitian_split(D_matrix)
 
     A_norm = opnorm(A_part)  # Operator 2-norm (largest singular value)
 

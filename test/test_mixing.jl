@@ -309,4 +309,308 @@ using StableRNGs
         @test_throws ArgumentError estimate_mixing_time(result; model=:invalid)
     end
 
+    # ====================================================================
+    # Integrator wrapper (qf-lkb.2): vector-method API + NamedTuple forwarder
+    # ====================================================================
+    @testset "Integrator wrapper (qf-lkb.2)" begin
+
+        # ---------------------------------------------------------------
+        # (a) Synthetic single-exp matches analytic
+        # ---------------------------------------------------------------
+        @testset "(a) vector method: single-exp matches analytic" begin
+            times      = collect(range(0.0, 10.0; length = 101))
+            distances  = 0.5 .* exp.(-0.7 .* times)
+
+            est = estimate_mixing_time(times, distances;
+                                       model           = :single,
+                                       target_epsilon  = 0.01,
+                                       extrapolate     = true)
+
+            # Analytic: 0.5 * exp(-0.7 t) = 0.01  =>  t = log(50) / 0.7
+            @test isapprox(est.fitted_gap,   0.7;           rtol = 1e-3)
+            @test isapprox(est.mixing_time,  log(50) / 0.7; rtol = 1e-2)
+            @test est.model_used === :single
+
+            @info "qf-lkb.2 (a)" gap=est.fitted_gap mixing=est.mixing_time
+        end
+
+        # ---------------------------------------------------------------
+        # (b) Synthetic bi-exp matches analytic
+        # ---------------------------------------------------------------
+        @testset "(b) vector method: bi-exp recovers slow gap" begin
+            # Need t_max >> 1/g_slow ≈ 3.3 to expose the asymptote.
+            # Pick t_max = 30 (~10 e-foldings of slow mode), n=301.
+            times = collect(range(0.0, 30.0; length = 301))
+            dists = 0.4 .* exp.(-2.0 .* times) .+
+                    0.3 .* exp.(-0.3 .* times) .+ 1.0e-5
+
+            est = estimate_mixing_time(times, dists;
+                                       model           = :biexp,
+                                       target_epsilon  = 1.0e-3,
+                                       extrapolate     = true)
+
+            @test isapprox(est.fitted_gap, 0.3; rtol = 5.0e-2)
+            @test est.mixing_time_extrapolated !== nothing &&
+                  isfinite(est.mixing_time_extrapolated)
+            @test est.model_used === :biexp
+            @test est.biexp_fit_result !== nothing
+
+            @info "qf-lkb.2 (b)" slow_gap=est.fitted_gap fast_gap=est.biexp_fit_result.gap_fast tmix=est.mixing_time_extrapolated
+        end
+
+        # ---------------------------------------------------------------
+        # (c) NamedTuple forwarder matches direct vector call
+        # ---------------------------------------------------------------
+        @testset "(c) NamedTuple forwarder bit-equivalent to vector call" begin
+            times = collect(range(0.0, 30.0; length = 301))
+            dists = 0.4 .* exp.(-2.0 .* times) .+
+                    0.3 .* exp.(-0.3 .* times) .+ 1.0e-5
+
+            # Mock the integrator output shape (qf-lkb.1 contract).
+            mock = (
+                t              = times,
+                distances      = dists,
+                total_matvecs  = 0,
+                all_converged  = true,
+            )
+
+            est_nt  = estimate_mixing_time(mock;
+                                           model = :biexp,
+                                           target_epsilon = 1.0e-3,
+                                           extrapolate    = true)
+            est_vec = estimate_mixing_time(times, dists;
+                                           model = :biexp,
+                                           target_epsilon = 1.0e-3,
+                                           extrapolate    = true)
+
+            @test est_nt.mixing_time_extrapolated == est_vec.mixing_time_extrapolated
+            @test est_nt.fitted_gap == est_vec.fitted_gap
+        end
+
+        # ---------------------------------------------------------------
+        # (d) Backward-compat: ThermalizeResults dispatch matches vector dispatch
+        # ---------------------------------------------------------------
+        @testset "(d) ThermalizeResults regression: delegation parity" begin
+            times = collect(0.0:0.1:50.0)
+            dists = 1.5 .* exp.(-0.3 .* times) .+ 0.001
+
+            result = _make_synthetic_result(times, dists; mixing_time = 50.0)
+
+            # ThermalizeResults overload (default :single)
+            est_old = estimate_mixing_time(result;
+                                           target_epsilon = 0.01,
+                                           extrapolate    = true)
+            # Vector method, model=:single explicit (matches old default)
+            est_new = estimate_mixing_time(times, dists;
+                                           model = :single,
+                                           target_epsilon = 0.01,
+                                           extrapolate    = true)
+
+            @test est_old.model_used === :single  # regression: default unchanged
+            @test isapprox(est_old.mixing_time, est_new.mixing_time;  atol = 1.0e-12)
+            @test isapprox(est_old.fitted_gap,  est_new.fitted_gap;   atol = 1.0e-12)
+            @test isapprox(est_old.offset,      est_new.offset;       atol = 1.0e-12)
+        end
+    end
+
+    # ====================================================================
+    # Eigenmode τ_mix (qf-e4y.2): closed-form bisection on the Krylov
+    # spectral decomposition. Replaces the bi-exp curve fit on the :krylov
+    # route — same answer on healthy cells, finite/correct on cells where
+    # LM degenerates.
+    # ====================================================================
+    @testset "Eigenmode τ_mix (qf-e4y.2)" begin
+
+        # Hand-built spectral decomposition: build R_modes, c, eigenvalues
+        # such that ρ(t) - σ_β = Σ_i c_i e^{λ_i t} R_i is a known scalar
+        # multiple of a fixed (Hermitian, traceless) matrix `M`. Then
+        # d(t) = scalar(t) * ‖M‖_1 / 2.
+        function _build_toy_decomp(eigenvalues::Vector{ComplexF64},
+                                    coeffs::Vector{ComplexF64};
+                                    d::Int = 4)
+            # Single shared Hermitian traceless mode shape.
+            M = ComplexF64[0 1 0 0; 1 0 0 0; 0 0 0 -1; 0 0 -1 0]  # Hermitian, tr=0
+            # Replicate M as the right-eigenvector for every non-steady mode;
+            # steady mode is a no-op contribution (c[1] = 0 by convention).
+            R_modes = Vector{Matrix{ComplexF64}}(undef, length(eigenvalues))
+            for i in eachindex(eigenvalues)
+                R_modes[i] = copy(M)
+            end
+            return (R_modes = R_modes, M = M)
+        end
+
+        # ---------------------------------------------------------------
+        # (a) Hand-built 3-mode toy: synthetic spectral data → analytic τ_mix
+        # ---------------------------------------------------------------
+        @testset "(a) 3-mode toy recovers analytic τ_mix" begin
+            d = 4
+            eigenvalues = ComplexF64[0.0, -0.5, -2.0]
+            c           = ComplexF64[0.0, 0.3, 0.4]
+            toy = _build_toy_decomp(eigenvalues, c; d=d)
+            # σ_β and ρ_inf coincide (no floor) so floor_distance = 0.
+            sigma_beta = Matrix{ComplexF64}(I, d, d) / d
+            rho_inf    = copy(sigma_beta)
+
+            # The residual matrix is (0.3 e^{-0.5 t} + 0.4 e^{-2 t}) * M;
+            # ‖M‖_1 = sum of |singular values| = 4 (M has eigenvalues ±1, ±1).
+            M_norm = sum(svdvals(toy.M))  # = 4
+            # d(t) = (0.3 e^{-0.5 t} + 0.4 e^{-2 t}) * M_norm / 2.
+            target = 0.05
+            f_true(t) = (0.3 * exp(-0.5 * t) + 0.4 * exp(-2.0 * t)) * M_norm / 2 - target
+            t_true = Roots.find_zero(f_true, (0.0, 200.0), Roots.Bisection())
+
+            res = eigenmode_mixing_time(eigenvalues, c, toy.R_modes,
+                                          rho_inf, sigma_beta, target;
+                                          atol=1e-4)
+
+            @test res.source === :extrapolated
+            @test isapprox(res.gap, 0.5; atol=1e-12)
+            @test isapprox(res.floor_distance, 0.0; atol=1e-12)
+            @test isapprox(res.mixing_time, t_true; atol=1e-3)
+            @info "(a) toy τ_mix" τ=res.mixing_time τ_true=t_true gap=res.gap n_evals=res.n_evals
+        end
+
+        # ---------------------------------------------------------------
+        # (b) Floor-handling: target below ‖ρ_inf - σ_β‖_1 / 2 → :floor
+        # ---------------------------------------------------------------
+        @testset "(b) target below floor → :floor source" begin
+            d = 4
+            eigenvalues = ComplexF64[0.0, -0.5]
+            c           = ComplexF64[0.0, 0.1]
+            toy = _build_toy_decomp(eigenvalues, c; d=d)
+            sigma_beta = Matrix{ComplexF64}(I, d, d) / d
+            # Build ρ_inf with a known offset from σ_β: 0.01 trace distance.
+            # δ = (0.02 / ‖M‖_1) * M is Hermitian and trace-0 → trace dist = 0.01.
+            M_norm = sum(svdvals(toy.M))
+            rho_inf = sigma_beta .+ (0.02 / M_norm) .* toy.M
+            target = 0.001  # below floor=0.01
+
+            res = eigenmode_mixing_time(eigenvalues, c, toy.R_modes,
+                                          rho_inf, sigma_beta, target)
+            @test res.source === :floor
+            @test isinf(res.mixing_time)
+            @test isapprox(res.floor_distance, 0.01; atol=1e-12)
+            @info "(b) floor branch" floor=res.floor_distance source=res.source
+        end
+
+        # ---------------------------------------------------------------
+        # (c) Complex-eigenvalue robustness: oscillating slow mode
+        # ---------------------------------------------------------------
+        @testset "(c) complex conjugate-pair eigenmodes" begin
+            d = 4
+            # Conjugate pair (-0.3 ± 0.5i) with paired conjugate c and R_modes.
+            # The residual is real Hermitian (imaginary parts cancel).
+            eigenvalues = ComplexF64[0.0, -0.3 + 0.5im, -0.3 - 0.5im]
+            c           = ComplexF64[0.0, 0.25 + 0.0im, 0.25 + 0.0im]
+            toy = _build_toy_decomp(eigenvalues, c; d=d)
+            sigma_beta = Matrix{ComplexF64}(I, d, d) / d
+            rho_inf    = copy(sigma_beta)
+
+            # Residual: (c_+ e^{(-0.3+0.5i)t} + c_- e^{(-0.3-0.5i)t}) M
+            #         = 0.5 * cos(0.5 t) * e^{-0.3 t} * M    (paired conjugates)
+            M_norm = sum(svdvals(toy.M))
+            target = 0.05
+            # The bisection in d(t) handles the |cos| fluctuation by tracking
+            # absolute trace distance — the function is non-monotone, so it
+            # may have multiple crossings. Bisection picks the first root
+            # in [0, t_upper] which is the SMALLEST t where d(t) = ε.
+            # We compare to the same: the first crossing of the analytic
+            # |0.5 cos(0.5 t) e^{-0.3 t}| * M_norm / 2 = ε.
+            f_true(t) = 0.5 * cos(0.5 * t) * exp(-0.3 * t) * M_norm / 2 - target
+            # Find first crossing on [0, big].
+            # f(0) = 0.5 * 1 * 4/2 - 0.05 = 1.0 - 0.05 = 0.95 > 0; f decays.
+            t_true = Roots.find_zero(f_true, (0.0, 50.0), Roots.Bisection())
+
+            res = eigenmode_mixing_time(eigenvalues, c, toy.R_modes,
+                                          rho_inf, sigma_beta, target;
+                                          atol=1e-4)
+            @test res.source === :extrapolated
+            @test isapprox(res.gap, 0.3; atol=1e-12)
+            @test isapprox(res.mixing_time, t_true; atol=1e-2)
+            @info "(c) complex eigenmodes" τ=res.mixing_time τ_true=t_true
+        end
+
+        # ---------------------------------------------------------------
+        # (d) Integration with predict_lindbladian_trajectory: eigenmode
+        # τ_mix matches a dense fine-grid trajectory crossing within rtol.
+        # ---------------------------------------------------------------
+        @testset "(d) integrates with predict_lindbladian_trajectory (n=3 β=10)" begin
+            # Uses the BETA=10 test fixture from test_helpers.jl; smooth-Metro
+            # is the project default for make_config (a=BETA/30, s=0.4).
+            cfg = make_config(Lindbladian(), EnergyDomain(); num_qubits=3)
+            ham = N3_HAM
+            jumps = N3_JUMPS
+            d = 2^3
+            # Maximally-mixed init (worst-case starting trace distance).
+            rho_0 = Matrix{ComplexF64}(I, d, d) / d
+            # Coarse grid for predictor; eigenmode formula is grid-independent.
+            t_grid = collect(range(0.0, 80.0; length=41))
+
+            pres = predict_lindbladian_trajectory(cfg, ham, jumps, rho_0, t_grid;
+                                                    krylovdim=40)
+            target = 1e-3
+            res_eig = eigenmode_mixing_time(pres.eigenvalues, pres.c, pres.R_modes,
+                                              pres.rho_inf, pres.sigma_beta, target;
+                                              atol=1e-3)
+            @test res_eig.source === :extrapolated
+            @test isfinite(res_eig.mixing_time) && res_eig.mixing_time > 0
+            @test res_eig.gap > 0
+
+            # Cross-check: dense fine-grid eval of d(t) at the helper's τ.
+            # Use the same closed-form (this is the strongest possible check
+            # short of run_thermalize).
+            function d_at_dense(t::Float64)
+                d_local = size(pres.rho_inf, 1)
+                rho_t = copy(pres.rho_inf)
+                @inbounds for i in 1:length(pres.eigenvalues)
+                    abs(pres.eigenvalues[i]) < 1e-10 && continue
+                    phase = exp(pres.eigenvalues[i] * t)
+                    rho_t .+= (pres.c[i] * phase) .* pres.R_modes[i]
+                end
+                @inbounds for j in 1:d_local, k in 1:d_local
+                    rho_t[k, j] = (rho_t[k, j] + conj(rho_t[j, k])) / 2
+                end
+                return sum(svdvals(rho_t .- pres.sigma_beta)) / 2
+            end
+            @test isapprox(d_at_dense(res_eig.mixing_time), target; rtol=1e-2)
+            @info "(d) predict_lindbladian + eigenmode_mixing_time" τ=res_eig.mixing_time gap=res_eig.gap floor=res_eig.floor_distance n_evals=res_eig.n_evals
+        end
+
+        # ---------------------------------------------------------------
+        # (e) Edge: degenerate input (only steady mode) → :nan
+        # ---------------------------------------------------------------
+        @testset "(e) only-steady-mode input → :nan" begin
+            d = 4
+            # Single eigenvalue at zero (steady), no slow modes captured.
+            eigenvalues = ComplexF64[0.0]
+            c           = ComplexF64[0.0]
+            R_modes     = Matrix{ComplexF64}[Matrix{ComplexF64}(I, d, d) / d]
+            sigma_beta  = Matrix{ComplexF64}(I, d, d) / d
+            rho_inf     = copy(sigma_beta)
+            res = eigenmode_mixing_time(eigenvalues, c, R_modes,
+                                          rho_inf, sigma_beta, 1e-3)
+            @test res.source === :nan
+            @test isnan(res.mixing_time)
+            @info "(e) degenerate input" source=res.source gap=res.gap
+        end
+
+        # ---------------------------------------------------------------
+        # (f) Edge: invalid input (mismatched lengths) → ArgumentError
+        # ---------------------------------------------------------------
+        @testset "(f) mismatched input lengths throw" begin
+            d = 4
+            eigenvalues = ComplexF64[0.0, -0.5]
+            c           = ComplexF64[0.0]   # wrong length
+            R_modes     = [Matrix{ComplexF64}(I, d, d) for _ in 1:2]
+            sigma_beta  = Matrix{ComplexF64}(I, d, d) / d
+            rho_inf     = copy(sigma_beta)
+            @test_throws ArgumentError eigenmode_mixing_time(eigenvalues, c,
+                R_modes, rho_inf, sigma_beta, 1e-3)
+            @test_throws ArgumentError eigenmode_mixing_time(
+                ComplexF64[0.0, -0.5], ComplexF64[0.0, 0.1],
+                [Matrix{ComplexF64}(I, d, d) for _ in 1:2],
+                rho_inf, sigma_beta, -1e-3)
+        end
+    end
+
 end

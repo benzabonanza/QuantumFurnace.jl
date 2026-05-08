@@ -20,7 +20,7 @@ function _prepare_oft_nufft_prefactors(
     bohr_freqs::AbstractMatrix{<:AbstractFloat},
     time_labels::Vector{<:AbstractFloat},
     energy_labels::Vector{<:AbstractFloat},
-    sigma::AbstractFloat;
+    filter::AbstractFilter;
     eps::Float64 = 1e-12,
     nthreads::Int = 1,
 )
@@ -35,13 +35,14 @@ function _prepare_oft_nufft_prefactors(
     bohr_freqs_f64 = Float64.(bohr_freqs)
     time_labels_f64 = Float64.(time_labels)
     energy_labels_f64 = Float64.(energy_labels)
-    sigma_f64 = Float64(sigma)
 
     # Flatten Bohr frequencies but only retain unique ones.
     bohr_flat = vec(bohr_freqs_f64)
     unique_bohr_flat, invmap = _unique_with_invmap(bohr_flat)
 
-    base_weights = ComplexF64.(exp.(-(sigma_f64^2) .* (time_labels_f64 .^ 2)))
+    # Filter time-domain weights. Gaussian: real exp(-σ² t²); DLL: complex
+    # closed form. Both promote to ComplexF64 for FINUFFT.
+    base_weights = ComplexF64.(time_kernel.(Ref(filter), time_labels_f64))
     input_weights = Matrix{ComplexF64}(undef, length(time_labels_f64), 1)
     out_nufft = Matrix{ComplexF64}(undef, length(unique_bohr_flat), 1)
 

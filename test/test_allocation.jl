@@ -56,8 +56,15 @@ using Random
         allocs = @allocated B_time(JumpOp[jump], TEST_HAM, b_minus, b_plus, T0, BETA, SIGMA)
         # Budget: pre-allocated buffers (diag_u, diag_u2 vectors; b_plus_summand, tmp, M, B matrices)
         # and lazy adjoint views from mul! calls. Must NOT include per-iteration Diagonal wrapper allocations.
+        # qf-6af.5: when threading the inner τ × jumps loop and outer t-loop,
+        # B_time additionally allocates per-task buffers (one set per chunk
+        # plus a partial accumulator) and Task objects. Multiplied by
+        # nthreads, the budget grows linearly. Even with the wider budget
+        # the test still rejects the per-iteration Diagonal regression
+        # (~num_b_plus × d² ≈ 183 × 256 × 16 ≈ 750 KB at NUM_QUBITS=4).
         d = DIM
-        max_expected = 25 * d^2 * sizeof(ComplexF64) + 4096  # empirical: buffers + mul! adjoint wrappers + headroom
+        nt = max(Threads.nthreads(), 1)
+        max_expected = (25 + 8 * (nt - 1)) * d^2 * sizeof(ComplexF64) + 4096 * nt
         @test allocs <= max_expected  # B_time single-jump: allow buffers, catch Diagonal wrapper reintroduction
         @info "B_time allocations (single-jump)" allocs_bytes=allocs threshold=max_expected
 
@@ -85,7 +92,10 @@ using Random
         B_ref = B_trotter(JumpOp[jump], TEST_TROTTER, b_minus, b_plus, BETA, SIGMA)
         allocs = @allocated B_trotter(JumpOp[jump], TEST_TROTTER, b_minus, b_plus, BETA, SIGMA)
         d = DIM
-        max_expected = 25 * d^2 * sizeof(ComplexF64) + 4096  # empirical: same structure as B_time
+        # qf-6af.5: same widening rationale as `B_time allocations` above —
+        # threading adds per-task buffers + Task overhead at construction.
+        nt = max(Threads.nthreads(), 1)
+        max_expected = (25 + 8 * (nt - 1)) * d^2 * sizeof(ComplexF64) + 4096 * nt
         @test allocs <= max_expected  # B_trotter single-jump: same budget rationale as B_time
         @info "B_trotter allocations (single-jump)" allocs_bytes=allocs threshold=max_expected
 

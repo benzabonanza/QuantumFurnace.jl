@@ -89,6 +89,111 @@ function _jump_contribution!(
     return L_target
 end
 
+"""
+    _jump_contribution!(
+        L_target, jump, hamiltonian,
+        config::Config{Lindbladian, BohrDomain, DLL}, precomputed_data, ws;
+        coherent_term=nothing,
+    )
+
+DLL Bohr-domain Liouvillian contribution (Ding–Li–Lin 2024, Eqs. 3.4 / 3.8).
+Builds the single Lindblad operator `L_a = Σ_ν freq_kernel(filter, ν) A^a_ν`
+once via `dll_lindblad_op_bohr` and accumulates the dissipator
+`L_a ρ L_a† − (1/2){L_a† L_a, ρ}` into `L_target` with no outer ω-loop and
+no γ(ω) prefactor.
+
+For multi-channel DLL filters (qf-7go.1), `dll_lindblad_op_bohr` returns a
+length-`k` vector of per-channel operators; this loop sums the per-channel
+dissipators (no cross terms in the multi-channel α).
+
+The optional `coherent_term` plumbing matches the CKG signature; the actual
+DLL coherent operator (G in Eq. 3.8) is built in DLL-3, so callers currently
+pass `coherent_term=nothing`.
+"""
+function _jump_contribution!(
+    L_target::AbstractMatrix{<:Complex},
+    jump::JumpOp,
+    hamiltonian::HamHam,
+    config::Config{Lindbladian, BohrDomain, DLL},
+    precomputed_data,
+    ws::Workspace{Lindbladian};
+    coherent_term::Union{Nothing, AbstractMatrix{<:Complex}} = nothing,
+    )
+    (; filter) = precomputed_data
+
+    if coherent_term !== nothing
+        _vectorize_liouvillian_coherent!(L_target, coherent_term, ws)
+    end
+
+    _accumulate_dll_bohr_dissipator!(L_target, jump, hamiltonian, filter, ws)
+    return L_target
+end
+
+# Single-channel DLL filter: one Lindblad operator per coupling.
+@inline function _accumulate_dll_bohr_dissipator!(
+    L_target::AbstractMatrix{<:Complex},
+    jump::JumpOp,
+    hamiltonian::HamHam,
+    filter::AbstractFilter,
+    ws::Workspace{Lindbladian},
+)
+    L_a = dll_lindblad_op_bohr(jump, hamiltonian, filter)
+    _vectorize_liouv_diss_and_add!(L_target, L_a, 1.0, ws)
+    return L_target
+end
+
+# Multi-channel DLL filter (qf-7go.1): see `src/dll_multichannel.jl` for the
+# `_accumulate_dll_bohr_dissipator!(::DLLMultiChannelFilter, ...)` overload.
+
+"""
+    _jump_contribution!(
+        L_target, jump, hamiltonian,
+        config::Config{Lindbladian, TimeDomain, DLL}, precomputed_data, ws;
+        coherent_term=nothing,
+    )
+
+DLL Time-domain Liouvillian contribution (Ding–Li–Lin 2024, Eqs. 3.4 / 3.8 /
+3.13). The single Lindblad operator on the simulator's truncated time grid is
+
+    L_a[i, j] = A_eb[i, j] · τ · Σ_m time_kernel(filter, t_m) · cis((λ_i − λ_j) · t_m)
+
+The DFT factor `Σ_m … cis((λ_i − λ_j) · t_m)` is precomputed once per
+Liouvillian build via FINUFFT in `_precompute_data`
+(`oft_nufft_at_zero_list`), collapsing the per-jump cost to a single
+elementwise multiply. Same Riemann sum, same Eq. 3.15 quadrature error
+structure as the explicit `dll_lindblad_op_time`; only the DFT is now
+`O(Nt log Nt + n² log(1/ε))`.
+
+For multi-channel DLL filters (qf-7go.1) the list has one prefactor matrix
+per channel; the dissipator sums `Σ_ℓ L^(ℓ) ρ (L^(ℓ))† − …` with no cross
+terms.
+
+The optional `coherent_term` plumbing matches the CKG signature; DLL coherent
+`G` is wired through `_precompute_coherent_B`.
+"""
+function _jump_contribution!(
+    L_target::AbstractMatrix{<:Complex},
+    jump::JumpOp,
+    hamiltonian::HamHam,
+    config::Config{Lindbladian, TimeDomain, DLL},
+    precomputed_data,
+    ws::Workspace{Lindbladian};
+    coherent_term::Union{Nothing, AbstractMatrix{<:Complex}} = nothing,
+    )
+    (; t0, oft_nufft_at_zero_list) = precomputed_data
+
+    if coherent_term !== nothing
+        _vectorize_liouvillian_coherent!(L_target, coherent_term, ws)
+    end
+
+    L_a = ws.scratch.jump_tmp
+    @inbounds for nufft_at_zero in oft_nufft_at_zero_list
+        @. L_a = jump.in_eigenbasis * nufft_at_zero * t0
+        _vectorize_liouv_diss_and_add!(L_target, L_a, 1.0, ws)
+    end
+    return L_target
+end
+
 function _jump_contribution!(
     L_target::AbstractMatrix{<:Complex},
     jump::JumpOp,
@@ -443,7 +548,19 @@ end
 
 # Minimum number of frequency labels to enable omega-loop parallelism.
 # Below this threshold, serial execution is faster due to task spawn overhead.
-const OMEGA_THREAD_THRESHOLD = 50
+#
+# 2026-05-06 (qf-in3.4) — set by empirical sweep
+# (`scripts/scratch_omega_threading_threshold.jl`) at n ∈ {3, 4, 5},
+# nthreads=4, EnergyDomain & TimeDomain:
+#  - n=3 (dim=8): serial wins at N=5 by ~20%; thread wins from N=10.
+#  - n=4 (dim=16): thread wins from N=5 by 2×, climbing to 3.3× at N≥75.
+#  - n=5 (dim=32): thread wins from N=5 by 3.3×, climbing to 3.7× at N≥75.
+# The new value of 10 captures the n=3 crossover where overhead is largest
+# in absolute terms; n ≥ 4 is then strictly faster threaded. The threading
+# dispatch costs ~1 kB / matvec for `Threads.@spawn` Task objects, which is
+# accepted in exchange for the 2–3× wall-time speedup for n_labels ∈ [10, 49]
+# that the previous (folkloric) value of 50 was forfeiting.
+const OMEGA_THREAD_THRESHOLD = 10
 
 """
     _partition_range(range, n_chunks) -> Vector{UnitRange{Int}}

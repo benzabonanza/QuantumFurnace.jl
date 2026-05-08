@@ -1,7 +1,7 @@
 {
   "database": "dolt",
   "backend": "dolt",
-  "dolt_mode": "server",
+  "dolt_mode": "embedded",
   "dolt_database": "QuantumFurnace",
   "project_id": "35709db1-9e01-4fb2-8d40-dac43fcab77e"
 }

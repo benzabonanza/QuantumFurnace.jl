@@ -159,11 +159,6 @@ function fidelity(rho::Union{Hermitian{<:Real}, Hermitian{<:Complex}},
     return real(sum(sqrt.(eig_vals[eig_vals.>0])))^2
 end
 
-function frobenius_norm(A::Matrix{<:Complex})
-    eig_vals = eigvals(A)
-    return sqrt(sum(abs.(eig_vals).^2))
-end
-
 function is_density_matrix(rho::Union{Hermitian{<:Real}, Hermitian{<:Complex}})
     if !isapprox(rho, rho')
         throw(ArgumentError("Input matrix is not Hermitian"))
@@ -222,13 +217,56 @@ end
 function random_density_matrix(num_qubits::Int)
     # Generate a random complex matrix
     A = randn(ComplexF64, 2^num_qubits, 2^num_qubits)
-    
+
     # Compute A * A^†
     ρ = A * A'
-    
+
     # Normalize the matrix to make the trace equal to 1
     ρ /= tr(ρ)
-    
+
     return Hermitian(ρ)
+end
+
+"""
+    validate_jump_pairing(jumps; allow_unpaired_nonhermitian=false, atol=1e-12)
+
+Check that every non-Hermitian jump in `jumps` has a partner whose `data ≈
+A†` (within `atol`) elsewhere in the set. KMS detailed balance for the
+KMS-CKG construction requires this pairing — without it, the Kossakowski
+α-skew-symmetry `α(ω₁,ω₂) = α(-ω₂,-ω₁) e^{-β(ω₁+ω₂)/2}` cannot be
+satisfied (Chen et al. 2025, qf-bm1 Q1).
+
+`allow_unpaired_nonhermitian=true` skips the check; intended only for unit
+tests of internal code paths (e.g., serial-vs-threaded equivalence) that
+compare two evaluations of the same physics on a non-physical fixture.
+"""
+function validate_jump_pairing(jumps::AbstractVector{<:JumpOp};
+                                allow_unpaired_nonhermitian::Bool = false,
+                                atol::Real = 1e-12)
+    allow_unpaired_nonhermitian && return nothing
+
+    unpaired_indices = Int[]
+    for k in eachindex(jumps)
+        jumps[k].hermitian && continue
+        Adag = jumps[k].data'
+        # Search for any other jump whose data ≈ A†
+        found = false
+        for j in eachindex(jumps)
+            j == k && continue
+            if size(jumps[j].data) == size(Adag) && isapprox(jumps[j].data, Adag; atol=atol)
+                found = true
+                break
+            end
+        end
+        found || push!(unpaired_indices, k)
+    end
+
+    isempty(unpaired_indices) && return nothing
+
+    throw(ArgumentError(
+        "KMS detailed balance requires (A, A†) pairs for non-Hermitian jumps. " *
+        "Found $(length(unpaired_indices)) unpaired non-Hermitian jump(s) at " *
+        "index/indices $(unpaired_indices). Pass " *
+        "`allow_unpaired_nonhermitian=true` for unit-test fixtures only."))
 end
 

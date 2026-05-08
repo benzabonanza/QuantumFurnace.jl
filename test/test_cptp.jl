@@ -109,8 +109,11 @@ using LinearAlgebra
                 jumps, ham_or_trott, config, precomputed_data; rescale_by_inv_prob=true,
             )
 
-            # Trajectory workspace path (reference)
-            ws = QuantumFurnace._build_trajectory_workspace(config, ham, jumps; extra_kw..., delta=TEST_DELTA)
+            # Trajectory workspace path (reference). Pin rescale_by_inv_prob=true to match
+            # the DM precomp path's `rescale_by_inv_prob=true` above; the default now follows
+            # `config.jump_selection` (= :sweep ⇒ bare-rate channels) per qf-2vo.
+            ws = QuantumFurnace._build_trajectory_workspace(config, ham, jumps; extra_kw...,
+                delta=TEST_DELTA, rescale_by_inv_prob=true)
 
             for a in 1:length(jumps)
                 @test isapprox(K0s[a], ws.K0s[a]; atol=1e-15)

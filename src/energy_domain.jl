@@ -125,6 +125,31 @@ function _pick_transition_gns(config::Config{<:Any, <:Any, GNS})
 end
 
 
+"""
+    pick_gamma_sup(config::Config) -> Real
+
+Closed-form continuum supremum `‖γ‖_∞` for the rate function `γ(ω)` selected by
+`config`. Returns the analytical sup independent of any energy grid — this is
+the grid-independent replacement for the prior `1.0 / maximum(transition.(energy_labels))`
+used to populate `gamma_norm_factor`.
+
+For every standard rate family currently supported (KMS / GNS Gaussian, kinky
+Metropolis, a-regularized, smooth Metropolis at any `s ≥ 0`, `a ≥ 0`), the
+continuum supremum is exactly `1.0`:
+- Gaussian: `γ(ω) = exp(-(ω+ω_γ)²/(2σ_γ²))`, sup = 1 at `ω = -ω_γ`.
+- Kinky Metropolis (KMS): `γ(ω) = exp(-β·max(ω + βσ²/2, 0))`, sup = 1 on `ω ≤ -βσ²/2`.
+- Kinky Metropolis (GNS, un-shifted): `γ(ω) = exp(-β·max(ω, 0))`, sup = 1 on `ω ≤ 0`.
+- a-regularized and smooth Metropolis (any `s, a ≥ 0`): sup = 1, attained as
+  `ω → -∞` (smooth) or in closed form on the half-line (kinky).
+
+The reciprocal of this value is what populates `gamma_norm_factor` in
+`_precompute_data` (so `gamma_norm_factor = 1 / pick_gamma_sup(config) = 1.0`
+for all current families).
+"""
+pick_gamma_sup(config::Config{<:Any, <:Any, KMS}) = 1.0
+pick_gamma_sup(config::Config{<:Any, <:Any, GNS}) = 1.0
+
+
 function _create_energy_labels(num_energy_bits::Integer, w0::Real)
     N = 2^(num_energy_bits)
     # N_labels = [0:1:Int(N/2)-1; -Int(N/2):1:-1]  twos complement order
@@ -181,7 +206,5 @@ function _truncate_energy_labels(
     # Symmetrize energy labels around 0.
     sym_limit = max(abs(energy_labels[start_index]), abs(energy_labels[end_index]))
     return energy_labels[abs.(energy_labels) .<= sym_limit]
-
-    return energy_labels[start_index:end_index]
 end
 #* --------------------------------------------------------------------------------------------------------------------------

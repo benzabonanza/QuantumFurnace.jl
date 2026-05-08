@@ -15,17 +15,23 @@ oft_domain_prefactor(::TimeDomain, w0::Real, sigma::Real, t0::Real) = w0 * t0^2 
 oft_domain_prefactor(::TrotterDomain, w0::Real, sigma::Real, t0::Real) = w0 * t0^2 * (sigma * sqrt(2 / pi)) / (2 * pi)
 
 function _precompute_labels(config::Config{<:Any, D}) where {D<:Union{BohrDomain, EnergyDomain}}
-    energy_labels = _create_energy_labels(config.num_energy_bits, config.w0)
+    # Dissipative register only (qf-9z0): EnergyDomain has no t-grid.
+    energy_labels = _create_energy_labels(register_r_D(config), register_w0_D(config))
     truncated_energy_labels = _truncate_energy_labels(energy_labels, config)
     return (truncated_energy_labels,)  # Energy labels
 end
 
 function _precompute_labels(config::Config{<:Any, D}) where {D<:Union{TimeDomain, TrotterDomain}}
-    energy_labels = _create_energy_labels(config.num_energy_bits, config.w0)
+    # Dissipative register only (qf-9z0). Coherent labels are built per-term
+    # in `_precompute_data` from the `b_minus / b_plus` registers.
+    r_D = register_r_D(config)
+    w0_D = register_w0_D(config)
+    t0_D = register_t0_D(config)
+    energy_labels = _create_energy_labels(r_D, w0_D)
     truncated_energy_labels = _truncate_energy_labels(energy_labels, config)
-    time_labels = energy_labels .* (config.t0 / config.w0)
-    return (truncated_energy_labels, time_labels) # Energy and time labels
-end  
+    time_labels = energy_labels .* (t0_D / w0_D)
+    return (truncated_energy_labels, time_labels) # Energy and time labels (dissipative grid)
+end
 
 function _precompute_data(
     config::Config{Lindbladian, BohrDomain},
@@ -33,10 +39,11 @@ function _precompute_data(
 )
 
     alpha = _pick_alpha(config)
-    # Was the only way to bring in the normalizing factor 1 / ||γ||_∞
-    energy_labels, = _precompute_labels(config)
-    transition = pick_transition(config)
-    gamma_norm_factor =  1.0 / maximum(transition.(energy_labels))
+    # Grid-independent normalisation: `pick_gamma_sup(config)` is the
+    # closed-form continuum sup of γ — 1.0 for every standard family.
+    # Replaces the prior `1.0 / maximum(transition.(energy_labels))`
+    # which sampled the sup on a discrete `(r_D, w0_D)`-dependent grid.
+    gamma_norm_factor = 1.0 / pick_gamma_sup(config)
     return (
         alpha = alpha,
         gamma_norm_factor = gamma_norm_factor
@@ -49,10 +56,9 @@ function _precompute_data(
 )
     alpha = _pick_alpha(config)
 
-    energy_labels, = _precompute_labels(config)
-    transition = pick_transition(config)
-    gamma_norm_factor = 1.0 / maximum(transition.(energy_labels))
-    
+    # Grid-independent normalisation (qf-etx); see Config{Lindbladian, BohrDomain} branch above.
+    gamma_norm_factor = 1.0 / pick_gamma_sup(config)
+
     # Cache the Bohr buckets as plain Int index pairs to avoid CartesianIndex overhead
     # and avoid rebuilding any per-frequency index lists inside jump_contribution!.
     bohr_keys = collect(keys(hamiltonian.bohr_dict))
@@ -86,8 +92,10 @@ function _precompute_data(
 )
     energy_labels, = _precompute_labels(config)
     transition = pick_transition(config)
-    gamma_norm_factor =  1.0 / maximum(transition.(energy_labels))
-    dp = oft_domain_prefactor(config.domain, config.w0, config.sigma)
+    # Grid-independent normalisation (qf-etx); see Config{Lindbladian, BohrDomain} branch.
+    gamma_norm_factor = 1.0 / pick_gamma_sup(config)
+    # EnergyDomain dissipator only consults `w0_D` (no time grid).
+    dp = oft_domain_prefactor(config.domain, register_w0_D(config), config.sigma)
 
     return (
         transition = transition,
@@ -97,37 +105,127 @@ function _precompute_data(
     )
 end
 
+"""
+    _precompute_data(config::Config{Lindbladian, BohrDomain, DLL}, hamiltonian::HamHam)
+
+DLL Bohr-domain precompute (Ding–Li–Lin 2024, Eq. 3.4 first form). DLL has no
+γ(ω) transition rates and no γ-norm factor — the filter `f̂(ν)` already encodes
+the KMS weight. Returns just the resolved filter.
+"""
+function _precompute_data(
+    config::Config{Lindbladian, BohrDomain, DLL},
+    hamiltonian::HamHam,
+)
+    return (filter = _resolve_filter(config),)
+end
+
+"""
+    _precompute_data(config::Config{Lindbladian, TimeDomain, DLL}, hamiltonian::HamHam)
+
+DLL Time-domain precompute (Ding–Li–Lin 2024, Eq. 3.4 third form). Builds the
+trapezoidal time grid `t_m = m · t0` for `m ∈ [-N/2, N/2 − 1]`, `N =
+2^num_energy_bits`, then truncates by `filter_time_cutoff`. Stores the uniform
+spacing `t0` as the integration weight together with a single-slice NUFFT
+prefactor evaluated at `ω = 0`:
+
+    pf[i, j] = Σ_m time_kernel(filter, t_m) · cis((λ_i − λ_j) · t_m)
+
+This is exactly the DFT in `dll_lindblad_op_time`'s explicit triple loop;
+computing it via FINUFFT amortises the per-jump cost from `O(Nt · n²)` to
+`O(Nt log Nt + n² log(1/ε))` (FINUFFT precision `ε = 1e-12`). The Riemann sum
+itself — and hence the Eq. 3.15 quadrature error structure — is unchanged.
+
+No `gamma_norm_factor`, `transition`, or `w0` — the DLL Lindblad operator is
+the OFT at `ω = 0` of the coupling, with the filter providing the only
+weighting.
+"""
+function _precompute_data(
+    config::Config{Lindbladian, TimeDomain, DLL},
+    hamiltonian::HamHam{T},
+) where {T<:AbstractFloat}
+    filter = _resolve_filter(config)
+    # Build the time grid directly from `(r_D, t0_D)` — the DLL construction
+    # has no ω-grid, so `w0_D` plays no role here. DLL has no `b_-/b_+` split
+    # either; G shares the same dissipative grid (qf-9z0).
+    r_D = register_r_D(config)
+    t0_D = register_t0_D(config)
+    N = 2^r_D
+    raw_time_labels = collect((-N÷2):(N÷2 - 1)) .* t0_D
+    oft_time_labels = _truncate_time_labels_for_oft(raw_time_labels, config.sigma; filter=filter)
+
+    # Single-slice NUFFT at ω = 0 per channel; replaces the per-jump explicit
+    # `cis()` triple loop in `dll_lindblad_op_time` with a single FINUFFT eval.
+    # For single-channel filters this is a length-1 list — the consumer loop
+    # in `_jump_contribution!` (DLL TimeDomain) iterates uniformly.
+    sub_filters = _filter_channels_for_dll_oft(filter)
+    oft_nufft_at_zero_list = Matrix{Complex{T}}[]
+    for sub in sub_filters
+        nufft = _prepare_oft_nufft_prefactors(
+            hamiltonian.bohr_freqs, oft_time_labels, T[zero(T)], sub; eps=1e-12,
+        )
+        push!(oft_nufft_at_zero_list, Matrix(@view nufft.data[:, :, 1]))
+    end
+
+    return (
+        filter = filter,
+        time_labels = oft_time_labels,
+        t0 = t0_D,
+        oft_nufft_at_zero_list = oft_nufft_at_zero_list,
+    )
+end
+
+# Helper: enumerate the per-channel filters used to build the DLL TimeDomain
+# OFT prefactor stack. For single-channel DLL filters the list has length 1
+# (the filter itself); the `DLLMultiChannelFilter` overload lives in
+# `src/dll_multichannel.jl`.
+@inline _filter_channels_for_dll_oft(filter::AbstractFilter) = (filter,)
+
 function _precompute_data(
     config::Config{<:Any, D},
     ham_or_trott::Union{HamHam, TrottTrott}
 ) where {D<:Union{TimeDomain, TrotterDomain}}
-    energy_labels, time_labels = _precompute_labels(config)
-    oft_time_labels = _truncate_time_labels_for_oft(time_labels, config.sigma)
+    energy_labels, time_labels = _precompute_labels(config)  # dissipative grid (qf-9z0)
+    oft_time_labels = _truncate_time_labels_for_oft(time_labels, config.sigma; filter=_resolve_filter(config))
 
     transition = pick_transition(config)
-    gamma_norm_factor =  1.0 / maximum(transition.(energy_labels))
+    # Grid-independent normalisation (qf-etx); see Config{Lindbladian, BohrDomain} branch.
+    gamma_norm_factor = 1.0 / pick_gamma_sup(config)
 
-    # Coherent term B
+    # Coherent term B (KMS-only). Each leg is built on its own register —
+    # `b_-(t)` on the outer triple, `b_+(τ)` on the inner triple. qf-9z0.3
+    # plumbs these grids through `B_time / B_trotter`; here we only need the
+    # truncated per-leg dictionaries.
     b_minus, b_plus = if with_coherent(config.construction)
-        _b_minus = _compute_truncated_func(_compute_b_minus, time_labels, config.beta, config.sigma)
+        time_labels_b_minus = _create_energy_labels(register_r_b_minus(config),
+            register_w0_b_minus(config)) .* (register_t0_b_minus(config) / register_w0_b_minus(config))
+        time_labels_b_plus  = _create_energy_labels(register_r_b_plus(config),
+            register_w0_b_plus(config))  .* (register_t0_b_plus(config)  / register_w0_b_plus(config))
+        _b_minus = _compute_truncated_func(_compute_b_minus, time_labels_b_minus, config.beta, config.sigma)
         chosen_b_plus, b_plus_args = _select_b_plus_calculator(config)
-        _b_plus = _compute_truncated_func(chosen_b_plus, time_labels, b_plus_args...)
+        _b_plus = _compute_truncated_func(chosen_b_plus, time_labels_b_plus, b_plus_args...)
         (_b_minus, _b_plus)
     else
         (nothing, nothing)
     end
 
-    # OFT NUFFT prefactors (same call for both TimeDomain and TrotterDomain)
+    # OFT NUFFT prefactors (dissipative path; same call for TimeDomain/TrotterDomain).
+    # `nthreads=1` preserves byte-deterministic FINUFFT output across runs
+    # (load-bearing for the byte-identity tests in `test_dll_filter.jl` and
+    # the regression checks in `test_regression.jl`). FINUFFT is not the
+    # construction-time hot spot per the qf-6af motivation; enabling its
+    # OpenMP threading gives a single-digit-percent improvement at most while
+    # introducing ULP-level non-determinism that breaks the byte-identity
+    # contract above.
     oft_nufft_prefactors = _prepare_oft_nufft_prefactors(
         ham_or_trott.bohr_freqs,
         oft_time_labels,
         energy_labels,
-        config.sigma;
+        _resolve_filter(config);
         eps=1e-12,
         nthreads=1,
     )
-    
-    dp = oft_domain_prefactor(config.domain, config.w0, config.sigma, config.t0)
+
+    dp = oft_domain_prefactor(config.domain, register_w0_D(config), config.sigma, register_t0_D(config))
 
     return (
         transition = transition,
@@ -278,4 +376,34 @@ function _precompute_per_jump_channels(
     end
 
     return (; K0s, U_residuals)
+end
+
+"""
+    _apply_one_dm_substep!(evolving_dm, scratch, jump, U_coherent, K0, U_residual,
+                           ham_or_trott, config, precomputed_data, jump_weight_scaling)
+
+Apply one per-jump substep `e^{δ𝓛_a}` to the evolving density matrix:
+coherent unitary, accumulate ρ_jump, then the precomputed CPTP channel.
+Used by `run_thermalize` for both `:sweep` (called S times in order) and
+`:random` (called once with a random jump index per outer δ-step).
+"""
+@inline function _apply_one_dm_substep!(
+    evolving_dm::Matrix{<:Complex},
+    scratch::ThermalizeScratch{<:Complex},
+    jump::JumpOp,
+    U_coherent::Union{Nothing, Matrix{<:Complex}},
+    K0::Matrix{<:Complex},
+    U_residual::Matrix{<:Complex},
+    ham_or_trott::Union{HamHam, TrottTrott},
+    config::Config{Thermalize},
+    precomputed_data,
+    jump_weight_scaling::Real,
+)
+    _apply_coherent_unitary!(evolving_dm, U_coherent, scratch)
+    _accumulate_rho_jump!(
+        scratch, evolving_dm, jump, ham_or_trott, config, precomputed_data;
+        jump_weight_scaling = jump_weight_scaling,
+    )
+    _apply_precomputed_channel!(evolving_dm, K0, U_residual, scratch)
+    return nothing
 end

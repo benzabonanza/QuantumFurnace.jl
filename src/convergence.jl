@@ -173,11 +173,13 @@ function run_trajectories_convergence(
     trotter::Union{TrottTrott,Nothing} = nothing,
     total_time::Real = config.mixing_time,
     delta::Real = config.delta,
+    allow_unpaired_nonhermitian::Bool = false,
 )
     # Build workspace ONCE (not per batch)
     ws, actual_seed = _build_framework_and_seed(
         jumps, config, psi0, hamiltonian;
         trotter=trotter, delta=delta, seed=seed,
+        allow_unpaired_nonhermitian=allow_unpaired_nonhermitian,
     )
 
     CT = eltype(psi0)
@@ -304,11 +306,13 @@ function run_trajectories_adaptive(
     trotter::Union{TrottTrott,Nothing} = nothing,
     total_time::Real = config.mixing_time,
     delta::Real = config.delta,
+    allow_unpaired_nonhermitian::Bool = false,
 )
     # Build workspace ONCE (not per batch)
     ws, actual_seed = _build_framework_and_seed(
         jumps, config, psi0, hamiltonian;
         trotter=trotter, delta=delta, seed=seed,
+        allow_unpaired_nonhermitian=allow_unpaired_nonhermitian,
     )
 
     max_batches = cld(n_max, batch_size)
@@ -409,6 +413,7 @@ function _run_trajectory_convergence(
     jumps, config, hamiltonian, trotter, psi0;
     seed, total_time, delta, observables, observable_names,
     batch_size, n_batches,
+    allow_unpaired_nonhermitian::Bool = false,
 )
     # Compute Gibbs reference
     gibbs = if config.domain isa TrotterDomain
@@ -433,6 +438,7 @@ function _run_trajectory_convergence(
         gibbs=gibbs, observables=obs, observable_names=obs_names,
         batch_size=batch_size, n_batches=n_batches,
         seed=seed, trotter=trotter, total_time=total_time, delta=delta,
+        allow_unpaired_nonhermitian=allow_unpaired_nonhermitian,
     )
 
     return result
@@ -449,6 +455,7 @@ function _run_trajectory_adaptive(
     jumps, config, hamiltonian, trotter, psi0;
     seed, total_time, delta, observables, observable_names,
     batch_size, n_max, convergence_threshold, patience, min_batches, window_size,
+    allow_unpaired_nonhermitian::Bool = false,
 )
     # Compute Gibbs reference
     gibbs = if config.domain isa TrotterDomain
@@ -475,6 +482,7 @@ function _run_trajectory_adaptive(
         convergence_threshold=convergence_threshold, patience=patience,
         min_batches=min_batches, window_size=window_size,
         seed=seed, trotter=trotter, total_time=total_time, delta=delta,
+        allow_unpaired_nonhermitian=allow_unpaired_nonhermitian,
     )
 
     return result

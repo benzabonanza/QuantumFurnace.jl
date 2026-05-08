@@ -55,14 +55,49 @@ via the trait function `with_coherent(construction)`, not stored as a field.
 - `a` and `s`: Parameters for the linear combination type.
 
 ## Grid parameters
-- `num_energy_bits`: Coarseness of energy/time grid.
-- `t0` and `w0`: Time and energy units for Riemann-summed integrals (related by Fourier: w0*t0 = 2pi/N).
+
+The simulator uses up to **three independent register triples** `(num_energy_bits_X, t0_X, w0_X)`,
+one per term that lives on its own QPE register on the quantum side. Each triple obeys
+its own Fourier relation `w0_X * t0_X = 2π / 2^{num_energy_bits_X}` (with `t0_X` not
+required for EnergyDomain since the dissipator uses analytical `A(ω)` there):
+
+- `num_energy_bits_D`, `t0_D`, `w0_D` — **dissipative** OFT register (used by the
+  CKG/GNS/DLL dissipator: OFT integral `Σ_t̄ b̄(t̄) e^{-iωt̄} A(t̄)`).
+- `num_energy_bits_b_minus`, `t0_b_minus`, `w0_b_minus` — **outer** coherent
+  integration register (`b_-(t)` loop in `B`); KMS-only.
+- `num_energy_bits_b_plus`, `t0_b_plus`, `w0_b_plus` — **inner** coherent
+  integration register (`b_+(τ)` loop in `B`); KMS-only.
+
+For backward compatibility, the **legacy** kwargs `num_energy_bits`, `t0`, `w0` still
+work and auto-promote to the three triples (`X_D = X_b_minus = X_b_plus = legacy_X`).
+Mixing legacy and new on the same field is rejected at validation.
+
 - `eta`: Accuracy coefficient for Metropolis linear combination in time domain.
-- `num_trotter_steps_per_t0`: Trotter steps per unit time t0.
+- `num_trotter_steps_per_t0`: Trotter steps per unit time t0_D.
 
 ## Thermalize-specific
 - `mixing_time`: Total duration of time evolution (only for `Thermalize` simulations).
 - `delta`: Time step size for weak-measurement emulation (only for `Thermalize` simulations).
+
+## GQSP-specific (Thermalize/Trajectory coherent step)
+- `with_gqsp`: If `true`, use the GQSP polynomial approximation of `exp(-iδ B_a)` for the
+  coherent step instead of the exact matrix exponential. Requires
+  `with_coherent(construction)=true` and `domain isa Union{TimeDomain, TrotterDomain}`.
+- `gqsp_degree`: Truncation degree `d ≥ 1` of the Jacobi-Anger polynomial. Default `1`
+  is faithful to `O((δα)²)` and matches the splitting error.
+
+## Generator splitting (Thermalize/Trajectory dissipative step)
+- `jump_selection`: `:sweep` (default, thesis-preferred) deterministically cycles through
+  the jump set per outer δ-step `Φ_𝓐 = e^{δ𝓛_S} ∘ ⋯ ∘ e^{δ𝓛_1} ≈ e^{δ𝓛}` with bare-δ
+  rates per substep; `:random` picks one jump uniformly per outer step with rates
+  rescaled by `S = |𝓐|` so that `E[step] ≈ e^{δ𝓛}`. The deterministic sweep has a
+  strictly smaller leading-order spectral-gap perturbation (Methods §generator-splitting).
+
+## OFT filter (DLL-1)
+- `filter`: Optional `AbstractFilter` for the Operator Fourier Transform. `nothing`
+  (default) selects the CKG Gaussian path with width `sigma` — byte-identical to the
+  pre-filter codebase. A `DLLGaussianFilter(beta)` selects the Ding–Li–Lin Gevrey
+  filter (Time/TrotterDomain only, currently the NUFFT prefactor path).
 
 ## Currently possible linear combinations:
 (a, s) =
@@ -94,7 +129,21 @@ via the trait function `with_coherent(construction)`, not stored as a field.
     a::Union{T, Nothing} = nothing
     s::Union{T, Nothing} = nothing
 
-    # Grid parameters
+    # Grid parameters — per-register triples (qf-9z0). Each X-register obeys its
+    # own Fourier relation `w0_X * t0_X = 2π / 2^{num_energy_bits_X}`. EnergyDomain
+    # never needs `t0_X`. DLL TimeDomain never needs `w0_D`. Coherent registers
+    # (`b_minus`, `b_plus`) are KMS-only.
+    num_energy_bits_D::Union{Int, Nothing} = nothing
+    t0_D::Union{T, Nothing} = nothing
+    w0_D::Union{T, Nothing} = nothing
+    num_energy_bits_b_minus::Union{Int, Nothing} = nothing
+    t0_b_minus::Union{T, Nothing} = nothing
+    w0_b_minus::Union{T, Nothing} = nothing
+    num_energy_bits_b_plus::Union{Int, Nothing} = nothing
+    t0_b_plus::Union{T, Nothing} = nothing
+    w0_b_plus::Union{T, Nothing} = nothing
+    # Legacy single-register kwargs — auto-promote to all three triples in
+    # `validate_config!`. Test fixtures and scripts may still set them directly.
     num_energy_bits::Union{Int, Nothing} = nothing
     t0::Union{T, Nothing} = nothing
     w0::Union{T, Nothing} = nothing
@@ -104,7 +153,61 @@ via the trait function `with_coherent(construction)`, not stored as a field.
     # Thermalize-specific
     mixing_time::Union{T, Nothing} = nothing
     delta::Union{T, Nothing} = nothing
+
+    # GQSP-specific (Thermalize/Trajectory coherent step)
+    with_gqsp::Bool = false
+    gqsp_degree::Int = 1
+
+    # Dissipative jump-selection rule (Thermalize/Trajectory): :sweep | :random.
+    # :sweep is the thesis-preferred deterministic Lie-Trotter sweep over {A^a};
+    # :random keeps the legacy uniform-random sampling with 1/p_a rate rescaling.
+    jump_selection::Symbol = :sweep
+
+    # OFT filter (DLL-1): nothing -> CKG Gaussian via config.sigma
+    filter::Union{Nothing, AbstractFilter} = nothing
 end
+
+# ---------------------------------------------------------------------------
+# Per-register accessors (qf-9z0).
+#
+# Each helper resolves to the explicit per-term field if set, else falls back
+# to the legacy single-register field. Use these throughout `src/` instead of
+# `cfg.t0` / `cfg.w0` / `cfg.num_energy_bits` so that downstream code can
+# transparently consume either the legacy or the per-term API.
+# ---------------------------------------------------------------------------
+
+"""
+    register_t0_D(cfg)        register_w0_D(cfg)        register_r_D(cfg)
+
+Resolve the **dissipative** time/energy/bit triple `(t0_D, w0_D, r_D)`. If the
+explicit per-term field is `nothing`, fall back to the legacy
+`cfg.t0` / `cfg.w0` / `cfg.num_energy_bits`.
+"""
+@inline register_t0_D(cfg::Config) = cfg.t0_D !== nothing ? cfg.t0_D : cfg.t0
+@inline register_w0_D(cfg::Config) = cfg.w0_D !== nothing ? cfg.w0_D : cfg.w0
+@inline register_r_D(cfg::Config)  = cfg.num_energy_bits_D !== nothing ? cfg.num_energy_bits_D : cfg.num_energy_bits
+
+"""
+    register_t0_b_minus(cfg)  register_w0_b_minus(cfg)  register_r_b_minus(cfg)
+
+Resolve the **outer coherent** triple `(t0_b_minus, w0_b_minus, r_b_minus)` —
+the spacing of the `b_-(t)` outer Riemann sum in `B`. KMS-only. Falls back to
+the legacy field when the explicit per-term field is `nothing`.
+"""
+@inline register_t0_b_minus(cfg::Config) = cfg.t0_b_minus !== nothing ? cfg.t0_b_minus : cfg.t0
+@inline register_w0_b_minus(cfg::Config) = cfg.w0_b_minus !== nothing ? cfg.w0_b_minus : cfg.w0
+@inline register_r_b_minus(cfg::Config)  = cfg.num_energy_bits_b_minus !== nothing ? cfg.num_energy_bits_b_minus : cfg.num_energy_bits
+
+"""
+    register_t0_b_plus(cfg)   register_w0_b_plus(cfg)   register_r_b_plus(cfg)
+
+Resolve the **inner coherent** triple `(t0_b_plus, w0_b_plus, r_b_plus)` — the
+spacing of the `b_+(τ)` inner Riemann sum in `B`. KMS-only. Falls back to the
+legacy field when the explicit per-term field is `nothing`.
+"""
+@inline register_t0_b_plus(cfg::Config) = cfg.t0_b_plus !== nothing ? cfg.t0_b_plus : cfg.t0
+@inline register_w0_b_plus(cfg::Config) = cfg.w0_b_plus !== nothing ? cfg.w0_b_plus : cfg.w0
+@inline register_r_b_plus(cfg::Config)  = cfg.num_energy_bits_b_plus !== nothing ? cfg.num_energy_bits_b_plus : cfg.num_energy_bits
 
 """
     JumpOp
@@ -246,20 +349,10 @@ struct TrajectoryResults{T<:AbstractFloat} <: AbstractResults
     metadata::Dict{Symbol, Any}
 end
 
-# Became obsolete with NUFFTCaches. But used for debugging.
-struct OFTCaches{T<:AbstractFloat}
-    prefactors::Vector{Complex{T}}
-    U::Diagonal{Complex{T}, Vector{Complex{T}}}
-    temp_op::Matrix{Complex{T}}
-
-    function OFTCaches{T}(dim::Int) where {T<:AbstractFloat}
-        CT = Complex{T}
-        prefactors = zeros(CT, 0) # Will be resized later
-        U = Diagonal(zeros(CT, dim))
-        temp_op = zeros(CT, dim, dim)
-        new{T}(prefactors, U, temp_op)
-    end
-end
+# Note: `OFTCaches` (cache struct used by the deprecated `time_oft!` /
+# `trotter_oft!` direct-summation OFT routines) has been retired alongside
+# those functions. The original definition is preserved for reference at
+# `src/staging/ofts.jl`. Mainline code uses `NUFFTCaches` (above).
 
 # ---------------------------------------------------------------------------
 # Scratch sub-structs for Workspace (Phase 35)
@@ -309,6 +402,13 @@ end
 
 Scratch buffers for Krylov matvec and eigsolve hot paths.
 Fields use physics-descriptive names (sandwich_tmp replaces tmp1, sandwich_out replaces LdagL).
+
+`task_scratches` is a pre-allocated pool of per-thread scratches used by the
+qf-in3 ω-loop threading dispatch in `apply_lindbladian!`; `work_list` is a
+pre-built `(jump_idx, label_idx)` schedule populated by the Workspace
+constructor. Together they keep the per-matvec allocation budget down to the
+intrinsic `Threads.@spawn` Task overhead (~1 kB) even when threading
+dispatches.
 """
 struct KrylovScratch{T<:Complex}
     jump_oft::Matrix{T}
@@ -316,12 +416,31 @@ struct KrylovScratch{T<:Complex}
     sandwich_out::Matrix{T}    # was LdagL (sandwich result)
     rho_out::Matrix{T}
     channel_rho_jump::Union{Nothing, Matrix{T}}  # Thermalize-channel only
+    task_scratches::Vector{KrylovScratch{T}}     # per-thread pool (qf-in3.4)
+    work_list::Vector{Tuple{Int, Int}}           # pre-built (k, li) schedule (qf-in3.4)
 end
 
-function KrylovScratch(::Type{CT}, dim::Int; with_channel_rho_jump::Bool=false) where {CT<:Complex}
+function KrylovScratch(::Type{CT}, dim::Int;
+                       with_channel_rho_jump::Bool=false,
+                       num_threads::Int=Threads.nthreads()) where {CT<:Complex}
     Zm() = zeros(CT, dim, dim)
     crj = with_channel_rho_jump ? Zm() : nothing
-    return KrylovScratch{CT}(Zm(), Zm(), Zm(), Zm(), crj)
+
+    # Per-thread scratch pool — only needed when threading. Each task scratch
+    # itself carries its own empty `task_scratches` and `work_list` vectors
+    # (terminates recursion / reduces footprint, and avoids any future
+    # aliasing surprise if the chunk functions ever start reading those
+    # fields).
+    task_pool = if num_threads > 1
+        [KrylovScratch{CT}(Zm(), Zm(), Zm(), Zm(),
+                           with_channel_rho_jump ? Zm() : nothing,
+                           KrylovScratch{CT}[],
+                           Tuple{Int, Int}[]) for _ in 1:num_threads]
+    else
+        KrylovScratch{CT}[]
+    end
+
+    return KrylovScratch{CT}(Zm(), Zm(), Zm(), Zm(), crj, task_pool, Tuple{Int, Int}[])
 end
 
 """
@@ -372,6 +491,9 @@ struct Workspace{S<:AbstractSimulation, D<:AbstractDomain, C<:AbstractConstructi
     jumps::Union{Nothing, Vector{JumpOp}}
     B_total::Union{Nothing, Matrix{Complex{T}}}
 
+    # DLL per-jump Bohr-domain Lindblad operators (Ding–Li–Lin 2024 Eq. 3.4 first form)
+    dll_lindblads::Union{Nothing, Vector{Matrix{Complex{T}}}}
+
     # Krylov effective Hamiltonian (Lindbladian mode)
     G_left::Union{Nothing, Matrix{Complex{T}}}
     G_right::Union{Nothing, Matrix{Complex{T}}}
@@ -410,6 +532,7 @@ struct Workspace{S<:AbstractSimulation, D<:AbstractDomain, C<:AbstractConstructi
     K0s::Union{Nothing, Vector{Matrix{Complex{T}}}}        # per-jump K0^a
     U_residuals::Union{Nothing, Vector{Matrix{Complex{T}}}}  # per-jump U_residual^a
     U_Bs::Union{Nothing, Vector{Union{Nothing, Matrix{Complex{T}}}}}  # per-jump coherent unitary
+    jump_selection::Union{Nothing, Symbol}  # :sweep | :random | nothing (non-Trajectory)
 
     # Identity matrix (Lindbladian construction path)
     Id::Union{Nothing, Matrix{Complex{T}}}

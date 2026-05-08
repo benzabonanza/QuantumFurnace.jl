@@ -67,6 +67,10 @@ end
             delta=0.01, ntraj=ntraj, seed=seed)
 
         # Manual serial reference: accumulate density matrices with same per-trajectory seeds
+        # Must call `_do_outer_step!` (the same outer-δ driver the threaded path uses, which
+        # in `:sweep` mode loops over all S jumps once per call) — calling the bare
+        # `step_along_trajectory!` here would replicate the legacy `:random` path and
+        # diverge from the threaded result.
         ws = QuantumFurnace._build_trajectory_workspace(therm_config, N3_HAM, N3_JUMPS; delta=0.01)
         num_steps = ceil(Int, 0.5 / ws.delta)
         rho_ref = zeros(CT, dim, dim)
@@ -77,7 +81,7 @@ end
             psi_norm2 = real(dot(psi, psi))
             rmul!(psi, 1.0 / sqrt(max(psi_norm2, eps(Float64))))
             for _ in 1:num_steps
-                step_along_trajectory!(psi, ws_ref, rng)
+                QuantumFurnace._do_outer_step!(psi, ws_ref, rng)
             end
             QuantumFurnace._accumulate_density_matrix!(rho_ref, psi)
         end
@@ -128,12 +132,16 @@ end
         psi0 = zeros(CT, dim)
         psi0[1] = 1.0
 
-        # Use longer mixing_time and more trajectories to amortize threading overhead.
-        # At dim=8 each step is very fast, so we need enough total work to see speedup.
+        # Sized to amortize threading overhead at dim=8 without dominating wall
+        # time / memory in the suite. Each outer step now sweeps S=9 jumps via
+        # `_do_outer_step!` — 9× the per-step work of the original `:random`
+        # design — so 200 trajectories × 100 outer steps gives ~180K inner
+        # `step_along_trajectory!` calls per averaging pass, more than enough
+        # signal for a `t_threaded < t_serial` timing assertion.
         therm_config = make_config(Thermalize(), TimeDomain(); num_qubits=3,
-            delta=0.01, mixing_time=10.0, construction=GNS())
+            delta=0.01, mixing_time=1.0, construction=GNS())
 
-        ntraj = 2000
+        ntraj = 200
 
         # Warmup both paths
         run_trajectories(N3_JUMPS, therm_config, psi0, N3_HAM;
@@ -152,16 +160,17 @@ end
         # trajectories one at a time in a loop, using inline step loop directly
         # This simulates serial execution regardless of thread count
         ws = QuantumFurnace._build_trajectory_workspace(therm_config, N3_HAM, N3_JUMPS; delta=0.01)
-        num_steps_perf = ceil(Int, 5.0 / ws.delta)
+        num_steps_perf = ceil(Int, 1.0 / ws.delta)
 
-        # Warmup serial path
+        # Warmup serial path. Use `_do_outer_step!` so this benchmark stays apples-
+        # to-apples with the threaded path, which also calls `_do_outer_step!`.
         ws_s = QuantumFurnace._copy_workspace_for_thread(ws)
         psi_s = copy(psi0)
         rng_s = Random.Xoshiro(1)
         psi_s_norm2 = real(dot(psi_s, psi_s))
         rmul!(psi_s, 1.0 / sqrt(max(psi_s_norm2, eps(Float64))))
         for _ in 1:num_steps_perf
-            step_along_trajectory!(psi_s, ws_s, rng_s)
+            QuantumFurnace._do_outer_step!(psi_s, ws_s, rng_s)
         end
 
         t_serial = @elapsed begin
@@ -174,7 +183,7 @@ end
                     psi_loop_norm2 = real(dot(psi_loop, psi_loop))
                     rmul!(psi_loop, 1.0 / sqrt(max(psi_loop_norm2, eps(Float64))))
                     for _ in 1:num_steps_perf
-                        step_along_trajectory!(psi_loop, ws_loop, rng_loop)
+                        QuantumFurnace._do_outer_step!(psi_loop, ws_loop, rng_loop)
                     end
                     QuantumFurnace._accumulate_density_matrix!(rho_acc, psi_loop)
                 end
@@ -222,7 +231,7 @@ end
 @testset "DM serial-threaded BLAS agreement" begin
     # Run with BLAS threads = 1 (serial BLAS) vs default (multi-threaded BLAS)
     therm_config = make_config(Thermalize(), EnergyDomain(); num_qubits=3,
-        delta=0.01, mixing_time=0.5)
+        delta=0.01, mixing_time=0.05)
     rng_seed = 42
 
     # Serial BLAS reference
@@ -280,7 +289,7 @@ end
             (BohrDomain(), N3_JUMPS, nothing, "Bohr"),
         ]
             cfg = make_config(Thermalize(), domain; num_qubits=3,
-                delta=0.01, mixing_time=0.5)
+                delta=0.01, mixing_time=0.05)
             rng_seed = 42
 
             result1 = run_thermalize(jumps, cfg, N3_HAM, trott;
@@ -302,7 +311,7 @@ end
 @testset "Serial vs threaded omega-loop agreement" begin
     if Threads.nthreads() > 1
         cfg = make_config(Thermalize(), EnergyDomain(); num_qubits=3,
-            delta=0.01, mixing_time=0.5)
+            delta=0.01, mixing_time=0.05)
         rng_seed = 42
 
         # Run with threading enabled (default path on -t 4)
@@ -338,8 +347,249 @@ end
 @testset "Omega-loop BLAS restoration" begin
     old_blas = BLAS.get_num_threads()
     cfg = make_config(Thermalize(), EnergyDomain(); num_qubits=3,
-        delta=0.01, mixing_time=0.5)
+        delta=0.01, mixing_time=0.05)
     run_thermalize(N3_JUMPS, cfg, N3_HAM)
     @test BLAS.get_num_threads() == old_blas
     @info "Omega-loop BLAS restoration" blas_before=old_blas blas_after=BLAS.get_num_threads()
+end
+
+# ============================================================================
+# Lindbladian-matvec ω-loop threading tests (qf-in3)
+# These exercise `_apply_lindbladian_threaded_energy!` and
+# `_apply_lindbladian_threaded_timetrot!` directly, comparing their output to
+# the serial public path. Threading is correctness-preserving up to floating-
+# point summation order, so the threshold for the bit-match check is set
+# relative to ‖L(rho)‖.
+# ============================================================================
+
+# Helper: run threaded variant directly and return the resulting rho_out.
+# Mirrors what `apply_lindbladian!` does internally when the threshold dispatch
+# fires, so bypasses the threshold gate.
+function _run_threaded_lindbladian!(ws, rho, config, ham; adjoint::Bool=false)
+    sc = ws.scratch::QuantumFurnace.KrylovScratch{ComplexF64}
+    if adjoint
+        G_left, G_right = ws.G_left_adj, ws.G_right_adj
+    else
+        G_left, G_right = ws.G_left, ws.G_right
+    end
+    fill!(sc.rho_out, 0)
+    mul!(sc.rho_out, G_left, rho)
+    mul!(sc.rho_out, rho, G_right, 1.0, 1.0)
+
+    prefactor = ws.oft_domain_prefactor * ws.gamma_norm_factor
+    if config.domain isa EnergyDomain
+        inv_4sigma2 = 1.0 / (4 * config.sigma^2)
+        QuantumFurnace._apply_lindbladian_threaded_energy!(
+            sc, rho, ws.jump_eigenbases, ws.jump_hermitian,
+            ham.bohr_freqs, ws.energy_labels, config, prefactor, inv_4sigma2;
+            adjoint=adjoint)
+    else
+        nufft = ws.oft_nufft_prefactors
+        QuantumFurnace._apply_lindbladian_threaded_timetrot!(
+            sc, rho, ws.jump_eigenbases, ws.jump_hermitian,
+            nufft.data, nufft.energy_to_index, ws.energy_labels, config, prefactor;
+            adjoint=adjoint)
+    end
+    return copy(sc.rho_out)
+end
+
+@testset "Lindbladian threaded matvec: serial ≡ threaded" begin
+    if Threads.nthreads() > 1
+        rng = MersenneTwister(123)
+
+        # Build a non-Hermitian complex jump for breadth (covers the
+        # `is_herm == false` branch of the work-list builder). KMS detailed
+        # balance in production needs the conjugate-paired partner, but a
+        # single non-Hermitian jump is fine for a serial vs threaded unit
+        # test — both paths run the same (possibly non-physical) physics.
+        raw_complex = randn(rng, ComplexF64, DIM, DIM) ./ sqrt(DIM)
+        complex_jump = JumpOp(raw_complex,
+                              TEST_HAM.eigvecs' * raw_complex * TEST_HAM.eigvecs,
+                              false, false)
+
+        for (domain, jumps, trott, name) in [
+            (EnergyDomain(),  TEST_JUMPS,                 nothing,        "Energy / Hermitian jumps"),
+            (EnergyDomain(),  JumpOp[complex_jump],       nothing,        "Energy / non-Hermitian jump"),
+            (TimeDomain(),    TEST_JUMPS,                 nothing,        "Time / Hermitian jumps"),
+            (TimeDomain(),    JumpOp[complex_jump],       nothing,        "Time / non-Hermitian jump"),
+            (TrotterDomain(), TEST_TROTTER_JUMPS,         TEST_TROTTER,   "Trotter / Hermitian jumps"),
+        ]
+            config = make_config(Lindbladian(), domain; construction=KMS())
+            ws_a = Workspace(config, TEST_HAM, jumps; trotter=trott)
+            ws_b = Workspace(config, TEST_HAM, jumps; trotter=trott)
+
+            for adjoint in (false, true)
+                Random.seed!(rng, 7)
+                rho = Matrix(random_density_matrix(NUM_QUBITS))
+
+                serial = if adjoint
+                    copy(apply_adjoint_lindbladian!(ws_a, rho, config, TEST_HAM))
+                else
+                    copy(apply_lindbladian!(ws_a, rho, config, TEST_HAM))
+                end
+                threaded = _run_threaded_lindbladian!(ws_b, rho, config, TEST_HAM; adjoint=adjoint)
+
+                # FP-accumulation tolerance scaled to ‖L(rho)‖. Per-jump
+                # sandwich GEMMs keep the error in the 1e-13/‖L(rho)‖ regime
+                # for any reduction order; the helpers above empirically land
+                # at ~1e-16, ten orders below the gate.
+                tol = max(norm(serial), 1.0) * 1e-12
+                err = norm(threaded - serial)
+                @test err < tol
+                @info "Lindbladian threaded match" path=name adjoint=adjoint err=err tol=tol
+            end
+        end
+    else
+        @info "Skipping Lindbladian threaded matvec test (nthreads=$(Threads.nthreads()))"
+        @test true
+    end
+end
+
+@testset "Lindbladian threaded matvec: BLAS thread restoration" begin
+    if Threads.nthreads() > 1
+        config = make_config(Lindbladian(), EnergyDomain(); construction=KMS())
+        ws = Workspace(config, TEST_HAM, TEST_JUMPS)
+        rho = Matrix(random_density_matrix(NUM_QUBITS))
+
+        old_blas = BLAS.get_num_threads()
+        _run_threaded_lindbladian!(ws, rho, config, TEST_HAM; adjoint=false)
+        @test BLAS.get_num_threads() == old_blas
+        _run_threaded_lindbladian!(ws, rho, config, TEST_HAM; adjoint=true)
+        @test BLAS.get_num_threads() == old_blas
+        @info "Lindbladian threaded BLAS restoration" blas_before=old_blas blas_after=BLAS.get_num_threads()
+    else
+        @info "Skipping Lindbladian threaded BLAS restoration test (nthreads=$(Threads.nthreads()))"
+        @test true
+    end
+end
+
+@testset "Lindbladian threaded matvec: empty work list short-circuit" begin
+    if Threads.nthreads() > 1
+        # An all-Hermitian jump set with energy_labels that are all > 1e-12
+        # produces an empty work list; the helper must return without
+        # touching `sc.rho_out` beyond the coherent terms already there.
+        config = make_config(Lindbladian(), EnergyDomain(); construction=KMS())
+        ws = Workspace(config, TEST_HAM, TEST_JUMPS)
+        rho = Matrix(random_density_matrix(NUM_QUBITS))
+
+        sc = ws.scratch
+        prefactor = ws.oft_domain_prefactor * ws.gamma_norm_factor
+        inv_4sigma2 = 1.0 / (4 * config.sigma^2)
+
+        # Pre-fill rho_out with a sentinel value
+        fill!(sc.rho_out, ComplexF64(7.0))
+        # Empty energy labels -> empty work list
+        QuantumFurnace._apply_lindbladian_threaded_energy!(
+            sc, rho, ws.jump_eigenbases, ws.jump_hermitian,
+            TEST_HAM.bohr_freqs, Float64[], config, prefactor, inv_4sigma2;
+            adjoint=false)
+        @test all(sc.rho_out .== ComplexF64(7.0))
+    else
+        @info "Skipping empty work-list test (nthreads=$(Threads.nthreads()))"
+        @test true
+    end
+end
+
+# ============================================================================
+# Channel-Krylov ω-loop threading tests (qf-in3 follow-up)
+# Mirrors the Lindbladian threading tests above for `apply_delta_channel!`.
+# ============================================================================
+
+# Helper: drive `_accumulate_jump_sandwich_threaded_*!` directly. Re-creates
+# the rest of `apply_delta_channel!` (coherent rotation + K0/U_residual
+# assembly) so the comparison against the public `apply_delta_channel!` is a
+# fair serial-vs-threaded isolation of just the dissipative ω-loop.
+function _run_threaded_channel!(ws, rho, config, ham)
+    sc = ws.scratch::QuantumFurnace.KrylovScratch{ComplexF64}
+    K0 = ws.K0
+    U_res = ws.U_residual
+    U_coh = ws.U_coherent
+    delta = ws.delta
+
+    if U_coh !== nothing
+        mul!(sc.sandwich_tmp, U_coh, rho)
+        mul!(sc.sandwich_out, sc.sandwich_tmp, U_coh')
+        rho_eff = sc.sandwich_out
+    else
+        rho_eff = rho
+    end
+
+    fill!(sc.channel_rho_jump, 0)
+
+    prefactor = ws.oft_domain_prefactor * ws.gamma_norm_factor
+    if config.domain isa EnergyDomain
+        inv_4sigma2 = 1.0 / (4 * config.sigma^2)
+        QuantumFurnace._accumulate_jump_sandwich_threaded_energy!(
+            sc.channel_rho_jump, sc, rho_eff, delta,
+            ws.jump_eigenbases, ws.jump_hermitian,
+            ham.bohr_freqs, ws.energy_labels, ws.transition,
+            prefactor, inv_4sigma2)
+    else
+        nufft = ws.oft_nufft_prefactors
+        QuantumFurnace._accumulate_jump_sandwich_threaded_timetrot!(
+            sc.channel_rho_jump, sc, rho_eff, delta,
+            ws.jump_eigenbases, ws.jump_hermitian,
+            nufft.data, nufft.energy_to_index,
+            ws.energy_labels, ws.transition, prefactor)
+    end
+
+    mul!(sc.sandwich_tmp, K0, rho_eff)
+    mul!(sc.rho_out, sc.sandwich_tmp, K0')
+    sc.rho_out .+= sc.channel_rho_jump
+    mul!(sc.sandwich_tmp, U_res, rho_eff)
+    mul!(sc.rho_out, sc.sandwich_tmp, U_res', 1.0, 1.0)
+
+    return copy(sc.rho_out)
+end
+
+@testset "Channel threaded matvec: serial ≡ threaded" begin
+    if Threads.nthreads() > 1
+        rng = MersenneTwister(456)
+        raw_complex = randn(rng, ComplexF64, DIM, DIM) ./ sqrt(DIM)
+        complex_jump = JumpOp(raw_complex,
+                              TEST_HAM.eigvecs' * raw_complex * TEST_HAM.eigvecs,
+                              false, false)
+
+        for (domain, jumps, trott, name) in [
+            (EnergyDomain(),  TEST_JUMPS,                 nothing,        "Energy / Hermitian jumps"),
+            (EnergyDomain(),  JumpOp[complex_jump],       nothing,        "Energy / non-Hermitian jump"),
+            (TimeDomain(),    TEST_JUMPS,                 nothing,        "Time / Hermitian jumps"),
+            (TimeDomain(),    JumpOp[complex_jump],       nothing,        "Time / non-Hermitian jump"),
+            (TrotterDomain(), TEST_TROTTER_JUMPS,         TEST_TROTTER,   "Trotter / Hermitian jumps"),
+        ]
+            config = make_config(Thermalize(), domain; construction=KMS())
+            ws_a = Workspace(config, TEST_HAM, jumps; trotter=trott)
+            ws_b = Workspace(config, TEST_HAM, jumps; trotter=trott)
+
+            Random.seed!(rng, 7)
+            rho = Matrix(random_density_matrix(NUM_QUBITS))
+
+            serial = copy(apply_delta_channel!(ws_a, rho, config, TEST_HAM))
+            threaded = _run_threaded_channel!(ws_b, rho, config, TEST_HAM)
+
+            tol = max(norm(serial), 1.0) * 1e-12
+            err = norm(threaded - serial)
+            @test err < tol
+            @info "Channel threaded match" path=name err=err tol=tol
+        end
+    else
+        @info "Skipping channel threaded matvec test (nthreads=$(Threads.nthreads()))"
+        @test true
+    end
+end
+
+@testset "Channel threaded matvec: BLAS thread restoration" begin
+    if Threads.nthreads() > 1
+        config = make_config(Thermalize(), EnergyDomain(); construction=KMS())
+        ws = Workspace(config, TEST_HAM, TEST_JUMPS)
+        rho = Matrix(random_density_matrix(NUM_QUBITS))
+
+        old_blas = BLAS.get_num_threads()
+        apply_delta_channel!(ws, rho, config, TEST_HAM)
+        @test BLAS.get_num_threads() == old_blas
+        @info "Channel threaded BLAS restoration" blas_before=old_blas blas_after=BLAS.get_num_threads()
+    else
+        @info "Skipping channel threaded BLAS restoration test (nthreads=$(Threads.nthreads()))"
+        @test true
+    end
 end

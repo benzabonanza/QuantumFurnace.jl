@@ -139,69 +139,14 @@ end
     @info "DMTST-05: Cross-domain distances" dist_bohr_time dist_bohr_trott dist_time_trott
 end
 
-# DMTST-06: OFT consistency across domains
-# oft! (analytical, Energy domain) vs time_oft! (time quadrature) vs trotter_oft! (Trotter)
-# Expected: energy ~ time within TOL_QUADRATURE; trotter has additional error.
+# DMTST-06: NUFFT OFT consistency vs analytical Energy-domain reference.
+# Verifies the NUFFT-accelerated OFT matches the analytical `oft!` to within
+# time-quadrature tolerance (Time domain) and Trotter-error tolerance
+# (Trotter domain). The original cross-checks against the deprecated
+# `time_oft!` / `trotter_oft!` direct-summation routines were retired with
+# those functions in qf-6z9.4 (kept at `src/staging/ofts.jl` for reference).
 
-@testset "DMTST-06: OFT consistency" begin
-    jump = TEST_JUMPS[1]  # X on site 1
-    w = -3 * W0           # Test energy value
-
-    # Energy OFT (analytical, Bohr/Energy domain)
-    energy_oft_prefactor = 1 / sqrt(SIGMA * sqrt(2 * pi))
-    A_energy = Matrix{ComplexF64}(undef, DIM, DIM)
-    oft!(A_energy, jump.in_eigenbasis, TEST_HAM.bohr_freqs, w, 1.0 / (4 * SIGMA^2))
-    A_energy .*= energy_oft_prefactor
-
-    # Time OFT (time domain quadrature)
-    # Reconstruct oft_time_labels since they are not stored in precomputed_data
-    energy_labels = QuantumFurnace._create_energy_labels(NUM_ENERGY_BITS, W0)
-    time_labels_full = energy_labels .* (T0 / W0)
-    oft_time_labels = QuantumFurnace._truncate_time_labels_for_oft(time_labels_full, SIGMA)
-
-    time_oft_prefactor = T0 * sqrt(SIGMA * sqrt(2 / pi) / (2 * pi))
-    caches = QuantumFurnace.OFTCaches{Float64}(DIM)
-    A_time = Matrix{ComplexF64}(undef, DIM, DIM)
-    QuantumFurnace.time_oft!(A_time, caches, jump, w, TEST_HAM, oft_time_labels, SIGMA)
-    A_time .*= time_oft_prefactor
-
-    # Trotter OFT: trotter_oft! needs jump in Trotter eigenbasis
-    jump_trott = TEST_TROTTER_JUMPS[1]
-    A_trott = Matrix{ComplexF64}(undef, DIM, DIM)
-    QuantumFurnace.trotter_oft!(A_trott, caches, jump_trott, w, TEST_TROTTER, oft_time_labels, SIGMA)
-    A_trott .*= time_oft_prefactor
-    # Transform result from Trotter eigenbasis back to H-eigenbasis
-    U_t2e = TEST_TROTTER.eigvecs' * TEST_HAM.eigvecs
-    A_trott_in_eigen = U_t2e' * A_trott * U_t2e
-
-    # Compute distances
-    dist_energy_time = norm(A_energy - A_time)
-    dist_energy_trott = norm(A_energy - A_trott_in_eigen)
-    dist_time_trott = norm(A_time - A_trott_in_eigen)
-
-    # Energy and time OFT agree up to quadrature tolerance
-    # Time quadrature error: O(1/N_time_points) with N=4096, well below 1e-6
-    @test dist_energy_time < TOL_QUADRATURE
-    @info "DMTST-06: A_energy vs A_time" distance=dist_energy_time threshold=TOL_QUADRATURE
-
-    # Trotter error is at least as large as time quadrature error (with small numerical margin)
-    # Monotonicity: Trotter approximation adds error on top of quadrature
-    @test dist_energy_trott >= dist_energy_time - 1e-10
-    @info "DMTST-06: Trotter error >= quadrature error" dist_energy_trott dist_energy_time margin=1e-10
-
-    # Trotter OFT error (measured ~1.5e-8, tight threshold)
-    # Threshold 1e-5 gives ~1000x margin for system-size variation
-    @test dist_energy_trott < 1e-5
-    @info "DMTST-06: OFT Trotter total error" distance=dist_energy_trott threshold=1e-5
-
-    @info "DMTST-06: Cross-domain distances" dist_energy_time dist_energy_trott dist_time_trott
-end
-
-# DMTST-06b: NUFFT OFT consistency
-# Verifies the NUFFT-accelerated OFT matches both the direct summation methods (time_oft!, trotter_oft!)
-# and the analytical energy-domain OFT.
-
-@testset "DMTST-06b: NUFFT OFT consistency" begin
+@testset "DMTST-06: NUFFT OFT consistency" begin
     jump = TEST_JUMPS[1]  # X on site 1
     w = -3 * W0           # Test energy value (must be on energy grid)
 
@@ -211,12 +156,7 @@ end
     oft!(A_energy, jump.in_eigenbasis, TEST_HAM.bohr_freqs, w, 1.0 / (4 * SIGMA^2))
     A_energy .*= energy_oft_prefactor
 
-    # --- Shared setup ---
-    energy_labels = QuantumFurnace._create_energy_labels(NUM_ENERGY_BITS, W0)
-    time_labels_full = energy_labels .* (T0 / W0)
-    oft_time_labels = QuantumFurnace._truncate_time_labels_for_oft(time_labels_full, SIGMA)
     time_oft_prefactor = T0 * sqrt(SIGMA * sqrt(2 / pi) / (2 * pi))
-    caches = QuantumFurnace.OFTCaches{Float64}(DIM)
 
     # === Time NUFFT OFT ===
     config_time = make_config(Lindbladian(),TimeDomain())
@@ -228,11 +168,6 @@ end
     nufft_pf_time = QuantumFurnace._prefactor_view(precomputed_time.oft_nufft_prefactors, w)
     A_nufft_time = jump.in_eigenbasis .* nufft_pf_time
     A_nufft_time .*= time_oft_prefactor
-
-    # Direct time_oft! for comparison
-    A_time = Matrix{ComplexF64}(undef, DIM, DIM)
-    QuantumFurnace.time_oft!(A_time, caches, jump, w, TEST_HAM, oft_time_labels, SIGMA)
-    A_time .*= time_oft_prefactor
 
     # === Trotter NUFFT OFT ===
     config_trott = make_config(Lindbladian(),TrotterDomain())
@@ -249,35 +184,17 @@ end
     A_nufft_trott .*= time_oft_prefactor
     A_nufft_trott_in_eigen = U_t2e' * A_nufft_trott * U_t2e
 
-    # Direct trotter_oft! for comparison
-    A_trott = Matrix{ComplexF64}(undef, DIM, DIM)
-    QuantumFurnace.trotter_oft!(A_trott, caches, jump_trott, w, TEST_TROTTER, oft_time_labels, SIGMA)
-    A_trott .*= time_oft_prefactor
-    A_trott_in_eigen = U_t2e' * A_trott * U_t2e
-
     # Compute distances
-    dist_nufft_time_vs_time = norm(A_nufft_time - A_time)
-    dist_nufft_trott_vs_trott = norm(A_nufft_trott_in_eigen - A_trott_in_eigen)
     dist_nufft_time_vs_energy = norm(A_nufft_time - A_energy)
     dist_nufft_trott_vs_energy = norm(A_nufft_trott_in_eigen - A_energy)
 
-    # NUFFT time OFT matches direct time_oft! (both compute same sum, NUFFT uses FFT with eps=1e-12)
-    # Threshold 1e-10 allows for floating-point reordering differences between FFT and direct sum
-    @test dist_nufft_time_vs_time < 1e-10
-    @info "DMTST-06b: NUFFT time vs direct time" distance=dist_nufft_time_vs_time threshold=1e-10
-
-    # NUFFT trotter OFT matches direct trotter_oft!
-    # Same reasoning: FFT vs direct sum reordering, threshold 1e-10
-    @test dist_nufft_trott_vs_trott < 1e-10
-    @info "DMTST-06b: NUFFT trotter vs direct trotter" distance=dist_nufft_trott_vs_trott threshold=1e-10
-
-    # NUFFT time OFT matches analytical (same tolerance as DMTST-06 time vs energy)
-    # Time quadrature error: O(1/N_time_points), well below TOL_QUADRATURE
+    # NUFFT time OFT matches analytical within time-quadrature error
+    # (O(1/N_time_points) with N=4096, well below TOL_QUADRATURE).
     @test dist_nufft_time_vs_energy < TOL_QUADRATURE
-    @info "DMTST-06b: NUFFT time vs analytical" distance=dist_nufft_time_vs_energy threshold=TOL_QUADRATURE
+    @info "DMTST-06: NUFFT time vs analytical" distance=dist_nufft_time_vs_energy threshold=TOL_QUADRATURE
 
-    # NUFFT Trotter OFT error (measured ~1.5e-8, tight threshold)
-    # Threshold 1e-5 gives ~1000x margin for system-size variation
+    # NUFFT Trotter OFT error (measured ~1.5e-8; threshold 1e-5 gives ~1000x
+    # margin for system-size variation; Trotter error sits on top of quadrature error).
     @test dist_nufft_trott_vs_energy < 1e-5
-    @info "DMTST-06b: NUFFT trotter vs analytical" distance=dist_nufft_trott_vs_energy threshold=1e-5
+    @info "DMTST-06: NUFFT trotter vs analytical" distance=dist_nufft_trott_vs_energy threshold=1e-5
 end

@@ -11,8 +11,11 @@
 
 # Generated files
 /results/
-/hamiltonians/
 /experiments/
+
+# Hamiltonian BSON cache files are large build artefacts (n=10 → ~50 MB);
+# the generation script itself is tracked.
+/hamiltonians/*.bson
 
 # OS-specific files
 /docs/.DS_Store
@@ -28,3 +31,27 @@
 
 # Beads / Dolt files (added by bd init)
 .beads-credential-key
+
+# Python environments
+.venv/
+.venv-uv/
+.venv-linux/
+venv/
+env/
+.env
+.python-version
+pyvenv.cfg
+
+# Python caches and build artefacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.tox/
+.coverage
+htmlcov/
+

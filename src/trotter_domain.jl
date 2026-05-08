@@ -4,10 +4,32 @@
     Stores precomputed data for Trotterized time evolution.
     Parameterized on element type `T`, inferred from the HamHam used for construction.
 
-    # Fields
-    - `t0`: The time unit for the Trotter step.
-    - `num_trotter_steps_per_t0`: Self-explanatory. Usually `t0` is small enough to just use 1 Trotter step for it.
-    - `eigvals_t0`, `eigvecs`: Eigenvalues of the evolution operator for one time unit `t0`, and corresponding eigenvectors.
+    # Legacy fields (single-cache mode — also set in shared-δt₀ mode where they alias the dissipative cache)
+    - `t0`: Trotter-step duration of the **dissipative** register (= `t0_D`).
+    - `num_trotter_steps_per_t0`: Number of elementary Strang substeps composing one `t0` step
+      (= `M_D` in shared-δt₀ mode; = the user's `M` in legacy mode).
+    - `eigvals_t0`: Eigenvalues of `S_2(t0/M)^M`, the Strang one-step operator at duration `t0`.
+    - `eigvecs`: Strang eigenbasis. In shared-δt₀ mode this is the eigenbasis of the elementary
+      `S_2(δt₀)` — the same set of eigenvectors as `eigvecs` of any power, hence shared across
+      all three per-register caches.
+    - `bohr_freqs`: Quasi-Bohr frequencies extracted from `eigvals_t0` at scale `t0`.
+
+    # Per-register fields (qf-d0w shared-δt₀ scheme; `nothing` in legacy single-cache mode)
+    - `eigvals_t0_b_minus`: Eigenvalues at the **outer coherent** Trotter step
+      `t0_b_minus = β · register_t0_b_minus(config)`. Used by the `b_-(t)` outer loop in
+      `B_trotter`.
+    - `eigvals_t0_b_plus`: Eigenvalues at the **inner coherent** Trotter step
+      `t0_b_plus = β · register_t0_b_plus(config)`. Used by the `b_+(τ)` inner loop in
+      `B_trotter`.
+    - `t0_b_minus`, `t0_b_plus`: The corresponding Trotter-step durations (β times the
+      config grid spacings). Stored so the consumer can compute `num_steps =
+      round(grid_index · β · t0_grid / t0_X)` and recover an integer step count
+      independent of the dissipative `t0_D`.
+
+    All three `eigvals_t0_X` derive from the same elementary `S_2(δt₀)` eigenvalues
+    `λ_S`: `eigvals_t0_X = λ_S .^ M_X`. This guarantees a single shared eigenbasis
+    (`eigvecs` of `λ_S`) and avoids any runtime basis alignment between the three
+    coherent-term loops.
 """
 struct TrottTrott{T<:AbstractFloat}
     t0::T
@@ -15,8 +37,22 @@ struct TrottTrott{T<:AbstractFloat}
     eigvals_t0::Vector{Complex{T}}
     eigvecs::Matrix{Complex{T}}
     bohr_freqs::Matrix{T}
+    # qf-d0w per-register caches (nothing in legacy single-cache mode).
+    eigvals_t0_b_minus::Union{Nothing, Vector{Complex{T}}}
+    eigvals_t0_b_plus::Union{Nothing, Vector{Complex{T}}}
+    t0_b_minus::Union{Nothing, T}
+    t0_b_plus::Union{Nothing, T}
 end
 
+"""
+    TrottTrott(hamiltonian, t::Real, num_trotter_steps::Int) -> TrottTrott
+
+Legacy single-cache constructor. Builds `S_2(t/M)^M` via `_trotterize2`, diagonalizes
+it, and stores the result. The per-register fields (`eigvals_t0_b_minus`,
+`eigvals_t0_b_plus`, `t0_b_minus`, `t0_b_plus`) are set to `nothing` — `B_trotter`
+falls back to `eigvals_t0` for both the outer `b_-(t)` and inner `b_+(τ)` loops,
+which reproduces the pre-qf-d0w behaviour byte-for-byte.
+"""
 function TrottTrott(hamiltonian::HamHam{T}, t::Real, num_trotter_steps::Int64) where {T<:AbstractFloat}
     t_f64 = Float64(t)
     # Trotter computation always in Float64 (Pauli matrices are ComplexF64 constants).
@@ -30,7 +66,96 @@ function TrottTrott(hamiltonian::HamHam{T}, t::Real, num_trotter_steps::Int64) w
         Vector{Complex{T}}(trottU_eigvals),
         Matrix{Complex{T}}(trottU_eigvecs),
         Matrix{T}(bfreqs),
+        nothing, nothing, nothing, nothing,
         )
+end
+
+"""
+    TrottTrott(hamiltonian, t0_D::Real, t0_b_minus::Real, t0_b_plus::Real, M_user::Int)
+        -> TrottTrott
+
+qf-d0w shared-δt₀ constructor for KMS coherent in TrotterDomain. Picks an elementary
+Strang substep `δt₀ = min(t0_D, t0_b_minus, t0_b_plus) / M_user`, asserts that all
+three natural steps are integer multiples of `δt₀`, and builds a single eigenbasis
+`U_S` from `S_2(δt₀)`. The per-register `eigvals_t0_X = λ_S .^ M_X` are vector
+powers — no extra Trotterizations or diagonalizations.
+
+`t0_b_minus` and `t0_b_plus` here are the **Trotter-step durations** of the
+outer and inner coherent integral evolutions:
+- `b_-(t/σ)` over the outer grid → `t0_b_minus = register_t0_b_minus(config) / σ`.
+- `b_+(τβ)` over the inner grid → `t0_b_plus  = β · register_t0_b_plus(config)`.
+
+For the standard project convention `σ = 1/β` both scalings coincide. The
+per-leg formulas are written separately so that `B_trotter` can recover an
+**integer** step count for any σ. The dissipative step `t0_D =
+register_t0_D(config)` is in raw Hamiltonian-time units and carries no
+σ-rescaling.
+
+Throws `ArgumentError` if any natural step is not an integer multiple of `δt₀`
+(the integer-M condition fails for non-default `w0_D` or non-power-of-two grid
+ratios; in that case the user should adjust the grid or — when implemented —
+opt into the independent-cache fallback).
+"""
+function TrottTrott(
+    hamiltonian::HamHam{T},
+    t0_D::Real,
+    t0_b_minus::Real,
+    t0_b_plus::Real,
+    M_user::Int,
+) where {T<:AbstractFloat}
+    M_user > 0 || throw(ArgumentError("TrottTrott shared-δt₀: M_user must be > 0 (got $M_user)."))
+    t0_D > 0    || throw(ArgumentError("TrottTrott shared-δt₀: t0_D must be > 0 (got $t0_D)."))
+    t0_b_minus > 0 || throw(ArgumentError("TrottTrott shared-δt₀: t0_b_minus must be > 0 (got $t0_b_minus)."))
+    t0_b_plus > 0  || throw(ArgumentError("TrottTrott shared-δt₀: t0_b_plus must be > 0 (got $t0_b_plus)."))
+
+    natural = (Float64(t0_D), Float64(t0_b_minus), Float64(t0_b_plus))
+    delta_t0 = minimum(natural) / M_user
+    M_D, M_bm, M_bp = _shared_delta_t0_steps(natural, delta_t0)
+
+    # One elementary Strang one-step at δt₀ — single Trotterization, single diagonalization.
+    trottU_S = _trotterize2(hamiltonian, delta_t0, 1)
+    eigvals_S, eigvecs_S = eigen(trottU_S)
+
+    eigvals_t0_D  = eigvals_S .^ M_D
+    eigvals_t0_bm = eigvals_S .^ M_bm
+    eigvals_t0_bp = eigvals_S .^ M_bp
+
+    # bohr_freqs is a property of the dissipative t0 (mirrors legacy single-cache
+    # semantics so existing consumers — NUFFT prefactors, OFT lifts — see the
+    # same scale they always have).
+    bfreqs = _trotter_bohr_freqs(eigvals_t0_D, Float64(t0_D))
+
+    return TrottTrott{T}(
+        T(t0_D),
+        M_D,
+        Vector{Complex{T}}(eigvals_t0_D),
+        Matrix{Complex{T}}(eigvecs_S),
+        Matrix{T}(bfreqs),
+        Vector{Complex{T}}(eigvals_t0_bm),
+        Vector{Complex{T}}(eigvals_t0_bp),
+        T(t0_b_minus),
+        T(t0_b_plus),
+    )
+end
+
+# Helper: enforces the integer-M condition and returns (M_D, M_bm, M_bp) as Ints.
+# The condition fails for non-default `w0_D` or non-power-of-two grid ratios —
+# in that case the caller should adjust parameters or use a different scheme.
+function _shared_delta_t0_steps(natural::NTuple{3, Float64}, delta_t0::Float64;
+                                tol::Float64 = 1e-9)
+    M = ntuple(i -> natural[i] / delta_t0, 3)
+    M_int = ntuple(i -> round(Int, M[i]), 3)
+    @inbounds for i in 1:3
+        if abs(M[i] - M_int[i]) > tol * max(1.0, M[i])
+            label = (i == 1) ? "t0_D" : (i == 2 ? "t0_b_minus" : "t0_b_plus")
+            throw(ArgumentError(
+                "TrottTrott shared-δt₀: $(label) / δt₀ = $(M[i]) is not integer " *
+                "(δt₀ = $(delta_t0), tol = $tol). The shared-δt₀ scheme requires all " *
+                "three natural Trotter steps to be commensurate; commonly this fails " *
+                "for non-default w0_D or grid ratios that are not powers of two."))
+        end
+    end
+    return M_int
 end
 
 function _trotter_bohr_freqs(trottU_T_eigvals::Vector{ComplexF64}, t::Float64)
@@ -95,9 +220,9 @@ function _trotterize2(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
     end
 
     # 2-site terms in the Hamiltonian that do not commute with e.g. XX on site (1, 2)
-    sequence_2site_not_commuting = []
+    sequence_2site_not_commuting = Matrix{ComplexF64}[]
     if length(groups.noncommuting[1]) != 0
-        for (term, coupling) in (groups.noncommuting[1], groups.noncommuting[2])
+        for (term, coupling) in zip(groups.noncommuting[1], groups.noncommuting[2])
             for q in 1:num_qubits
                 term_f64 = Vector{Matrix{ComplexF64}}(term)
                 expm_pauli_term = expm_pauli_padded(term_f64, timestep * Float64(coupling) / 2, num_qubits, q)

@@ -3,9 +3,15 @@ function B_bohr(hamiltonian::HamHam{T}, jumps::AbstractVector{<:JumpOp}, config:
 
     dim = size(hamiltonian.data, 1)
     CT = Complex{T}
-    unique_freqs = keys(hamiltonian.bohr_dict)
+    unique_freqs = collect(keys(hamiltonian.bohr_dict))
 
     f = _pick_f(config)  # Picks rates for B in Bohr domain
+
+    n_jumps = length(jumps)
+    n_freqs = length(unique_freqs)
+    if Threads.nthreads() > 1 && n_jumps * n_freqs >= OMEGA_THREAD_THRESHOLD
+        return _B_bohr_threaded(hamiltonian, jumps, f, unique_freqs, dim, n_jumps, CT)
+    end
 
     B = zeros(CT, dim, dim)
     for jump in jumps
@@ -25,6 +31,79 @@ function B_bohr(hamiltonian::HamHam{T}, jumps::AbstractVector{<:JumpOp}, config:
         end
     end
     return B
+end
+
+# qf-6af.5: thread the (jump_idx, freq_idx) outer×inner double loop. Each
+# task accumulates a private dim×dim B partial and uses its own f_A_nu_1
+# scratch; reduce after `@sync`. Used by Workspace setups that hit B_bohr
+# from `_precompute_coherent_B` (BohrDomain + EnergyDomain Lindbladian KMS).
+function _B_bohr_threaded(
+    hamiltonian::HamHam{T},
+    jumps::AbstractVector{<:JumpOp},
+    f,
+    unique_freqs::Vector,
+    dim::Int,
+    n_jumps::Int,
+    ::Type{CT},
+) where {T<:AbstractFloat, CT}
+    n_freqs = length(unique_freqs)
+    n_work  = n_jumps * n_freqs
+    nt = min(Threads.nthreads(), n_work)
+    chunks = _partition_range(1:n_work, nt)
+    n_chunks = length(chunks)
+
+    B_partials  = [zeros(CT, dim, dim) for _ in 1:n_chunks]
+    f_A_buffers = [Matrix{CT}(undef, dim, dim) for _ in 1:n_chunks]
+
+    old_blas = BLAS.get_num_threads()
+    BLAS.set_num_threads(1)
+    try
+        @sync for (idx, chunk) in enumerate(chunks)
+            Threads.@spawn _B_bohr_chunk!(
+                B_partials[idx], f_A_buffers[idx],
+                hamiltonian, jumps, f, unique_freqs,
+                dim, n_freqs, chunk)
+        end
+    finally
+        BLAS.set_num_threads(old_blas)
+    end
+
+    B = zeros(CT, dim, dim)
+    @inbounds for idx in 1:n_chunks
+        B .+= B_partials[idx]
+    end
+    return B
+end
+
+function _B_bohr_chunk!(
+    B_partial::Matrix{CT},
+    f_A_nu_1::Matrix{CT},
+    hamiltonian::HamHam,
+    jumps::AbstractVector{<:JumpOp},
+    f,
+    unique_freqs::Vector,
+    dim::Int,
+    n_freqs::Int,
+    chunk::UnitRange{Int},
+) where {CT}
+    @inbounds for w_idx in chunk
+        # Linear (jump_idx, freq_idx) decoding: outer jump, inner freq.
+        jump_idx = ((w_idx - 1) ÷ n_freqs) + 1
+        freq_idx = ((w_idx - 1) % n_freqs) + 1
+        jump = jumps[jump_idx]
+        nu_2 = unique_freqs[freq_idx]
+        indices = hamiltonian.bohr_dict[nu_2]
+
+        @. f_A_nu_1 = f(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
+        @inbounds for idx in indices
+            i, j = idx[1], idx[2]
+            val = conj(jump.in_eigenbasis[i, j])
+            @inbounds for col in 1:dim
+                B_partial[j, col] += val * f_A_nu_1[i, col]
+            end
+        end
+    end
+    return nothing
 end
 
 function _pick_f(config::Config{<:Any, <:Any, KMS})

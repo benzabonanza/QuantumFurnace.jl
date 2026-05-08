@@ -194,6 +194,12 @@ function _accumulate_jump_sandwich!(
     inv_4sigma2 = 1.0 / (4 * config.sigma^2)
     prefactor = ws.oft_domain_prefactor * gamma_norm_factor
 
+    if Threads.nthreads() > 1 && length(energy_labels) >= OMEGA_THREAD_THRESHOLD
+        return _accumulate_jump_sandwich_threaded_energy!(
+            out, sc, rho, delta, ws.jump_eigenbases, ws.jump_hermitian,
+            bohr_freqs, energy_labels, transition, prefactor, inv_4sigma2)
+    end
+
     for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
         is_herm = ws.jump_hermitian[k]
         if is_herm
@@ -240,6 +246,13 @@ function _accumulate_jump_sandwich!(
     sc = ws.scratch::KrylovScratch{T}
     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = ws
     prefactor = ws.oft_domain_prefactor * gamma_norm_factor
+
+    if Threads.nthreads() > 1 && length(energy_labels) >= OMEGA_THREAD_THRESHOLD
+        return _accumulate_jump_sandwich_threaded_timetrot!(
+            out, sc, rho, delta, ws.jump_eigenbases, ws.jump_hermitian,
+            oft_nufft_prefactors.data, oft_nufft_prefactors.energy_to_index,
+            energy_labels, transition, prefactor)
+    end
 
     for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
         is_herm = ws.jump_hermitian[k]
@@ -292,11 +305,20 @@ function _accumulate_jump_sandwich!(
     bohr_alpha_fn = ws.bohr_alpha
     gamma_norm_factor = ws.gamma_norm_factor
     dim = size(rho, 1)
-    # Allocate A_nu2_dag buffer (one per call, acceptable for Bohr)
-    A_nu2_dag = zeros(T, dim, dim)
+
+    bohr_keys = ws.bohr_keys
+    bohr_keys_local = bohr_keys === nothing ? collect(keys(hamiltonian.bohr_dict)) : bohr_keys
+    n_jumps = length(ws.jump_eigenbases)
+    n_keys  = length(bohr_keys_local)
+    if Threads.nthreads() > 1 && n_jumps * n_keys >= OMEGA_THREAD_THRESHOLD
+        return _accumulate_jump_sandwich_threaded_bohr!(
+            out, sc, rho, delta, ws.jump_eigenbases,
+            bohr_alpha_fn, gamma_norm_factor,
+            hamiltonian.bohr_freqs, hamiltonian.bohr_dict, bohr_keys_local)
+    end
 
     for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
-        for nu_2 in keys(hamiltonian.bohr_dict)
+        for nu_2 in bohr_keys_local
             # alpha_A = B_nu2
             @. sc.jump_oft = bohr_alpha_fn(hamiltonian.bohr_freqs, nu_2) * eigenbasis
 
@@ -314,6 +336,272 @@ function _accumulate_jump_sandwich!(
             # out += delta * gamma_norm_factor * alpha_A * (rho * A_nu2_dag)
             mul!(out, sc.jump_oft, sc.sandwich_tmp, delta * gamma_norm_factor, 1.0)
         end
+    end
+    return nothing
+end
+
+# ---------------------------------------------------------------------------
+# Threaded ω-loop variants for the channel jump sandwich (qf-in3 follow-up)
+# ---------------------------------------------------------------------------
+#
+# Mirror of `_apply_lindbladian_threaded_*!` in `src/krylov_matvec.jl`, but for
+# the additive accumulator pattern of `_accumulate_jump_sandwich!`. Uses
+# `sc.task_scratches[idx].channel_rho_jump` as the per-thread accumulator
+# (Thermalize Workspaces are constructed with `with_channel_rho_jump=true`),
+# and `sc.work_list` as the pre-built `(jump_idx, label_idx)` schedule.
+# Reduces the per-thread chunks into the caller's `out` buffer at the end.
+
+function _accumulate_jump_sandwich_threaded_energy!(
+    out::Matrix{T},
+    sc::KrylovScratch{T},
+    rho::Matrix{T},
+    delta::Real,
+    jump_eigenbases::Vector{Matrix{T}},
+    jump_hermitian::Vector{Bool},
+    bohr_freqs::AbstractMatrix{<:Real},
+    energy_labels::Vector{Float64},
+    transition,
+    prefactor::Float64,
+    inv_4sigma2::Float64,
+) where {T<:Complex}
+    work = sc.work_list
+    _populate_lindblad_work_list!(work, jump_hermitian, energy_labels)
+    n_work = length(work)
+    n_work == 0 && return nothing
+
+    pool = sc.task_scratches
+    nt = min(Threads.nthreads(), n_work, length(pool))
+    chunks = _partition_range(1:n_work, nt)
+
+    old_blas = BLAS.get_num_threads()
+    BLAS.set_num_threads(1)
+    try
+        @sync for (idx, chunk) in enumerate(chunks)
+            Threads.@spawn _accumulate_jump_sandwich_chunk_energy!(
+                pool[idx], rho, delta, jump_eigenbases, jump_hermitian,
+                bohr_freqs, energy_labels, transition, work, chunk,
+                prefactor, inv_4sigma2)
+        end
+    finally
+        BLAS.set_num_threads(old_blas)
+    end
+
+    @inbounds for idx in 1:length(chunks)
+        out .+= pool[idx].channel_rho_jump
+    end
+    return nothing
+end
+
+function _accumulate_jump_sandwich_chunk_energy!(
+    task_sc::KrylovScratch{T},
+    rho::Matrix{T},
+    delta::Real,
+    jump_eigenbases::Vector{Matrix{T}},
+    jump_hermitian::Vector{Bool},
+    bohr_freqs::AbstractMatrix{<:Real},
+    energy_labels::Vector{Float64},
+    transition,
+    work::Vector{Tuple{Int, Int}},
+    chunk::UnitRange{Int},
+    prefactor::Float64,
+    inv_4sigma2::Float64,
+) where {T<:Complex}
+    fill!(task_sc.channel_rho_jump, 0)
+
+    @inbounds for w_idx in chunk
+        (k, li) = work[w_idx]
+        eigenbasis = jump_eigenbases[k]
+        is_herm = jump_hermitian[k]
+
+        w_raw = energy_labels[li]
+        # Hermitian fold: only `w_raw <= 1e-12` queued; OFT and rate use
+        # `|w_raw|`. Non-Hermitian uses `w_raw` directly (signed).
+        w = is_herm ? abs(w_raw) : w_raw
+
+        oft!(task_sc.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+        rate2 = prefactor * transition(w)
+        mul!(task_sc.sandwich_tmp, rho, task_sc.jump_oft')
+        mul!(task_sc.channel_rho_jump, task_sc.jump_oft, task_sc.sandwich_tmp,
+             delta * rate2, 1.0)
+
+        if is_herm && w > 1e-12
+            rate2_neg = prefactor * transition(-w)
+            mul!(task_sc.sandwich_tmp, rho, task_sc.jump_oft)
+            mul!(task_sc.channel_rho_jump, task_sc.jump_oft', task_sc.sandwich_tmp,
+                 delta * rate2_neg, 1.0)
+        end
+    end
+    return nothing
+end
+
+function _accumulate_jump_sandwich_threaded_timetrot!(
+    out::Matrix{T},
+    sc::KrylovScratch{T},
+    rho::Matrix{T},
+    delta::Real,
+    jump_eigenbases::Vector{Matrix{T}},
+    jump_hermitian::Vector{Bool},
+    nufft_data::AbstractArray{T, 3},
+    nufft_idx::AbstractDict,
+    energy_labels::Vector{Float64},
+    transition,
+    prefactor::Float64,
+) where {T<:Complex}
+    work = sc.work_list
+    _populate_lindblad_work_list!(work, jump_hermitian, energy_labels)
+    n_work = length(work)
+    n_work == 0 && return nothing
+
+    pool = sc.task_scratches
+    nt = min(Threads.nthreads(), n_work, length(pool))
+    chunks = _partition_range(1:n_work, nt)
+
+    old_blas = BLAS.get_num_threads()
+    BLAS.set_num_threads(1)
+    try
+        @sync for (idx, chunk) in enumerate(chunks)
+            Threads.@spawn _accumulate_jump_sandwich_chunk_timetrot!(
+                pool[idx], rho, delta, jump_eigenbases, jump_hermitian,
+                nufft_data, nufft_idx, energy_labels, transition, work, chunk,
+                prefactor)
+        end
+    finally
+        BLAS.set_num_threads(old_blas)
+    end
+
+    @inbounds for idx in 1:length(chunks)
+        out .+= pool[idx].channel_rho_jump
+    end
+    return nothing
+end
+
+function _accumulate_jump_sandwich_chunk_timetrot!(
+    task_sc::KrylovScratch{T},
+    rho::Matrix{T},
+    delta::Real,
+    jump_eigenbases::Vector{Matrix{T}},
+    jump_hermitian::Vector{Bool},
+    nufft_data::AbstractArray{T, 3},
+    nufft_idx::AbstractDict,
+    energy_labels::Vector{Float64},
+    transition,
+    work::Vector{Tuple{Int, Int}},
+    chunk::UnitRange{Int},
+    prefactor::Float64,
+) where {T<:Complex}
+    fill!(task_sc.channel_rho_jump, 0)
+
+    @inbounds for w_idx in chunk
+        (k, li) = work[w_idx]
+        eigenbasis = jump_eigenbases[k]
+        is_herm = jump_hermitian[k]
+
+        w_raw = energy_labels[li]
+        w = is_herm ? abs(w_raw) : w_raw
+        prefactor_idx = is_herm ? nufft_idx[w] : li
+        nufft_pf = @view nufft_data[:, :, prefactor_idx]
+        @. task_sc.jump_oft = eigenbasis * nufft_pf
+        rate2 = prefactor * transition(w)
+
+        mul!(task_sc.sandwich_tmp, rho, task_sc.jump_oft')
+        mul!(task_sc.channel_rho_jump, task_sc.jump_oft, task_sc.sandwich_tmp,
+             delta * rate2, 1.0)
+
+        if is_herm && w > 1e-12
+            rate2_neg = prefactor * transition(-w)
+            mul!(task_sc.sandwich_tmp, rho, task_sc.jump_oft)
+            mul!(task_sc.channel_rho_jump, task_sc.jump_oft', task_sc.sandwich_tmp,
+                 delta * rate2_neg, 1.0)
+        end
+    end
+    return nothing
+end
+
+# --- BohrDomain channel sandwich threaded variant (qf-6af.7) ---
+#
+# Mirror of `_accumulate_jump_sandwich_threaded_timetrot!`, but with work
+# decomposed over (jump_idx, bohr_key_idx) pairs. BohrDomain dissipator is
+# `ρ_jump += δ·γ_nf · α(ν₂) · ρ · A_{ν₂}^†`, so the per-key inner work is
+# (1) form `α·A_{eb}` (entrywise scaling), (2) scatter `rho · A_{ν₂}^†` via
+# the precomputed `bohr_dict[ν₂]` index list, (3) `mul!(out, …, …, w, 1)`.
+
+function _accumulate_jump_sandwich_threaded_bohr!(
+    out::Matrix{T},
+    sc::KrylovScratch{T},
+    rho::Matrix{T},
+    delta::Real,
+    jump_eigenbases::Vector{Matrix{T}},
+    bohr_alpha_fn,
+    gamma_norm_factor::Real,
+    bohr_freqs::AbstractMatrix{<:Real},
+    bohr_dict,
+    bohr_keys::Vector,
+) where {T<:Complex}
+    n_jumps = length(jump_eigenbases)
+    n_keys  = length(bohr_keys)
+    n_work  = n_jumps * n_keys
+    n_work == 0 && return nothing
+
+    pool = sc.task_scratches
+    nt = min(Threads.nthreads(), n_work, length(pool))
+    chunks = _partition_range(1:n_work, nt)
+    n_chunks = length(chunks)
+
+    old_blas = BLAS.get_num_threads()
+    BLAS.set_num_threads(1)
+    try
+        @sync for (idx, chunk) in enumerate(chunks)
+            Threads.@spawn _accumulate_jump_sandwich_chunk_bohr!(
+                pool[idx], rho, delta, jump_eigenbases,
+                bohr_alpha_fn, gamma_norm_factor,
+                bohr_freqs, bohr_dict, bohr_keys, n_keys, chunk)
+        end
+    finally
+        BLAS.set_num_threads(old_blas)
+    end
+
+    @inbounds for idx in 1:n_chunks
+        out .+= pool[idx].channel_rho_jump
+    end
+    return nothing
+end
+
+function _accumulate_jump_sandwich_chunk_bohr!(
+    task_sc::KrylovScratch{T},
+    rho::Matrix{T},
+    delta::Real,
+    jump_eigenbases::Vector{Matrix{T}},
+    bohr_alpha_fn,
+    gamma_norm_factor::Real,
+    bohr_freqs::AbstractMatrix{<:Real},
+    bohr_dict,
+    bohr_keys::Vector,
+    n_keys::Int,
+    chunk::UnitRange{Int},
+) where {T<:Complex}
+    fill!(task_sc.channel_rho_jump, 0)
+    dim = size(rho, 1)
+
+    @inbounds for w_idx in chunk
+        k       = ((w_idx - 1) ÷ n_keys) + 1
+        key_idx = ((w_idx - 1) % n_keys) + 1
+        eigenbasis = jump_eigenbases[k]
+        nu_2 = bohr_keys[key_idx]
+
+        @. task_sc.jump_oft = bohr_alpha_fn(bohr_freqs, nu_2) * eigenbasis
+
+        fill!(task_sc.sandwich_tmp, 0)
+        indices = bohr_dict[nu_2]
+        @inbounds for idx in indices
+            i = idx[1]; j = idx[2]
+            v = conj(eigenbasis[i, j])
+            @inbounds for p in 1:dim
+                task_sc.sandwich_tmp[p, i] += rho[p, j] * v
+            end
+        end
+
+        mul!(task_sc.channel_rho_jump, task_sc.jump_oft, task_sc.sandwich_tmp,
+             delta * gamma_norm_factor, 1.0)
     end
     return nothing
 end
@@ -358,11 +646,13 @@ function krylov_spectral_gap(
     howmany::Int=4,
     tol::Real=1e-10,
     max_retries::Int=3,
+    allow_unpaired_nonhermitian::Bool=false,
     krylov_kwargs...
 )
     # Guards
     krylovdim > howmany || error("krylovdim ($krylovdim) must be > howmany ($howmany)")
     _check_krylov_memory(config.num_qubits, krylovdim)
+    validate_jump_pairing(jumps; allow_unpaired_nonhermitian=allow_unpaired_nonhermitian)
 
     # Allocate workspace
     ws = Workspace(config, hamiltonian, jumps; trotter=trotter)
@@ -459,11 +749,13 @@ function krylov_spectral_gap(
     howmany::Int=4,
     tol::Real=1e-10,
     max_retries::Int=3,
+    allow_unpaired_nonhermitian::Bool=false,
     krylov_kwargs...
 )
     # Guards
     krylovdim > howmany || error("krylovdim ($krylovdim) must be > howmany ($howmany)")
     _check_krylov_memory(config.num_qubits, krylovdim)
+    validate_jump_pairing(jumps; allow_unpaired_nonhermitian=allow_unpaired_nonhermitian)
 
     # Get delta from config
     delta = config.delta
@@ -572,6 +864,7 @@ function run_krylov_spectrum(
     howmany::Int=4,
     tol::Real=1e-10,
     max_retries::Int=3,
+    allow_unpaired_nonhermitian::Bool=false,
     krylov_kwargs...
 ) where {S<:Union{Lindbladian, Thermalize}, D, C, T}
 
@@ -582,7 +875,9 @@ function run_krylov_spectrum(
     krylov_result = krylov_spectral_gap(
         config, hamiltonian, jumps;
         trotter=trotter, krylovdim=krylovdim, howmany=howmany,
-        tol=tol, max_retries=max_retries, krylov_kwargs...
+        tol=tol, max_retries=max_retries,
+        allow_unpaired_nonhermitian=allow_unpaired_nonhermitian,
+        krylov_kwargs...
     )
 
     wall_time = time() - t_start

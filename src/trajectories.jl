@@ -64,6 +64,7 @@ function _build_trajectory_workspace(
     jumps::Vector{JumpOp};
     trotter::Union{TrottTrott,Nothing}=nothing,
     delta::Real = config.delta,
+    rescale_by_inv_prob::Union{Bool, Nothing} = nothing,
 ) where {D<:AbstractDomain, C<:AbstractConstruction, T<:AbstractFloat}
 
     CT = Complex{T}
@@ -82,20 +83,40 @@ function _build_trajectory_workspace(
     n_jumps = length(jumps)
     p_jump = 1.0 / n_jumps
 
+    # Resolve rate-rescaling: explicit kwarg wins; otherwise follow config.jump_selection.
+    # :random -> rescale rates by S so a single random pick reproduces δ𝓛 in expectation;
+    # :sweep  -> bare rates with S sequential substeps per outer δ-step.
+    rescale = rescale_by_inv_prob === nothing ? (config.jump_selection == :random) : rescale_by_inv_prob
+
     @assert delta < 1.0 "delta = $(delta) >= 1.0: too large for CPTP channel"
     alpha = 1 - sqrt(1 - delta)
 
     # Convert to concrete element type for zero-allocation access in hot loop
     jumps_for_diss = convert(Vector{JumpOp{Matrix{CT}}}, collect(JumpOp, jumps))
 
-    # Precompute per-operator coherent B terms (one per jump)
+    # Precompute per-operator coherent B terms (one per jump). With with_gqsp=true (which
+    # validate_config! restricts to Time/TrotterDomain + coherent), use the GQSP polynomial
+    # approximation `f_d(B/α)` instead of the exact matrix exponential.
     per_op_U_B = Vector{Union{Nothing, Matrix{CT}}}(undef, n_jumps)
     if with_coherent(config.construction)
+        delta_eff = rescale ? (delta / p_jump) : delta
+        # qf-9z0.3 / qf-d0w: outer/inner coherent register spacings are the
+        # config grid spacings `(register_t0_b_minus, register_t0_b_plus)` for
+        # both TimeDomain and TrotterDomain — they are the Riemann-sum
+        # integration weights consumed by `_gqsp_block_encoding_alpha` and they
+        # MUST match the spacings already used inside `_precompute_coherent_B`
+        # → `B_trotter` (which read them from the config registers, not from
+        # `trotter.t0`). The previous TrotterDomain branch passed
+        # `(trotter.t0, trotter.t0)` which silently used the dissipative
+        # register's spacing for both legs of the GQSP α — correct only for
+        # legacy single-register fixtures where `t0_D == t0_b_minus == t0_b_plus`.
+        t0_outer = register_t0_b_minus(config)
+        t0_inner = register_t0_b_plus(config)
         @inbounds for a in 1:n_jumps
             single_jump = JumpOp[jumps[a]]  # Force Vector{JumpOp} for dispatch compatibility
             B_a = _precompute_coherent_B(single_jump, ham_or_trott, config, precomputed_data)
-            hermitianize!(B_a)
-            per_op_U_B[a] = exp(-1im * (delta / p_jump) * Hermitian(B_a))
+            per_op_U_B[a] = _coherent_unitary_step(jumps[a], B_a, precomputed_data,
+                t0_outer, t0_inner, delta_eff, config.with_gqsp, config.gqsp_degree)
         end
     else
         fill!(per_op_U_B, nothing)
@@ -112,7 +133,9 @@ function _build_trajectory_workspace(
     @inbounds for a in 1:n_jumps
         _precompute_R([jumps_for_diss[a]], ham_or_trott, config, precomputed_data, builder_scratch)
         R_a = copy(builder_scratch.R)
-        R_a .*= (1.0 / p_jump)
+        if rescale
+            R_a .*= (1.0 / p_jump)
+        end
 
         (; K0, U_residual) = _build_cptp_channel(R_a, delta)
 
@@ -123,7 +146,11 @@ function _build_trajectory_workspace(
 
     # Precompute scaled_prefactor for the hot path
     gamma_norm_factor = precomputed_data.gamma_norm_factor
-    scaled_prefactor = precomputed_data.oft_domain_prefactor * gamma_norm_factor / p_jump
+    scaled_prefactor = if rescale
+        precomputed_data.oft_domain_prefactor * gamma_norm_factor / p_jump
+    else
+        precomputed_data.oft_domain_prefactor * gamma_norm_factor
+    end
 
     # Extract hot-path fields from precomputed_data with concrete types
     transition_fn = precomputed_data.transition
@@ -139,6 +166,7 @@ function _build_trajectory_workspace(
 
     return Workspace{Trajectory, D, C, T}(
         nothing, nothing, jumps_for_diss, nothing,  # physics data (jumps stored here)
+        nothing,                                     # dll_lindblads (Trajectory path)
         nothing, nothing, nothing, nothing,  # G fields
         nothing, nothing, nothing, Float64(alpha), Float64(delta),  # channel: K0/U_residual/U_coherent=nothing, alpha, delta
         transition_fn, gamma_norm_factor, energy_labels_vec, nothing, oft_nufft_pref,  # domain precomputed
@@ -146,6 +174,7 @@ function _build_trajectory_workspace(
         nothing,  # coherent_unitaries
         ham_or_trott, n_jumps, Float64(scaled_prefactor), Float64(config.sigma),  # trajectory fields
         Rs, K0s, U_residuals, per_op_U_B,  # per-operator Kraus vectors
+        config.jump_selection,  # :sweep | :random
         nothing,  # Id
         sc,  # scratch
     )
@@ -165,6 +194,7 @@ function _copy_workspace_for_thread(ws::Workspace{Trajectory,D,C,T}) where {D,C,
 
     return Workspace{Trajectory, D, C, T}(
         ws.jump_eigenbases, ws.jump_hermitian, ws.jumps, ws.B_total,
+        ws.dll_lindblads,
         ws.G_left, ws.G_right, ws.G_left_adj, ws.G_right_adj,
         ws.K0, ws.U_residual, ws.U_coherent, ws.alpha, ws.delta,
         ws.transition, ws.gamma_norm_factor, ws.energy_labels, ws.oft_domain_prefactor, ws.oft_nufft_prefactors,
@@ -172,6 +202,7 @@ function _copy_workspace_for_thread(ws::Workspace{Trajectory,D,C,T}) where {D,C,
         ws.coherent_unitaries,
         ws.ham_or_trott, ws.n_jumps, ws.scaled_prefactor, ws.sigma,
         ws.Rs, ws.K0s, ws.U_residuals, ws.U_Bs,
+        ws.jump_selection,
         ws.Id,
         fresh_scratch,
     )
@@ -672,6 +703,25 @@ end
 
 Partition a range into n_chunks approximately equal chunks. Earlier chunks get the remainder.
 """
+# Apply one outer δ-step to a trajectory state vector. In `:sweep` mode this
+# performs a deterministic Lie-Trotter sweep over all `S = ws.n_jumps` jumps;
+# in `:random` mode it picks one jump uniformly at random with rate-rescaled
+# channels (legacy path).
+@inline function _do_outer_step!(
+    psi::Vector{<:Complex},
+    ws::Workspace{Trajectory},
+    rng::AbstractRNG,
+)
+    if ws.jump_selection === :sweep
+        @inbounds for a in 1:ws.n_jumps
+            step_along_trajectory!(psi, ws, rng, a)
+        end
+    else  # :random (or nothing legacy → random)
+        step_along_trajectory!(psi, ws, rng)
+    end
+    return nothing
+end
+
 function _partition_trajectories(range::UnitRange{Int}, n_chunks::Int)
     len = length(range)
     n_chunks = min(n_chunks, len)  # no more chunks than items
@@ -712,7 +762,7 @@ function _run_chunk_no_obs!(
         rmul!(psi, 1.0 / sqrt(max(psi_norm2, eps(Float64))))
         # Step loop (was _evolve_along_trajectory!)
         @inbounds for _ in 1:num_steps
-            step_along_trajectory!(psi, ws, rng)
+            _do_outer_step!(psi, ws, rng)
         end
         _accumulate_density_matrix!(ws.scratch.rho_acc, psi)
     end
@@ -754,7 +804,7 @@ function _run_chunk_with_obs!(
 
         save_idx = 1
         for step in 1:num_steps
-            step_along_trajectory!(psi, ws, rng)
+            _do_outer_step!(psi, ws, rng)
             if step % save_every == 0
                 save_idx += 1
                 _accumulate_measurements!(mean_data_local, save_idx, psi, observables, tmp_meas)
@@ -800,7 +850,7 @@ function _run_chunk_obs_only!(
 
         save_idx = 1
         for step in 1:num_steps
-            step_along_trajectory!(psi, ws, rng)
+            _do_outer_step!(psi, ws, rng)
             if step % save_every == 0
                 save_idx += 1
                 _accumulate_measurements!(mean_data_local, save_idx, psi, observables, tmp_meas)
@@ -879,8 +929,10 @@ function _build_framework_and_seed(
     trotter::Union{TrottTrott,Nothing}=nothing,
     delta::Real = config.delta,
     seed::Union{Int,Nothing} = nothing,
+    allow_unpaired_nonhermitian::Bool = false,
 )
     validate_config!(config)
+    validate_jump_pairing(jumps; allow_unpaired_nonhermitian=allow_unpaired_nonhermitian)
     _print_press(config)
 
     ws = _build_trajectory_workspace(config, hamiltonian, jumps; trotter=trotter, delta=delta)
@@ -915,6 +967,7 @@ function run_trajectories(
     observables::Union{Nothing, Vector{<:Matrix{<:Complex}}} = nothing,
     save_every::Int = 1,
     seed::Union{Int,Nothing} = nothing,
+    allow_unpaired_nonhermitian::Bool = false,
 )
 
     @assert ntraj >= 1
@@ -923,6 +976,7 @@ function run_trajectories(
     ws, actual_seed = _build_framework_and_seed(
         jumps, config, psi0, hamiltonian;
         trotter=trotter, delta=delta, seed=seed,
+        allow_unpaired_nonhermitian=allow_unpaired_nonhermitian,
     )
 
     CT = eltype(psi0)
@@ -989,7 +1043,7 @@ function run_trajectories(
 
             save_idx = 1
             for step in 1:num_steps
-                step_along_trajectory!(psi, ws, rng_serial)
+                _do_outer_step!(psi, ws, rng_serial)
                 if step % save_every == 0
                     save_idx += 1
                     _accumulate_measurements!(mean_data, save_idx, psi, observables, ws.scratch.psi_tmp)
@@ -1030,6 +1084,7 @@ function run_observable_trajectories(
     save_every::Int = 1,
     seed::Union{Int,Nothing} = nothing,
     reconstruct_dm::Bool = false,
+    allow_unpaired_nonhermitian::Bool = false,
 )
     @assert ntraj >= 1
     @assert save_every >= 1
@@ -1037,6 +1092,7 @@ function run_observable_trajectories(
     ws, actual_seed = _build_framework_and_seed(
         jumps, config, psi0, hamiltonian;
         trotter=trotter, delta=delta, seed=seed,
+        allow_unpaired_nonhermitian=allow_unpaired_nonhermitian,
     )
 
     CT = eltype(psi0)
@@ -1106,7 +1162,7 @@ function run_observable_trajectories(
 
             save_idx = 1
             for step in 1:num_steps
-                step_along_trajectory!(psi, ws, rng_serial)
+                _do_outer_step!(psi, ws, rng_serial)
                 if step % save_every == 0
                     save_idx += 1
                     _accumulate_measurements!(mean_data, save_idx, psi, observables, ws.scratch.psi_tmp)
@@ -1132,27 +1188,37 @@ function run_observable_trajectories(
 end
 
 """
-    step_along_trajectory!(psi, ws, rng)  for D in {TimeDomain, TrotterDomain}
+    step_along_trajectory!(psi, ws, rng [, a])  for D in {TimeDomain, TrotterDomain}
 
-    Per-operator Lie-Trotter splitting: randomly select ONE operator a, apply that operator's
+    Per-operator Lie-Trotter splitting: select operator `a`, apply that operator's
     CPTP channel (K0_a, U_res_a, jump outcomes for operator a only).
 
     Arguments:
     - `psi`: state vector (modified in-place)
     - `ws`: Workspace{Trajectory} containing both framework data and scratch buffers
     - `rng`: random number generator (explicit for thread safety and reproducibility)
+    - `a` (optional): explicit jump index in `1:ws.n_jumps`. If omitted, the index is
+      drawn uniformly at random from `rng` (legacy `:random` mode); the deterministic
+      sweep entry points pass `a` directly to realise `Φ_𝓐 = e^{δ𝓛_S}∘⋯∘e^{δ𝓛_1}`.
 
     # Per-operator channel structure (Chen 2023, adapted for Lie-Trotter splitting):
-    #   Pick a in {1,...,N_jumps} uniformly at random
-    #   K0_a = I - alpha*R_a, where alpha = 1 - sqrt(1-delta), R_a scaled by n_jumps
+    #   K0_a = I - alpha*R_a
     #   K_{a,w} = sqrt(delta * scaled_rate(w)) * L_{a,w}  (jump operators for operator a)
     #   U_res_a: U_res_a'*U_res_a = S_a  (residual for operator a)
-    # R_a rates rescaled by 1/p_jump; CPTP channel uses bare delta (matching DM).
+    # In :random mode R_a is rescaled by 1/p_jump = S so the random pick reproduces
+    # δ𝓛 in expectation; in :sweep mode R_a is bare and S substeps run per outer step.
 """
+@inline step_along_trajectory!(
+    psi::Vector{<:Complex},
+    ws::Workspace{Trajectory},
+    rng::AbstractRNG,
+) = step_along_trajectory!(psi, ws, rng, rand(rng, 1:ws.n_jumps))
+
 function step_along_trajectory!(
     psi::Vector{<:Complex},
     ws::Workspace{Trajectory,D,C,T},
     rng::AbstractRNG,
+    a::Int,
     ) where {D<:Union{TimeDomain,TrotterDomain},C,T}
 
     sc = ws.scratch::TrajectoryScratch{Complex{T}}
@@ -1164,8 +1230,6 @@ function step_along_trajectory!(
     energy_labels = ws.energy_labels
     oft_prefactors = ws.oft_nufft_prefactors
 
-    # Select random operator (Vector elements are concrete-typed)
-    a = rand(rng, 1:ws.n_jumps)
     @inbounds R_a = ws.Rs[a]
     @inbounds K0_a = ws.K0s[a]
     @inbounds U_res_a = ws.U_residuals[a]
@@ -1286,15 +1350,17 @@ function step_along_trajectory!(
 end
 
 """
-    step_along_trajectory!(psi, ws, rng)  for D == EnergyDomain
+    step_along_trajectory!(psi, ws, rng [, a])  for D == EnergyDomain
 
     Per-operator Lie-Trotter splitting for EnergyDomain.
     Same logic as Time/Trotter variant but A_{a,w} is generated by `oft!(...)`.
+    See the Time/TrotterDomain method for the `a` argument semantics.
 """
 function step_along_trajectory!(
     psi::Vector{<:Complex},
     ws::Workspace{Trajectory,EnergyDomain,C,T},
     rng::AbstractRNG,
+    a::Int,
     ) where {C,T}
 
     sc = ws.scratch::TrajectoryScratch{Complex{T}}
@@ -1306,8 +1372,6 @@ function step_along_trajectory!(
     transition = ws.transition
     energy_labels = ws.energy_labels
 
-    # Select random operator (Vector elements are concrete-typed)
-    a = rand(rng, 1:ws.n_jumps)
     @inbounds R_a = ws.Rs[a]
     @inbounds K0_a = ws.K0s[a]
     @inbounds U_res_a = ws.U_residuals[a]
@@ -1442,6 +1506,7 @@ Returns a NamedTuple with fields expected by `run_trajectory`.
 function _run_trajectory_with_obs(
     jumps, config, hamiltonian, trotter, psi0;
     seed, total_time, delta, ntraj, observables, save_every,
+    allow_unpaired_nonhermitian::Bool = false,
 )
     # Delegate to existing run_observable_trajectories with reconstruct_dm=true
     # (reconstructs DM once at the end as the final average)
@@ -1450,6 +1515,7 @@ function _run_trajectory_with_obs(
         trotter=trotter, total_time=total_time, delta=delta,
         ntraj=ntraj, observables=observables, save_every=save_every,
         seed=seed, reconstruct_dm=true,
+        allow_unpaired_nonhermitian=allow_unpaired_nonhermitian,
     )
 
     # Wrap into the NamedTuple interface run_trajectory expects
@@ -1532,6 +1598,7 @@ function run_trajectory(
     patience::Int = 3,
     min_batches::Int = 5,
     window_size::Int = 3,
+    allow_unpaired_nonhermitian::Bool = false,
 )
     # Validation
     adaptive && !convergence && error("adaptive=true requires convergence=true")
@@ -1549,6 +1616,7 @@ function run_trajectory(
             batch_size=batch_size, n_max=n_max,
             convergence_threshold=convergence_threshold, patience=patience,
             min_batches=min_batches, window_size=window_size,
+            allow_unpaired_nonhermitian=allow_unpaired_nonhermitian,
         )
         wall_time = time() - t_start
         metadata = _capture_metadata(wall_time_seconds=wall_time)
@@ -1565,6 +1633,7 @@ function run_trajectory(
             seed=seed, total_time=total_time, delta=delta,
             observables=observables, observable_names=observable_names,
             batch_size=batch_size, n_batches=n_batches,
+            allow_unpaired_nonhermitian=allow_unpaired_nonhermitian,
         )
         wall_time = time() - t_start
         metadata = _capture_metadata(wall_time_seconds=wall_time)
@@ -1580,6 +1649,7 @@ function run_trajectory(
             jumps, config, hamiltonian, trotter, psi0;
             seed=seed, total_time=total_time, delta=delta, ntraj=ntraj,
             observables=observables, save_every=save_every,
+            allow_unpaired_nonhermitian=allow_unpaired_nonhermitian,
         )
         wall_time = time() - t_start
         metadata = _capture_metadata(wall_time_seconds=wall_time)
@@ -1593,6 +1663,7 @@ function run_trajectory(
     ws, actual_seed = _build_framework_and_seed(
         jumps, config, psi0, hamiltonian;
         trotter=trotter, delta=delta, seed=seed,
+        allow_unpaired_nonhermitian=allow_unpaired_nonhermitian,
     )
     rho_result = _run_batch_no_obs!(ws, psi0, ntraj, actual_seed, total_time)
 

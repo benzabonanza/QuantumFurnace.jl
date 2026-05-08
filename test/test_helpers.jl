@@ -6,64 +6,71 @@ Constants here are computed once at include time and reused across all test file
 
 using QuantumFurnace
 using LinearAlgebra
+using Test: @test
 using BSON
 
 # ---------------------------------------------------------------------------
-# BSON legacy loader (test-only)
+# BSON legacy loader (test-only) — wraps the package-internal loader so that
+# fixtures can pass an explicit path (Pkg.test() runs from a temp project dir
+# where load_hamiltonian's Pkg.project() lookup misses the source-tree files).
+# ---------------------------------------------------------------------------
+const _load_test_hamiltonian = QuantumFurnace._load_hamiltonian_bson
+
+# ---------------------------------------------------------------------------
+# Shared physics fixtures (test-only)
 # ---------------------------------------------------------------------------
 """
-    _load_test_hamiltonian(ham_path, beta) -> HamHam
+    make_dll_n3_system(beta) -> (; ham, jumps, gibbs)
 
-Load a legacy BSON-serialized HamHam and reconstruct it with the new fully-initialized
-struct definition. Uses BSON.parse to avoid deserialization failure from the changed
-HamHam field types (bohr_freqs, bohr_dict, gibbs are no longer Union{..., Nothing}).
+Build the n=3 disordered Heisenberg fixture at a specified `beta` for DLL
+tests (test_dll_coherent.jl, test_dll_dissipator.jl, test_dll_kms_db.jl all
+share this fixture). Differs from `make_test_system` only in that `beta`
+is a per-call argument rather than the fixed `BETA` constant — DLL tests
+need to sweep β ∈ {1, 5, 10}.
+
+Returns the same shape as `make_test_system`.
 """
-function _load_test_hamiltonian(ham_path::String, beta::Float64)
-    raw = open(ham_path) do io
-        BSON.parse(io)
+function make_dll_n3_system(beta::Real)
+    source_root = dirname(@__DIR__)
+    ham_path = joinpath(source_root, "hamiltonians", "heis_disordered_periodic_n3.bson")
+    ham = _load_test_hamiltonian(ham_path, Float64(beta))
+    jump_paulis = [[X], [Y], [Z]]
+    num_jumps = length(jump_paulis) * 3
+    jump_norm = sqrt(num_jumps)
+    jumps = JumpOp[]
+    for pauli in jump_paulis
+        for site in 1:3
+            op = Matrix(pad_term(pauli, 3, site)) ./ jump_norm
+            op_eb = ham.eigvecs' * op * ham.eigvecs
+            push!(jumps, JumpOp(op, op_eb, op == transpose(op), op == op'))
+        end
     end
-    ham_raw = raw[:hamiltonian]
-    fields = ham_raw[:data]
+    return (; ham, jumps, gibbs = ham.gibbs)
+end
 
-    # Legacy HamHam field order (14 fields):
-    #   1:data, 2:bohr_freqs(nothing), 3:bohr_dict(nothing), 4:base_terms,
-    #   5:base_coeffs, 6:disordering_term, 7:disordering_coeffs,
-    #   8:eigvals, 9:eigvecs, 10:nu_min, 11:shift, 12:rescaling_factor,
-    #   13:periodic, 14:gibbs
-    cache = IdDict()
-    init = QuantumFurnace
+"""
+    assert_kms_skew_symmetric(α, ν_grid, β; atol=1e-12)
 
-    data_matrix = BSON.raise_recursive(fields[1], cache, init)::Matrix{ComplexF64}
-    base_terms = Vector{Vector{Matrix{ComplexF64}}}(BSON.raise_recursive(fields[4], cache, init))
-    base_coeffs = BSON.raise_recursive(fields[5], cache, init)::Vector{Float64}
-    disordering_term_raw = let dt = BSON.raise_recursive(fields[6], cache, init)
-        dt === nothing ? nothing : Vector{Matrix{ComplexF64}}(dt)
+Structural witness of KMS detailed balance at the Kossakowski level
+(Ding–Li–Lin 2024, Eq. 4.7):
+
+    α(ν, ν') = α(-ν', -ν) · exp(-β(ν+ν')/2)
+
+`ν_grid` must be symmetric around 0 (so each ν has its negation in the
+grid) and `α` must be a `K × K` matrix with `K = length(ν_grid)`. Used
+as a per-filter assertion across the DLL Kossakowski tests.
+"""
+function assert_kms_skew_symmetric(α::AbstractMatrix, ν_grid::AbstractVector,
+                                   β::Real; atol::Real = 1e-12)
+    K = length(ν_grid)
+    @assert size(α) == (K, K)
+    neg_idx = [findfirst(==(-ν_grid[k]), ν_grid) for k in 1:K]
+    @assert all(!isnothing, neg_idx) "ν_grid must be symmetric around 0"
+    for q in 1:K, p in 1:K
+        lhs = α[p, q]
+        rhs = α[neg_idx[q], neg_idx[p]] * exp(-β * (ν_grid[p] + ν_grid[q]) / 2)
+        @test abs(lhs - rhs) <= atol
     end
-    disordering_coeffs_raw = let dc = BSON.raise_recursive(fields[7], cache, init)
-        dc === nothing ? nothing : Vector{Float64}(dc)
-    end
-    eigvals_vec = BSON.raise_recursive(fields[8], cache, init)::Vector{Float64}
-    eigvecs_mat = BSON.raise_recursive(fields[9], cache, init)::Matrix{ComplexF64}
-    nu_min = Float64(fields[10])
-    shift = Float64(fields[11])
-    rescaling_factor = Float64(fields[12])
-    periodic = Bool(fields[13])
-
-    raw_nt = (
-        matrix = data_matrix,
-        terms = base_terms,
-        base_coeffs = base_coeffs,
-        disordering_term = disordering_term_raw,
-        disordering_coeffs = disordering_coeffs_raw,
-        eigvals = eigvals_vec,
-        eigvecs = eigvecs_mat,
-        nu_min = nu_min,
-        shift = shift,
-        rescaling_factor = rescaling_factor,
-        periodic = periodic,
-    )
-
-    return HamHam(raw_nt, beta)
 end
 
 # ---------------------------------------------------------------------------

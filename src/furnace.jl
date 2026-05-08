@@ -1,5 +1,9 @@
 function construct_lindbladian(jumps::Vector{JumpOp}, config::Config{Lindbladian}, hamiltonian::HamHam;
-    trotter::Union{TrottTrott, Nothing}=nothing)
+    trotter::Union{TrottTrott, Nothing}=nothing,
+    include_coherent::Bool=true,
+    allow_unpaired_nonhermitian::Bool=false)
+
+    validate_jump_pairing(jumps; allow_unpaired_nonhermitian=allow_unpaired_nonhermitian)
 
     domain_name = replace(string(typeof(config.domain)), "Domain" => "")
     println("Constructing Liouvillian ($(domain_name))")
@@ -23,20 +27,28 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::Config{Lindbladian
     Id = Matrix{CT}(I, dim, dim)
     ws = Workspace{Lindbladian, typeof(config.domain), typeof(config.construction), T}(
         nothing, nothing, nothing, nothing,  # physics data
+        nothing,                              # dll_lindblads
         nothing, nothing, nothing, nothing,  # G fields
         nothing, nothing, nothing, nothing, nothing,  # channel fields
         nothing, nothing, nothing, nothing,  # domain precomputed (transition, gnf, energy_labels, oft_domain_prefactor)
         nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # domain-specific (oft_nufft_prefactors, bohr_alpha, bohr_keys, bohr_is, bohr_js, b_minus, b_plus)
         nothing,  # coherent_unitaries
         nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # trajectory fields
+        nothing,  # jump_selection (Lindbladian path: not a Trajectory simulator)
         Id,       # Id
         sc,       # scratch
     )
 
     # Precompute all B's for the A's if for KMS DB and with_coherent.
-    Btot = _precompute_coherent_B(jumps, ham_or_trott, config, precomputed_data)
-    if Btot !== nothing
-        _vectorize_liouvillian_coherent!(total_lindbladian, Btot, ws)
+    # `include_coherent=false` skips the coherent contribution even when the
+    # construction's `with_coherent` trait is true -- used by detailed-balance
+    # diagnostics that need to compare the dissipator-only Lindbladian against
+    # the full one (e.g. KMS without the Lamb-shift restoration).
+    if include_coherent
+        Btot = _precompute_coherent_B(jumps, ham_or_trott, config, precomputed_data)
+        if Btot !== nothing
+            _vectorize_liouvillian_coherent!(total_lindbladian, Btot, ws)
+        end
     end
 
     # Jumps arrive in the correct basis (trotter.eigvecs for TrotterDomain,
@@ -76,15 +88,18 @@ function run_lindblad(
     jumps::Vector{JumpOp},
     config::Config{Lindbladian,D,C,T},
     hamiltonian::HamHam{T},
-    trotter::Union{TrottTrott, Nothing}=nothing,
+    trotter::Union{TrottTrott, Nothing}=nothing;
+    allow_unpaired_nonhermitian::Bool=false,
 ) where {D, C, T<:AbstractFloat}
 
     t_start = time()
 
     validate_config!(config)
+    validate_jump_pairing(jumps; allow_unpaired_nonhermitian=allow_unpaired_nonhermitian)
     _print_press(config)
 
-    liouv = construct_lindbladian(jumps, config, hamiltonian, trotter=trotter)
+    liouv = construct_lindbladian(jumps, config, hamiltonian; trotter=trotter,
+        allow_unpaired_nonhermitian=allow_unpaired_nonhermitian)
     @printf("Done.\n")
 
     # Arpack shift-invert eigensolver
@@ -134,9 +149,9 @@ history in a `ThermalizeResults` struct.
 
 # Keyword Arguments
 - `initial_dm::Union{Nothing, Matrix{<:Complex}}=nothing`: Initial density matrix (defaults to maximally mixed I/d)
-- `rng::AbstractRNG=Random.default_rng()`: Random number generator
-- `rescale_by_inv_prob::Bool=true`: Rescale delta by 1/p_jump for physical mixing time
-- `save_every::Int=1`: Record trace distance every `save_every` steps. Default 1 preserves per-step recording. Convergence cutoff is only checked at save points.
+- `rng::AbstractRNG=Random.default_rng()`: Random number generator (used only when `config.jump_selection == :random`)
+- `rescale_by_inv_prob::Union{Bool, Nothing}=nothing`: Override the rate-rescaling rule. By default, the choice follows `config.jump_selection`: `:random` ⇒ rescale rates by `S = |jumps|` (1 substep per outer δ-step, `E[step] ≈ e^{δ𝓛}`); `:sweep` ⇒ bare rates and `S` substeps per outer δ-step (`Φ_𝓐 = e^{δ𝓛_S}∘⋯∘e^{δ𝓛_1} ≈ e^{δ𝓛}`).
+- `save_every::Int=1`: Record trace distance every `save_every` outer steps. Default 1 preserves per-step recording. Convergence cutoff is only checked at save points.
 
 # Returns
 `ThermalizeResults` with final density matrix, trace distances, time steps, and metadata.
@@ -148,8 +163,9 @@ function run_thermalize(
     trotter::Union{TrottTrott, Nothing}=nothing;
     initial_dm::Union{Nothing, Matrix{<:Complex}}=nothing,
     rng::AbstractRNG = Random.default_rng(),
-    rescale_by_inv_prob::Bool = true,
+    rescale_by_inv_prob::Union{Bool, Nothing} = nothing,
     save_every::Int = 1,
+    allow_unpaired_nonhermitian::Bool = false,
 ) where {D, C, T<:AbstractFloat}
 
     dim = size(hamiltonian.data, 1)
@@ -164,6 +180,7 @@ function run_thermalize(
     t_start = time()
 
     validate_config!(config)
+    validate_jump_pairing(jumps; allow_unpaired_nonhermitian=allow_unpaired_nonhermitian)
     @assert save_every >= 1 "save_every must be >= 1"
     _print_press(config)
 
@@ -179,9 +196,15 @@ function run_thermalize(
 
     precomputed_data = _precompute_data(config, ham_or_trott)
 
-    p_jump = 1.0 / length(jumps)
+    # Resolve rate-rescaling: explicit kwarg wins, otherwise follow config.jump_selection.
+    # :random -> rescale rates by S=|jumps| so a single random pick reproduces δ𝓛 in
+    # expectation; :sweep -> bare rates with S sequential substeps per outer δ-step.
+    rescale = rescale_by_inv_prob === nothing ? (config.jump_selection == :random) : rescale_by_inv_prob
+
+    n_jumps = length(jumps)
+    p_jump = 1.0 / n_jumps
     coherent_unitaries = _precompute_coherent_unitary(jumps, hamiltonian, config, precomputed_data;
-        trotter=trotter, delta_scale = rescale_by_inv_prob ? (1.0 / p_jump) : 1.0)
+        trotter=trotter, delta_scale = rescale ? (1.0 / p_jump) : 1.0)
 
     CT = eltype(evolving_dm)
     scratch = ThermalizeScratch(CT, dim)
@@ -189,11 +212,11 @@ function run_thermalize(
     # Precompute per-jump CPTP channels (K0, U_residual) -- eliminates eigen() from hot loop
     (; K0s, U_residuals) = _precompute_per_jump_channels(
         jumps, ham_or_trott, config, precomputed_data;
-        rescale_by_inv_prob = rescale_by_inv_prob,
+        rescale_by_inv_prob = rescale,
     )
 
     # Precompute jump_weight_scaling for _accumulate_rho_jump!
-    jump_weight_scaling = rescale_by_inv_prob ? (precomputed_data.gamma_norm_factor / p_jump) : precomputed_data.gamma_norm_factor
+    jump_weight_scaling = rescale ? (precomputed_data.gamma_norm_factor / p_jump) : precomputed_data.gamma_norm_factor
 
     num_steps = Int(ceil(config.mixing_time / config.delta))
 
@@ -205,26 +228,25 @@ function run_thermalize(
     try
         BLAS.set_num_threads(Threads.nthreads())
         for step in 1:num_steps
-            idx = rand(rng, 1:length(jumps))
-            jump = jumps[idx]
-
-            # Coherent evolution (already precomputed, same as before)
-            _apply_coherent_unitary!(
-                evolving_dm,
-                coherent_unitaries === nothing ? nothing : coherent_unitaries[idx],
-                scratch,
-            )
-
-            # Accumulate rho_jump (rho-dependent omega loop, no R/eigen)
-            _accumulate_rho_jump!(
-                scratch, evolving_dm, jump, ham_or_trott, config, precomputed_data;
-                jump_weight_scaling = jump_weight_scaling,
-            )
-
-            # Apply precomputed channel (no eigendecomposition)
-            _apply_precomputed_channel!(
-                evolving_dm, K0s[idx], U_residuals[idx], scratch,
-            )
+            if config.jump_selection == :sweep
+                # Deterministic Lie-Trotter sweep: Φ_𝓐 = e^{δ𝓛_S} ∘ ⋯ ∘ e^{δ𝓛_1}.
+                @inbounds for a in 1:n_jumps
+                    _apply_one_dm_substep!(
+                        evolving_dm, scratch, jumps[a],
+                        coherent_unitaries === nothing ? nothing : coherent_unitaries[a],
+                        K0s[a], U_residuals[a],
+                        ham_or_trott, config, precomputed_data, jump_weight_scaling,
+                    )
+                end
+            else  # :random
+                idx = rand(rng, 1:n_jumps)
+                _apply_one_dm_substep!(
+                    evolving_dm, scratch, jumps[idx],
+                    coherent_unitaries === nothing ? nothing : coherent_unitaries[idx],
+                    K0s[idx], U_residuals[idx],
+                    ham_or_trott, config, precomputed_data, jump_weight_scaling,
+                )
+            end
 
             if step % save_every == 0
                 dist = trace_distance_h(Hermitian(evolving_dm), gibbs)
