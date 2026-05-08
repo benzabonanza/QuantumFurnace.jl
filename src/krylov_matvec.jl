@@ -102,8 +102,7 @@ function apply_lindbladian!(
     jump_hermitian = ws.jump_hermitian::Vector{Bool}
     prefactor = (ws.oft_domain_prefactor::Float64) * (ws.gamma_norm_factor::Float64)
     energy_labels = ws.energy_labels::Vector{Float64}
-    bohr_freqs = hamiltonian.bohr_freqs
-    inv_4sigma2 = 1.0 / (4 * config.sigma^2)
+    oft_prefactors_energy = ws.oft_prefactors_energy::EnergyDomainPrefactors{Float64, Array{Float64, 3}}
 
     CT = one(T)
     ZT = zero(T)
@@ -121,8 +120,8 @@ function apply_lindbladian!(
 
     if Threads.nthreads() > 1 && length(energy_labels) >= OMEGA_THREAD_THRESHOLD
         return _apply_lindbladian_threaded_energy!(
-            sc, rho, jump_eigenbases, jump_hermitian, bohr_freqs,
-            energy_labels, config, prefactor, inv_4sigma2; adjoint=false)
+            sc, rho, jump_eigenbases, jump_hermitian, oft_prefactors_energy,
+            energy_labels, config, prefactor; adjoint=false)
     end
 
     for (k, eigenbasis) in enumerate(jump_eigenbases)
@@ -132,7 +131,8 @@ function apply_lindbladian!(
                 w_raw > 1e-12 && continue
                 w = abs(w_raw)
 
-                oft!(sc.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+                pref_view = _prefactor_view(oft_prefactors_energy, w)
+                @. sc.jump_oft = eigenbasis * pref_view
 
                 scalar_w = prefactor * pick_transition(config, w)
                 _accumulate_sandwich_scratch!(sc.rho_out, sc.jump_oft, rho, scalar_w, sc.sandwich_tmp, sc.sandwich_out)
@@ -144,7 +144,8 @@ function apply_lindbladian!(
             end
         else
             for w in energy_labels
-                oft!(sc.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+                pref_view = _prefactor_view(oft_prefactors_energy, w)
+                @. sc.jump_oft = eigenbasis * pref_view
                 scalar_w = prefactor * pick_transition(config, w)
                 _accumulate_sandwich_scratch!(sc.rho_out, sc.jump_oft, rho, scalar_w, sc.sandwich_tmp, sc.sandwich_out)
             end
@@ -173,8 +174,7 @@ function apply_adjoint_lindbladian!(
     jump_hermitian = ws.jump_hermitian::Vector{Bool}
     prefactor = (ws.oft_domain_prefactor::Float64) * (ws.gamma_norm_factor::Float64)
     energy_labels = ws.energy_labels::Vector{Float64}
-    bohr_freqs = hamiltonian.bohr_freqs
-    inv_4sigma2 = 1.0 / (4 * config.sigma^2)
+    oft_prefactors_energy = ws.oft_prefactors_energy::EnergyDomainPrefactors{Float64, Array{Float64, 3}}
 
     CT = one(T)
     ZT = zero(T)
@@ -192,8 +192,8 @@ function apply_adjoint_lindbladian!(
 
     if Threads.nthreads() > 1 && length(energy_labels) >= OMEGA_THREAD_THRESHOLD
         return _apply_lindbladian_threaded_energy!(
-            sc, rho, jump_eigenbases, jump_hermitian, bohr_freqs,
-            energy_labels, config, prefactor, inv_4sigma2; adjoint=true)
+            sc, rho, jump_eigenbases, jump_hermitian, oft_prefactors_energy,
+            energy_labels, config, prefactor; adjoint=true)
     end
 
     for (k, eigenbasis) in enumerate(jump_eigenbases)
@@ -203,7 +203,8 @@ function apply_adjoint_lindbladian!(
                 w_raw > 1e-12 && continue
                 w = abs(w_raw)
 
-                oft!(sc.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+                pref_view = _prefactor_view(oft_prefactors_energy, w)
+                @. sc.jump_oft = eigenbasis * pref_view
 
                 scalar_w = prefactor * pick_transition(config, w)
                 _accumulate_sandwich_adj_scratch!(sc.rho_out, sc.jump_oft, rho, scalar_w, sc.sandwich_tmp, sc.sandwich_out)
@@ -215,7 +216,8 @@ function apply_adjoint_lindbladian!(
             end
         else
             for w in energy_labels
-                oft!(sc.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+                pref_view = _prefactor_view(oft_prefactors_energy, w)
+                @. sc.jump_oft = eigenbasis * pref_view
                 scalar_w = prefactor * pick_transition(config, w)
                 _accumulate_sandwich_adj_scratch!(sc.rho_out, sc.jump_oft, rho, scalar_w, sc.sandwich_tmp, sc.sandwich_out)
             end
@@ -665,11 +667,10 @@ function _apply_lindbladian_threaded_energy!(
     rho::Matrix{T},
     jump_eigenbases::Vector{Matrix{T}},
     jump_hermitian::Vector{Bool},
-    bohr_freqs::AbstractMatrix{<:Real},
+    oft_prefactors_energy::EnergyDomainPrefactors{Float64, Array{Float64, 3}},
     energy_labels::Vector{Float64},
     config::Config{Lindbladian, EnergyDomain},
-    prefactor::Float64,
-    inv_4sigma2::Float64;
+    prefactor::Float64;
     adjoint::Bool,
 ) where {T<:Complex}
     # `work` is the scratch's pre-allocated buffer; `_populate_…!` does
@@ -690,8 +691,8 @@ function _apply_lindbladian_threaded_energy!(
         @sync for (idx, chunk) in enumerate(chunks)
             Threads.@spawn _apply_lindbladian_chunk_energy!(
                 pool[idx], rho, jump_eigenbases, jump_hermitian,
-                bohr_freqs, energy_labels, work, chunk, config,
-                prefactor, inv_4sigma2; adjoint=adjoint)
+                oft_prefactors_energy, energy_labels, work, chunk, config,
+                prefactor; adjoint=adjoint)
         end
     finally
         BLAS.set_num_threads(old_blas)
@@ -709,13 +710,12 @@ function _apply_lindbladian_chunk_energy!(
     rho::Matrix{T},
     jump_eigenbases::Vector{Matrix{T}},
     jump_hermitian::Vector{Bool},
-    bohr_freqs::AbstractMatrix{<:Real},
+    oft_prefactors_energy::EnergyDomainPrefactors{Float64, Array{Float64, 3}},
     energy_labels::Vector{Float64},
     work::Vector{Tuple{Int, Int}},
     chunk::UnitRange{Int},
     config::Config{Lindbladian, EnergyDomain},
-    prefactor::Float64,
-    inv_4sigma2::Float64;
+    prefactor::Float64;
     adjoint::Bool,
 ) where {T<:Complex}
     fill!(task_sc.rho_out, 0)
@@ -731,7 +731,8 @@ function _apply_lindbladian_chunk_energy!(
         # OFT and rate take the signed value.
         w = is_herm ? abs(w_raw) : w_raw
 
-        oft!(task_sc.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+        pref_view = _prefactor_view(oft_prefactors_energy, w)
+        @. task_sc.jump_oft = eigenbasis * pref_view
 
         scalar_w = prefactor * pick_transition(config, w)
         if adjoint

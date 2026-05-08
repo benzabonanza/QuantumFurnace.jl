@@ -54,7 +54,7 @@ function _jump_contribution!(
     coherent_term::Union{Nothing, AbstractMatrix{<:Complex}} = nothing,
     )
 
-    (; transition, gamma_norm_factor, energy_labels) = precomputed_data
+    (; transition, gamma_norm_factor, energy_labels, oft_prefactors_energy) = precomputed_data
 
     B = coherent_term
     if B !== nothing
@@ -63,14 +63,14 @@ function _jump_contribution!(
 
     jump_oft = ws.scratch.jump_tmp
     prefactor = precomputed_data.oft_domain_prefactor * gamma_norm_factor
-    inv_4sigma2 = 1.0 / (4 * config.sigma^2)
 
     if jump.hermitian
         for w_raw in energy_labels
             # iterate only half-grid (w<=0) and mirror manually
             w_raw > 1e-12 && continue
             w = abs(w_raw)
-            oft!(jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
+            pref_view = _prefactor_view(oft_prefactors_energy, w)
+            @. jump_oft = jump.in_eigenbasis * pref_view
             scalar_w = prefactor * transition(w)
             _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
             if w > 1e-12
@@ -80,7 +80,8 @@ function _jump_contribution!(
         end
     else
         for w in energy_labels
-            oft!(jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
+            pref_view = _prefactor_view(oft_prefactors_energy, w)
+            @. jump_oft = jump.in_eigenbasis * pref_view
             scalar_w = prefactor * transition(w)
             _vectorize_liouv_diss_and_add!(L_target, jump_oft, scalar_w, ws)
         end

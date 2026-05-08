@@ -113,17 +113,15 @@ function _accumulate_R_total!(
     config::Config{<:Any, EnergyDomain},
     hamiltonian::HamHam,
 ) where {T<:Complex}
-    (; transition, gamma_norm_factor, energy_labels) = precomputed_data
-    bohr_freqs = hamiltonian.bohr_freqs
-    inv_4sigma2 = 1.0 / (4 * config.sigma^2)
+    (; transition, gamma_norm_factor, energy_labels, oft_prefactors_energy) = precomputed_data
     prefactor = precomputed_data.oft_domain_prefactor * gamma_norm_factor
 
     n_labels = length(energy_labels)
     n_jumps  = length(ws_eigenbases)
     if Threads.nthreads() > 1 && n_jumps * n_labels >= OMEGA_THREAD_THRESHOLD
         return _accumulate_R_total_threaded_energy!(
-            R, ws_eigenbases, ws_hermitian, bohr_freqs, energy_labels,
-            transition, prefactor, inv_4sigma2)
+            R, ws_eigenbases, ws_hermitian, oft_prefactors_energy, energy_labels,
+            transition, prefactor)
     end
 
     dim = size(R, 1)
@@ -136,7 +134,8 @@ function _accumulate_R_total!(
             for w_raw in energy_labels
                 w_raw > 1e-12 && continue
                 w = abs(w_raw)
-                oft!(jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+                pref_view = _prefactor_view(oft_prefactors_energy, w)
+                @. jump_oft = eigenbasis * pref_view
                 rate2 = prefactor * transition(w)
                 mul!(LdagL, jump_oft', jump_oft)
                 @. R += rate2 * LdagL
@@ -148,7 +147,8 @@ function _accumulate_R_total!(
             end
         else
             for w in energy_labels
-                oft!(jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+                pref_view = _prefactor_view(oft_prefactors_energy, w)
+                @. jump_oft = eigenbasis * pref_view
                 rate2 = prefactor * transition(w)
                 mul!(LdagL, jump_oft', jump_oft)
                 @. R += rate2 * LdagL
@@ -286,11 +286,10 @@ function _accumulate_R_total_threaded_energy!(
     R::Matrix{T},
     ws_eigenbases::Vector{Matrix{T}},
     ws_hermitian::Vector{Bool},
-    bohr_freqs::AbstractMatrix{<:Real},
+    oft_prefactors_energy::EnergyDomainPrefactors{Float64, Array{Float64, 3}},
     energy_labels::AbstractVector{Float64},
     transition,
     prefactor::Float64,
-    inv_4sigma2::Float64,
 ) where {T<:Complex}
     work = _build_R_total_work_list(ws_hermitian, energy_labels)
     n_work = length(work)
@@ -311,8 +310,8 @@ function _accumulate_R_total_threaded_energy!(
         @sync for (idx, chunk) in enumerate(chunks)
             Threads.@spawn _accumulate_R_total_chunk_energy!(
                 R_partials[idx], jump_ofts[idx], LdagLs[idx],
-                ws_eigenbases, ws_hermitian, bohr_freqs, energy_labels,
-                work, chunk, transition, prefactor, inv_4sigma2)
+                ws_eigenbases, ws_hermitian, oft_prefactors_energy, energy_labels,
+                work, chunk, transition, prefactor)
         end
     finally
         BLAS.set_num_threads(old_blas)
@@ -330,13 +329,12 @@ function _accumulate_R_total_chunk_energy!(
     LdagL::Matrix{T},
     ws_eigenbases::Vector{Matrix{T}},
     ws_hermitian::Vector{Bool},
-    bohr_freqs::AbstractMatrix{<:Real},
+    oft_prefactors_energy::EnergyDomainPrefactors{Float64, Array{Float64, 3}},
     energy_labels::AbstractVector{Float64},
     work::Vector{Tuple{Int, Int}},
     chunk::UnitRange{Int},
     transition,
     prefactor::Float64,
-    inv_4sigma2::Float64,
 ) where {T<:Complex}
     @inbounds for w_idx in chunk
         (k, li) = work[w_idx]
@@ -346,7 +344,8 @@ function _accumulate_R_total_chunk_energy!(
         w_raw = energy_labels[li]
         w = is_herm ? abs(w_raw) : w_raw
 
-        oft!(jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+        pref_view = _prefactor_view(oft_prefactors_energy, w)
+        @. jump_oft = eigenbasis * pref_view
         rate2 = prefactor * transition(w)
         mul!(LdagL, jump_oft', jump_oft)
         @. R_partial += rate2 * LdagL
