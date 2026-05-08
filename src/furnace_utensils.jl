@@ -96,12 +96,19 @@ function _precompute_data(
     gamma_norm_factor = 1.0 / pick_gamma_sup(config)
     # EnergyDomain dissipator only consults `w0_D` (no time grid).
     dp = oft_domain_prefactor(config.domain, register_w0_D(config), config.sigma)
+    # qf-e60.1: precomputed Gaussian OFT prefactor cache. Mainline EnergyDomain
+    # consumers (qf-e60.{2,3,4}) read this via `_prefactor_view` instead of
+    # calling `oft!` per (jump, ω). `oft!` stays as the cross-check oracle.
+    oft_prefactors_energy = _prepare_oft_prefactors_energy(
+        ham_or_trott.bohr_freqs, energy_labels, config.sigma,
+    )
 
     return (
         transition = transition,
         gamma_norm_factor = gamma_norm_factor,
         energy_labels = energy_labels,
         oft_domain_prefactor = dp,
+        oft_prefactors_energy = oft_prefactors_energy,
     )
 end
 

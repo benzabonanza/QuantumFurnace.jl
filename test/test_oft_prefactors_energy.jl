@@ -110,4 +110,41 @@ const _prefactor_view_qf   = QuantumFurnace._prefactor_view
             @test view_w == @view p.data[:, :, k]
         end
     end
+
+    @testset "_precompute_data populates cache for EnergyDomain configs" begin
+        for sim in (Lindbladian(), Thermalize())
+            config = make_config(sim, EnergyDomain())
+            cfg_pd = QuantumFurnace._precompute_data(config, TEST_HAM)
+            @test hasproperty(cfg_pd, :oft_prefactors_energy)
+            @test cfg_pd.oft_prefactors_energy isa _EnergyPrefactors
+
+            # Must match the formula bit-for-bit; redundant with the standalone
+            # builder test, but here we verify the Config-driven pathway.
+            inv_4sigma2 = 1.0 / (4 * config.sigma^2)
+            d = size(TEST_HAM.bohr_freqs, 1)
+            energy_labels = cfg_pd.energy_labels
+            cache = cfg_pd.oft_prefactors_energy
+            for k in 1:length(energy_labels), j in 1:d, i in 1:d
+                expected = exp(-(TEST_HAM.bohr_freqs[i, j] - energy_labels[k])^2 * inv_4sigma2)
+                @test abs(cache.data[i, j, k] - expected) ≤ 1e-15
+                # Skip the full d^2 N_w on the inner loops in case the test
+                # ever runs at larger d; one ω is enough to catch wiring drift.
+                k == 1 || break
+            end
+        end
+    end
+
+    @testset "_precompute_data does NOT populate cache for non-EnergyDomain configs" begin
+        for domain in (TimeDomain(), TrotterDomain())
+            config = make_config(Lindbladian(), domain)
+            ham_or_trott = domain isa TrotterDomain ? TEST_TROTTER : TEST_HAM
+            cfg_pd = QuantumFurnace._precompute_data(config, ham_or_trott)
+            @test !hasproperty(cfg_pd, :oft_prefactors_energy)
+        end
+        # BohrDomain Lindbladian _precompute_data takes the alpha branch — no
+        # energy_labels there at all, so nothing to cache.
+        config = make_config(Lindbladian(), BohrDomain())
+        cfg_pd = QuantumFurnace._precompute_data(config, TEST_HAM)
+        @test !hasproperty(cfg_pd, :oft_prefactors_energy)
+    end
 end
