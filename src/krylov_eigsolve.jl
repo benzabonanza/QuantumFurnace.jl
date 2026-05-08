@@ -190,14 +190,13 @@ function _accumulate_jump_sandwich!(
 ) where {T<:Complex}
     sc = ws.scratch::KrylovScratch{T}
     (; transition, gamma_norm_factor, energy_labels) = ws
-    bohr_freqs = hamiltonian.bohr_freqs
-    inv_4sigma2 = 1.0 / (4 * config.sigma^2)
+    oft_prefactors_energy = ws.oft_prefactors_energy::EnergyDomainPrefactors{Float64, Array{Float64, 3}}
     prefactor = ws.oft_domain_prefactor * gamma_norm_factor
 
     if Threads.nthreads() > 1 && length(energy_labels) >= OMEGA_THREAD_THRESHOLD
         return _accumulate_jump_sandwich_threaded_energy!(
             out, sc, rho, delta, ws.jump_eigenbases, ws.jump_hermitian,
-            bohr_freqs, energy_labels, transition, prefactor, inv_4sigma2)
+            oft_prefactors_energy, energy_labels, transition, prefactor)
     end
 
     for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
@@ -206,7 +205,8 @@ function _accumulate_jump_sandwich!(
             for w_raw in energy_labels
                 w_raw > 1e-12 && continue
                 w = abs(w_raw)
-                oft!(sc.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+                pref_view = _prefactor_view(oft_prefactors_energy, w)
+                @. sc.jump_oft = eigenbasis * pref_view
                 rate2 = prefactor * transition(w)
                 # Physics convention sandwich: delta * rate2 * L * rho * L'
                 mul!(sc.sandwich_tmp, rho, sc.jump_oft')          # tmp = rho * L'
@@ -220,7 +220,8 @@ function _accumulate_jump_sandwich!(
             end
         else
             for w in energy_labels
-                oft!(sc.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+                pref_view = _prefactor_view(oft_prefactors_energy, w)
+                @. sc.jump_oft = eigenbasis * pref_view
                 rate2 = prefactor * transition(w)
                 mul!(sc.sandwich_tmp, rho, sc.jump_oft')
                 mul!(out, sc.jump_oft, sc.sandwich_tmp, delta * rate2, 1.0)
@@ -358,11 +359,10 @@ function _accumulate_jump_sandwich_threaded_energy!(
     delta::Real,
     jump_eigenbases::Vector{Matrix{T}},
     jump_hermitian::Vector{Bool},
-    bohr_freqs::AbstractMatrix{<:Real},
+    oft_prefactors_energy::EnergyDomainPrefactors{Float64, Array{Float64, 3}},
     energy_labels::Vector{Float64},
     transition,
     prefactor::Float64,
-    inv_4sigma2::Float64,
 ) where {T<:Complex}
     work = sc.work_list
     _populate_lindblad_work_list!(work, jump_hermitian, energy_labels)
@@ -379,8 +379,8 @@ function _accumulate_jump_sandwich_threaded_energy!(
         @sync for (idx, chunk) in enumerate(chunks)
             Threads.@spawn _accumulate_jump_sandwich_chunk_energy!(
                 pool[idx], rho, delta, jump_eigenbases, jump_hermitian,
-                bohr_freqs, energy_labels, transition, work, chunk,
-                prefactor, inv_4sigma2)
+                oft_prefactors_energy, energy_labels, transition, work, chunk,
+                prefactor)
         end
     finally
         BLAS.set_num_threads(old_blas)
@@ -398,13 +398,12 @@ function _accumulate_jump_sandwich_chunk_energy!(
     delta::Real,
     jump_eigenbases::Vector{Matrix{T}},
     jump_hermitian::Vector{Bool},
-    bohr_freqs::AbstractMatrix{<:Real},
+    oft_prefactors_energy::EnergyDomainPrefactors{Float64, Array{Float64, 3}},
     energy_labels::Vector{Float64},
     transition,
     work::Vector{Tuple{Int, Int}},
     chunk::UnitRange{Int},
     prefactor::Float64,
-    inv_4sigma2::Float64,
 ) where {T<:Complex}
     fill!(task_sc.channel_rho_jump, 0)
 
@@ -418,7 +417,8 @@ function _accumulate_jump_sandwich_chunk_energy!(
         # `|w_raw|`. Non-Hermitian uses `w_raw` directly (signed).
         w = is_herm ? abs(w_raw) : w_raw
 
-        oft!(task_sc.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
+        pref_view = _prefactor_view(oft_prefactors_energy, w)
+        @. task_sc.jump_oft = eigenbasis * pref_view
         rate2 = prefactor * transition(w)
         mul!(task_sc.sandwich_tmp, rho, task_sc.jump_oft')
         mul!(task_sc.channel_rho_jump, task_sc.jump_oft, task_sc.sandwich_tmp,
