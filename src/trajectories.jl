@@ -160,6 +160,11 @@ function _build_trajectory_workspace(
     else
         nothing
     end
+    oft_pref_energy = if hasproperty(precomputed_data, :oft_prefactors_energy)
+        precomputed_data.oft_prefactors_energy
+    else
+        nothing
+    end
 
     # Build TrajectoryScratch
     sc = TrajectoryScratch(CT, dim)
@@ -169,7 +174,7 @@ function _build_trajectory_workspace(
         nothing,                                     # dll_lindblads (Trajectory path)
         nothing, nothing, nothing, nothing,  # G fields
         nothing, nothing, nothing, Float64(alpha), Float64(delta),  # channel: K0/U_residual/U_coherent=nothing, alpha, delta
-        transition_fn, gamma_norm_factor, energy_labels_vec, nothing, oft_nufft_pref,  # domain precomputed
+        transition_fn, gamma_norm_factor, energy_labels_vec, nothing, oft_nufft_pref, oft_pref_energy,  # domain precomputed
         nothing, nothing, nothing, nothing, nothing, nothing,  # bohr/b fields
         nothing,  # coherent_unitaries
         ham_or_trott, n_jumps, Float64(scaled_prefactor), Float64(config.sigma),  # trajectory fields
@@ -197,7 +202,7 @@ function _copy_workspace_for_thread(ws::Workspace{Trajectory,D,C,T}) where {D,C,
         ws.dll_lindblads,
         ws.G_left, ws.G_right, ws.G_left_adj, ws.G_right_adj,
         ws.K0, ws.U_residual, ws.U_coherent, ws.alpha, ws.delta,
-        ws.transition, ws.gamma_norm_factor, ws.energy_labels, ws.oft_domain_prefactor, ws.oft_nufft_prefactors,
+        ws.transition, ws.gamma_norm_factor, ws.energy_labels, ws.oft_domain_prefactor, ws.oft_nufft_prefactors, ws.oft_prefactors_energy,
         ws.bohr_alpha, ws.bohr_keys, ws.bohr_is, ws.bohr_js, ws.b_minus, ws.b_plus,
         ws.coherent_unitaries,
         ws.ham_or_trott, ws.n_jumps, ws.scaled_prefactor, ws.sigma,

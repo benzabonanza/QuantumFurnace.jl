@@ -62,6 +62,7 @@ function Workspace(
     pd_el = hasproperty(precomputed_data, :energy_labels) ? precomputed_data.energy_labels : nothing
     pd_odp = hasproperty(precomputed_data, :oft_domain_prefactor) ? precomputed_data.oft_domain_prefactor : nothing
     pd_nufft = hasproperty(precomputed_data, :oft_nufft_prefactors) ? precomputed_data.oft_nufft_prefactors : nothing
+    pd_oft_pre_energy = hasproperty(precomputed_data, :oft_prefactors_energy) ? precomputed_data.oft_prefactors_energy : nothing
     pd_alpha = hasproperty(precomputed_data, :alpha) ? precomputed_data.alpha : nothing
     pd_bkeys = hasproperty(precomputed_data, :bohr_keys) ? precomputed_data.bohr_keys : nothing
     pd_bis = hasproperty(precomputed_data, :bohr_is) ? precomputed_data.bohr_is : nothing
@@ -84,7 +85,7 @@ function Workspace(
         nothing,  # dll_lindblads (CKG/GNS path; populated by DLL specialised constructor)
         G_left, G_right, G_left_adj, G_right_adj,
         nothing, nothing, nothing, nothing, nothing,  # channel fields
-        pd_transition, pd_gnf, pd_el, pd_odp, pd_nufft,
+        pd_transition, pd_gnf, pd_el, pd_odp, pd_nufft, pd_oft_pre_energy,
         pd_alpha, pd_bkeys, pd_bis, pd_bjs, pd_bminus, pd_bplus,
         nothing,  # coherent_unitaries
         nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # trajectory fields
@@ -696,7 +697,7 @@ function Workspace(
         dll_lindblads,
         G_left, G_right, G_left_adj, G_right_adj,
         nothing, nothing, nothing, nothing, nothing,  # channel fields
-        nothing, nothing, nothing, nothing, nothing,  # transition/gnf/energy_labels/odp/nufft
+        nothing, nothing, nothing, nothing, nothing, nothing,  # transition/gnf/energy_labels/odp/nufft/oft_prefactors_energy
         nothing, nothing, nothing, nothing, nothing, nothing,  # bohr_alpha/bohr_keys/bohr_is/bohr_js/b_minus/b_plus
         nothing,  # coherent_unitaries
         nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # trajectory fields
@@ -788,6 +789,7 @@ function Workspace(
     pd_el = hasproperty(precomputed_data, :energy_labels) ? precomputed_data.energy_labels : nothing
     pd_odp = hasproperty(precomputed_data, :oft_domain_prefactor) ? precomputed_data.oft_domain_prefactor : nothing
     pd_nufft = hasproperty(precomputed_data, :oft_nufft_prefactors) ? precomputed_data.oft_nufft_prefactors : nothing
+    pd_oft_pre_energy = hasproperty(precomputed_data, :oft_prefactors_energy) ? precomputed_data.oft_prefactors_energy : nothing
     pd_alpha = hasproperty(precomputed_data, :alpha) ? precomputed_data.alpha : nothing
     pd_bkeys = hasproperty(precomputed_data, :bohr_keys) ? precomputed_data.bohr_keys : nothing
     pd_bis = hasproperty(precomputed_data, :bohr_is) ? precomputed_data.bohr_is : nothing
@@ -810,7 +812,7 @@ function Workspace(
         nothing,  # dll_lindblads (Thermalize path)
         G_left, G_right, G_left_adj, G_right_adj,
         channel.K0, channel.U_residual, U_coherent, nothing, Float64(delta),
-        pd_transition, pd_gnf, pd_el, pd_odp, pd_nufft,
+        pd_transition, pd_gnf, pd_el, pd_odp, pd_nufft, pd_oft_pre_energy,
         pd_alpha, pd_bkeys, pd_bis, pd_bjs, pd_bminus, pd_bplus,
         nothing,  # coherent_unitaries
         nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # trajectory fields

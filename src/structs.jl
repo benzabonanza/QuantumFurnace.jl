@@ -513,6 +513,7 @@ struct Workspace{S<:AbstractSimulation, D<:AbstractDomain, C<:AbstractConstructi
     energy_labels::Union{Nothing, Vector{Float64}}
     oft_domain_prefactor::Union{Nothing, Float64}
     oft_nufft_prefactors::Any  # NUFFTPrefactors or Nothing
+    oft_prefactors_energy::Any # EnergyDomainPrefactors or Nothing (qf-e60.1)
     bohr_alpha::Any            # BohrDomain alpha function (renamed to avoid clash with CPTP alpha)
     bohr_keys::Any             # BohrDomain keys
     bohr_is::Any               # BohrDomain row indices

@@ -147,4 +147,46 @@ const _prefactor_view_qf   = QuantumFurnace._prefactor_view
         cfg_pd = QuantumFurnace._precompute_data(config, TEST_HAM)
         @test !hasproperty(cfg_pd, :oft_prefactors_energy)
     end
+
+    @testset "Workspace constructors propagate oft_prefactors_energy" begin
+        # Lindbladian / EnergyDomain: cache populated, NUFFT slot empty.
+        config = make_config(Lindbladian(), EnergyDomain())
+        ws = QuantumFurnace.Workspace(config, TEST_HAM, TEST_JUMPS)
+        @test hasproperty(ws, :oft_prefactors_energy)
+        @test ws.oft_prefactors_energy isa _EnergyPrefactors
+        @test ws.oft_nufft_prefactors === nothing
+
+        # Thermalize / EnergyDomain: cache populated.
+        config_t = make_config(Thermalize(), EnergyDomain())
+        ws_t = QuantumFurnace.Workspace(config_t, TEST_HAM, TEST_JUMPS)
+        @test ws_t.oft_prefactors_energy isa _EnergyPrefactors
+
+        # Lindbladian / TimeDomain: NUFFT cache populated, energy cache empty.
+        config_time = make_config(Lindbladian(), TimeDomain())
+        ws_time = QuantumFurnace.Workspace(config_time, TEST_HAM, TEST_JUMPS)
+        @test ws_time.oft_prefactors_energy === nothing
+        @test ws_time.oft_nufft_prefactors !== nothing
+
+        # Lindbladian / TrotterDomain: NUFFT cache populated, energy cache empty.
+        config_trot = make_config(Lindbladian(), TrotterDomain())
+        ws_trot = QuantumFurnace.Workspace(config_trot, TEST_HAM, TEST_TROTTER_JUMPS;
+                                           trotter=TEST_TROTTER)
+        @test ws_trot.oft_prefactors_energy === nothing
+        @test ws_trot.oft_nufft_prefactors !== nothing
+
+        # Lindbladian / BohrDomain: both caches empty (alpha-driven path).
+        config_bohr = make_config(Lindbladian(), BohrDomain())
+        ws_bohr = QuantumFurnace.Workspace(config_bohr, TEST_HAM, TEST_JUMPS)
+        @test ws_bohr.oft_prefactors_energy === nothing
+    end
+
+    @testset "Lindbladian dense ctor still works post-field-add" begin
+        # `construct_lindbladian` builds an internal scratch Workspace with all
+        # `nothing` caches; ensure the new positional slot doesn't break it.
+        # qf-e60.{2,3,4} migrate the consumer to use the cache.
+        config = make_config(Lindbladian(), EnergyDomain())
+        L = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
+        @test L isa Matrix
+        @test size(L) == (DIM^2, DIM^2)
+    end
 end
