@@ -793,6 +793,7 @@ function _accumulate_rho_jump_threaded_energy!(
     config::Config{Thermalize, EnergyDomain},
     precomputed_data;
     jump_weight_scaling::Real,
+    task_scratches::Union{Nothing, Vector{ThermalizeScratch{CT}}}=nothing,
 ) where {CT<:Complex}
     (; transition, energy_labels) = precomputed_data
     base_prefactor = precomputed_data.oft_domain_prefactor * jump_weight_scaling
@@ -810,15 +811,22 @@ function _accumulate_rho_jump_threaded_energy!(
     chunks = _partition_range(1:n_work, nt)
     dim = size(evolving_dm, 1)
 
-    # Per-task scratch: each needs rho_jump, jump_oft, sandwich_tmp
-    task_scratches = [ThermalizeScratch(CT, dim) for _ in 1:length(chunks)]
+    # Per-task scratch: each needs rho_jump, jump_oft, sandwich_tmp.
+    # If a pool is supplied (qf-po5), reuse it; otherwise allocate fresh
+    # (backward-compat path used by run_thermalize / run_trajectory today).
+    local_pool = if task_scratches === nothing
+        [ThermalizeScratch(CT, dim) for _ in 1:length(chunks)]
+    else
+        @assert length(task_scratches) >= length(chunks)
+        task_scratches
+    end
 
     old_blas = BLAS.get_num_threads()
     BLAS.set_num_threads(1)
     try
         @sync for (idx, chunk) in enumerate(chunks)
             Threads.@spawn _accumulate_rho_jump_chunk_energy!(
-                task_scratches[idx], evolving_dm, jump, hamiltonian,
+                local_pool[idx], evolving_dm, jump, hamiltonian,
                 config, precomputed_data, half_indices[chunk];
                 base_prefactor=base_prefactor, inv_4sigma2=inv_4sigma2)
         end
@@ -828,8 +836,8 @@ function _accumulate_rho_jump_threaded_energy!(
 
     # Reduce: sum per-task rho_jump into scratch.rho_jump
     fill!(scratch.rho_jump, 0)
-    for ts in task_scratches
-        scratch.rho_jump .+= ts.rho_jump
+    for idx in 1:length(chunks)
+        scratch.rho_jump .+= local_pool[idx].rho_jump
     end
 
     return nothing
@@ -879,6 +887,7 @@ function _accumulate_rho_jump_threaded_timetrot!(
     config::Config{Thermalize, D},
     precomputed_data;
     jump_weight_scaling::Real,
+    task_scratches::Union{Nothing, Vector{ThermalizeScratch{CT}}}=nothing,
 ) where {CT<:Complex, D<:Union{TimeDomain, TrotterDomain}}
     (; transition, energy_labels, oft_nufft_prefactors) = precomputed_data
     base_prefactor = precomputed_data.oft_domain_prefactor * jump_weight_scaling
@@ -895,14 +904,19 @@ function _accumulate_rho_jump_threaded_timetrot!(
     chunks = _partition_range(1:n_work, nt)
     dim = size(evolving_dm, 1)
 
-    task_scratches = [ThermalizeScratch(CT, dim) for _ in 1:length(chunks)]
+    local_pool = if task_scratches === nothing
+        [ThermalizeScratch(CT, dim) for _ in 1:length(chunks)]
+    else
+        @assert length(task_scratches) >= length(chunks)
+        task_scratches
+    end
 
     old_blas = BLAS.get_num_threads()
     BLAS.set_num_threads(1)
     try
         @sync for (idx, chunk) in enumerate(chunks)
             Threads.@spawn _accumulate_rho_jump_chunk_timetrot!(
-                task_scratches[idx], evolving_dm, jump,
+                local_pool[idx], evolving_dm, jump,
                 config, precomputed_data, half_indices[chunk];
                 base_prefactor=base_prefactor)
         end
@@ -912,8 +926,8 @@ function _accumulate_rho_jump_threaded_timetrot!(
 
     # Reduce: sum per-task rho_jump into scratch.rho_jump
     fill!(scratch.rho_jump, 0)
-    for ts in task_scratches
-        scratch.rho_jump .+= ts.rho_jump
+    for idx in 1:length(chunks)
+        scratch.rho_jump .+= local_pool[idx].rho_jump
     end
 
     return nothing
@@ -965,6 +979,7 @@ function _accumulate_rho_jump_threaded_bohr!(
     bohr_is::Union{Nothing, Vector{Vector{Int}}},
     bohr_js::Union{Nothing, Vector{Vector{Int}}};
     jump_weight_scaling::Real,
+    task_scratches::Union{Nothing, Vector{ThermalizeScratch{CT}}}=nothing,
 ) where {CT<:Complex}
     dim = size(evolving_dm, 1)
     (; alpha) = precomputed_data
@@ -974,14 +989,19 @@ function _accumulate_rho_jump_threaded_bohr!(
     nt = min(Threads.nthreads(), n_keys)
     chunks = _partition_range(1:n_keys, nt)
 
-    task_scratches = [ThermalizeScratch(CT, dim) for _ in 1:length(chunks)]
+    local_pool = if task_scratches === nothing
+        [ThermalizeScratch(CT, dim) for _ in 1:length(chunks)]
+    else
+        @assert length(task_scratches) >= length(chunks)
+        task_scratches
+    end
 
     old_blas = BLAS.get_num_threads()
     BLAS.set_num_threads(1)
     try
         @sync for (idx, chunk) in enumerate(chunks)
             Threads.@spawn _accumulate_rho_jump_chunk_bohr!(
-                task_scratches[idx], evolving_dm, jump, hamiltonian,
+                local_pool[idx], evolving_dm, jump, hamiltonian,
                 precomputed_data, bohr_keys, bohr_is, bohr_js, chunk;
                 scaled_delta=scaled_delta)
         end
@@ -991,8 +1011,8 @@ function _accumulate_rho_jump_threaded_bohr!(
 
     # Reduce: sum per-task rho_jump into scratch.rho_jump
     fill!(scratch.rho_jump, 0)
-    for ts in task_scratches
-        scratch.rho_jump .+= ts.rho_jump
+    for idx in 1:length(chunks)
+        scratch.rho_jump .+= local_pool[idx].rho_jump
     end
 
     return nothing

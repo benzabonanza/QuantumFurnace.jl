@@ -381,6 +381,15 @@ end
 
 Scratch buffers for DM Kraus evolution (`run_thermalize`).
 Replaces the old `KrausScratch` with physics-descriptive names and dead K0 removed.
+
+`task_scratches` is an optional pre-allocated pool of per-thread scratches
+mirroring the qf-in3.4 pattern on `KrylovScratch`. It is consumed by the
+threaded `_accumulate_rho_jump_threaded_*!` entries when handed in via the
+optional `task_scratches` kwarg, letting the upcoming faithful
+`apply_delta_channel!` (qf-po5 Commit 2) reuse a once-allocated pool across
+all `n_jumps` per-jump substeps. When the field is empty (default,
+backward-compat), the threaded variants fall back to allocating a fresh
+per-call pool exactly as before.
 """
 struct ThermalizeScratch{T<:Complex}
     jump_oft::Matrix{T}
@@ -390,11 +399,29 @@ struct ThermalizeScratch{T<:Complex}
     sandwich_tmp::Matrix{T}    # was tmp1
     rho_work::Matrix{T}        # was tmp2
     rho_next::Matrix{T}
+    task_scratches::Vector{ThermalizeScratch{T}}  # per-thread pool (qf-po5)
 end
 
-function ThermalizeScratch(::Type{CT}, dim::Int) where {CT<:Complex}
+function ThermalizeScratch(::Type{CT}, dim::Int;
+                           with_task_pool::Bool=false,
+                           num_threads::Int=Threads.nthreads()) where {CT<:Complex}
     Zm() = zeros(CT, dim, dim)
-    return ThermalizeScratch{CT}(Zm(), Zm(), Zm(), Zm(), Zm(), Zm(), Zm())
+
+    # Per-thread scratch pool — only allocated when explicitly requested via
+    # `with_task_pool=true`. Each task scratch itself carries its own empty
+    # `task_scratches` vector (terminates recursion / matches the
+    # `KrylovScratch` qf-in3.4 pattern). The default `with_task_pool=false`
+    # produces a struct field-by-field equivalent to the pre-qf-po5
+    # `ThermalizeScratch(CT, dim)` modulo the new empty `task_scratches`
+    # field — every existing call site keeps its previous behaviour.
+    task_pool = if with_task_pool && num_threads > 1
+        [ThermalizeScratch{CT}(Zm(), Zm(), Zm(), Zm(), Zm(), Zm(), Zm(),
+                               ThermalizeScratch{CT}[]) for _ in 1:num_threads]
+    else
+        ThermalizeScratch{CT}[]
+    end
+
+    return ThermalizeScratch{CT}(Zm(), Zm(), Zm(), Zm(), Zm(), Zm(), Zm(), task_pool)
 end
 
 """
