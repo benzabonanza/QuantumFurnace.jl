@@ -18,8 +18,12 @@
     # Shared n=3 disordered Heisenberg fixture; see test_helpers.jl::make_dll_n3_system.
     _build_dll_n3_system = make_dll_n3_system
 
-    # Reuse the same grid as test_dll_dissipator.jl
-    _NUM_ENERGY_BITS = 12
+    # Reuse the same grid as test_dll_dissipator.jl. N=10 (Nt=1024) keeps
+    # t_max ≈ 63 (= Nt·t0/2) — same as the legacy N=12 — but cuts NUFFT
+    # source-points 16× (4096² → 1024²). Empirically the Bohr↔Time error
+    # is already at the FINUFFT precision floor (~3e-9) at Nt ≥ 256, so
+    # the existing 1e-3 / 1e-5 tolerances stay well-clear (qf-5nz).
+    _NUM_ENERGY_BITS = 10
     _T0 = 2pi / (2^_NUM_ENERGY_BITS * 0.05)
     _BETAS = (1.0, 5.0, 10.0)
 

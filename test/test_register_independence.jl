@@ -38,7 +38,7 @@ end
 # Build a `Config` at the legacy `(N, w0, t0)` register, then a copy with
 # all three explicit triples set to the same values. They should produce
 # byte-identical Lindbladians.
-function _legacy_kms_cfg(domain; N::Int = 12, w0::Real = 0.05, beta = _BETA_REG_INDEP)
+function _legacy_kms_cfg(domain; N::Int = 10, w0::Real = 0.05, beta = _BETA_REG_INDEP)
     t0 = 2π / (2^N * w0)
     Config(;
         sim = Lindbladian(),
@@ -57,7 +57,7 @@ function _legacy_kms_cfg(domain; N::Int = 12, w0::Real = 0.05, beta = _BETA_REG_
     )
 end
 
-function _new_kms_cfg(domain; N::Int = 12, w0::Real = 0.05, beta = _BETA_REG_INDEP)
+function _new_kms_cfg(domain; N::Int = 10, w0::Real = 0.05, beta = _BETA_REG_INDEP)
     t0 = 2π / (2^N * w0)
     Config(;
         sim = Lindbladian(),
@@ -76,7 +76,7 @@ function _new_kms_cfg(domain; N::Int = 12, w0::Real = 0.05, beta = _BETA_REG_IND
     )
 end
 
-function _legacy_dll_cfg(; N::Int = 12, w0::Real = 0.05, beta = _BETA_REG_INDEP)
+function _legacy_dll_cfg(; N::Int = 10, w0::Real = 0.05, beta = _BETA_REG_INDEP)
     t0 = 2π / (2^N * w0)
     Config(;
         sim = Lindbladian(),
@@ -93,7 +93,7 @@ function _legacy_dll_cfg(; N::Int = 12, w0::Real = 0.05, beta = _BETA_REG_INDEP)
     )
 end
 
-function _new_dll_cfg(; N::Int = 12, w0::Real = 0.05, beta = _BETA_REG_INDEP)
+function _new_dll_cfg(; N::Int = 10, w0::Real = 0.05, beta = _BETA_REG_INDEP)
     t0 = 2π / (2^N * w0)
     Config(;
         sim = Lindbladian(),
@@ -126,19 +126,20 @@ end
     end
 
     @testset "Independent triples produce a sane Lindbladian (KMS Time)" begin
-        # Reference at uniform N = 12, w0 = 0.05.
+        # Reference at uniform N = 10, w0 = 0.05 (qf-5nz: was N=12; the
+        # independent-triple sanity check is N-invariant).
         cfg_ref = _new_kms_cfg(TimeDomain())
         L_ref = construct_lindbladian(sys.jumps, cfg_ref, sys.ham)
 
         # Now coarsen the inner integration register only.
-        N_bp = 10; w0_bp = 0.2; t0_bp = 2π / (2^N_bp * w0_bp)
+        N_bp = 8; w0_bp = 0.2; t0_bp = 2π / (2^N_bp * w0_bp)
         cfg_indep = Config(;
             sim = Lindbladian(), domain = TimeDomain(), construction = KMS(),
             num_qubits = _NUM_QUBITS_REG_INDEP, with_linear_combination = true,
             beta = _BETA_REG_INDEP, sigma = _SIGMA_REG_INDEP,
             a = _BETA_REG_INDEP / 30.0, s = 0.4,
-            num_energy_bits_D = 12, w0_D = 0.05, t0_D = 2π / (2^12 * 0.05),
-            num_energy_bits_b_minus = 12, w0_b_minus = 0.05, t0_b_minus = 2π / (2^12 * 0.05),
+            num_energy_bits_D = 10, w0_D = 0.05, t0_D = 2π / (2^10 * 0.05),
+            num_energy_bits_b_minus = 10, w0_b_minus = 0.05, t0_b_minus = 2π / (2^10 * 0.05),
             num_energy_bits_b_plus = N_bp, w0_b_plus = w0_bp, t0_b_plus = t0_bp,
             num_trotter_steps_per_t0 = 10,
         )

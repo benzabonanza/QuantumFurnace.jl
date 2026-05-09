@@ -10,7 +10,10 @@
     #     for byte (BohrDomain).
     # =====================================================================
     _BETAS = (1.0, 5.0, 10.0)
-    _NEB = 12
+    # N=10 (Nt=1024): same t_max ≈ 63 as legacy N=12, 16× less NUFFT memory.
+    # Bohr↔Time error already at FINUFFT floor by Nt ≥ 256 (qf-5nz). Required
+    # to keep the k∈{1,2,4} channel sweep below the 3.5 GB sandbox cap.
+    _NEB = 10
     _T0_CFG = 2π / (2^_NEB * 0.05)
 
     function _make_cfg(domain, beta, filter)

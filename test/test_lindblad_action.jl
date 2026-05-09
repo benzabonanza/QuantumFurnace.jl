@@ -467,38 +467,47 @@ end
 
     # -----------------------------------------------------------------------
     # (i) Sanity benchmark: ODE-integrator τ_mix vs Thermalize-extrapolation τ_mix
+    #
+    # NO_SANDBOX (qf-5nz): the Trotter-vs-continuous τ_mix agreement at the
+    # 10% relative-error level needs δ=0.001 over mixing_time=50 → 50 000
+    # run_thermalize steps, ~150 s on the sandbox container. Loosening δ or
+    # the horizon would push the rel_err past the 10% physics-check
+    # threshold (Trotter weak error scales O(δ·τ_mix)). Run with
+    # QUANTUMFURNACE_FULL_TESTS=true outside the sandbox.
     # -----------------------------------------------------------------------
-    @testset "(i) Sanity benchmark vs Thermalize @ n=3, β=10" begin
-        beta = 10.0
-        sys = make_dll_n3_system(beta)
-        d = size(sys.ham.data, 1)
-        rho_0 = Matrix{ComplexF64}(I(d) / d)
+    if get(ENV, "QUANTUMFURNACE_FULL_TESTS", "false") == "true"
+        @testset "(i) Sanity benchmark vs Thermalize @ n=3, β=10 [NO_SANDBOX]" begin
+            beta = 10.0
+            sys = make_dll_n3_system(beta)
+            d = size(sys.ham.data, 1)
+            rho_0 = Matrix{ComplexF64}(I(d) / d)
 
-        # Integrator side (continuous-time, exact L).
-        config_int = make_config(Lindbladian(), BohrDomain();
-                                  num_qubits=3, construction=KMS())
-        t_grid = collect(range(0.0, 60.0, length=61))
-        res_int = integrate_to_gibbs(config_int, sys.ham, sys.jumps, rho_0, t_grid;
-                                      mode=:L, krylovdim=20, tol=1e-10)
-        est_int = estimate_mixing_time(res_int; model=:biexp,
-                                        target_epsilon=0.01, extrapolate=true)
+            # Integrator side (continuous-time, exact L).
+            config_int = make_config(Lindbladian(), BohrDomain();
+                                      num_qubits=3, construction=KMS())
+            t_grid = collect(range(0.0, 60.0, length=61))
+            res_int = integrate_to_gibbs(config_int, sys.ham, sys.jumps, rho_0, t_grid;
+                                          mode=:L, krylovdim=20, tol=1e-10)
+            est_int = estimate_mixing_time(res_int; model=:biexp,
+                                            target_epsilon=0.01, extrapolate=true)
 
-        # Thermalize side (discrete CPTP channel, δ-step Trotterization).
-        config_therm = make_config(Thermalize(), BohrDomain();
-                                    num_qubits=3, mixing_time=50.0, delta=0.001)
-        res_therm = run_thermalize(sys.jumps, config_therm, sys.ham;
-                                    initial_dm=copy(rho_0))
-        est_therm = estimate_mixing_time(res_therm; model=:biexp,
-                                          target_epsilon=0.01, extrapolate=true)
+            # Thermalize side (discrete CPTP channel, δ-step Trotterization).
+            config_therm = make_config(Thermalize(), BohrDomain();
+                                        num_qubits=3, mixing_time=50.0, delta=0.001)
+            res_therm = run_thermalize(sys.jumps, config_therm, sys.ham;
+                                        initial_dm=copy(rho_0))
+            est_therm = estimate_mixing_time(res_therm; model=:biexp,
+                                              target_epsilon=0.01, extrapolate=true)
 
-        @test isfinite(est_int.mixing_time)
-        @test isfinite(est_therm.mixing_time)
-        rel_err = abs(est_int.mixing_time - est_therm.mixing_time) / est_therm.mixing_time
-        # PHYSICS CHECK: 10% accommodates Trotter (O(δ·τ_mix) per-step error) +
-        # bi-exp fit noise on both sides. Tighter would catch noise; looser
-        # would miss factor-of-2+ qualitative bugs.
-        @test rel_err < 0.10
-        @info "(i) τ_mix sanity benchmark" tau_int=est_int.mixing_time tau_therm=est_therm.mixing_time rel_err=rel_err
+            @test isfinite(est_int.mixing_time)
+            @test isfinite(est_therm.mixing_time)
+            rel_err = abs(est_int.mixing_time - est_therm.mixing_time) / est_therm.mixing_time
+            # PHYSICS CHECK: 10% accommodates Trotter (O(δ·τ_mix) per-step error) +
+            # bi-exp fit noise on both sides. Tighter would catch noise; looser
+            # would miss factor-of-2+ qualitative bugs.
+            @test rel_err < 0.10
+            @info "(i) τ_mix sanity benchmark" tau_int=est_int.mixing_time tau_therm=est_therm.mixing_time rel_err=rel_err
+        end
     end
 
     # -----------------------------------------------------------------------

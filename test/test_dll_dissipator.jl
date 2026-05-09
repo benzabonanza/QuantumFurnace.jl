@@ -19,8 +19,10 @@
     # All Configs share these grid parameters. Half-grid t_max = 62.83,
     # which exceeds the DLL filter cutoff at β=10 (~35.5) by ~2x — sufficient
     # margin for trapezoidal quadrature to converge to ≤1e-4 against the
-    # exact Bohr decomposition.
-    _DLL_NUM_ENERGY_BITS = 12
+    # exact Bohr decomposition. N=10 (Nt=1024) reaches the FINUFFT precision
+    # floor for Bohr↔Time at this fixture (~3e-9, qf-5nz) — bumping to N=12
+    # gains nothing, but uses 16× more NUFFT memory.
+    _DLL_NUM_ENERGY_BITS = 10
     _DLL_W0 = 0.05
     _DLL_T0 = 2pi / (2^_DLL_NUM_ENERGY_BITS * _DLL_W0)
     _DLL_BETAS = (1.0, 5.0, 10.0)
