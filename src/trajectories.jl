@@ -168,10 +168,10 @@ function _build_trajectory_workspace(
         nothing, nothing, jumps_for_diss, nothing,  # physics data (jumps stored here)
         nothing,                                     # dll_lindblads (Trajectory path)
         nothing, nothing, nothing, nothing,  # G fields
-        nothing, nothing, nothing, Float64(alpha), Float64(delta),  # channel: K0/U_residual/U_coherent=nothing, alpha, delta
+        Float64(alpha), Float64(delta),  # alpha, delta (qf-po5: summed K0/U_residual/U_coherent fields removed)
         transition_fn, gamma_norm_factor, energy_labels_vec, nothing, oft_nufft_pref,  # domain precomputed
         nothing, nothing, nothing, nothing, nothing, nothing,  # bohr/b fields
-        nothing,  # coherent_unitaries
+        nothing,  # U_coherents (Trajectory uses U_Bs below; keep nothing here)
         ham_or_trott, n_jumps, Float64(scaled_prefactor), Float64(config.sigma),  # trajectory fields
         Rs, K0s, U_residuals, per_op_U_B,  # per-operator Kraus vectors
         config.jump_selection,  # :sweep | :random
@@ -196,10 +196,10 @@ function _copy_workspace_for_thread(ws::Workspace{Trajectory,D,C,T}) where {D,C,
         ws.jump_eigenbases, ws.jump_hermitian, ws.jumps, ws.B_total,
         ws.dll_lindblads,
         ws.G_left, ws.G_right, ws.G_left_adj, ws.G_right_adj,
-        ws.K0, ws.U_residual, ws.U_coherent, ws.alpha, ws.delta,
+        ws.alpha, ws.delta,  # qf-po5: summed K0/U_residual/U_coherent fields removed
         ws.transition, ws.gamma_norm_factor, ws.energy_labels, ws.oft_domain_prefactor, ws.oft_nufft_prefactors,
         ws.bohr_alpha, ws.bohr_keys, ws.bohr_is, ws.bohr_js, ws.b_minus, ws.b_plus,
-        ws.coherent_unitaries,
+        ws.U_coherents,  # qf-po5: renamed from coherent_unitaries
         ws.ham_or_trott, ws.n_jumps, ws.scaled_prefactor, ws.sigma,
         ws.Rs, ws.K0s, ws.U_residuals, ws.U_Bs,
         ws.jump_selection,

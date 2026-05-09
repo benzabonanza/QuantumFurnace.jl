@@ -766,44 +766,29 @@ function predict_channel_trajectory(
         "(got :$(config.jump_selection)). The :random selection runs a stochastic " *
         "process whose deterministic Φ_δ matvec is e^{δ𝓛} only in expectation."))
 
-    # Domain dispatch for ham_or_trott (mirrors run_thermalize).
+    # Domain dispatch for ham_or_trott (mirrors run_thermalize). Computed
+    # locally for the Gibbs-reference basis transform below; the channel
+    # matvec consumes the same `ham_or_trott` via `ws.ham_or_trott`.
     ham_or_trott = config.domain isa TrotterDomain ? begin
         trotter === nothing && error("TrotterDomain requires a trotter object")
         trotter
     end : hamiltonian
 
-    pd = _precompute_data(config, ham_or_trott)
-
-    # :sweep ⇒ bare per-jump rates (no rescale_by_inv_prob).
-    coherent_unitaries = _precompute_coherent_unitary(
-        jumps, hamiltonian, config, pd; trotter=trotter, delta_scale=1.0)
-    (; K0s, U_residuals) = _precompute_per_jump_channels(
-        jumps, ham_or_trott, config, pd; rescale_by_inv_prob=false)
-    jump_weight_scaling = pd.gamma_norm_factor
+    # qf-po5: route through `Workspace + apply_delta_channel!`. The Workspace
+    # constructor builds per-jump K0s/U_residuals/U_coherents via the SAME
+    # helpers run_thermalize calls; the matvec then runs the per-jump Lie–Trotter
+    # sweep. Single source of truth — bit-identical to run_thermalize :sweep
+    # modulo Krylov truncation.
+    ws = Workspace(config, hamiltonian, jumps; trotter=trotter)
 
     CT = Complex{eltype(hamiltonian.eigvals)}
-    scratch = ThermalizeScratch(CT, d)
-    rho_buf = Matrix{CT}(undef, d, d)
-    n_jumps = length(jumps)
 
-    # Forward channel matvec: applies one full Φ_δ step on `in`, writes to `out`.
-    fwd! = let scratch = scratch, jumps = jumps,
-               coherent_unitaries = coherent_unitaries,
-               K0s = K0s, U_residuals = U_residuals,
-               ham_or_trott = ham_or_trott, config = config,
-               pd = pd, jws = jump_weight_scaling, rho_buf = rho_buf,
-               n_jumps = n_jumps
+    # Forward channel matvec: applies one full Φ_δ step on `x`, writes to `out`.
+    fwd! = let ws = ws, config = config, ham = hamiltonian
         (out::AbstractMatrix, x::AbstractMatrix) -> begin
-            copyto!(rho_buf, x)
-            @inbounds for a in 1:n_jumps
-                _apply_one_dm_substep!(
-                    rho_buf, scratch, jumps[a],
-                    coherent_unitaries === nothing ? nothing : coherent_unitaries[a],
-                    K0s[a], U_residuals[a],
-                    ham_or_trott, config, pd, jws,
-                )
-            end
-            copyto!(out, rho_buf)
+            rho_in = Matrix{CT}(x)
+            apply_delta_channel!(ws, rho_in, config, ham)
+            copyto!(out, ws.scratch.rho_next)
             return out
         end
     end

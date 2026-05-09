@@ -101,509 +101,103 @@ end
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# apply_delta_channel! -- Faithful Chen CPTP channel (Eq. 3.2)
+# apply_delta_channel! -- Faithful jumpwise Φ_δ matvec (qf-po5)
 # ---------------------------------------------------------------------------
 
 """
-    apply_delta_channel!(ws, rho, config, hamiltonian) -> ws.scratch.rho_out
+    apply_delta_channel!(ws, rho, config, hamiltonian) -> ws.scratch.rho_next
 
-Apply the faithful Chen CPTP channel (Eq. 3.2) to a density matrix.
+Apply the **faithful** jumpwise Lie–Trotter Φ_δ matvec to a density matrix —
+the same per-step dynamics `run_thermalize :sweep` (`src/furnace.jl:230-249`)
+runs on the simulator, modulo Krylov truncation upstream.
 
-Uses precomputed channel matrices (K0, U_residual, U_coherent) from the workspace
-(populated by the Config{Thermalize} constructor). The per-matvec computation is:
+The matvec sweeps the per-jump substep `e^{δ𝓛_a}` for `a = 1, …, n_jumps`:
 
-    1. Coherent rotation: rho_eff = U_coherent * rho * U_coherent' (if coherent enabled)
-    2. Jump sandwich: rho_jump = delta * sum rate^2 * L * rho_eff * L'
-    3. Assembly: E(rho) = K0 * rho_eff * K0' + rho_jump + U_res * rho_eff * U_res'
+    1. Coherent unitary    : ρ ← U^a_coh · ρ · U^a_coh'      (GQSP-built when config.with_gqsp)
+    2. Dissipator          : ρ_jump ← δ · Σ_ω rate²(ω) · L^a_ω · ρ · L^a_ω'
+    3. Weak-measurement    : ρ ← K0_a · ρ · K0_a' + ρ_jump + U_residual_a · ρ · U_residual_a'
+
+Each substep is `_apply_one_dm_substep!` (`src/furnace_utensils.jl:390`), which is the
+single canonical kernel used by both `run_thermalize` and `predict_channel_trajectory`.
+The final `ρ` is published via `ws.scratch.rho_next`.
 
 # Arguments
-- `ws::Workspace{KrylovSpectrum}`: Pre-allocated workspace with channel fields populated
+- `ws::Workspace{KrylovSpectrum, D, C, T}`: Pre-allocated workspace populated by
+  `Workspace(::Config{Thermalize}, ...)` — exposes per-jump `K0s`, `U_residuals`,
+  `U_coherents` plus the `precomputed_data` view, the threading pool on
+  `ws.scratch.task_scratches`, and `ws.ham_or_trott` for the dissipator dispatch.
 - `rho::Matrix{T}`: Input density matrix (dim x dim)
-- `config::Config`: Configuration (for sandwich dispatch)
-- `hamiltonian::HamHam`: Hamiltonian
+- `config::Config{Thermalize, D}`: Configuration (read for `delta`, `sigma`, etc.)
+- `hamiltonian::HamHam`: Hamiltonian (kept on the signature for parity with the
+  Lindbladian path; the dissipator dispatch consults `ws.ham_or_trott`).
 
 # Returns
-`ws.scratch.rho_out` containing E(rho).
+`ws.scratch.rho_next` containing Φ_δ(ρ).
 """
 function apply_delta_channel!(
-    ws::Workspace{KrylovSpectrum},
-    rho::Matrix{T},
-    config::Config,
+    ws::Workspace{KrylovSpectrum, D, C, T},
+    rho::Matrix{CT},
+    config::Config{Thermalize, D},
     hamiltonian::HamHam,
-) where {T<:Complex}
-    sc = ws.scratch::KrylovScratch{T}
-    K0 = ws.K0
-    U_res = ws.U_residual
-    U_coh = ws.U_coherent
-    delta = ws.delta
+) where {D, C, T<:AbstractFloat, CT<:Complex}
+    sc = ws.scratch::ThermalizeScratch{CT}
+    K0s = ws.K0s::Vector{Matrix{CT}}
+    U_residuals = ws.U_residuals::Vector{Matrix{CT}}
+    U_coherents = ws.U_coherents
+    jumps = ws.jumps::Vector{JumpOp}
+    ham_or_trott = ws.ham_or_trott
+    jws = ws.gamma_norm_factor::Float64
 
-    # 1. Coherent rotation: rho_eff = U_coh * rho * U_coh'
-    #    Use sc.sandwich_out as scratch for rho_eff (safe: sandwich_out not used until sandwich loop)
-    if U_coh !== nothing
-        mul!(sc.sandwich_tmp, U_coh, rho)
-        mul!(sc.sandwich_out, sc.sandwich_tmp, U_coh')
-        rho_eff = sc.sandwich_out
-    else
-        rho_eff = rho
-    end
+    # NamedTuple view of precomputed_data fields stored on the workspace; lets
+    # `_apply_one_dm_substep!` and its `_accumulate_rho_jump!` callee read the
+    # same field surface they read inside `run_thermalize`.
+    pd = (
+        transition           = ws.transition,
+        gamma_norm_factor    = ws.gamma_norm_factor,
+        energy_labels        = ws.energy_labels,
+        oft_domain_prefactor = ws.oft_domain_prefactor,
+        oft_nufft_prefactors = ws.oft_nufft_prefactors,
+        alpha                = ws.bohr_alpha,
+        bohr_keys            = ws.bohr_keys,
+        bohr_is              = ws.bohr_is,
+        bohr_js              = ws.bohr_js,
+        b_minus              = ws.b_minus,
+        b_plus               = ws.b_plus,
+    )
 
-    # 2. Accumulate jump sandwich: rho_jump = delta * sum rate^2 * L * rho_eff * L'
-    fill!(sc.channel_rho_jump, 0)
-    _accumulate_jump_sandwich!(sc.channel_rho_jump, ws, rho_eff, delta, config, hamiltonian)
+    # Use sc.rho_work as the evolving density matrix. CRITICAL: `evolving_dm`
+    # MUST NOT alias any of the buffers `_apply_precomputed_channel!` writes to
+    # (`scratch.rho_next`, `scratch.sandwich_tmp`) — that helper reads
+    # `evolving_dm` after writing `scratch.rho_next`, so aliasing the two
+    # would clobber the input mid-channel and break trace preservation.
+    # `run_thermalize` pre-qf-po5 already follows this convention (its
+    # `evolving_dm` is the user-supplied initial DM, distinct from the scratch).
+    copyto!(sc.rho_work, rho)
+    evolving_dm = sc.rho_work
 
-    # 3. Need a safe copy of rho_eff before overwriting rho_out
-    #    If U_coh !== nothing, rho_eff = sc.sandwich_out (not aliased with rho_out) -- safe
-    #    If U_coh === nothing, rho_eff = rho (input arg) -- safe
-
-    # Assembly: rho_out = K0 * rho_eff * K0' + rho_jump + U_res * rho_eff * U_res'
-    mul!(sc.sandwich_tmp, K0, rho_eff)
-    mul!(sc.rho_out, sc.sandwich_tmp, K0')
-
-    sc.rho_out .+= sc.channel_rho_jump
-
-    mul!(sc.sandwich_tmp, U_res, rho_eff)
-    mul!(sc.rho_out, sc.sandwich_tmp, U_res', 1.0, 1.0)
-
-    return sc.rho_out
-end
-
-# ---------------------------------------------------------------------------
-# _accumulate_jump_sandwich!: domain-dispatched physics-convention sandwiches
-# ---------------------------------------------------------------------------
-
-"""
-    _accumulate_jump_sandwich!(out, ws, rho, delta, config, hamiltonian) -> nothing
-
-Accumulate `delta * sum rate^2 * L * rho * L'` (physics convention sandwich)
-into `out`. Domain-dispatched for EnergyDomain.
-
-Matches the rho_jump accumulation in `_jump_contribution!` for EnergyDomain
-(jump_workers.jl) but operating on pre-rotated rho_eff.
-"""
-function _accumulate_jump_sandwich!(
-    out::Matrix{T},
-    ws::Workspace{KrylovSpectrum},
-    rho::Matrix{T},
-    delta::Real,
-    config::Config{<:Any, EnergyDomain},
-    hamiltonian::HamHam,
-) where {T<:Complex}
-    sc = ws.scratch::KrylovScratch{T}
-    (; transition, gamma_norm_factor, energy_labels) = ws
-    bohr_freqs = hamiltonian.bohr_freqs
-    inv_4sigma2 = 1.0 / (4 * config.sigma^2)
-    prefactor = ws.oft_domain_prefactor * gamma_norm_factor
-
-    if Threads.nthreads() > 1 && length(energy_labels) >= OMEGA_THREAD_THRESHOLD
-        return _accumulate_jump_sandwich_threaded_energy!(
-            out, sc, rho, delta, ws.jump_eigenbases, ws.jump_hermitian,
-            bohr_freqs, energy_labels, transition, prefactor, inv_4sigma2)
-    end
-
-    for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
-        is_herm = ws.jump_hermitian[k]
-        if is_herm
-            for w_raw in energy_labels
-                w_raw > 1e-12 && continue
-                w = abs(w_raw)
-                oft!(sc.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
-                rate2 = prefactor * transition(w)
-                # Physics convention sandwich: delta * rate2 * L * rho * L'
-                mul!(sc.sandwich_tmp, rho, sc.jump_oft')          # tmp = rho * L'
-                mul!(out, sc.jump_oft, sc.sandwich_tmp, delta * rate2, 1.0)  # out += d*r2 * L * rho * L'
-                if w > 1e-12
-                    rate2_neg = prefactor * transition(-w)
-                    # Neg freq: L_neg = L', sandwich = L' * rho * L
-                    mul!(sc.sandwich_tmp, rho, sc.jump_oft)        # tmp = rho * L
-                    mul!(out, sc.jump_oft', sc.sandwich_tmp, delta * rate2_neg, 1.0)
-                end
-            end
-        else
-            for w in energy_labels
-                oft!(sc.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
-                rate2 = prefactor * transition(w)
-                mul!(sc.sandwich_tmp, rho, sc.jump_oft')
-                mul!(out, sc.jump_oft, sc.sandwich_tmp, delta * rate2, 1.0)
-            end
-        end
-    end
-    return nothing
-end
-
-"""
-    _accumulate_jump_sandwich!(out, ws, rho, delta, config, hamiltonian) -> nothing
-
-TimeDomain / TrotterDomain version: same structure but uses NUFFT prefactor OFT.
-"""
-function _accumulate_jump_sandwich!(
-    out::Matrix{T},
-    ws::Workspace{KrylovSpectrum},
-    rho::Matrix{T},
-    delta::Real,
-    config::Config{<:Any, D},
-    hamiltonian::HamHam,
-) where {T<:Complex, D<:Union{TimeDomain, TrotterDomain}}
-    sc = ws.scratch::KrylovScratch{T}
-    (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = ws
-    prefactor = ws.oft_domain_prefactor * gamma_norm_factor
-
-    if Threads.nthreads() > 1 && length(energy_labels) >= OMEGA_THREAD_THRESHOLD
-        return _accumulate_jump_sandwich_threaded_timetrot!(
-            out, sc, rho, delta, ws.jump_eigenbases, ws.jump_hermitian,
-            oft_nufft_prefactors.data, oft_nufft_prefactors.energy_to_index,
-            energy_labels, transition, prefactor)
-    end
-
-    for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
-        is_herm = ws.jump_hermitian[k]
-        if is_herm
-            for w_raw in energy_labels
-                w_raw > 1e-12 && continue
-                w = abs(w_raw)
-                nufft_pf = _prefactor_view(oft_nufft_prefactors, w)
-                @. sc.jump_oft = eigenbasis * nufft_pf
-                rate2 = prefactor * transition(w)
-                mul!(sc.sandwich_tmp, rho, sc.jump_oft')
-                mul!(out, sc.jump_oft, sc.sandwich_tmp, delta * rate2, 1.0)
-                if w > 1e-12
-                    rate2_neg = prefactor * transition(-w)
-                    mul!(sc.sandwich_tmp, rho, sc.jump_oft)
-                    mul!(out, sc.jump_oft', sc.sandwich_tmp, delta * rate2_neg, 1.0)
-                end
-            end
-        else
-            for w in energy_labels
-                nufft_pf = _prefactor_view(oft_nufft_prefactors, w)
-                @. sc.jump_oft = eigenbasis * nufft_pf
-                rate2 = prefactor * transition(w)
-                mul!(sc.sandwich_tmp, rho, sc.jump_oft')
-                mul!(out, sc.jump_oft, sc.sandwich_tmp, delta * rate2, 1.0)
-            end
-        end
-    end
-    return nothing
-end
-
-"""
-    _accumulate_jump_sandwich!(out, ws, rho, delta, config, hamiltonian) -> nothing
-
-BohrDomain version: iterates over Bohr frequency buckets.
-
-The physics-convention sandwich for BohrDomain is:
-    rho_jump += delta * gamma_norm_factor * alpha_A * rho * A_nu2_dag
-Matching jump_workers.jl:276-277.
-"""
-function _accumulate_jump_sandwich!(
-    out::Matrix{T},
-    ws::Workspace{KrylovSpectrum},
-    rho::Matrix{T},
-    delta::Real,
-    config::Config{<:Any, BohrDomain},
-    hamiltonian::HamHam,
-) where {T<:Complex}
-    sc = ws.scratch::KrylovScratch{T}
-    bohr_alpha_fn = ws.bohr_alpha
-    gamma_norm_factor = ws.gamma_norm_factor
-    dim = size(rho, 1)
-
-    bohr_keys = ws.bohr_keys
-    bohr_keys_local = bohr_keys === nothing ? collect(keys(hamiltonian.bohr_dict)) : bohr_keys
-    n_jumps = length(ws.jump_eigenbases)
-    n_keys  = length(bohr_keys_local)
-    if Threads.nthreads() > 1 && n_jumps * n_keys >= OMEGA_THREAD_THRESHOLD
-        return _accumulate_jump_sandwich_threaded_bohr!(
-            out, sc, rho, delta, ws.jump_eigenbases,
-            bohr_alpha_fn, gamma_norm_factor,
-            hamiltonian.bohr_freqs, hamiltonian.bohr_dict, bohr_keys_local)
-    end
-
-    for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
-        for nu_2 in bohr_keys_local
-            # alpha_A = B_nu2
-            @. sc.jump_oft = bohr_alpha_fn(hamiltonian.bohr_freqs, nu_2) * eigenbasis
-
-            # Build A_nu2_dag: entrywise rho*A_nu2_dag via scatter (matches thermalization code)
-            fill!(sc.sandwich_tmp, 0)
-            indices = hamiltonian.bohr_dict[nu_2]
-            @inbounds for idx in indices
-                i = idx[1]; j = idx[2]
-                v = conj(eigenbasis[i, j])
-                @inbounds for p in 1:dim
-                    sc.sandwich_tmp[p, i] += rho[p, j] * v  # sandwich_tmp = rho * A_nu2_dag
-                end
-            end
-
-            # out += delta * gamma_norm_factor * alpha_A * (rho * A_nu2_dag)
-            mul!(out, sc.jump_oft, sc.sandwich_tmp, delta * gamma_norm_factor, 1.0)
-        end
-    end
-    return nothing
-end
-
-# ---------------------------------------------------------------------------
-# Threaded ω-loop variants for the channel jump sandwich (qf-in3 follow-up)
-# ---------------------------------------------------------------------------
-#
-# Mirror of `_apply_lindbladian_threaded_*!` in `src/krylov_matvec.jl`, but for
-# the additive accumulator pattern of `_accumulate_jump_sandwich!`. Uses
-# `sc.task_scratches[idx].channel_rho_jump` as the per-thread accumulator
-# (Thermalize Workspaces are constructed with `with_channel_rho_jump=true`),
-# and `sc.work_list` as the pre-built `(jump_idx, label_idx)` schedule.
-# Reduces the per-thread chunks into the caller's `out` buffer at the end.
-
-function _accumulate_jump_sandwich_threaded_energy!(
-    out::Matrix{T},
-    sc::KrylovScratch{T},
-    rho::Matrix{T},
-    delta::Real,
-    jump_eigenbases::Vector{Matrix{T}},
-    jump_hermitian::Vector{Bool},
-    bohr_freqs::AbstractMatrix{<:Real},
-    energy_labels::Vector{Float64},
-    transition,
-    prefactor::Float64,
-    inv_4sigma2::Float64,
-) where {T<:Complex}
-    work = sc.work_list
-    _populate_lindblad_work_list!(work, jump_hermitian, energy_labels)
-    n_work = length(work)
-    n_work == 0 && return nothing
-
-    pool = sc.task_scratches
-    nt = min(Threads.nthreads(), n_work, length(pool))
-    chunks = _partition_range(1:n_work, nt)
-
+    # qf-po5: hoist the BLAS=1 clamp once per matvec. The threaded
+    # `_accumulate_rho_jump_threaded_*!` entries inside `_accumulate_rho_jump!`
+    # save/restore on entry too — that nested save/restore becomes a no-op
+    # under this outer clamp.
     old_blas = BLAS.get_num_threads()
     BLAS.set_num_threads(1)
     try
-        @sync for (idx, chunk) in enumerate(chunks)
-            Threads.@spawn _accumulate_jump_sandwich_chunk_energy!(
-                pool[idx], rho, delta, jump_eigenbases, jump_hermitian,
-                bohr_freqs, energy_labels, transition, work, chunk,
-                prefactor, inv_4sigma2)
+        @inbounds for a in 1:length(jumps)
+            U_a = U_coherents === nothing ? nothing : U_coherents[a]
+            _apply_one_dm_substep!(
+                evolving_dm, sc, jumps[a],
+                U_a, K0s[a], U_residuals[a],
+                ham_or_trott, config, pd, jws,
+            )
         end
     finally
         BLAS.set_num_threads(old_blas)
     end
 
-    @inbounds for idx in 1:length(chunks)
-        out .+= pool[idx].channel_rho_jump
-    end
-    return nothing
-end
-
-function _accumulate_jump_sandwich_chunk_energy!(
-    task_sc::KrylovScratch{T},
-    rho::Matrix{T},
-    delta::Real,
-    jump_eigenbases::Vector{Matrix{T}},
-    jump_hermitian::Vector{Bool},
-    bohr_freqs::AbstractMatrix{<:Real},
-    energy_labels::Vector{Float64},
-    transition,
-    work::Vector{Tuple{Int, Int}},
-    chunk::UnitRange{Int},
-    prefactor::Float64,
-    inv_4sigma2::Float64,
-) where {T<:Complex}
-    fill!(task_sc.channel_rho_jump, 0)
-
-    @inbounds for w_idx in chunk
-        (k, li) = work[w_idx]
-        eigenbasis = jump_eigenbases[k]
-        is_herm = jump_hermitian[k]
-
-        w_raw = energy_labels[li]
-        # Hermitian fold: only `w_raw <= 1e-12` queued; OFT and rate use
-        # `|w_raw|`. Non-Hermitian uses `w_raw` directly (signed).
-        w = is_herm ? abs(w_raw) : w_raw
-
-        oft!(task_sc.jump_oft, eigenbasis, bohr_freqs, w, inv_4sigma2)
-        rate2 = prefactor * transition(w)
-        mul!(task_sc.sandwich_tmp, rho, task_sc.jump_oft')
-        mul!(task_sc.channel_rho_jump, task_sc.jump_oft, task_sc.sandwich_tmp,
-             delta * rate2, 1.0)
-
-        if is_herm && w > 1e-12
-            rate2_neg = prefactor * transition(-w)
-            mul!(task_sc.sandwich_tmp, rho, task_sc.jump_oft)
-            mul!(task_sc.channel_rho_jump, task_sc.jump_oft', task_sc.sandwich_tmp,
-                 delta * rate2_neg, 1.0)
-        end
-    end
-    return nothing
-end
-
-function _accumulate_jump_sandwich_threaded_timetrot!(
-    out::Matrix{T},
-    sc::KrylovScratch{T},
-    rho::Matrix{T},
-    delta::Real,
-    jump_eigenbases::Vector{Matrix{T}},
-    jump_hermitian::Vector{Bool},
-    nufft_data::AbstractArray{T, 3},
-    nufft_idx::AbstractDict,
-    energy_labels::Vector{Float64},
-    transition,
-    prefactor::Float64,
-) where {T<:Complex}
-    work = sc.work_list
-    _populate_lindblad_work_list!(work, jump_hermitian, energy_labels)
-    n_work = length(work)
-    n_work == 0 && return nothing
-
-    pool = sc.task_scratches
-    nt = min(Threads.nthreads(), n_work, length(pool))
-    chunks = _partition_range(1:n_work, nt)
-
-    old_blas = BLAS.get_num_threads()
-    BLAS.set_num_threads(1)
-    try
-        @sync for (idx, chunk) in enumerate(chunks)
-            Threads.@spawn _accumulate_jump_sandwich_chunk_timetrot!(
-                pool[idx], rho, delta, jump_eigenbases, jump_hermitian,
-                nufft_data, nufft_idx, energy_labels, transition, work, chunk,
-                prefactor)
-        end
-    finally
-        BLAS.set_num_threads(old_blas)
-    end
-
-    @inbounds for idx in 1:length(chunks)
-        out .+= pool[idx].channel_rho_jump
-    end
-    return nothing
-end
-
-function _accumulate_jump_sandwich_chunk_timetrot!(
-    task_sc::KrylovScratch{T},
-    rho::Matrix{T},
-    delta::Real,
-    jump_eigenbases::Vector{Matrix{T}},
-    jump_hermitian::Vector{Bool},
-    nufft_data::AbstractArray{T, 3},
-    nufft_idx::AbstractDict,
-    energy_labels::Vector{Float64},
-    transition,
-    work::Vector{Tuple{Int, Int}},
-    chunk::UnitRange{Int},
-    prefactor::Float64,
-) where {T<:Complex}
-    fill!(task_sc.channel_rho_jump, 0)
-
-    @inbounds for w_idx in chunk
-        (k, li) = work[w_idx]
-        eigenbasis = jump_eigenbases[k]
-        is_herm = jump_hermitian[k]
-
-        w_raw = energy_labels[li]
-        w = is_herm ? abs(w_raw) : w_raw
-        prefactor_idx = is_herm ? nufft_idx[w] : li
-        nufft_pf = @view nufft_data[:, :, prefactor_idx]
-        @. task_sc.jump_oft = eigenbasis * nufft_pf
-        rate2 = prefactor * transition(w)
-
-        mul!(task_sc.sandwich_tmp, rho, task_sc.jump_oft')
-        mul!(task_sc.channel_rho_jump, task_sc.jump_oft, task_sc.sandwich_tmp,
-             delta * rate2, 1.0)
-
-        if is_herm && w > 1e-12
-            rate2_neg = prefactor * transition(-w)
-            mul!(task_sc.sandwich_tmp, rho, task_sc.jump_oft)
-            mul!(task_sc.channel_rho_jump, task_sc.jump_oft', task_sc.sandwich_tmp,
-                 delta * rate2_neg, 1.0)
-        end
-    end
-    return nothing
-end
-
-# --- BohrDomain channel sandwich threaded variant (qf-6af.7) ---
-#
-# Mirror of `_accumulate_jump_sandwich_threaded_timetrot!`, but with work
-# decomposed over (jump_idx, bohr_key_idx) pairs. BohrDomain dissipator is
-# `ρ_jump += δ·γ_nf · α(ν₂) · ρ · A_{ν₂}^†`, so the per-key inner work is
-# (1) form `α·A_{eb}` (entrywise scaling), (2) scatter `rho · A_{ν₂}^†` via
-# the precomputed `bohr_dict[ν₂]` index list, (3) `mul!(out, …, …, w, 1)`.
-
-function _accumulate_jump_sandwich_threaded_bohr!(
-    out::Matrix{T},
-    sc::KrylovScratch{T},
-    rho::Matrix{T},
-    delta::Real,
-    jump_eigenbases::Vector{Matrix{T}},
-    bohr_alpha_fn,
-    gamma_norm_factor::Real,
-    bohr_freqs::AbstractMatrix{<:Real},
-    bohr_dict,
-    bohr_keys::Vector,
-) where {T<:Complex}
-    n_jumps = length(jump_eigenbases)
-    n_keys  = length(bohr_keys)
-    n_work  = n_jumps * n_keys
-    n_work == 0 && return nothing
-
-    pool = sc.task_scratches
-    nt = min(Threads.nthreads(), n_work, length(pool))
-    chunks = _partition_range(1:n_work, nt)
-    n_chunks = length(chunks)
-
-    old_blas = BLAS.get_num_threads()
-    BLAS.set_num_threads(1)
-    try
-        @sync for (idx, chunk) in enumerate(chunks)
-            Threads.@spawn _accumulate_jump_sandwich_chunk_bohr!(
-                pool[idx], rho, delta, jump_eigenbases,
-                bohr_alpha_fn, gamma_norm_factor,
-                bohr_freqs, bohr_dict, bohr_keys, n_keys, chunk)
-        end
-    finally
-        BLAS.set_num_threads(old_blas)
-    end
-
-    @inbounds for idx in 1:n_chunks
-        out .+= pool[idx].channel_rho_jump
-    end
-    return nothing
-end
-
-function _accumulate_jump_sandwich_chunk_bohr!(
-    task_sc::KrylovScratch{T},
-    rho::Matrix{T},
-    delta::Real,
-    jump_eigenbases::Vector{Matrix{T}},
-    bohr_alpha_fn,
-    gamma_norm_factor::Real,
-    bohr_freqs::AbstractMatrix{<:Real},
-    bohr_dict,
-    bohr_keys::Vector,
-    n_keys::Int,
-    chunk::UnitRange{Int},
-) where {T<:Complex}
-    fill!(task_sc.channel_rho_jump, 0)
-    dim = size(rho, 1)
-
-    @inbounds for w_idx in chunk
-        k       = ((w_idx - 1) ÷ n_keys) + 1
-        key_idx = ((w_idx - 1) % n_keys) + 1
-        eigenbasis = jump_eigenbases[k]
-        nu_2 = bohr_keys[key_idx]
-
-        @. task_sc.jump_oft = bohr_alpha_fn(bohr_freqs, nu_2) * eigenbasis
-
-        fill!(task_sc.sandwich_tmp, 0)
-        indices = bohr_dict[nu_2]
-        @inbounds for idx in indices
-            i = idx[1]; j = idx[2]
-            v = conj(eigenbasis[i, j])
-            @inbounds for p in 1:dim
-                task_sc.sandwich_tmp[p, i] += rho[p, j] * v
-            end
-        end
-
-        mul!(task_sc.channel_rho_jump, task_sc.jump_oft, task_sc.sandwich_tmp,
-             delta * gamma_norm_factor, 1.0)
-    end
-    return nothing
+    # Publish via sc.rho_next (mirrors the `_apply_precomputed_channel!` final
+    # `copyto!(evolving_dm, scratch.rho_next)`; both buffers hold Φ_δ(ρ) here).
+    copyto!(sc.rho_next, evolving_dm)
+    return sc.rho_next
 end
 
 # ---------------------------------------------------------------------------
@@ -766,11 +360,13 @@ function krylov_spectral_gap(
     # Dimensions
     dim = size(hamiltonian.data, 1)
 
-    # Build channel matvec closure using faithful Chen channel
+    # Build channel matvec closure using the faithful jumpwise Φ_δ (qf-po5).
+    # `apply_delta_channel!` publishes the result via `ws.scratch.rho_next`
+    # (ThermalizeScratch) — same convention as the per-step run_thermalize loop.
     function channel_matvec(v::AbstractVector)
         rho = reshape(v, dim, dim)
         apply_delta_channel!(ws, rho, config, hamiltonian)
-        return copy(vec(ws.scratch.rho_out))  # CRITICAL: copy to avoid aliasing
+        return copy(vec(ws.scratch.rho_next))  # CRITICAL: copy to avoid aliasing
     end
 
     # Initial vector: maximally mixed state

@@ -457,52 +457,15 @@ using Random
     end
 
     # ------------------------------------------------------------
-    # (i) Channel jump-sandwich threaded — BohrDomain
+    # (i) Channel jump-sandwich threaded — DELETED in qf-po5 Commit 2.
+    #
+    # The summed-channel `_accumulate_jump_sandwich!` family this testset
+    # exercised was deleted when `apply_delta_channel!` was rewritten to the
+    # faithful per-jump sweep. The serial ≡ threaded equivalence of the
+    # equivalent dissipator `_accumulate_rho_jump_threaded_*!` is regression-
+    # tested by the per-step run_thermalize tests (test_thermalization.jl) and
+    # by the byte-identity check in test_predict_channel.jl (a)/(b1).
     # ------------------------------------------------------------
-    @testset "(i) Channel sandwich threaded vs serial: BohrDomain" begin
-        if Threads.nthreads() > 1
-            cfg = make_config(Thermalize(), BohrDomain(); construction=KMS())
-            ws = Workspace(cfg, TEST_HAM, TEST_JUMPS)
-            Random.seed!(456)
-            rho = Matrix(random_density_matrix(NUM_QUBITS))
-
-            sc = ws.scratch
-            fill!(sc.channel_rho_jump, 0)
-            QuantumFurnace._accumulate_jump_sandwich!(sc.channel_rho_jump,
-                ws, rho, ws.delta, cfg, TEST_HAM)
-            out_threaded = copy(sc.channel_rho_jump)
-
-            d = DIM
-            bohr_alpha_fn = ws.bohr_alpha
-            gnf = ws.gamma_norm_factor
-            bohr_keys = ws.bohr_keys === nothing ?
-                collect(keys(TEST_HAM.bohr_dict)) : ws.bohr_keys
-            out_serial = zeros(ComplexF64, d, d)
-            for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
-                for nu_2 in bohr_keys
-                    f_A = similar(eigenbasis)
-                    @. f_A = bohr_alpha_fn(TEST_HAM.bohr_freqs, nu_2) * eigenbasis
-                    rho_A = zeros(ComplexF64, d, d)
-                    indices = TEST_HAM.bohr_dict[nu_2]
-                    for idx in indices
-                        i, j = idx[1], idx[2]
-                        v = conj(eigenbasis[i, j])
-                        for p in 1:d
-                            rho_A[p, i] += rho[p, j] * v
-                        end
-                    end
-                    out_serial .+= ws.delta * gnf * (f_A * rho_A)
-                end
-            end
-
-            err = norm(out_threaded .- out_serial)
-            rel = err / max(norm(out_serial), 1.0)
-            @test rel < 1e-12
-            @info "qf-6af channel sandwich bohr" err=err rel=rel
-        else
-            @test true
-        end
-    end
 
     # ------------------------------------------------------------
     # (j) BLAS thread restoration on every threaded entry

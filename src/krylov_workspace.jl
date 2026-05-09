@@ -83,10 +83,10 @@ function Workspace(
         jump_eigenbases, jump_hermitian, jumps, B_total,
         nothing,  # dll_lindblads (CKG/GNS path; populated by DLL specialised constructor)
         G_left, G_right, G_left_adj, G_right_adj,
-        nothing, nothing, nothing, nothing, nothing,  # channel fields
+        nothing, nothing,  # alpha, delta (Lindbladian path: no CPTP scaffolding)
         pd_transition, pd_gnf, pd_el, pd_odp, pd_nufft,
         pd_alpha, pd_bkeys, pd_bis, pd_bjs, pd_bminus, pd_bplus,
-        nothing,  # coherent_unitaries
+        nothing,  # U_coherents (Lindbladian path: no per-jump coherent unitaries)
         nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # trajectory fields
         nothing,  # jump_selection (KrylovSpectrum path: no per-step jump selection)
         nothing,  # Id
@@ -695,10 +695,10 @@ function Workspace(
         jump_eigenbases, jump_hermitian, jumps, G,  # B_total slot stores G
         dll_lindblads,
         G_left, G_right, G_left_adj, G_right_adj,
-        nothing, nothing, nothing, nothing, nothing,  # channel fields
+        nothing, nothing,  # alpha, delta (DLL Lindbladian path)
         nothing, nothing, nothing, nothing, nothing,  # transition/gnf/energy_labels/odp/nufft
         nothing, nothing, nothing, nothing, nothing, nothing,  # bohr_alpha/bohr_keys/bohr_is/bohr_js/b_minus/b_plus
-        nothing,  # coherent_unitaries
+        nothing,  # U_coherents (DLL Lindbladian path)
         nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # trajectory fields
         nothing,  # jump_selection
         nothing,  # Id
@@ -713,8 +713,17 @@ end
 """
     Workspace(config::Config{Thermalize}, hamiltonian, jumps; trotter=nothing)
 
-Construct a `Workspace{KrylovSpectrum}` with precomputed CPTP channel matrices for
-the faithful Chen channel (Eq. 3.2).
+Construct a `Workspace{KrylovSpectrum, Thermalize, ...}` with **per-jump** CPTP channel
+matrices for the faithful jumpwise Φ_δ matvec (qf-po5).
+
+The workspace stores per-jump `K0s`, `U_residuals`, `U_coherents` (length = `n_jumps`),
+exactly the matrices `run_thermalize :sweep` builds via `_precompute_per_jump_channels`
+and `_precompute_coherent_unitary` — `apply_delta_channel!` then sweeps over them in
+order, matching the implementable algorithm bit-for-bit modulo Krylov truncation.
+
+`jump_selection = :random` is rejected here: a single random jump pick reproduces δ𝓛
+in expectation only, not as a deterministic channel matvec, so the Krylov spectral
+expansion of Φ_δ is undefined for that mode.
 
 Returns `Workspace{KrylovSpectrum,D,C,T}`.
 """
@@ -732,11 +741,14 @@ function Workspace(
         hamiltonian
     end
 
+    # qf-po5: reject :random — the channel matvec is deterministic by construction.
+    config.jump_selection === :sweep || throw(ArgumentError(
+        "Workspace(::Config{Thermalize}, ...) for the Krylov channel matvec " *
+        "requires config.jump_selection = :sweep (got :$(config.jump_selection)). " *
+        ":random is an expectation map of the per-step jump pick, not a single deterministic channel."))
+
     # Precompute domain-specific data
     precomputed_data = _precompute_data(config, ham_or_trott)
-
-    # Precompute coherent B_total (returns nothing for GNS / with_coherent=false)
-    B_total = _precompute_coherent_B(jumps, ham_or_trott, config, precomputed_data)
 
     # Determine dimensions and element type
     dim = size(hamiltonian.data, 1)
@@ -747,42 +759,35 @@ function Workspace(
     jump_eigenbases = [Matrix{CT}(j.in_eigenbasis) for j in jumps]
     jump_hermitian  = [j.hermitian for j in jumps]
 
-    # Allocate KrylovScratch (with channel_rho_jump for Thermalize)
-    sc = KrylovScratch(CT, dim; with_channel_rho_jump=true)
-
-    # --- Precompute channel matrices ---
-    delta = config.delta
-
-    # 1. Compute R_total (physics convention)
-    R_total = zeros(CT, dim, dim)
-    _accumulate_R_total!(R_total, jump_eigenbases, jump_hermitian,
-                         precomputed_data, config, ham_or_trott)
-    hermitianize!(R_total)
-
-    # Precompute G_left/G_right
-    if B_total !== nothing
-        B_T = Matrix{CT}(transpose(B_total))
-        G_left  = Matrix{CT}(1im .* B_T .- 0.5 .* R_total)
-        G_right = Matrix{CT}(-1im .* B_T .- 0.5 .* R_total)
-    else
-        G_left  = Matrix{CT}(-0.5 .* R_total)
-        G_right = Matrix{CT}(-0.5 .* R_total)
-    end
-
-    G_left_adj  = G_right
-    G_right_adj = G_left
-
-    # 2. Compute K0, U_residual (Chen Eq. 3.2)
-    channel = _build_cptp_channel(R_total, delta)
-
-    # 3. Compute U_coherent = exp(-i*delta*B_total) if coherent
-    U_coherent = if B_total !== nothing
-        Matrix{CT}(exp(-1im * delta * Hermitian(B_total)))
-    else
+    # qf-po5: per-jump coherent unitaries (GQSP-built when config.with_gqsp).
+    # :sweep ⇒ delta_scale = 1.0 (matches run_thermalize at furnace.jl:206-207).
+    coh_raw = _precompute_coherent_unitary(
+        jumps, hamiltonian, config, precomputed_data;
+        trotter=trotter, delta_scale=1.0)
+    # Broaden element type to `Vector{Union{Nothing, Matrix{CT}}}` so the field
+    # type matches the struct declaration (mirrors trajectory `U_Bs`).
+    U_coherents = if coh_raw === nothing
         nothing
+    else
+        Vector{Union{Nothing, Matrix{CT}}}(coh_raw)
     end
 
-    # Absorb precomputed_data fields
+    # qf-po5: per-jump CPTP (K0_a, U_residual_a) — same helper run_thermalize :sweep uses.
+    (; K0s, U_residuals) = _precompute_per_jump_channels(
+        jumps, ham_or_trott, config, precomputed_data;
+        rescale_by_inv_prob=false,
+    )
+
+    # qf-po5: ThermalizeScratch with task pool plumbed by Commit 1. The faithful
+    # `apply_delta_channel!` per-jump sweep delegates the dissipator ω-loop to the
+    # threaded `_accumulate_rho_jump_threaded_*!` entries, which consume this pool
+    # via `scratch.task_scratches` (no fresh per-call allocation per jump).
+    sc = ThermalizeScratch(CT, dim;
+        with_task_pool = Threads.nthreads() > 1,
+        num_threads = Threads.nthreads(),
+    )
+
+    # Absorb precomputed_data fields (mirrors the Lindbladian constructor).
     pd_transition = hasproperty(precomputed_data, :transition) ? precomputed_data.transition : nothing
     pd_gnf = hasproperty(precomputed_data, :gamma_norm_factor) ? precomputed_data.gamma_norm_factor : nothing
     pd_el = hasproperty(precomputed_data, :energy_labels) ? precomputed_data.energy_labels : nothing
@@ -795,26 +800,22 @@ function Workspace(
     pd_bminus = hasproperty(precomputed_data, :b_minus) ? precomputed_data.b_minus : nothing
     pd_bplus = hasproperty(precomputed_data, :b_plus) ? precomputed_data.b_plus : nothing
 
-    # qf-in3.4: pre-build the (jump_idx, label_idx) work list for the threaded
-    # ω-loop dispatch in apply_delta_channel! (EnergyDomain / TimeDomain /
-    # TrotterDomain). BohrDomain leaves the list empty.
-    if pd_el !== nothing
-        _populate_lindblad_work_list!(sc.work_list, jump_hermitian, pd_el)
-    end
-
     D = typeof(config.domain)
     C = typeof(config.construction)
+    delta = config.delta
+    n_jumps = length(jumps)
 
     return Workspace{KrylovSpectrum, D, C, T}(
-        jump_eigenbases, jump_hermitian, jumps, B_total,
+        jump_eigenbases, jump_hermitian, jumps, nothing,  # B_total: unused on the Thermalize matvec path
         nothing,  # dll_lindblads (Thermalize path)
-        G_left, G_right, G_left_adj, G_right_adj,
-        channel.K0, channel.U_residual, U_coherent, nothing, Float64(delta),
+        nothing, nothing, nothing, nothing,  # G_left/G_right/G_left_adj/G_right_adj: only used by the Lindbladian matvec
+        nothing, Float64(delta),  # alpha (CPTP scalar — unused for KrylovSpectrum), delta (read by predict_channel_trajectory's k-grid → t-grid)
         pd_transition, pd_gnf, pd_el, pd_odp, pd_nufft,
         pd_alpha, pd_bkeys, pd_bis, pd_bjs, pd_bminus, pd_bplus,
-        nothing,  # coherent_unitaries
-        nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # trajectory fields
-        nothing,  # jump_selection
+        U_coherents,  # qf-po5: per-jump coherent unitaries (replaces the dropped summed `U_coherent`)
+        ham_or_trott, n_jumps, nothing, nothing,  # trajectory: ham_or_trott + n_jumps populated; scaled_prefactor/sigma=nothing for KrylovSpectrum
+        nothing, K0s, U_residuals, U_coherents,   # trajectory: Rs=nothing; per-jump K0s/U_residuals; U_Bs reuses U_coherents (same matrices)
+        :sweep,  # jump_selection (constructor enforced :sweep above)
         nothing,  # Id
         sc,
     )

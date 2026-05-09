@@ -527,10 +527,10 @@ struct Workspace{S<:AbstractSimulation, D<:AbstractDomain, C<:AbstractConstructi
     G_left_adj::Union{Nothing, Matrix{Complex{T}}}
     G_right_adj::Union{Nothing, Matrix{Complex{T}}}
 
-    # CPTP channel (Krylov Thermalize mode, and Thermalize DM; also per-operator alpha/delta for Trajectory)
-    K0::Union{Nothing, Matrix{Complex{T}}}
-    U_residual::Union{Nothing, Matrix{Complex{T}}}
-    U_coherent::Union{Nothing, Matrix{Complex{T}}}
+    # CPTP channel scalars (Krylov Thermalize mode, and Thermalize DM; also per-operator alpha/delta for Trajectory).
+    # The summed `K0 / U_residual / U_coherent` fields were removed in qf-po5 Commit 2 — the
+    # faithful Φ_δ matvec is per-jump, so per-jump `K0s / U_residuals / U_coherents` are
+    # consulted instead (declared in the Trajectory block below; reused by Thermalize+Krylov).
     alpha::Union{Nothing, Float64}
     delta::Union{Nothing, Float64}
 
@@ -547,8 +547,11 @@ struct Workspace{S<:AbstractSimulation, D<:AbstractDomain, C<:AbstractConstructi
     b_minus::Any               # Time/TrotterDomain coherent
     b_plus::Any                # Time/TrotterDomain coherent
 
-    # Thermalize DM-specific (coherent unitaries)
-    coherent_unitaries::Union{Nothing, Vector{Matrix{Complex{T}}}}
+    # Thermalize-DM / Krylov-channel coherent unitaries (per-jump, length = n_jumps).
+    # Element type allows `nothing` per jump so a no-coherent jump can be skipped
+    # without consulting `with_coherent(config.construction)` in the matvec — mirrors
+    # the trajectory-branch `U_Bs::Vector{Union{Nothing, Matrix}}` shape exactly.
+    U_coherents::Union{Nothing, Vector{Union{Nothing, Matrix{Complex{T}}}}}
 
     # Trajectory-specific fields (per-operator Lie-Trotter splitting)
     ham_or_trott::Any          # HamHam or TrottTrott (needed for EnergyDomain oft!())

@@ -29,10 +29,10 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::Config{Lindbladian
         nothing, nothing, nothing, nothing,  # physics data
         nothing,                              # dll_lindblads
         nothing, nothing, nothing, nothing,  # G fields
-        nothing, nothing, nothing, nothing, nothing,  # channel fields
+        nothing, nothing,  # channel scalars (alpha, delta) — qf-po5 dropped K0/U_residual/U_coherent
         nothing, nothing, nothing, nothing,  # domain precomputed (transition, gnf, energy_labels, oft_domain_prefactor)
         nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # domain-specific (oft_nufft_prefactors, bohr_alpha, bohr_keys, bohr_is, bohr_js, b_minus, b_plus)
-        nothing,  # coherent_unitaries
+        nothing,  # U_coherents
         nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # trajectory fields
         nothing,  # jump_selection (Lindbladian path: not a Trajectory simulator)
         Id,       # Id

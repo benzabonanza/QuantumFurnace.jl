@@ -493,90 +493,16 @@ end
 # ============================================================================
 # Channel-Krylov ω-loop threading tests (qf-in3 follow-up)
 # Mirrors the Lindbladian threading tests above for `apply_delta_channel!`.
+#
+# qf-po5 Commit 2 deleted the `_run_threaded_channel!` helper and its
+# "Channel threaded matvec: serial ≡ threaded" testset. The new faithful
+# `apply_delta_channel!` consumes `_accumulate_rho_jump_threaded_*!` (whose
+# serial ≡ threaded equivalence is regressioned by the per-step run_thermalize
+# tests in `test_thermalization.jl` and the byte-identity check in
+# `test_predict_channel.jl` (a)/(b1)) — driving the threaded variants directly
+# from a re-implementation of the deleted summed-channel matvec is no longer
+# meaningful. The BLAS thread-restoration testset below stays.
 # ============================================================================
-
-# Helper: drive `_accumulate_jump_sandwich_threaded_*!` directly. Re-creates
-# the rest of `apply_delta_channel!` (coherent rotation + K0/U_residual
-# assembly) so the comparison against the public `apply_delta_channel!` is a
-# fair serial-vs-threaded isolation of just the dissipative ω-loop.
-function _run_threaded_channel!(ws, rho, config, ham)
-    sc = ws.scratch::QuantumFurnace.KrylovScratch{ComplexF64}
-    K0 = ws.K0
-    U_res = ws.U_residual
-    U_coh = ws.U_coherent
-    delta = ws.delta
-
-    if U_coh !== nothing
-        mul!(sc.sandwich_tmp, U_coh, rho)
-        mul!(sc.sandwich_out, sc.sandwich_tmp, U_coh')
-        rho_eff = sc.sandwich_out
-    else
-        rho_eff = rho
-    end
-
-    fill!(sc.channel_rho_jump, 0)
-
-    prefactor = ws.oft_domain_prefactor * ws.gamma_norm_factor
-    if config.domain isa EnergyDomain
-        inv_4sigma2 = 1.0 / (4 * config.sigma^2)
-        QuantumFurnace._accumulate_jump_sandwich_threaded_energy!(
-            sc.channel_rho_jump, sc, rho_eff, delta,
-            ws.jump_eigenbases, ws.jump_hermitian,
-            ham.bohr_freqs, ws.energy_labels, ws.transition,
-            prefactor, inv_4sigma2)
-    else
-        nufft = ws.oft_nufft_prefactors
-        QuantumFurnace._accumulate_jump_sandwich_threaded_timetrot!(
-            sc.channel_rho_jump, sc, rho_eff, delta,
-            ws.jump_eigenbases, ws.jump_hermitian,
-            nufft.data, nufft.energy_to_index,
-            ws.energy_labels, ws.transition, prefactor)
-    end
-
-    mul!(sc.sandwich_tmp, K0, rho_eff)
-    mul!(sc.rho_out, sc.sandwich_tmp, K0')
-    sc.rho_out .+= sc.channel_rho_jump
-    mul!(sc.sandwich_tmp, U_res, rho_eff)
-    mul!(sc.rho_out, sc.sandwich_tmp, U_res', 1.0, 1.0)
-
-    return copy(sc.rho_out)
-end
-
-@testset "Channel threaded matvec: serial ≡ threaded" begin
-    if Threads.nthreads() > 1
-        rng = MersenneTwister(456)
-        raw_complex = randn(rng, ComplexF64, DIM, DIM) ./ sqrt(DIM)
-        complex_jump = JumpOp(raw_complex,
-                              TEST_HAM.eigvecs' * raw_complex * TEST_HAM.eigvecs,
-                              false, false)
-
-        for (domain, jumps, trott, name) in [
-            (EnergyDomain(),  TEST_JUMPS,                 nothing,        "Energy / Hermitian jumps"),
-            (EnergyDomain(),  JumpOp[complex_jump],       nothing,        "Energy / non-Hermitian jump"),
-            (TimeDomain(),    TEST_JUMPS,                 nothing,        "Time / Hermitian jumps"),
-            (TimeDomain(),    JumpOp[complex_jump],       nothing,        "Time / non-Hermitian jump"),
-            (TrotterDomain(), TEST_TROTTER_JUMPS,         TEST_TROTTER,   "Trotter / Hermitian jumps"),
-        ]
-            config = make_config(Thermalize(), domain; construction=KMS())
-            ws_a = Workspace(config, TEST_HAM, jumps; trotter=trott)
-            ws_b = Workspace(config, TEST_HAM, jumps; trotter=trott)
-
-            Random.seed!(rng, 7)
-            rho = Matrix(random_density_matrix(NUM_QUBITS))
-
-            serial = copy(apply_delta_channel!(ws_a, rho, config, TEST_HAM))
-            threaded = _run_threaded_channel!(ws_b, rho, config, TEST_HAM)
-
-            tol = max(norm(serial), 1.0) * 1e-12
-            err = norm(threaded - serial)
-            @test err < tol
-            @info "Channel threaded match" path=name err=err tol=tol
-        end
-    else
-        @info "Skipping channel threaded matvec test (nthreads=$(Threads.nthreads()))"
-        @test true
-    end
-end
 
 @testset "Channel threaded matvec: BLAS thread restoration" begin
     if Threads.nthreads() > 1
