@@ -177,6 +177,7 @@ function _build_trajectory_workspace(
         config.jump_selection,  # :sweep | :random
         nothing,  # Id
         sc,  # scratch
+        config,  # cached_cfg (qf-qmi.2)
     )
 end
 
@@ -205,6 +206,7 @@ function _copy_workspace_for_thread(ws::Workspace{Trajectory,D,C,T}) where {D,C,
         ws.jump_selection,
         ws.Id,
         fresh_scratch,
+        ws.cached_cfg,  # qf-qmi.2: thread copies share the cfg ref (immutable)
     )
 end
 

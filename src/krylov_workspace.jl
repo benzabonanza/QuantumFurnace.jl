@@ -91,6 +91,7 @@ function Workspace(
         nothing,  # jump_selection (KrylovSpectrum path: no per-step jump selection)
         nothing,  # Id
         sc,
+        config,   # cached_cfg (qf-qmi.2): used by predict_*_trajectory(workspace=...) to validate reuse
     )
 end
 
@@ -703,6 +704,7 @@ function Workspace(
         nothing,  # jump_selection
         nothing,  # Id
         sc,
+        config,   # cached_cfg (qf-qmi.2)
     )
 end
 
@@ -818,5 +820,6 @@ function Workspace(
         :sweep,  # jump_selection (constructor enforced :sweep above)
         nothing,  # Id
         sc,
+        config,   # cached_cfg (qf-qmi.2)
     )
 end

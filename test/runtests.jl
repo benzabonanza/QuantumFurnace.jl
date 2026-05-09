@@ -62,6 +62,7 @@ const SANDBOX_FILES = String[
     "test_lindblad_action.jl",
     "test_predict_lindbladian.jl",
     "test_predict_channel.jl",
+    "test_predict_workspace_reuse.jl",
     "test_faithful_apply_delta_channel.jl",
     "test_sweep_channel_mixing.jl",
     "test_krylov_matvec.jl",

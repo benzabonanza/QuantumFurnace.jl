@@ -616,14 +616,26 @@ function predict_lindbladian_trajectory(
     validate_config!(config)
     validate_jump_pairing(jumps; allow_unpaired_nonhermitian=allow_unpaired_nonhermitian)
 
-    # qf-qmi.2: optional pre-built Workspace reuse for parameter sweeps. The
-    # ctor cost is O(d^3.x) for EnergyDomain Lindbladian + KMS (B_bohr loop),
-    # vastly larger than a 30-matvec Krylov factorisation at n>=6. A caller
-    # sweeping (β, σ, ε) at fixed (n, ham, jumps, domain, construction) can
-    # build the workspace once and pass it here.
+    # qf-qmi.2: optional pre-built Workspace reuse. The ctor cost is O(d^3.x)
+    # for EnergyDomain Lindbladian + KMS (B_bohr loop), vastly larger than a
+    # 30-matvec Krylov factorisation at n>=6. A caller iterating over
+    # (t_grid, krylovdim, tol, rho_0) at fixed (config, ham, jumps) can build
+    # the workspace once and pass it here. NOTE: any change to (config, ham,
+    # jumps) requires rebuilding the workspace — the cached_cfg / scratch /
+    # jump-count assertions below catch this case loudly.
     ws = if workspace === nothing
         Workspace(config, hamiltonian, jumps)
     else
+        workspace.scratch isa KrylovScratch || throw(ArgumentError(
+            "predict_lindbladian_trajectory requires Workspace(::Config{Lindbladian}, ...); " *
+            "got workspace with scratch::$(typeof(workspace.scratch))"))
+        workspace.cached_cfg === nothing && throw(ArgumentError(
+            "workspace was built without a cached config (internal API path?). " *
+            "Public callers should pass a workspace built via Workspace(config, ham, jumps)."))
+        workspace.cached_cfg == config || throw(ArgumentError(
+            "workspace.cached_cfg != config — cannot reuse a workspace whose " *
+            "construction config differs from the call-site config (β, σ, a, s, " *
+            "register triples, with_gqsp, etc. all matter). Rebuild the workspace."))
         @assert size(workspace.G_left, 1) == d  "workspace dim must match rho_0"
         @assert length(workspace.jumps) == length(jumps)  "workspace jump count mismatch"
         workspace
@@ -792,13 +804,24 @@ function predict_channel_trajectory(
     # helpers run_thermalize calls; the matvec then runs the per-jump Lie–Trotter
     # sweep. Single source of truth — bit-identical to run_thermalize :sweep
     # modulo Krylov truncation.
-    # qf-qmi.2: optional pre-built Workspace for sweep reuse (see
+    # qf-qmi.2: optional pre-built Workspace for reuse (see
     # predict_lindbladian_trajectory rationale). Matvec scales as d^3 here,
     # so reuse savings are smaller than for the Lindbladian path but still
-    # sizeable when iterating across (β, σ, δ) at fixed (n, ham, jumps).
+    # sizeable when iterating across (k_grid, krylovdim, tol, rho_0) at
+    # fixed (config, ham, jumps).
     ws = if workspace === nothing
         Workspace(config, hamiltonian, jumps; trotter=trotter)
     else
+        workspace.scratch isa ThermalizeScratch || throw(ArgumentError(
+            "predict_channel_trajectory requires Workspace(::Config{Thermalize}, ...); " *
+            "got workspace with scratch::$(typeof(workspace.scratch))"))
+        workspace.cached_cfg === nothing && throw(ArgumentError(
+            "workspace was built without a cached config (internal API path?). " *
+            "Public callers should pass a workspace built via Workspace(config, ham, jumps; trotter=...)."))
+        workspace.cached_cfg == config || throw(ArgumentError(
+            "workspace.cached_cfg != config — cannot reuse a workspace whose " *
+            "construction config differs from the call-site config (β, σ, a, s, δ, " *
+            "register triples, with_gqsp, jump_selection, etc. all matter). Rebuild."))
         @assert length(workspace.jumps) == length(jumps)  "workspace jump count mismatch"
         @assert size(workspace.scratch.rho_next, 1) == d  "workspace dim must match rho_0"
         workspace

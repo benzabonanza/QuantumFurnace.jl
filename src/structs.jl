@@ -569,4 +569,10 @@ struct Workspace{S<:AbstractSimulation, D<:AbstractDomain, C<:AbstractConstructi
 
     # Scratch buffers (nested, simulation-path-specific)
     scratch
+
+    # qf-qmi.2: cached construction-time config for `workspace=` reuse
+    # validation. Stored as untyped to keep the struct invariant under
+    # later config refactors and to allow `nothing` for any internal callers
+    # that build a Workspace without a public config (none in src/ today).
+    cached_cfg::Union{Nothing, Config}
 end

@@ -37,6 +37,7 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::Config{Lindbladian
         nothing,  # jump_selection (Lindbladian path: not a Trajectory simulator)
         Id,       # Id
         sc,       # scratch
+        config,   # cached_cfg (qf-qmi.2; only used by Krylov predict_*_trajectory but kept here for ctor uniformity)
     )
 
     # Precompute all B's for the A's if for KMS DB and with_coherent.
