@@ -608,6 +608,7 @@ function predict_lindbladian_trajectory(
     tol::Real = 1e-10,
     save_states::Bool = false,
     allow_unpaired_nonhermitian::Bool = false,
+    workspace::Union{Nothing, Workspace{KrylovSpectrum}} = nothing,
 )::NamedTuple where {T<:Complex}
     d = size(rho_0, 1)
     @assert size(rho_0, 2) == d  "rho_0 must be square"
@@ -615,7 +616,18 @@ function predict_lindbladian_trajectory(
     validate_config!(config)
     validate_jump_pairing(jumps; allow_unpaired_nonhermitian=allow_unpaired_nonhermitian)
 
-    ws = Workspace(config, hamiltonian, jumps)
+    # qf-qmi.2: optional pre-built Workspace reuse for parameter sweeps. The
+    # ctor cost is O(d^3.x) for EnergyDomain Lindbladian + KMS (B_bohr loop),
+    # vastly larger than a 30-matvec Krylov factorisation at n>=6. A caller
+    # sweeping (β, σ, ε) at fixed (n, ham, jumps, domain, construction) can
+    # build the workspace once and pass it here.
+    ws = if workspace === nothing
+        Workspace(config, hamiltonian, jumps)
+    else
+        @assert size(workspace.G_left, 1) == d  "workspace dim must match rho_0"
+        @assert length(workspace.jumps) == length(jumps)  "workspace jump count mismatch"
+        workspace
+    end
     fwd! = let ws = ws, config = config, ham = hamiltonian
         (out::AbstractMatrix, x::AbstractMatrix) -> begin
             apply_lindbladian!(ws, x, config, ham)
@@ -755,6 +767,7 @@ function predict_channel_trajectory(
     save_states::Bool = false,
     trotter::Union{Nothing, TrottTrott} = nothing,
     allow_unpaired_nonhermitian::Bool = false,
+    workspace::Union{Nothing, Workspace{KrylovSpectrum}} = nothing,
 )::NamedTuple where {T<:Complex}
     d = size(rho_0, 1)
     @assert size(rho_0, 2) == d  "rho_0 must be square"
@@ -779,7 +792,17 @@ function predict_channel_trajectory(
     # helpers run_thermalize calls; the matvec then runs the per-jump Lie–Trotter
     # sweep. Single source of truth — bit-identical to run_thermalize :sweep
     # modulo Krylov truncation.
-    ws = Workspace(config, hamiltonian, jumps; trotter=trotter)
+    # qf-qmi.2: optional pre-built Workspace for sweep reuse (see
+    # predict_lindbladian_trajectory rationale). Matvec scales as d^3 here,
+    # so reuse savings are smaller than for the Lindbladian path but still
+    # sizeable when iterating across (β, σ, δ) at fixed (n, ham, jumps).
+    ws = if workspace === nothing
+        Workspace(config, hamiltonian, jumps; trotter=trotter)
+    else
+        @assert length(workspace.jumps) == length(jumps)  "workspace jump count mismatch"
+        @assert size(workspace.scratch.rho_next, 1) == d  "workspace dim must match rho_0"
+        workspace
+    end
 
     CT = Complex{eltype(hamiltonian.eigvals)}
 
