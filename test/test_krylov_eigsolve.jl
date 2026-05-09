@@ -28,10 +28,10 @@ using QuantumFurnace
         I_d2 = Matrix{ComplexF64}(LinearAlgebra.I(DIM^2))
 
         # Threshold rationale (trace preservation): tr(E(rho)) should equal tr(rho) exactly
-        # for a CPTP map. Error is FP accumulation from channel application + per-jump
-        # defensive `hermitianize!` in `_apply_precomputed_channel!` (qf-po5: each of
-        # `n_jumps` substeps adds ~1e-10 trace drift). At n=3 with 9 jumps we expect
-        # O(n_jumps · DIM^2 · eps) ~ 1e-9. Threshold 1e-8 keeps a 10x margin.
+        # for a CPTP map. Real FP drift from the per-jump Lie–Trotter sweep is at the
+        # rounding floor (~5e-16 measured); `hermitianize!` averages off-diagonals
+        # without touching the diagonal, so it adds no trace drift. Threshold 1e-10
+        # gives >1e5× margin.
         #
         # Threshold rationale (positivity): eigenvalues of E(rho) should be >= 0 for CPTP.
         # FP rounding can produce tiny negatives: O(eps * ||rho||) ~ 1e-16. Threshold -1e-10 is generous.
@@ -53,7 +53,7 @@ using QuantumFurnace
 
             # Trace preservation: tr(E(rho)) == tr(rho)
             trace_err = abs(real(tr(rho_chen)) - real(tr(rho)))
-            @test isapprox(real(tr(rho_chen)), real(tr(rho)); atol=1e-8)
+            @test isapprox(real(tr(rho_chen)), real(tr(rho)); atol=1e-10)
             max_trace_err = max(max_trace_err, trace_err)
 
             # Positivity: eigenvalues of E(rho) >= -eps for valid density matrix input

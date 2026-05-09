@@ -327,11 +327,12 @@ end
     # ========================================================================
     @testset "L-vs-E convergence (KMS)" begin
 
-        # qf-po5 Commit 2: lowered from 0.9 → 0.8 since the faithful per-jump
-        # Φ_δ (Lie–Trotter on the n_jumps substeps) has a slightly larger
-        # O(δ²) prefactor than the prior all-at-once summed channel did,
-        # compressing the visible O(δ) window. TimeDomain lands at ~0.845
-        # consistently; Energy/Trotter/Bohr stay > 0.94 — well above 0.8.
+        # Threshold 0.8 — threading-stochastic: TimeDomain lands at 0.85 with
+        # nthreads=2 and 0.91 with nthreads=8 (KrylovKit Arnoldi initialisation
+        # depends on chunk schedules). The faithful per-jump Φ_δ (qf-po5) also
+        # carries a slightly larger O(δ²) Lie–Trotter prefactor than the prior
+        # all-at-once summed channel did, compressing the visible O(δ) regime.
+        # 0.8 is robust across the supported thread range.
         order_threshold = 0.8
 
         @testset "EnergyDomain" begin

@@ -607,7 +607,9 @@ function _accumulate_rho_jump!(
 
     n_labels = length(energy_labels)
     if Threads.nthreads() > 1 && n_labels >= OMEGA_THREAD_THRESHOLD
-        return _accumulate_rho_jump_threaded_energy!(scratch, evolving_dm, jump, hamiltonian, config, precomputed_data; jump_weight_scaling=jump_weight_scaling)
+        return _accumulate_rho_jump_threaded_energy!(scratch, evolving_dm, jump, hamiltonian, config, precomputed_data;
+            jump_weight_scaling=jump_weight_scaling,
+            task_scratches=isempty(scratch.task_scratches) ? nothing : scratch.task_scratches)
     end
 
     base_prefactor = precomputed_data.oft_domain_prefactor * jump_weight_scaling
@@ -670,7 +672,9 @@ function _accumulate_rho_jump!(
 
     n_labels = length(energy_labels)
     if Threads.nthreads() > 1 && n_labels >= OMEGA_THREAD_THRESHOLD
-        return _accumulate_rho_jump_threaded_timetrot!(scratch, evolving_dm, jump, ham_or_trott, config, precomputed_data; jump_weight_scaling=jump_weight_scaling)
+        return _accumulate_rho_jump_threaded_timetrot!(scratch, evolving_dm, jump, ham_or_trott, config, precomputed_data;
+            jump_weight_scaling=jump_weight_scaling,
+            task_scratches=isempty(scratch.task_scratches) ? nothing : scratch.task_scratches)
     end
 
     base_prefactor = precomputed_data.oft_domain_prefactor * jump_weight_scaling
@@ -738,7 +742,9 @@ function _accumulate_rho_jump!(
 
     n_keys = length(bohr_keys)
     if Threads.nthreads() > 1 && n_keys >= OMEGA_THREAD_THRESHOLD
-        return _accumulate_rho_jump_threaded_bohr!(scratch, evolving_dm, jump, hamiltonian, config, precomputed_data, bohr_keys, bohr_is, bohr_js; jump_weight_scaling=jump_weight_scaling)
+        return _accumulate_rho_jump_threaded_bohr!(scratch, evolving_dm, jump, hamiltonian, config, precomputed_data, bohr_keys, bohr_is, bohr_js;
+            jump_weight_scaling=jump_weight_scaling,
+            task_scratches=isempty(scratch.task_scratches) ? nothing : scratch.task_scratches)
     end
 
     scaled_delta = config.delta * jump_weight_scaling
