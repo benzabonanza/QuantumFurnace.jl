@@ -375,10 +375,14 @@ function _precompute_R(
 
     fill!(scratch.R, 0)
 
+    # qf-qmi.1: concrete-typed view of jump.in_eigenbasis (see _jump_contribution!).
+    CT = eltype(scratch.jump_oft)
+
     @inbounds for jump in jumps
+        in_eb = jump.in_eigenbasis::Matrix{CT}
         for (k, nu_2) in pairs(bohr_keys)
             # B_{nu_2} = sum_{nu_1} alpha(nu_1, nu_2) * A^a
-            @. scratch.jump_oft = alpha(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
+            @. scratch.jump_oft = alpha(hamiltonian.bohr_freqs, nu_2) * in_eb
 
             # R += gamma_norm_factor * A_{nu_2}^dagger * B_{nu_2}
             if bohr_is !== nothing
@@ -387,7 +391,7 @@ function _precompute_R(
                 @inbounds for t in eachindex(is)
                     i = is[t]
                     j = js[t]
-                    v = conj(jump.in_eigenbasis[i, j]) * gamma_norm_factor
+                    v = conj(in_eb[i, j]) * gamma_norm_factor
                     @inbounds for q in 1:dim
                         scratch.R[j, q] += v * scratch.jump_oft[i, q]
                     end
@@ -397,7 +401,7 @@ function _precompute_R(
                 @inbounds for idx in indices
                     i = idx[1]
                     j = idx[2]
-                    v = conj(jump.in_eigenbasis[i, j]) * gamma_norm_factor
+                    v = conj(in_eb[i, j]) * gamma_norm_factor
                     @inbounds for q in 1:dim
                         scratch.R[j, q] += v * scratch.jump_oft[i, q]
                     end
@@ -639,9 +643,12 @@ function _precompute_R_chunk_bohr!(
     (; alpha) = precomputed_data
     fill!(scratch.R, 0)
 
+    # qf-qmi.1: concrete-typed view of jump.in_eigenbasis (see _jump_contribution!).
+    in_eb = jump.in_eigenbasis::Matrix{CT}
+
     @inbounds for k in key_indices
         nu_2 = bohr_keys[k]
-        @. scratch.jump_oft = alpha(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
+        @. scratch.jump_oft = alpha(hamiltonian.bohr_freqs, nu_2) * in_eb
 
         if bohr_is !== nothing
             is = bohr_is[k]
@@ -649,7 +656,7 @@ function _precompute_R_chunk_bohr!(
             @inbounds for t in eachindex(is)
                 i = is[t]
                 j = js[t]
-                v = conj(jump.in_eigenbasis[i, j]) * gamma_norm_factor
+                v = conj(in_eb[i, j]) * gamma_norm_factor
                 @inbounds for q in 1:dim
                     scratch.R[j, q] += v * scratch.jump_oft[i, q]
                 end
@@ -659,7 +666,7 @@ function _precompute_R_chunk_bohr!(
             @inbounds for idx in indices
                 i = idx[1]
                 j = idx[2]
-                v = conj(jump.in_eigenbasis[i, j]) * gamma_norm_factor
+                v = conj(in_eb[i, j]) * gamma_norm_factor
                 @inbounds for q in 1:dim
                     scratch.R[j, q] += v * scratch.jump_oft[i, q]
                 end

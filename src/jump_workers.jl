@@ -323,6 +323,12 @@ function _jump_contribution!(
     fill!(scratch.R, 0)
     fill!(scratch.rho_jump, 0)
 
+    # qf-qmi.1: hoist the concrete-typed view of `jump.in_eigenbasis` (declared
+    # `Matrix{<:Complex}` UnionAll). Per-element accesses below would otherwise
+    # box the result and run dynamic dispatch in the inner index loop.
+    CT = eltype(scratch.jump_oft)
+    in_eb = jump.in_eigenbasis::Matrix{CT}
+
     # For each fixed "right" Bohr label v2 build the composite
     #   B_{v2} = \sum_{v1} alpha_{v1,v2} A_{v1}
     # and accumulate
@@ -330,7 +336,7 @@ function _jump_contribution!(
     #   R        +=     A_{v2}dag B_{v2}
     @inbounds for (k, nu_2) in pairs(bohr_keys)
         # B_{v2}
-        @. scratch.jump_oft = alpha(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
+        @. scratch.jump_oft = alpha(hamiltonian.bohr_freqs, nu_2) * in_eb
 
         # sandwich_tmp := rho A_{v2}dag without explicitly building A_{v2}dag.
         # If (i,j) is in the v2 bucket, then (A_{v2}dag)_{j,i} = conj(A_{i,j}).
@@ -341,7 +347,7 @@ function _jump_contribution!(
             @inbounds for t in eachindex(is)
                 i = is[t]
                 j = js[t]
-                v = conj(jump.in_eigenbasis[i, j])
+                v = conj(in_eb[i, j])
                 @inbounds for p in 1:dim
                     scratch.sandwich_tmp[p, i] += evolving_dm[p, j] * v
                 end
@@ -351,7 +357,7 @@ function _jump_contribution!(
             @inbounds for idx in indices
                 i = idx[1]
                 j = idx[2]
-                v = conj(jump.in_eigenbasis[i, j])
+                v = conj(in_eb[i, j])
                 @inbounds for p in 1:dim
                     scratch.sandwich_tmp[p, i] += evolving_dm[p, j] * v
                 end
@@ -368,7 +374,7 @@ function _jump_contribution!(
             @inbounds for t in eachindex(is)
                 i = is[t]
                 j = js[t]
-                v = conj(jump.in_eigenbasis[i, j]) * jump_weight_scaling
+                v = conj(in_eb[i, j]) * jump_weight_scaling
                 @inbounds for q in 1:dim
                     scratch.R[j, q] += v * scratch.jump_oft[i, q]
                 end
@@ -378,7 +384,7 @@ function _jump_contribution!(
             @inbounds for idx in indices
                 i = idx[1]
                 j = idx[2]
-                v = conj(jump.in_eigenbasis[i, j]) * jump_weight_scaling
+                v = conj(in_eb[i, j]) * jump_weight_scaling
                 @inbounds for q in 1:dim
                     scratch.R[j, q] += v * scratch.jump_oft[i, q]
                 end
@@ -751,9 +757,13 @@ function _accumulate_rho_jump!(
 
     fill!(scratch.rho_jump, 0)
 
+    # qf-qmi.1: concrete-typed view of jump.in_eigenbasis (see _jump_contribution!).
+    CT = eltype(scratch.jump_oft)
+    in_eb = jump.in_eigenbasis::Matrix{CT}
+
     @inbounds for (k, nu_2) in pairs(bohr_keys)
         # B_{v2} = sum_{v1} alpha(v1, v2) * A
-        @. scratch.jump_oft = alpha(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
+        @. scratch.jump_oft = alpha(hamiltonian.bohr_freqs, nu_2) * in_eb
 
         # sandwich_tmp := rho A_{v2}dag
         fill!(scratch.sandwich_tmp, 0)
@@ -763,7 +773,7 @@ function _accumulate_rho_jump!(
             @inbounds for t in eachindex(is)
                 i = is[t]
                 j = js[t]
-                v = conj(jump.in_eigenbasis[i, j])
+                v = conj(in_eb[i, j])
                 @inbounds for p in 1:dim
                     scratch.sandwich_tmp[p, i] += evolving_dm[p, j] * v
                 end
@@ -773,7 +783,7 @@ function _accumulate_rho_jump!(
             @inbounds for idx in indices
                 i = idx[1]
                 j = idx[2]
-                v = conj(jump.in_eigenbasis[i, j])
+                v = conj(in_eb[i, j])
                 @inbounds for p in 1:dim
                     scratch.sandwich_tmp[p, i] += evolving_dm[p, j] * v
                 end
@@ -1040,11 +1050,14 @@ function _accumulate_rho_jump_chunk_bohr!(
     (; alpha) = precomputed_data
     fill!(scratch.rho_jump, 0)
 
+    # qf-qmi.1: concrete-typed view of jump.in_eigenbasis (see _jump_contribution!).
+    in_eb = jump.in_eigenbasis::Matrix{CT}
+
     @inbounds for k in key_indices
         nu_2 = bohr_keys[k]
 
         # B_{v2} = sum_{v1} alpha(v1, v2) * A
-        @. scratch.jump_oft = alpha(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
+        @. scratch.jump_oft = alpha(hamiltonian.bohr_freqs, nu_2) * in_eb
 
         # sandwich_tmp := rho A_{v2}dag
         fill!(scratch.sandwich_tmp, 0)
@@ -1054,7 +1067,7 @@ function _accumulate_rho_jump_chunk_bohr!(
             @inbounds for t in eachindex(is)
                 i = is[t]
                 j = js[t]
-                v = conj(jump.in_eigenbasis[i, j])
+                v = conj(in_eb[i, j])
                 @inbounds for p in 1:dim
                     scratch.sandwich_tmp[p, i] += evolving_dm[p, j] * v
                 end
@@ -1064,7 +1077,7 @@ function _accumulate_rho_jump_chunk_bohr!(
             @inbounds for idx in indices
                 i = idx[1]
                 j = idx[2]
-                v = conj(jump.in_eigenbasis[i, j])
+                v = conj(in_eb[i, j])
                 @inbounds for p in 1:dim
                     scratch.sandwich_tmp[p, i] += evolving_dm[p, j] * v
                 end

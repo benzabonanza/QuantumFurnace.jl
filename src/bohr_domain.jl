@@ -15,15 +15,22 @@ function B_bohr(hamiltonian::HamHam{T}, jumps::AbstractVector{<:JumpOp}, config:
 
     B = zeros(CT, dim, dim)
     for jump in jumps
+        # qf-qmi.1: local concrete-type annotation. JumpOp.in_eigenbasis is
+        # declared as `Matrix{<:Complex}` (UnionAll) so per-element accesses
+        # `jump.in_eigenbasis[i, j]` would otherwise box the result Complex —
+        # measured at 19M allocs / 600 MiB per call at n=6. Asserting the
+        # field as the concrete type the codebase actually uses (Matrix{CT}
+        # = Matrix{Complex{T}}) restores type-stability for the inner loop.
+        in_eb = jump.in_eigenbasis::Matrix{CT}
         f_A_nu_1 = zeros(CT, dim, dim)
         for nu_2 in unique_freqs
             indices = hamiltonian.bohr_dict[nu_2]
-            @. f_A_nu_1 = f(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
+            @. f_A_nu_1 = f(hamiltonian.bohr_freqs, nu_2) * in_eb
             # B += A_nu_2' * f_A_nu_1 expanded per-index:
-            # A_nu_2'[j,i] = conj(jump.in_eigenbasis[i,j]) for (i,j) in indices
+            # A_nu_2'[j,i] = conj(in_eb[i,j]) for (i,j) in indices
             @inbounds for idx in indices
                 i, j = idx[1], idx[2]
-                val = conj(jump.in_eigenbasis[i, j])
+                val = conj(in_eb[i, j])
                 @inbounds for col in 1:dim
                     B[j, col] += val * f_A_nu_1[i, col]
                 end
@@ -94,10 +101,13 @@ function _B_bohr_chunk!(
         nu_2 = unique_freqs[freq_idx]
         indices = hamiltonian.bohr_dict[nu_2]
 
-        @. f_A_nu_1 = f(hamiltonian.bohr_freqs, nu_2) * jump.in_eigenbasis
+        # qf-qmi.1: see B_bohr serial path for rationale; same fix restores
+        # type-stability in the threaded chunk's inner per-element loop.
+        in_eb = jump.in_eigenbasis::Matrix{CT}
+        @. f_A_nu_1 = f(hamiltonian.bohr_freqs, nu_2) * in_eb
         @inbounds for idx in indices
             i, j = idx[1], idx[2]
-            val = conj(jump.in_eigenbasis[i, j])
+            val = conj(in_eb[i, j])
             @inbounds for col in 1:dim
                 B_partial[j, col] += val * f_A_nu_1[i, col]
             end
