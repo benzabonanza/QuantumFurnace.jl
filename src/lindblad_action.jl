@@ -1844,6 +1844,14 @@ function sweep_channel_mixing(
         #   even when no crossing exists.
         # - :nan → degenerate input (no slow mode captured); tau_mix = NaN.
         tau_mix_source = res_eig.source
+        if tau_mix_source !== :extrapolated
+            # Loud surface for the :floor / :nan branches so the audit-retune
+            # cycle is never silently skipped. tau_mix and total_ham_sim_time
+            # in this branch encode a spectral-gap proxy — NOT an achievable
+            # mixing time. Retune δ (or r_b±) until the channel floor drops
+            # below ε on the next pass.
+            @warn "channel cell did not extrapolate τ_mix(ε); falling back to gap-bound proxy — tau_mix/total_ham_sim_time are NOT thesis-trustworthy until retune" n=n_i β=β_i ε=ε_i filter=f_i source=tau_mix_source floor_distance=res_eig.floor_distance δ_used=predict_res.delta_used
+        end
         tau_mix = if tau_mix_source === :extrapolated
             res_eig.mixing_time
         elseif tau_mix_source === :floor
