@@ -23,13 +23,23 @@
 #   2) DLL Gaussian filter      — matrix-free DLL apply (qf-lkb.9, BohrDomain)
 #   3) DLL Metropolis filter    — matrix-free DLL apply (qf-lkb.9, BohrDomain)
 #
-# Sweep grid (3 × 4 × 3 = 36 cells):
-#   n ∈ {3, 4, 5},  β ∈ {1.0, 2.0, 5.0, 10.0},  construction × filter as above.
+# Sweep grid (3 × 3 × 3 = 27 cells):
+#   n ∈ {3, 4, 5},  β_phys ∈ {1.0, 2.0, 3.0},  construction × filter as above.
+#
+# PHYSICS CHECK (qf-6vr / Phase qf-bphys): β is now the *physical* inverse
+# temperature against the un-rescaled Hamiltonian. The sweep harness reads
+# `ham.rescaling_factor` per cell and derives `β_alg = β_phys · rescaling_factor`;
+# at n=5 the n=5 fixture's `rescaling_factor` is in the same ballpark as at
+# n=3 (≈ 20–32), so β_phys ∈ {1, 2, 3} corresponds to β_alg ranges that the
+# param-table calibration still covers. The β_phys grid (1, 2, 3) replaces
+# the legacy β_alg grid (1, 2, 5, 10).
 #
 # Output:
-#   drafts/figures/numerics/ckg_vs_dll_taumix.{png, pdf}     (figure)
-#   drafts/figures/numerics/ckg_vs_dll_taumix.bson           (raw sweep data)
-#   drafts/figures/numerics/sweep_cache/{ckg, dll_gauss, dll_metro}/  (per-cell sidecars; resumable)
+#   drafts/figures/numerics/ckg_vs_dll_taumix_betaphys.{png, pdf}     (figure)
+#   drafts/figures/numerics/ckg_vs_dll_taumix_betaphys.bson           (raw sweep data)
+#   drafts/figures/numerics/sweep_cache_betaphys/{ckg, dll_gauss, dll_metro}/
+#   (per-cell sidecars; the `_betaphys` suffix prevents collisions with legacy
+#   β_alg-first caches under `sweep_cache/{…}`)
 #
 # Plot layout (2×3 subplots):
 #   row 1: τ_mix vs n  with one line per β  (CKG | DLL Gaussian | DLL Metropolis)
@@ -81,21 +91,22 @@ using Plots
 # and matrix-free DLL (qf-lkb.9). The legacy heis_disordered_periodic_n*.bson
 # fixture family covers exactly n ∈ {3, 4, 5}; n=6,7 extension requires
 # generating fresh fixtures or switching to heis_xxx_zzdisordered_periodic_n*.
-const N_VALUES    = [3, 4, 5]
-const BETA_VALUES = [1.0, 2.0, 5.0, 10.0]
-const TARGET_EPS  = 1e-3
-const T_MAX_FACTOR = 5.0      # PHYSICS CHECK: per qf-lkb.3 testset finding
-const T_GRID_LEN   = 81       # bi-exp fitting wants ≥ 50 well-spaced samples
-const KRYLOV_DIM   = 30
-const TOL          = 1e-10
-const SEEDS        = [42]      # single seed; this script targets the figure, not seed-stats
+const N_VALUES         = [3, 4, 5]
+# qf-6vr: β_phys ∈ {1, 2, 3} replaces legacy β_alg ∈ {1, 2, 5, 10}.
+# β_alg is derived per cell from `ham.rescaling_factor` (see sweep harness).
+const BETA_PHYS_VALUES = [1.0, 2.0, 3.0]
+const TARGET_EPS       = 1e-3
+const T_MAX_FACTOR     = 5.0      # PHYSICS CHECK: per qf-lkb.3 testset finding
+const T_GRID_LEN       = 81       # bi-exp fitting wants ≥ 50 well-spaced samples
+const KRYLOV_DIM       = 30
+const TOL              = 1e-10
+const SEEDS            = [42]      # single seed; this script targets the figure, not seed-stats
 
 # ── Thesis colour palette (memory: reference_thesis_colors.md) ───────────────
-const COLOR_BETA = Dict(
-    1.0  => "#5C7794",   # slateblue
-    2.0  => "#5F8B8E",   # dustyteal
-    5.0  => "#B5654A",   # terracotta
-    10.0 => "#7A2E39",   # bordeaux
+const COLOR_BETA_PHYS = Dict(
+    1.0 => "#5C7794",   # slateblue
+    2.0 => "#5F8B8E",   # dustyteal
+    3.0 => "#7A2E39",   # bordeaux
 )
 const COLOR_N = Dict(
     3 => "#2D5A3D",      # pinegreen
@@ -104,14 +115,16 @@ const COLOR_N = Dict(
 )
 
 # ── Output paths ──────────────────────────────────────────────────────────────
+# qf-6vr: `_betaphys` suffix on every output path prevents collisions with
+# the legacy β_alg-first sweep outputs under `sweep_cache/{…}`.
 const OUT_DIR     = joinpath(@__DIR__, "..", "drafts", "figures", "numerics")
-const CACHE_DIR   = joinpath(OUT_DIR, "sweep_cache")
+const CACHE_DIR   = joinpath(OUT_DIR, "sweep_cache_betaphys")
 const CACHE_CKG   = joinpath(CACHE_DIR, "ckg")
 const CACHE_GAUSS = joinpath(CACHE_DIR, "dll_gauss")
 const CACHE_METRO = joinpath(CACHE_DIR, "dll_metro")
-const FIG_PNG     = joinpath(OUT_DIR, "ckg_vs_dll_taumix.png")
-const FIG_PDF     = joinpath(OUT_DIR, "ckg_vs_dll_taumix.pdf")
-const BSON_OUT    = joinpath(OUT_DIR, "ckg_vs_dll_taumix.bson")
+const FIG_PNG     = joinpath(OUT_DIR, "ckg_vs_dll_taumix_betaphys.png")
+const FIG_PDF     = joinpath(OUT_DIR, "ckg_vs_dll_taumix_betaphys.pdf")
+const BSON_OUT    = joinpath(OUT_DIR, "ckg_vs_dll_taumix_betaphys.bson")
 
 mkpath(OUT_DIR)
 mkpath(CACHE_CKG)
@@ -124,9 +137,9 @@ println("CKG vs DLL τ_mix comparison sweep (qf-lkb.6)")
 println("="^72)
 @printf("Julia threads: %d, BLAS threads: %d\n",
         Threads.nthreads(), BLAS.get_num_threads())
-@printf("n_values    : %s\n", string(N_VALUES))
-@printf("beta_values : %s\n", string(BETA_VALUES))
-@printf("seeds       : %s\n", string(SEEDS))
+@printf("n_values         : %s\n", string(N_VALUES))
+@printf("beta_phys_values : %s\n", string(BETA_PHYS_VALUES))
+@printf("seeds            : %s\n", string(SEEDS))
 @printf("target ε    : %.1e\n", TARGET_EPS)
 @printf("t_max_factor: %.2f / gap_est\n", T_MAX_FACTOR)
 @printf("t_grid_len  : %d\n", T_GRID_LEN)
@@ -143,23 +156,24 @@ t_total_start = time()
 println("\n[1/3] CKG (KMS, EnergyDomain) sweep…");  flush(stdout)
 t_ckg_start = time()
 results_ckg = sweep_mixing_times(
-    N_VALUES, BETA_VALUES;
-    construction   = KMS(),
-    domain         = EnergyDomain(),         # qf-lkb.11: production CKG path
-    filter         = nothing,
-    mode           = :L,
-    method         = :krylov,                # qf-e4y.7: eigenmode τ_mix
-    seeds          = SEEDS,
-    a              = 0.0,                    # qf-lkb.11: thesis smooth-Metropolis
-    s              = 0.25,                   # qf-lkb.11: thesis smooth-Metropolis
-    target_epsilon = TARGET_EPS,
-    t_max_factor   = T_MAX_FACTOR,
-    t_grid_length  = T_GRID_LEN,
-    krylovdim      = KRYLOV_DIM,
-    tol            = TOL,
-    output_dir     = CACHE_CKG,
-    use_threads    = false,  # BLAS handles parallelism; Julia-level threading causes oversubscription at n=5
-    skip_existing  = true,
+    N_VALUES;
+    beta_phys_values = BETA_PHYS_VALUES,     # qf-6vr β_phys-first
+    construction     = KMS(),
+    domain           = EnergyDomain(),       # qf-lkb.11: production CKG path
+    filter           = nothing,
+    mode             = :L,
+    method           = :krylov,              # qf-e4y.7: eigenmode τ_mix
+    seeds            = SEEDS,
+    a                = 0.0,                  # qf-lkb.11: thesis smooth-Metropolis
+    s                = 0.25,                 # qf-lkb.11: thesis smooth-Metropolis
+    target_epsilon   = TARGET_EPS,
+    t_max_factor     = T_MAX_FACTOR,
+    t_grid_length    = T_GRID_LEN,
+    krylovdim        = KRYLOV_DIM,
+    tol              = TOL,
+    output_dir       = CACHE_CKG,
+    use_threads      = false,  # BLAS handles parallelism; Julia-level threading causes oversubscription at n=5
+    skip_existing    = true,
 )
 @printf("    CKG sweep wall time : %.1f s\n", time() - t_ckg_start)
 flush(stdout)
@@ -167,23 +181,24 @@ flush(stdout)
 println("\n[2/3] DLL Gaussian sweep…"); flush(stdout)
 t_g_start = time()
 results_dll_gauss = sweep_mixing_times(
-    N_VALUES, BETA_VALUES;
-    construction   = DLL(),
-    domain         = BohrDomain(),               # DLL is BohrDomain only
-    filter         = DLLGaussianFilter(1.0),     # type tag; harness rebuilds per β
-    mode           = :L,
-    method         = :krylov,                    # qf-e4y.7: eigenmode τ_mix
-    seeds          = SEEDS,
-    a              = 0.0,                        # DLL ignores a, s but keep
-    s              = 0.25,                       # config consistent across runs
-    target_epsilon = TARGET_EPS,
-    t_max_factor   = T_MAX_FACTOR,
-    t_grid_length  = T_GRID_LEN,
-    krylovdim      = KRYLOV_DIM,
-    tol            = TOL,
-    output_dir     = CACHE_GAUSS,
-    use_threads    = false,  # BLAS handles parallelism; Julia-level threading causes oversubscription at n=5
-    skip_existing  = true,
+    N_VALUES;
+    beta_phys_values = BETA_PHYS_VALUES,         # qf-6vr β_phys-first
+    construction     = DLL(),
+    domain           = BohrDomain(),             # DLL is BohrDomain only
+    filter           = DLLGaussianFilter(1.0),   # type tag; harness rebuilds per β
+    mode             = :L,
+    method           = :krylov,                  # qf-e4y.7: eigenmode τ_mix
+    seeds            = SEEDS,
+    a                = 0.0,                      # DLL ignores a, s but keep
+    s                = 0.25,                     # config consistent across runs
+    target_epsilon   = TARGET_EPS,
+    t_max_factor     = T_MAX_FACTOR,
+    t_grid_length    = T_GRID_LEN,
+    krylovdim        = KRYLOV_DIM,
+    tol              = TOL,
+    output_dir       = CACHE_GAUSS,
+    use_threads      = false,  # BLAS handles parallelism; Julia-level threading causes oversubscription at n=5
+    skip_existing    = true,
 )
 @printf("    DLL Gaussian sweep wall time : %.1f s\n", time() - t_g_start)
 flush(stdout)
@@ -191,23 +206,24 @@ flush(stdout)
 println("\n[3/3] DLL Metropolis sweep…"); flush(stdout)
 t_m_start = time()
 results_dll_metro = sweep_mixing_times(
-    N_VALUES, BETA_VALUES;
-    construction   = DLL(),
-    domain         = BohrDomain(),               # DLL is BohrDomain only
-    filter         = DLLMetropolisFilter(1.0),   # type tag; harness rebuilds per β
-    mode           = :L,
-    method         = :krylov,                    # qf-e4y.7: eigenmode τ_mix
-    seeds          = SEEDS,
-    a              = 0.0,
-    s              = 0.25,
-    target_epsilon = TARGET_EPS,
-    t_max_factor   = T_MAX_FACTOR,
-    t_grid_length  = T_GRID_LEN,
-    krylovdim      = KRYLOV_DIM,
-    tol            = TOL,
-    output_dir     = CACHE_METRO,
-    use_threads    = false,  # BLAS handles parallelism; Julia-level threading causes oversubscription at n=5
-    skip_existing  = true,
+    N_VALUES;
+    beta_phys_values = BETA_PHYS_VALUES,         # qf-6vr β_phys-first
+    construction     = DLL(),
+    domain           = BohrDomain(),             # DLL is BohrDomain only
+    filter           = DLLMetropolisFilter(1.0), # type tag; harness rebuilds per β
+    mode             = :L,
+    method           = :krylov,                  # qf-e4y.7: eigenmode τ_mix
+    seeds            = SEEDS,
+    a                = 0.0,
+    s                = 0.25,
+    target_epsilon   = TARGET_EPS,
+    t_max_factor     = T_MAX_FACTOR,
+    t_grid_length    = T_GRID_LEN,
+    krylovdim        = KRYLOV_DIM,
+    tol              = TOL,
+    output_dir       = CACHE_METRO,
+    use_threads      = false,  # BLAS handles parallelism; Julia-level threading causes oversubscription at n=5
+    skip_existing    = true,
 )
 @printf("    DLL Metropolis sweep wall time : %.1f s\n", time() - t_m_start)
 flush(stdout)
@@ -223,13 +239,13 @@ function print_summary(label::String, results::Vector{<:NamedTuple})
     # eigenmode schema. gap_est comes from the Arnoldi spectral pass,
     # floor_distance is the captured ‖ρ_inf - σ_β‖_1 / 2, source ∈
     # {:extrapolated, :floor, :nan}.
-    @printf("%-3s %-6s %-12s %-12s %-12s %-13s %-10s\n",
-            "n", "β", "τ_mix", "gap_est", "floor_dist", "source", "all_conv")
+    @printf("%-3s %-8s %-8s %-12s %-12s %-12s %-13s %-10s\n",
+            "n", "β_phys", "β_alg", "τ_mix", "gap_est", "floor_dist", "source", "all_conv")
     println("-"^88)
-    sorted = sort(collect(results); by = r -> (r.n, r.beta))
+    sorted = sort(collect(results); by = r -> (r.n, r.beta_phys))
     for r in sorted
-        @printf("%-3d %-6.1f %-12.4e %-12.4e %-12.4e %-13s %-10s\n",
-                r.n, r.beta, r.mixing_time, r.gap_est, r.floor_distance,
+        @printf("%-3d %-8.2f %-8.2f %-12.4e %-12.4e %-12.4e %-13s %-10s\n",
+                r.n, r.beta_phys, r.beta_alg, r.mixing_time, r.gap_est, r.floor_distance,
                 string(r.mixing_time_source), string(r.all_converged))
     end
 end
@@ -252,7 +268,7 @@ let
         :results_dll_gauss  => rg_any,
         :results_dll_metro  => rm_any,
         :n_values           => N_VALUES,
-        :beta_values        => BETA_VALUES,
+        :beta_phys_values   => BETA_PHYS_VALUES,  # qf-6vr: β_phys (β_alg derived per cell)
         :target_epsilon     => TARGET_EPS,
         :t_max_factor       => T_MAX_FACTOR,
         :t_grid_length      => T_GRID_LEN,
@@ -261,9 +277,11 @@ let
 end
 
 # ── Build the figure ──────────────────────────────────────────────────────────
-# Helper: pluck τ_mix for given (n, β) from a sweep result vector.
-function get_taumix(results::Vector{<:NamedTuple}, n::Integer, β::Real)
-    idx = findfirst(r -> r.n == n && isapprox(r.beta, β; atol=1e-12), results)
+# Helper: pluck τ_mix for given (n, β_phys) from a sweep result vector. The
+# qf-6vr sidecar schema always carries `:beta_phys` so x-axis lookup is
+# unambiguous.
+function get_taumix(results::Vector{<:NamedTuple}, n::Integer, β_phys::Real)
+    idx = findfirst(r -> r.n == n && isapprox(r.beta_phys, β_phys; atol=1e-12), results)
     idx === nothing && return NaN
     return results[idx].mixing_time
 end
@@ -280,42 +298,42 @@ function build_panel_vs_n(results::Vector{<:NamedTuple}, title::String;
         guidefontsize = 10,
         titlefontsize = 11,
     )
-    for β in BETA_VALUES
-        τs = [get_taumix(results, n, β) for n in N_VALUES]
+    for β_phys in BETA_PHYS_VALUES
+        τs = [get_taumix(results, n, β_phys) for n in N_VALUES]
         # Drop NaNs to keep the line connected through valid cells
         valid_idx = findall(!isnan, τs)
         if isempty(valid_idx)
             continue
         end
         Plots.plot!(plt, N_VALUES[valid_idx], τs[valid_idx];
-            color = COLOR_BETA[β],
+            color = COLOR_BETA_PHYS[β_phys],
             marker = :circle,
             markersize = 5,
             linewidth = 2,
-            label = @sprintf("β=%.0f", β))
+            label = @sprintf("β_phys=%.0f", β_phys))
     end
     return plt
 end
 
 function build_panel_vs_beta(results::Vector{<:NamedTuple}, title::String;
-                             ylabel::String = "", xlabel::String = "β")
+                             ylabel::String = "", xlabel::String = "β_phys")
     plt = Plots.plot(
         title = title,
         xlabel = xlabel,
         ylabel = ylabel,
         yscale = :log10,
         legend = :outerright,
-        xticks = BETA_VALUES,
+        xticks = BETA_PHYS_VALUES,
         guidefontsize = 10,
         titlefontsize = 11,
     )
     for n in N_VALUES
-        τs = [get_taumix(results, n, β) for β in BETA_VALUES]
+        τs = [get_taumix(results, n, β_phys) for β_phys in BETA_PHYS_VALUES]
         valid_idx = findall(!isnan, τs)
         if isempty(valid_idx)
             continue
         end
-        Plots.plot!(plt, BETA_VALUES[valid_idx], τs[valid_idx];
+        Plots.plot!(plt, BETA_PHYS_VALUES[valid_idx], τs[valid_idx];
             color = COLOR_N[n],
             marker = :diamond,
             markersize = 5,
