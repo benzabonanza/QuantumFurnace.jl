@@ -208,6 +208,47 @@ function create_alpha(nu_1::Real, nu_2::Real, beta::Real, sigma::Real, a::Real, 
     return alpha_nu_1
 end
 
+"""
+    default_smooth_s(beta, sigma) -> Real
+
+Default smooth-Metropolis regularisation `s` that preserves a *constant
+absolute smoothing width* `σ·√s = SMOOTH_S_REF_WIDTH = 0.05` across
+β-sweeps along the σ = c/β line (c = O(1)) — i.e. the kinky-Metropolis
+γ(ω) is mollified by the same Δω in absolute units, independent of β.
+
+Domain assumption: callers use σ in 1/β units (σ = c/β with c ∈ {0.25, …, 3}
+typical). The formula uses σ directly, so it remains well-defined off this
+line, but the kink-depth-relative interpretation only holds on it. β is in
+the signature both for the dispatch contract and to flag the domain to
+readers (and to enable a sanity assertion later if needed).
+
+Calibration: at β = 10, σ = 1/β = 0.1, thesis-numerics default `s = 0.25`,
+giving σ·√s = 0.05. Holding that absolute width fixed,
+
+    s_default(σ) = (SMOOTH_S_REF_WIDTH / σ)²    = β²/400   at σ = 1/β
+
+| β  |  σ = 1/β  |  s_default |
+|----|-----------|------------|
+|  5 | 0.20      |  0.0625    |
+| 10 | 0.10      |  0.25      |  ← calibration point (qf-3il)
+| 20 | 0.05      |  1.0       |
+| 50 | 0.02      |  6.25      |
+
+Rationale: the σ-Gaussian filter f_σ narrows linearly with σ along σ = c/β,
+so the same fractional smoothing of the kinky-Metro kink at ω = −βσ²/2
+requires σ·√s ∝ const. Larger β (narrower σ) needs *more* `s` to keep the
+energy-kernel quadrature error — and hence the energy-register size r_D —
+uniform across the β-sweep. The smoothing parameter affects only γ in the
+dissipator; the leading b_+ quadrature error is independent of s.
+
+This is opt-in: callers pass `s = default_smooth_s(β, σ)` to Config
+explicitly. Existing fixtures locked at `s = 0.25` (β = 10 regression tests)
+stay numerically identical because the formula evaluates to 0.25 at the
+calibration point.
+"""
+const SMOOTH_S_REF_WIDTH = 0.05  # σ·√s calibration: (β=10, σ=0.1, s=0.25)
+default_smooth_s(beta::Real, sigma::Real) = (SMOOTH_S_REF_WIDTH / sigma)^2
+
 function _pick_alpha_gns(config::Config{<:Any, <:Any, GNS})
 
     sigma = config.sigma

@@ -468,3 +468,37 @@ end
         end
     end
 end
+
+# ---------------------------------------------------------------------------
+# qf-96o: default_smooth_s β-scaling
+# ---------------------------------------------------------------------------
+@testset "qf-96o: default_smooth_s preserves absolute smoothing width σ·√s = 0.05" begin
+    @testset "calibration point (β=10, σ=1/β) returns s = 0.25" begin
+        @test QuantumFurnace.default_smooth_s(10.0, 0.1) == 0.25
+    end
+
+    @testset "constant σ·√s along σ = 1/β across β-sweep" begin
+        for β in (2.0, 5.0, 10.0, 20.0, 50.0)
+            σ = 1.0 / β
+            s = QuantumFurnace.default_smooth_s(β, σ)
+            @test σ * sqrt(s) ≈ 0.05 atol = 1e-12
+            @test s ≈ (β / 20.0)^2 atol = 1e-12     # equivalent form on σ = 1/β
+        end
+    end
+
+    @testset "constant σ·√s off σ = 1/β (σ = c/β, c ∈ {0.25, 2, 3})" begin
+        β = 10.0
+        for c in (0.25, 0.5, 2.0, 3.0)
+            σ = c / β
+            s = QuantumFurnace.default_smooth_s(β, σ)
+            @test σ * sqrt(s) ≈ 0.05 atol = 1e-12
+        end
+    end
+
+    @testset "monotone β-scaling at fixed c = σβ" begin
+        # s increases with β when σ = c/β (σ shrinks → need more s).
+        @test QuantumFurnace.default_smooth_s(20.0, 0.05) >
+              QuantumFurnace.default_smooth_s(10.0, 0.10) >
+              QuantumFurnace.default_smooth_s( 5.0, 0.20)
+    end
+end

@@ -15,12 +15,33 @@
 #   - drafts/error-analysis/parameter-recommendations.md       (M, δ, η — still authoritative)
 #   - .claude-memory/quadrature_register_recipe_qf_7xt.md      (qf-7xt summary)
 #
-# Cells:
+# Cells (post-2026-05-08 convention):
 #   n      ∈ {3, 4, 5, 6}                                  (laptop range; S3 extends)
 #   β      ∈ {5, 10, 20}
-#   ε_target ∈ {1e-3, 1e-6}
+#   ε_target ∈ {1e-3}                                      (1e-6 dropped — see below)
 #   filter ∈ {:gaussian, :smooth_metro, :kinky_metro}
-# = 72 cells total.
+# = 36 cells total in the default build.
+#
+# 2026-05-08: ε_target = 1e-6 was REMOVED from the default sweep grid.  Reason:
+# the mixing-time comparison plots (P1, P4, P5, P6) draw the spectral-gap
+# upper-bound overlay τ_bound = log(d/ε)/λ_2 next to the τ_mix curve, and λ_2
+# is already returned by `predict_lindbladian_trajectory` / `predict_channel_trajectory`
+# per cell.  A second curve at ε=1e-6 — whether re-simulated at tighter δ /
+# wider registers, or analytically projected as τ_mix(1e-3) + 3 ln 10 / λ_2 —
+# adds no information not already on the plot: any reader who wants τ_mix at
+# 1e-6 reads λ_2 off the gap overlay.  So the new convention is "1e-3 only,
+# do not plot 1e-6 in any form".
+#
+# The legacy ε=1e-6 recipe (r_D, r_b+, M_D, δ values) is still encoded in
+# `_r_D`, `_r_bp`, `_M_D`, `_delta_step`, `_M_bm`, `_M_bp` below for the rare
+# case we want a single explicit ε=1e-6 cell — pass `eps_values = [1e-3, 1e-6]`
+# to `build_table` / `build_ideal_lindbladian_table` to opt back in.
+# See bd memory `correction-2026-05-08-supersedes-earlier-same-day` and
+# bd issue qf-e4z.5/.11/.14/.15/.16 notes for the broader epic decision.
+# Closed S1 / S2 BSON sidecars (sweep_S1_ckg_ideal/, sweep_S2_dll_ideal/)
+# still contain pre-2026-05-08 ε=1e-6 rows; those remain usable historical
+# data but are NOT loaded into plots.
+# = 72 cells total in the legacy build (eps_values = [1e-3, 1e-6]).
 #
 # Sanity-check (--check): runs `predict_channel_trajectory` at six fixtures
 # (3 filters × 2 (n, β) pairs at ε_target = 1e-3) and reports the achieved
@@ -125,7 +146,16 @@ function _gaussian_params(beta::Float64)
 end
 
 # (a, s) for kinky / smooth Metropolis (thesis convention, project memory).
-_metro_as(filter::Symbol) = filter == :smooth_metro ? (0.0, 0.25) : (0.0, 0.0)
+# Smooth-Metro `s` is β-scaled (qf-96o) so absolute smoothing width σ·√s stays
+# at the calibrated 0.05 across β-sweeps along σ = 1/β. Reduces to s = 0.25 at
+# β = 10 (the thesis calibration point in qf-3il).
+function _metro_as(filter::Symbol, beta::Real)
+    if filter == :smooth_metro
+        return (0.0, QuantumFurnace.default_smooth_s(beta, 1.0 / beta))
+    else
+        return (0.0, 0.0)
+    end
+end
 
 """
     pick_channel_params(n, beta, eps, filter; ham=nothing) -> NamedTuple
@@ -162,7 +192,7 @@ function pick_channel_params(n::Integer, beta::Real, eps::Real, filter::Symbol;
     eta   = _eta(Float64(eps), Float64(beta))
 
     # Filter-specific sub-fields
-    a, s             = _metro_as(filter)
+    a, s             = _metro_as(filter, Float64(beta))
     gaussian_params  = filter == :gaussian ? _gaussian_params(Float64(beta)) : (nothing, nothing)
     with_lc          = filter != :gaussian
 
@@ -255,7 +285,7 @@ function pick_ideal_lindbladian_params(n::Integer, beta::Real, eps::Real,
 
     # Filter-specific sub-fields (mirrors channel-side recipe so the BSON is
     # uniform). The ideal Lindbladian has no b_± registers / Trotter Ms / δ / η.
-    a, s             = _metro_as(filter)
+    a, s             = _metro_as(filter, Float64(beta))
     gaussian_params  = filter == :gaussian ? _gaussian_params(Float64(beta)) : (nothing, nothing)
     with_lc          = filter != :gaussian
 
@@ -295,7 +325,9 @@ to extend.
 function build_ideal_lindbladian_table(;
         n_values::AbstractVector{<:Integer} = 3:6,
         beta_values::AbstractVector{<:Real} = [5.0, 10.0, 20.0],
-        eps_values::AbstractVector{<:Real}  = [1e-3, 1e-6],
+        # ε=1e-6 dropped from default 2026-05-08 — derive from λ_2 in post-processing.
+        # Pass `eps_values = [1e-3, 1e-6]` to opt back in (see header comment).
+        eps_values::AbstractVector{<:Real}  = [1e-3],
         filter_values::AbstractVector{Symbol} = [:smooth_metro, :gaussian, :kinky_metro],
     )
     rows = NamedTuple[]
@@ -327,7 +359,9 @@ hence `w0_D`).  Hamiltonian filename: `heis_xxx_zzdisordered_periodic_n{n}.bson`
 function build_table(;
         n_values::AbstractVector{<:Integer} = 3:6,
         beta_values::AbstractVector{<:Real} = [5.0, 10.0, 20.0],
-        eps_values::AbstractVector{<:Real}  = [1e-3, 1e-6],
+        # ε=1e-6 dropped from default 2026-05-08 — derive from λ_2 in post-processing.
+        # Pass `eps_values = [1e-3, 1e-6]` to opt back in (see header comment).
+        eps_values::AbstractVector{<:Real}  = [1e-3],
         filter_values::AbstractVector{Symbol} = [:gaussian, :smooth_metro, :kinky_metro],
     )
     rows = NamedTuple[]

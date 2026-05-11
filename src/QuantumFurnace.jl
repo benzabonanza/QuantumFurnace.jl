@@ -83,6 +83,8 @@ export gibbs_state, gibbs_state_in_eigen,
        create_bohr_dict, compute_trotter_error, make_trotter_for_config
 export pick_transition, pick_gamma_sup, create_alpha, create_alpha_gns, create_alpha_gauss,
        create_f, create_f_gauss, check_alpha_skew_symmetry
+# `default_smooth_s` (src/bohr_domain.jl) intentionally not exported — internal
+# helper used by production β-sweep scripts. Call as `QuantumFurnace.default_smooth_s`.
 export B_time, B_trotter, B_bohr
 export X, Y, Z, Had,
        pad_term, expm_pauli_padded, pauli_string_to_matrix,
