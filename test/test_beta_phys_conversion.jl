@@ -105,6 +105,43 @@ const _BPC_HAM_ALG10 = QuantumFurnace._load_hamiltonian_bson(_BPC_HAM_PATH, 10.0
         @test beta_phys(cfg_noφ) === nothing
     end
 
+    @testset "(eX) fit_scaling reader: prefers :beta_phys, tracks beta_kind" begin
+        # Synthetic vector of NamedTuples matching the qf-6vr sidecar schema.
+        rescale = 3.0
+        rows_phys = NamedTuple[]
+        for n in 3:8, βp in (1.0, 2.0, 3.0)
+            βa = βp * rescale
+            push!(rows_phys, (
+                n = n, beta = βa, beta_alg = βa, beta_phys = βp,
+                rescaling_factor = rescale,
+                mixing_time = Float64(n)^2 * βp^1.5 * (1.0 + 0.0),
+                mixing_time_source = :extrapolated,
+            ))
+        end
+        fits_phys = fit_scaling(rows_phys)
+        @test fits_phys[:M0].beta_kind === :phys
+        # Auto-mode prefers :beta_phys when present
+        @test all(b -> b ∈ (1.0, 2.0, 3.0), fits_phys[:M0].beta_values)
+
+        # Legacy rows with only :beta — reader picks :alg.
+        rows_legacy = NamedTuple[]
+        for n in 3:8, β in (5.0, 10.0, 20.0)
+            push!(rows_legacy, (
+                n = n, beta = β,
+                mixing_time = Float64(n)^2 * β^1.5,
+                mixing_time_source = :extrapolated,
+            ))
+        end
+        fits_legacy = fit_scaling(rows_legacy)
+        @test fits_legacy[:M0].beta_kind === :alg
+        @test all(b -> b ∈ (5.0, 10.0, 20.0), fits_legacy[:M0].beta_values)
+
+        # Explicit beta_kind=:alg on β_phys-aware data: reads :beta_alg.
+        fits_force_alg = fit_scaling(rows_phys; beta_kind = :alg)
+        @test fits_force_alg[:M0].beta_kind === :alg
+        @test all(b -> b ∈ (3.0, 6.0, 9.0), fits_force_alg[:M0].beta_values)
+    end
+
     @testset "(e) validate_config!(cfg, ham) consistency" begin
         rescale = _BPC_HAM_ALG10.rescaling_factor
         β_phys_val = 1.0

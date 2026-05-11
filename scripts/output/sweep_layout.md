@@ -6,15 +6,35 @@ One BSON per `(n, β, seed, [ε, filter,] construction, domain)` cell, written b
 (channel / S3 + S5 + S6) under `output_dir`.  Plot scripts compose snapshots
 without re-running anything.
 
+## β convention (qf-6vr)
+
+Each sidecar carries three β fields:
+
+| field | meaning |
+|---|---|
+| `beta_phys` | physical inverse temperature against the un-rescaled Hamiltonian (`H_phys`) |
+| `beta_alg`  | algorithm-side inverse temperature against the rescaled spectrum (`H_rescaled` stored in `ham.eigvals`) |
+| `beta`      | back-compat alias = `beta_alg` (legacy readers continue to work) |
+| `rescaling_factor` | `ham.rescaling_factor` for the cell's HamHam (≈ `2(λ_max − λ_min)/(1 − ε)`) — relates the two via `beta_alg = beta_phys · rescaling_factor` |
+
+The driver writes a sidecar through either of two entry points:
+
+- **β_phys-first (qf-6vr):** call `sweep_*(n_values; beta_phys_values = [β_phys, …])`. The sweep harness loads `ham` per cell, derives `beta_alg = beta_phys · ham.rescaling_factor`, and tags the sidecar filename with `betaphys<β_phys>`.
+- **β_alg-first (legacy):** call `sweep_*(n_values, [β_alg, …])`. The sidecar filename keeps the historic `beta<β_alg>` tag; `beta_phys` is derived from `ham.rescaling_factor` and recorded for forward compatibility.
+
+`fit_scaling(::Vector{<:NamedTuple}; beta_kind = :auto)` reads `:beta_phys` preferentially, falling back to `:beta_alg`/`:beta`. The returned `ScalingFit` carries `beta_kind ∈ {:phys, :alg}` so `formula_string` prints the correct β label (`β_phys^y` vs `β_alg^y`).
+
 ## Channel sweeps (`sweep_channel_mixing` — qf-e4z.2)
 
 ### Sidecar filename
 
 ```
-channel_n<n>_beta<β>_seed<seed>_eps<ε>_<filter>_<construction>_<domain>.bson
+channel_n<n>_beta<β_alg>_seed<seed>_eps<ε>_<filter>_<construction>_<domain>.bson      (legacy β_alg-first)
+channel_n<n>_betaphys<β_phys>_seed<seed>_eps<ε>_<filter>_<construction>_<domain>.bson  (qf-6vr β_phys-first)
 ```
 
-- `<β>` formatted as up to 6 decimals, trailing zeros stripped (`5`, `10`, `20.5`).
+- `<β_alg>` / `<β_phys>` formatted as up to 6 decimals, trailing zeros stripped (`5`, `10`, `20.5`).
+- The `betaphys` prefix prevents collisions between legacy β_alg-keyed caches and β_phys-first re-runs in the same `output_dir`.
 - `<ε>` in scientific notation `%.0e` (e.g. `1e-03`, `1e-06`).
 - `<filter>` ∈ {`gaussian`, `smooth_metro`, `kinky_metro`}.
 - `<construction>` ∈ {`KMS`, `GNS`}.
@@ -27,7 +47,8 @@ the per-cell `NamedTuple` returned by `sweep_channel_mixing`. Keys:
 
 | field | description |
 |---|---|
-| `n, beta, seed, eps, filter` | identifying tuple |
+| `n, beta, seed, eps, filter` | identifying tuple (`beta` = β_alg; back-compat) |
+| `beta_phys, beta_alg, rescaling_factor` | qf-6vr β-pair: `beta_alg = beta_phys · rescaling_factor` |
 | `family, construction, domain` | string tags (e.g. `xxx_zzdisordered`, `KMS`, `Trotter`) |
 | `r_D, w0_D, t0_D` | dissipative-register triple |
 | `r_bm, w0_bm, t0_bm` | outer-coherent register (b_-) |
@@ -74,10 +95,11 @@ The `2d` coefficient matches the live GQSP circuit (Form B, `d` controlled-`W` +
 ### Sidecar filename
 
 ```
-sweep_n<n>_beta<β>_seed<seed>_<mode>_<construction>_<domain>.bson
+sweep_n<n>_beta<β_alg>_seed<seed>_<mode>_<construction>_<domain>.bson         (legacy β_alg-first)
+sweep_n<n>_betaphys<β_phys>_seed<seed>_<mode>_<construction>_<domain>.bson    (qf-6vr β_phys-first)
 ```
 
-`mode` ∈ {`:L`, `:K`}; `domain` ∈ {`Bohr`, `Energy`}; `construction` ∈ {`KMS`, `DLL`}.
+`mode` ∈ {`:L`, `:K`}; `domain` ∈ {`Bohr`, `Energy`}; `construction` ∈ {`KMS`, `DLL`}. The β tag is `beta` when called with the positional `beta_values` (β_alg list), `betaphys` when called with `beta_phys_values` (β_phys list, qf-6vr).
 
 ### Schema — split by `method` (qf-e4y)
 
@@ -89,7 +111,8 @@ Single-pass spectral expansion via `predict_lindbladian_trajectory`. τ_mix(ε) 
 
 | field | description |
 |---|---|
-| `n, beta, seed, init_state, mode, method, construction, domain` | identifying tuple (`method = :krylov` here) |
+| `n, beta, seed, init_state, mode, method, construction, domain` | identifying tuple (`method = :krylov` here; `beta` = β_alg, back-compat) |
+| `beta_phys, beta_alg, rescaling_factor` | qf-6vr β-pair (always emitted; β_phys derived from `ham.rescaling_factor` in legacy mode) |
 | `filter_name, filter_kind, target_epsilon` | filter identifying tuple |
 | `r_D, w0_D, t0_D` | dissipative-register triple |
 | `gap_est` | smallest `|Re(λ_i)|` over non-steady eigenvalues from the predictor's Arnoldi |
@@ -107,7 +130,8 @@ Matrix-free ODE integrator over `t_grid` followed by a bi-exponential curve fit 
 
 | field | description |
 |---|---|
-| `n, beta, seed, init_state, mode, method, construction, domain` | identifying tuple (`method = :ode` here) |
+| `n, beta, seed, init_state, mode, method, construction, domain` | identifying tuple (`method = :ode` here; `beta` = β_alg, back-compat) |
+| `beta_phys, beta_alg, rescaling_factor` | qf-6vr β-pair (always emitted) |
 | `filter_name, filter_kind, target_epsilon` | filter identifying tuple |
 | `r_D, w0_D, t0_D` | dissipative-register triple |
 | `gap_est` | spectral gap from a separate `krylov_spectral_gap` Arnoldi pre-pass |
