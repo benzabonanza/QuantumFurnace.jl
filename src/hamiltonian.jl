@@ -215,6 +215,44 @@ function HamHam(raw::NamedTuple, beta::Real)
 end
 
 """
+    HamHam(raw::NamedTuple; beta_phys::Real) -> HamHam{T}
+
+Keyword constructor that takes the **physical** inverse temperature `β_phys`
+(against the un-rescaled Hamiltonian) and resolves the algorithm-side
+`β_alg = β_phys · raw.rescaling_factor` internally. The stored Gibbs state is
+`ρ ∝ exp(-β_alg · H_rescaled)` (== `exp(-β_phys · H_phys)` in physical units).
+
+Use this form when scripts want to type a physical temperature; the positional
+`HamHam(raw, beta)` form keeps the legacy interpretation `beta = β_alg`
+(against the rescaled spectrum stored in `data` / `eigvals`).
+"""
+function HamHam(raw::NamedTuple; beta_phys::Real)
+    rescale = raw.rescaling_factor
+    return HamHam(raw, beta_phys * rescale)
+end
+
+"""
+    beta_alg(ham::HamHam{T}, beta_phys::Real)   where T<:AbstractFloat -> T
+    beta_phys(ham::HamHam{T}, beta_alg::Real)   where T<:AbstractFloat -> T
+
+Convert between physical inverse temperature `β_phys` (against the
+un-rescaled Hamiltonian) and algorithm-side `β_alg` (against the rescaled
+spectrum stored in `ham.data` / `ham.eigvals`). The relation is
+
+    β_alg = β_phys · ham.rescaling_factor.
+
+`ham.rescaling_factor ≈ 2(λ_max − λ_min)/(1 − ε)` is set at construction by
+`find_ideal_heisenberg` to map the physical spectrum into `[0, 0.45]`. For
+extensive Hamiltonians (Heisenberg, TFIM) it grows roughly linearly with the
+qubit count `n`, so a sweep "at fixed `β_alg` across n" silently varies
+`β_phys` by the same factor — and vice versa. Use these helpers whenever
+crossing the boundary between user-facing physical temperature and the
+algorithm's rescaled units.
+"""
+beta_alg(ham::HamHam{T}, beta_phys::Real) where {T<:AbstractFloat} = T(beta_phys * ham.rescaling_factor)
+beta_phys(ham::HamHam{T}, beta_alg::Real) where {T<:AbstractFloat} = T(beta_alg / ham.rescaling_factor)
+
+"""
     _unpack_disordering_fields(raw::NamedTuple, T) -> (terms, coeffs)
 
 Convert disordering fields from a NamedTuple into the multi-term format.
