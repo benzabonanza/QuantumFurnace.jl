@@ -2,19 +2,45 @@
 # KMS-geometry utilities for Lindbladian comparison (epic qf-mto.{1,2,3})
 # ============================================================================
 #
-# Status (2026-05-04): diagnostic only. None of the helpers below are called
-# from the simulator hot path. They were used to confirm that DLL and CKG
-# Lindbladians have comparable natural normalisations, so mainline mixing-time
-# comparisons can be run without rescaling either generator. Kept available
-# (and tested in `test/test_kms_geometry.jl`) so the qf-mto sweep results
-# remain reproducible; new comparison work that doesn't need the KMS-geometry
-# decomposition can ignore this module.
+# Status (2026-05-04, refined 2026-05-11): diagnostic only. None of the helpers
+# below are called from the simulator hot path. They were used to confirm that
+# DLL and CKG Lindbladians have comparable natural normalisations, so mainline
+# mixing-time comparisons can be run without rescaling either generator. Kept
+# available (and tested in `test/test_kms_geometry.jl`) so the qf-mto sweep
+# results remain reproducible; new comparison work that doesn't need the
+# KMS-geometry decomposition can ignore this module.
+#
+# Thesis comparator (2026-05-11 literature-verified): the canonical fair-
+# comparison pair is `(‖L‖_HS or ‖L_diss‖_{1→1}^bnd, λ(L))`. Showing the HS
+# norm ratio is ≈ 1 across the (n, β) grid places both samplers at the same
+# generator scale [Chen et al. 2025 Eq. (1.2) `‖L_β‖_{1→1} = Õ(1)` convention];
+# under that scaling, comparing `λ(L)` directly is the comparison sanctioned by
+# the KMS-Poincaré bound [Kastoryano–Temme 2013 Def. 10, Eq. (2); Kochanowski
+# et al. 2024 Eq. (1)]
+#     τ_mix(ε) ≤ (1/λ) · log(‖σ^{-1/2}‖ / ε).
+# Use `(hs_operator_norm, spectral_gap_kms)` for thesis-grade comparisons.
+#
+# `intrinsic_mixing_ratio` (ρ = λ/Λ_max) remains exported as an *internal*
+# scale-invariant diagnostic.  An exhaustive 2026-05-11 search of the quantum
+# Gibbs-sampling corpus (Kastoryano–Temme 2013; Rouzé thesis Ch. 5–8;
+# Kochanowski 2024; Capel 2021/2025; Chen 2025; Ding 2024; Scandi–Alhambra
+# 2025; Temme et al. 2010; Li–Lu 2025; Fang 2024; Lu 2025; Rakovszky 2024;
+# Kastoryano–Brandão 2016; Lucia 2015), the classical comparator literature
+# (Diaconis–Saloff-Coste 1996; Diaconis–Stroock 1991; Andrieu–Livingstone 2021;
+# Levin–Peres–Wilmer; Saloff-Coste 1997; Boyd–Diaconis–Xiao 2004; Cho–Meyer
+# 2001; Kirkland 2008), and adjacent fields (hypocoercivity, lifting, MLSI)
+# found no prior use of this specific ratio as a sampler-comparison metric.
+# Closest neighbours: the MLSI-vs-Poincaré ratio α/λ (different functional
+# inequality constants, same generator); the Cheeger / quantum-bottleneck
+# ratio (geometric, not spectral); the hypocoercivity rate κ(λ_m, λ_M)
+# (bounds on different operators, not endpoints of one spectrum).  See
+# `.claude-memory/rho_intrinsic_not_in_literature.md` for the full audit.
 #
 # Compute the KMS-Poincaré gap λ(L), maximum KMS Dirichlet rate Λ_max(L), and
-# the *intrinsic* (scale-invariant) ratio ρ = λ / Λ_max for any (Lindbladian,
-# Gibbs state) pair, plus a 1→1 norm upper bound surrogate for the dissipator.
-# These are the numbers needed to compare CKG smooth-Metro vs DLL Metro vs DLL
-# Gauss on a fair footing (see `.claude-memory/fair_comparison_dirichlet_qf_mto.md`).
+# the intrinsic ratio ρ = λ/Λ_max for any (Lindbladian, Gibbs state) pair, plus
+# a 1→1 norm upper bound surrogate for the dissipator. These are the numbers
+# behind the qf-mto fair-comparison sweep (see
+# `.claude-memory/fair_comparison_dirichlet_qf_mto.md` and qf-j6j).
 #
 # Mathematical setup.
 #
@@ -250,9 +276,24 @@ KMS-Poincaré gap
     λ(L) = inf_{X ⊥ I, X ≠ 0}  -⟨X, L(X)⟩^KMS_σ / Var^KMS_σ(X)
 
 = smallest non-zero eigenvalue of the symmetrised KMS discriminant.
-Controls the τ_mix UPPER BOUND via the quantum Poincaré inequality
-`τ_mix(ε) ≤ (1/λ) · log(‖σ^{-½}‖ / ε)` (Kochanowski–Alhambra–Capel–Rouzé
-2024 Eq. (1)).
+
+This is the canonical variational definition of the KMS-Poincaré (L²) gap:
+- Kastoryano & Temme 2013, *J. Math. Phys.* 54, 052202, Def. 10 (p. 10) and
+  Prop. 8 (p. 9) — primary quantum source.
+- Classical analog: Diaconis & Saloff-Coste 1996, *Ann. Appl. Probab.* 6(3),
+  Eq. (1.4) (p. 696).
+- Textbook synthesis: Rouzé thesis, Sec. 5.2.2, p. 147 (KMS-DBC ↔ HS-symmetry
+  of the discriminant).
+
+Controls the τ_mix upper bound via the quantum Poincaré inequality
+
+    τ_mix(ε) ≤ (1/λ) · log(‖σ^{-½}‖ / ε)
+
+[Kastoryano–Temme 2013 Eq. (2), p. 2; Kochanowski et al. 2024 Eq. (1), p. 3].
+Together with a generator-scale measure (`hs_operator_norm` or
+`dissipator_one_to_one_norm_bound`) this is the canonical fair-comparison
+pair for two KMS-DBC samplers on the same Hamiltonian; the convention
+`‖L‖_{1→1} = Õ(1)` of Chen et al. 2025, Eq. (1.2) fixes the normalisation.
 
 Returns `(; gap, eigvals)` where `eigvals` are the d²−1 Dirichlet rates
 sorted by absolute value (smallest first); `gap = abs(eigvals[1])`.
@@ -292,23 +333,39 @@ end
 """
     intrinsic_mixing_ratio(L_super, sigma) -> Real
 
-Scale-invariant **conditioning ratio** of the KMS Dirichlet form,
+INTERNAL DIAGNOSTIC — not used in the thesis comparison.
+
+Scale-invariant ratio of the KMS Dirichlet form,
 
     ρ(L) = λ(L) / Λ_max(L)  ∈ (0, 1]
 
-where `λ` is the spectral gap (`spectral_gap_kms`) and `Λ_max` is the
-largest Dirichlet rate (`max_dirichlet_rate_kms`).  Both numerator and
-denominator scale linearly under `L → c·L`, so ρ is invariant under any
-uniform time rescaling — exposing the "geometric efficiency" of the
-sampler independent of its absolute generator strength.
+equal to the reciprocal spectral condition number of the symmetrised KMS
+discriminant `-(D_S + D_S†)/2` restricted to the orthogonal complement of
+the steady-state direction.  Both numerator and denominator scale linearly
+under `L → c·L`, so ρ is invariant under uniform time rescaling.
 
-NOTE this is NOT a τ_mix bound (neither upper nor lower).  It is a
-conditioning number / functional-inequality ratio analogous to the
-Poincaré-vs-Sobolev gap ratio used in classical Markov chain mixing
-analysis [Kastoryano–Temme 2013, *J. Math. Phys.* 54, 052202;
-Diaconis–Saloff-Coste 1996].  Two samplers with the same ρ have
-equivalent rate-per-unit-norm Dirichlet structure; the absolute mixing
-time still depends on the generator's overall scale.
+**Status (2026-05-11)**: an exhaustive literature audit found no prior use
+of this specific ratio as a sampler-comparison diagnostic in either the
+quantum Gibbs-sampling corpus (Kastoryano–Temme 2013; Kochanowski 2024;
+Capel 2021/2025; Chen 2025; Ding 2024; Scandi–Alhambra 2025; Temme et al.
+2010; Li–Lu 2025; Fang 2024; Lu 2025; Rakovszky 2024; Kastoryano–Brandão
+2016; Lucia 2015; Rouzé thesis) or the classical comparator literature
+(Diaconis–Saloff-Coste 1996; Diaconis–Stroock 1991; Andrieu–Livingstone
+2021; Levin–Peres–Wilmer; Saloff-Coste 1997; Cho–Meyer 2001; Kirkland 2008).
+The closest neighbours are the MLSI-vs-Poincaré ratio α/λ
+[Diaconis–Saloff-Coste 1996; Capel et al. 2021] and the Cheeger / quantum
+bottleneck ratios [Temme et al. 2010 Eq. 76; Rakovszky et al. 2024 Eq. 6].
+The term "condition number" is taken in MCMC theory [Cho–Meyer 2001] for
+stationary-distribution perturbation sensitivity, which is a different
+object — avoid that terminology when citing this code.
+
+**Thesis recommendation**: do NOT introduce ρ in writeups.  Use the
+canonical pair `(hs_operator_norm, spectral_gap_kms)` instead — see the
+module preamble and the docstring of `spectral_gap_kms` for the citation
+chain.  This function is retained for diagnostic / reproducibility use
+only.
+
+See `.claude-memory/rho_intrinsic_not_in_literature.md` for the full audit.
 """
 function intrinsic_mixing_ratio(
     L_super::AbstractMatrix{<:Complex},
