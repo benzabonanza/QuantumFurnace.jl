@@ -485,3 +485,29 @@ end
               QuantumFurnace.default_smooth_s( 5.0, 0.20)
     end
 end
+
+# ---------------------------------------------------------------------------
+# qf-nq5: validate_config! enforces the (a, s) Metropolis taxonomy.
+# Kinky Metropolis is exactly (s = 0, a = 0); smooth Metropolis is
+# (s > 0, any a ≥ 0). The (s = 0, a > 0) combination is rejected.
+# ---------------------------------------------------------------------------
+@testset "qf-nq5: validate_config! (a, s) Metropolis taxonomy" begin
+    function _taxonomy_cfg(; a, s, construction=KMS(), domain=BohrDomain())
+        Config(
+            sim = Lindbladian(), domain = domain, construction = construction,
+            num_qubits = 3, with_linear_combination = true,
+            beta = 10.0, sigma = 0.1, a = a, s = s,
+            num_energy_bits = 8, w0 = 0.05,
+        )
+    end
+    # Allowed: kinky (s = a = 0)
+    validate_config!(_taxonomy_cfg(a = 0.0, s = 0.0))
+    # Allowed: smooth with a = 0, s > 0 (thesis-default branch)
+    validate_config!(_taxonomy_cfg(a = 0.0, s = 0.25))
+    # Allowed: smooth with a > 0, s > 0
+    validate_config!(_taxonomy_cfg(a = 0.333, s = 0.4))
+    # Rejected: a-regularised but unsmoothed (s = 0, a > 0)
+    @test_throws ArgumentError validate_config!(_taxonomy_cfg(a = 1.0, s = 0.0))
+    # Same rejection on GNS construction
+    @test_throws ArgumentError validate_config!(_taxonomy_cfg(a = 1.0, s = 0.0, construction = GNS()))
+end

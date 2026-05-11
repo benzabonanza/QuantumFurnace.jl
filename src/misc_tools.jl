@@ -279,9 +279,19 @@ function validate_config!(config::Config)
         end
     end
 
-    if config.with_linear_combination && config.a == 0.0
+    if config.with_linear_combination
+        a_val = something(config.a, 0.0)
+        s_val = something(config.s, 0.0)
+        # (a, s) taxonomy: kinky Metropolis is exactly (s = 0, a = 0); smooth
+        # Metropolis is (s > 0, any a ≥ 0). The (s = 0, a > 0) combination is
+        # an a-regularised but unsmoothed rate that the thesis numerics never
+        # use — reject it so we don't silently dispatch into an out-of-scope
+        # rate function.
+        if s_val == 0.0 && a_val != 0.0
+            push!(errors, "For linear combinations require (s = 0, a = 0) for kinky Metropolis or (s > 0) for smooth Metropolis; got (s=0, a=$(a_val)).")
+        end
         # Note: the (a=0, s != 0) case is supported in eta-regularized smooth Metro (Task 8).
-        if config.domain isa Union{TimeDomain, TrotterDomain} && with_coherent(config.construction) && (isnothing(config.eta) || config.eta <= 0.0)
+        if a_val == 0.0 && config.domain isa Union{TimeDomain, TrotterDomain} && with_coherent(config.construction) && (isnothing(config.eta) || config.eta <= 0.0)
             push!(errors, "For linear combinations in the KMS DB case with a=0 in TIME or TROTTER domain, eta must be > 0.")
         end
     end
