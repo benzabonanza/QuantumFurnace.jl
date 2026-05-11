@@ -36,6 +36,21 @@ Both paths reconstruct via `HamHam(raw_nt, beta)`, which infers `T` from
 `eltype(raw.eigvals)` and recomputes `bohr_freqs`, `bohr_dict`, and `gibbs`.
 """
 function _load_hamiltonian_bson(path::String, beta::Float64)
+    return HamHam(_parse_hamiltonian_bson(path), beta)
+end
+
+"""
+    _parse_hamiltonian_bson(path) -> NamedTuple
+
+Parse a Hamiltonian BSON file into the raw NamedTuple shape expected by
+`HamHam(::NamedTuple, beta)` / `HamHam(::NamedTuple; beta_phys=…)`, **without**
+constructing the HamHam wrapper. Handles both on-disk schemas (legacy
+`HamHam`-typed and current NamedTuple-typed) — see `_load_hamiltonian_bson` for
+schema details. The returned NamedTuple always carries `rescaling_factor`, so
+callers in β_phys-first mode can compute `β_alg = β_phys · rescaling_factor`
+before invoking the HamHam constructor.
+"""
+function _parse_hamiltonian_bson(path::String)
     raw = open(path) do io
         BSON.parse(io)
     end
@@ -51,7 +66,7 @@ function _load_hamiltonian_bson(path::String, beta::Float64)
         is_namedtuple = type_name isa AbstractVector && !isempty(type_name) &&
                         last(type_name) == "NamedTuple"
         if is_namedtuple
-            return HamHam(_namedtuple_schema_to_raw(ham_raw), beta)
+            return _namedtuple_schema_to_raw(ham_raw)
         end
         error("Unrecognised Hamiltonian BSON schema (length=$(length(fields)), type=$type_name)")
     end
@@ -80,7 +95,7 @@ function _load_hamiltonian_bson(path::String, beta::Float64)
     rescaling_factor = Float64(fields[12])
     periodic = Bool(fields[13])
 
-    raw_nt = (
+    return (
         matrix = data_matrix,
         terms = base_terms,
         base_coeffs = base_coeffs,
@@ -93,8 +108,6 @@ function _load_hamiltonian_bson(path::String, beta::Float64)
         rescaling_factor = rescaling_factor,
         periodic = periodic,
     )
-
-    return HamHam(raw_nt, beta)
 end
 
 """

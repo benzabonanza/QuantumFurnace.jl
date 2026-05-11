@@ -980,48 +980,62 @@ function _make_init_state(init_state::Symbol, d::Integer,
 end
 
 """
-    _sweep_sidecar_path(output_dir, n, beta, seed, mode, construction_tag, domain_tag) -> String
+    _sweep_sidecar_path(output_dir, n, beta, seed, mode, construction_tag, domain_tag;
+                        beta_phys=nothing) -> String
 
 Canonical sweep sidecar filename:
-`sweep_n<n>_beta<beta>_seed<seed>_<mode>_<construction>_<domain>.bson`. β is
-formatted to up to 6 decimals with trailing zeros and dangling decimal points
-stripped so integer or simple-decimal values render compactly. The `domain`
-suffix prevents BohrDomain and EnergyDomain caches from colliding when both
-are exercised against the same `output_dir`.
+`sweep_n<n>_beta<β_alg>_seed<seed>_<mode>_<construction>_<domain>.bson` (legacy)
+or `sweep_n<n>_betaphys<β_phys>_seed<seed>_<mode>_<construction>_<domain>.bson`
+(β_phys-first, qf-6vr). β is formatted to up to 6 decimals with trailing zeros
+and dangling decimal points stripped so integer or simple-decimal values render
+compactly. The `domain` suffix prevents BohrDomain and EnergyDomain caches from
+colliding when both are exercised against the same `output_dir`. The
+`betaphys` prefix (when `beta_phys` is supplied) prevents legacy β_alg-keyed
+caches from colliding with the β_phys-first re-runs (qf-6vr.2 / Task 3).
 """
 function _sweep_sidecar_path(output_dir::AbstractString, n::Integer, beta::Real,
                              seed::Integer, mode::Symbol,
                              construction_tag::AbstractString,
-                             domain_tag::AbstractString)
-    beta_str = let s = @sprintf("%.6f", float(beta))
+                             domain_tag::AbstractString;
+                             beta_phys::Union{Nothing, Real} = nothing)
+    b_value = beta_phys === nothing ? float(beta) : float(beta_phys)
+    b_tag   = beta_phys === nothing ? "beta"      : "betaphys"
+    beta_str = let s = @sprintf("%.6f", b_value)
         s = rstrip(s, '0')
         s = rstrip(s, '.')
         isempty(s) ? "0" : s
     end
-    fname = "sweep_n$(n)_beta$(beta_str)_seed$(seed)_$(mode)_$(construction_tag)_$(domain_tag).bson"
+    fname = "sweep_n$(n)_$(b_tag)$(beta_str)_seed$(seed)_$(mode)_$(construction_tag)_$(domain_tag).bson"
     return joinpath(output_dir, fname)
 end
 
 """
     _channel_sweep_sidecar_path(output_dir, n, beta, seed, eps, filter_kind,
-                                construction_tag, domain_tag) -> String
+                                construction_tag, domain_tag;
+                                beta_phys=nothing) -> String
 
 Channel-sweep sidecar filename (qf-e4z.2):
-`channel_n<n>_beta<beta>_seed<seed>_eps<eps>_<filter>_<construction>_<domain>.bson`.
-The extra `eps` and `filter` segments prevent collisions across the (n, β, ε,
-filter) grid that `sweep_channel_mixing` walks.
+`channel_n<n>_beta<β_alg>_seed<seed>_eps<eps>_<filter>_<construction>_<domain>.bson`
+(legacy) or `channel_n<n>_betaphys<β_phys>_seed<seed>_eps<eps>_<filter>_<construction>_<domain>.bson`
+(β_phys-first, qf-6vr). The extra `eps` and `filter` segments prevent collisions
+across the (n, β, ε, filter) grid that `sweep_channel_mixing` walks. The
+`betaphys` prefix (when `beta_phys` is supplied) prevents the β_phys-first
+re-runs from clobbering legacy β_alg-keyed sidecars.
 """
 function _channel_sweep_sidecar_path(output_dir::AbstractString, n::Integer,
                                      beta::Real, seed::Integer, eps::Real,
                                      filter_kind::Symbol,
                                      construction_tag::AbstractString,
-                                     domain_tag::AbstractString)
-    beta_str = let s = @sprintf("%.6f", float(beta))
+                                     domain_tag::AbstractString;
+                                     beta_phys::Union{Nothing, Real} = nothing)
+    b_value = beta_phys === nothing ? float(beta) : float(beta_phys)
+    b_tag   = beta_phys === nothing ? "beta"      : "betaphys"
+    beta_str = let s = @sprintf("%.6f", b_value)
         s = rstrip(s, '0'); s = rstrip(s, '.')
         isempty(s) ? "0" : s
     end
     eps_str = @sprintf("%.0e", float(eps))            # e.g. "1e-03"
-    fname = "channel_n$(n)_beta$(beta_str)_seed$(seed)_eps$(eps_str)_$(filter_kind)_$(construction_tag)_$(domain_tag).bson"
+    fname = "channel_n$(n)_$(b_tag)$(beta_str)_seed$(seed)_eps$(eps_str)_$(filter_kind)_$(construction_tag)_$(domain_tag).bson"
     return joinpath(output_dir, fname)
 end
 
@@ -1128,7 +1142,8 @@ results = sweep_mixing_times([3, 4, 5, 6], [1.0, 5.0, 10.0];
 """
 function sweep_mixing_times(
     n_values::AbstractVector{<:Integer},
-    beta_values::AbstractVector{<:Real};
+    beta_values::AbstractVector{<:Real} = Float64[];
+    beta_phys_values::Union{Nothing, AbstractVector{<:Real}} = nothing,
     construction::AbstractConstruction = KMS(),
     domain::AbstractDomain = BohrDomain(),
     filter::Union{Nothing, AbstractFilter} = nothing,
@@ -1178,6 +1193,23 @@ function sweep_mixing_times(
     domain isa EnergyDomain && construction isa DLL && throw(
         ArgumentError("DLL construction is not supported in EnergyDomain (out of scope for DLL-2)"))
 
+    # qf-6vr Task 3 — β_phys-first mode. The two β arguments are mutually
+    # exclusive: positional `beta_values` carries β_alg (legacy), kwarg
+    # `beta_phys_values` carries β_phys (β_alg derived per-cell from
+    # `ham.rescaling_factor`). Sidecar filenames carry a `betaphys<β_phys>`
+    # tag in the β_phys path so re-runs do not clobber legacy β_alg caches.
+    mode_phys = beta_phys_values !== nothing
+    if mode_phys && !isempty(beta_values)
+        throw(ArgumentError(
+            "sweep_mixing_times: pass either positional `beta_values` (β_alg list) " *
+            "OR kwarg `beta_phys_values` (β_phys list), not both."))
+    end
+    if !mode_phys && isempty(beta_values)
+        throw(ArgumentError(
+            "sweep_mixing_times: must specify positional `beta_values` (β_alg list) " *
+            "or kwarg `beta_phys_values` (β_phys list)."))
+    end
+
     # qf-lkb.10: derive t_max_factor from target_epsilon when :auto.
     # Heuristic: factor = max(5.0, 1.5 * log10(1 / target_eps)) — gives 5 at
     # 1e-3 (preserving legacy behaviour), 9 at 1e-6, 14 at 1e-9. Bi-exp's
@@ -1221,9 +1253,12 @@ function sweep_mixing_times(
         mkpath(output_dir)
     end
 
-    # Flat product of (n, β, seed). Materialised so @threads can index it.
+    # Flat product of (n, β_unit, seed). `β_unit` is β_phys in mode_phys, β_alg
+    # otherwise — the runner resolves the (β_phys, β_alg) pair per-cell once
+    # `ham.rescaling_factor` is in hand. Materialised so @threads can index it.
+    β_unit_values = mode_phys ? Float64.(beta_phys_values) : Float64.(beta_values)
     points = [(Int(n), Float64(β), Int(s)) for n in n_values
-                                            for β in beta_values
+                                            for β in β_unit_values
                                             for s in seeds]
     n_points = length(points)
     results = Vector{NamedTuple}(undef, n_points)
@@ -1234,9 +1269,15 @@ function sweep_mixing_times(
     # contention and any race with per-thread sidecar writes downstream.
     if output_dir !== nothing && skip_existing
         for i in 1:n_points
-            n_i, β_i, seed_i = points[i]
-            sidecar = _sweep_sidecar_path(output_dir, n_i, β_i, seed_i,
-                                          mode, construction_tag, domain_tag)
+            n_i, β_unit_i, seed_i = points[i]
+            # In mode_phys the sidecar is keyed by β_phys; β_alg is irrelevant
+            # for the filename. In legacy mode the sidecar is keyed by β_alg.
+            sidecar = mode_phys ?
+                _sweep_sidecar_path(output_dir, n_i, 0.0, seed_i,
+                                    mode, construction_tag, domain_tag;
+                                    beta_phys = β_unit_i) :
+                _sweep_sidecar_path(output_dir, n_i, β_unit_i, seed_i,
+                                    mode, construction_tag, domain_tag)
             if isfile(sidecar)
                 try
                     d_loaded = BSON.load(sidecar, @__MODULE__)
@@ -1251,16 +1292,19 @@ function sweep_mixing_times(
 
     runner = function (i)
         skipped[i] && return
-        n_i, β_i, seed_i = points[i]
+        n_i, β_unit_i, seed_i = points[i]
         ham_path = joinpath(hamiltonian_dir, hamiltonian_filename(n_i))
         if !isfile(ham_path)
-            @warn "Hamiltonian file missing; skipping point" n=n_i β=β_i ham_path
-            results[i] = (n=n_i, beta=β_i, seed=seed_i, init_state=init_state,
+            @warn "Hamiltonian file missing; skipping point" n=n_i β_unit=β_unit_i ham_path
+            results[i] = (n=n_i, beta=β_unit_i, seed=seed_i, init_state=init_state,
                           mode=mode, method=method, construction=construction_tag,
                           domain=domain_tag,
                           filter_name=filter_name,
                           target_epsilon=float(target_epsilon),
                           filter_kind=filter_kind,
+                          beta_phys = mode_phys ? β_unit_i : NaN,
+                          beta_alg  = mode_phys ? NaN      : β_unit_i,
+                          rescaling_factor=NaN,
                           r_D=0, w0_D=NaN, t0_D=NaN,
                           gap_est=NaN, t_max=NaN,
                           t_max_factor=t_max_factor_resolved,
@@ -1273,7 +1317,16 @@ function sweep_mixing_times(
         end
 
         t0_run = time()
-        ham = _load_hamiltonian_bson(ham_path, β_i)
+        # Parse the BSON once → derived (β_phys, β_alg) via
+        # `raw.rescaling_factor` → HamHam at β_alg. Same path for both modes
+        # (matches the legacy one-shot loader byte-for-byte since
+        # `_load_hamiltonian_bson(path, β) == HamHam(_parse_hamiltonian_bson(path), β)`).
+        ham_raw_nt = _parse_hamiltonian_bson(ham_path)
+        rescale = ham_raw_nt.rescaling_factor
+        β_phys_i, β_i = mode_phys ?
+            (β_unit_i, β_unit_i * rescale) :
+            (β_unit_i / rescale, β_unit_i)
+        ham = HamHam(ham_raw_nt, β_i)
         jumps = _build_jump_set(ham, n_i)
 
         # Per-(n, β) filter: DLL filter must match β; rebuild from the user's
@@ -1317,6 +1370,7 @@ function sweep_mixing_times(
             num_qubits = n_i,
             with_linear_combination = cell_with_lc,
             beta = β_i,
+            beta_phys = β_phys_i,  # qf-6vr: explicit β_phys for validation pair
             sigma = 1.0 / β_i,
             a = cell_a,
             s = cell_s,
@@ -1389,6 +1443,9 @@ function sweep_mixing_times(
             (
                 n                   = n_i,
                 beta                = β_i,
+                beta_alg            = β_i,
+                beta_phys           = β_phys_i,
+                rescaling_factor    = rescale,
                 seed                = seed_i,
                 init_state          = init_state,
                 mode                = mode,
@@ -1465,6 +1522,9 @@ function sweep_mixing_times(
             (
                 n                   = n_i,
                 beta                = β_i,
+                beta_alg            = β_i,
+                beta_phys           = β_phys_i,
+                rescaling_factor    = rescale,
                 seed                = seed_i,
                 init_state          = init_state,
                 mode                = mode,
@@ -1496,8 +1556,12 @@ function sweep_mixing_times(
         results[i] = result
 
         if output_dir !== nothing
-            sidecar = _sweep_sidecar_path(output_dir, n_i, β_i, seed_i,
-                                          mode, construction_tag, domain_tag)
+            sidecar = mode_phys ?
+                _sweep_sidecar_path(output_dir, n_i, β_i, seed_i,
+                                    mode, construction_tag, domain_tag;
+                                    beta_phys = β_phys_i) :
+                _sweep_sidecar_path(output_dir, n_i, β_i, seed_i,
+                                    mode, construction_tag, domain_tag)
             try
                 BSON.bson(sidecar, Dict(:result => Dict(pairs(result))))
             catch err
@@ -1568,13 +1632,16 @@ parameter-table row. The `mixing_time` field is a placeholder
 function _build_channel_config(row::NamedTuple, n::Integer, β::Real,
                                 domain::AbstractDomain,
                                 construction::AbstractConstruction;
-                                mixing_time_target::Real = 5.0)
+                                mixing_time_target::Real = 5.0,
+                                beta_phys::Union{Nothing, Real} = nothing)
     return Config(
         sim = Thermalize(),
         domain = domain,
         construction = construction,
         num_qubits = n,
-        beta = β, sigma = row.sigma,
+        beta = β,
+        beta_phys = beta_phys,   # qf-6vr: optional physical β for the validation pair
+        sigma = row.sigma,
         with_linear_combination = row.with_linear_combination,
         a = row.a, s = row.s,
         gaussian_parameters = row.with_linear_combination ? (nothing, nothing) :
@@ -1663,7 +1730,8 @@ grid, edit and re-run `scripts/numerics_param_table.jl`.
 """
 function sweep_channel_mixing(
     n_values::AbstractVector{<:Integer},
-    beta_values::AbstractVector{<:Real};
+    beta_values::AbstractVector{<:Real} = Float64[];
+    beta_phys_values::Union{Nothing, AbstractVector{<:Real}} = nothing,
     target_epsilons::AbstractVector{<:Real} = [1e-3],
     filter_kinds::AbstractVector{Symbol} = [:smooth_metro],
     domain::AbstractDomain = TrotterDomain(),
@@ -1691,6 +1759,23 @@ function sweep_channel_mixing(
     k_grid_length >= 10 || throw(ArgumentError(
         "k_grid_length must be ≥ 10 (got $k_grid_length)"))
 
+    # qf-6vr Task 3 — β_phys-first mode. Same contract as `sweep_mixing_times`:
+    # exactly one of (positional `beta_values`, kwarg `beta_phys_values`)
+    # must be supplied. β_alg = β_phys · ham.rescaling_factor is computed
+    # per-cell, the param-table lookup is by β_alg in both modes, and the
+    # sidecar filename gains a `betaphys<β_phys>` prefix in β_phys-first mode.
+    mode_phys = beta_phys_values !== nothing
+    if mode_phys && !isempty(beta_values)
+        throw(ArgumentError(
+            "sweep_channel_mixing: pass either positional `beta_values` (β_alg list) " *
+            "OR kwarg `beta_phys_values` (β_phys list), not both."))
+    end
+    if !mode_phys && isempty(beta_values)
+        throw(ArgumentError(
+            "sweep_channel_mixing: must specify positional `beta_values` (β_alg list) " *
+            "or kwarg `beta_phys_values` (β_phys list)."))
+    end
+
     construction_tag = construction isa KMS ? "KMS" : construction isa GNS ? "GNS" : "DLL"
     domain_tag = domain isa TrotterDomain ? "Trotter" : "Time"
     family_str = string(family)
@@ -1700,9 +1785,12 @@ function sweep_channel_mixing(
 
     rows_table = _load_channel_param_table(param_table_bson)
 
-    # Flat product of (n, β, ε, filter, seed). Materialised so loops are stable.
+    # Flat product of (n, β_unit, ε, filter, seed). β_unit is β_phys in
+    # mode_phys, β_alg otherwise; the runner resolves the (β_phys, β_alg)
+    # pair per-cell via `ham.rescaling_factor`.
+    β_unit_values = mode_phys ? Float64.(beta_phys_values) : Float64.(beta_values)
     points = [(Int(n), Float64(β), Float64(ε), f, Int(s))
-              for n in n_values for β in beta_values
+              for n in n_values for β in β_unit_values
               for ε in target_epsilons for f in filter_kinds for s in seeds]
     n_points = length(points)
     results = Vector{NamedTuple}(undef, n_points)
@@ -1711,9 +1799,13 @@ function sweep_channel_mixing(
     # Pre-pass: load existing sidecars under skip_existing, before the main loop.
     if output_dir !== nothing && skip_existing
         for i in 1:n_points
-            n_i, β_i, ε_i, f_i, seed_i = points[i]
-            sidecar = _channel_sweep_sidecar_path(output_dir, n_i, β_i, seed_i, ε_i,
-                                                   f_i, construction_tag, domain_tag)
+            n_i, β_unit_i, ε_i, f_i, seed_i = points[i]
+            sidecar = mode_phys ?
+                _channel_sweep_sidecar_path(output_dir, n_i, 0.0, seed_i, ε_i,
+                                            f_i, construction_tag, domain_tag;
+                                            beta_phys = β_unit_i) :
+                _channel_sweep_sidecar_path(output_dir, n_i, β_unit_i, seed_i, ε_i,
+                                            f_i, construction_tag, domain_tag)
             if isfile(sidecar)
                 try
                     d_loaded = BSON.load(sidecar, @__MODULE__)
@@ -1730,19 +1822,26 @@ function sweep_channel_mixing(
 
     for i in 1:n_points
         skipped[i] && continue
-        n_i, β_i, ε_i, f_i, seed_i = points[i]
+        n_i, β_unit_i, ε_i, f_i, seed_i = points[i]
         ham_path = joinpath(hamiltonian_dir, ham_filename(n_i))
         if !isfile(ham_path)
-            @warn "Hamiltonian file missing; skipping channel cell" n=n_i β=β_i ham_path
+            @warn "Hamiltonian file missing; skipping channel cell" n=n_i β_unit=β_unit_i ham_path
             continue
         end
 
         local row, ham, jumps, cfg, trotter, rho_0, rho_init, predict_res, res_eig, sim_budget
+        local β_phys_i, β_i, rescale
         t0_run = time()
         try
+            ham_raw_nt = _parse_hamiltonian_bson(ham_path)
+            rescale = ham_raw_nt.rescaling_factor
+            β_phys_i, β_i = mode_phys ?
+                (β_unit_i, β_unit_i * rescale) :
+                (β_unit_i / rescale, β_unit_i)
             row = _lookup_channel_params(rows_table, n_i, β_i, ε_i, f_i)
-            ham = _load_hamiltonian_bson(ham_path, β_i)
-            cfg = _build_channel_config(row, n_i, β_i, domain, construction)
+            ham = HamHam(ham_raw_nt, β_i)
+            cfg = _build_channel_config(row, n_i, β_i, domain, construction;
+                                        beta_phys = β_phys_i)
 
             # Trotter cache (TrotterDomain only). Use make_trotter_for_config which
             # picks the qf-d0w shared-δt₀ scheme for KMS coherent. May fail at
@@ -1816,8 +1915,16 @@ function sweep_channel_mixing(
             sim_budget = compute_simulation_time(cfg, ham, tau_for_budget)
         catch err
             @warn "channel cell failed; recording NaN row" n=n_i β=β_i eps=ε_i filter=f_i err
+            # `β_i`, `β_phys_i`, `rescale` may be undefined if parsing failed —
+            # fall back to NaN / β_unit_i so the result row is still
+            # serialisable.
+            β_alg_recorded  = @isdefined(β_i)        ? β_i        : (mode_phys ? NaN        : β_unit_i)
+            β_phys_recorded = @isdefined(β_phys_i)   ? β_phys_i   : (mode_phys ? β_unit_i  : NaN)
+            rescale_recorded = @isdefined(rescale)   ? rescale    : NaN
             results[i] = (
-                n=n_i, beta=β_i, seed=seed_i, eps=ε_i, filter=f_i,
+                n=n_i, beta=β_alg_recorded, seed=seed_i, eps=ε_i, filter=f_i,
+                beta_alg=β_alg_recorded, beta_phys=β_phys_recorded,
+                rescaling_factor=rescale_recorded,
                 family=family_str, construction=construction_tag, domain=domain_tag,
                 r_D=NaN, w0_D=NaN, t0_D=NaN, r_bm=NaN, w0_bm=NaN, t0_bm=NaN,
                 r_bp=NaN, w0_bp=NaN, t0_bp=NaN,
@@ -1870,6 +1977,9 @@ function sweep_channel_mixing(
         result = (
             n                       = n_i,
             beta                    = β_i,
+            beta_alg                = β_i,
+            beta_phys               = β_phys_i,
+            rescaling_factor        = rescale,
             seed                    = seed_i,
             eps                     = ε_i,
             filter                  = f_i,
@@ -1909,8 +2019,12 @@ function sweep_channel_mixing(
         results[i] = result
 
         if output_dir !== nothing
-            sidecar = _channel_sweep_sidecar_path(output_dir, n_i, β_i, seed_i, ε_i,
-                                                   f_i, construction_tag, domain_tag)
+            sidecar = mode_phys ?
+                _channel_sweep_sidecar_path(output_dir, n_i, β_i, seed_i, ε_i,
+                                            f_i, construction_tag, domain_tag;
+                                            beta_phys = β_phys_i) :
+                _channel_sweep_sidecar_path(output_dir, n_i, β_i, seed_i, ε_i,
+                                            f_i, construction_tag, domain_tag)
             try
                 BSON.bson(sidecar, Dict(:result => Dict(pairs(result))))
             catch err
