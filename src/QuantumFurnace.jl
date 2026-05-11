@@ -74,7 +74,7 @@ export AbstractConstruction, KMS, GNS, DLL, with_coherent
 export Workspace, LiouvillianScratch, ThermalizeScratch, KrylovScratch, TrajectoryScratch
 export AbstractResults, save_result, load_result
 export BohrDomain, EnergyDomain, TimeDomain, TrotterDomain
-export HamHam, TrottTrott, JumpOp
+export HamHam, AbstractTrotter, TrottTrott, TrotterTriple, JumpOp
 export trace_distance_h, trace_distance_nh, trace_norm_h, trace_norm_nh,
        fidelity, is_density_matrix, random_density_matrix,
        hermitianize!, validate_jump_pairing

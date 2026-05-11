@@ -1,4 +1,22 @@
 """
+    AbstractTrotter{T<:AbstractFloat}
+
+Common supertype for Trotter-cache objects passed to TrotterDomain code paths
+(`construct_lindbladian`, `run_thermalize`, `B_trotter`, ...).
+
+Two concrete subtypes:
+
+- [`TrottTrott`](@ref): single-cache mode (legacy) and the qf-d0w shared-δt₀
+  mode. One Strang substep / one eigenbasis shared by all three coherent-term
+  legs.
+- [`TrotterTriple`](@ref) (qf-e4z.20): **three independent** Strang substeps and
+  eigenbases — one each for the dissipative (`D`), outer coherent (`b_-`), and
+  inner coherent (`b_+`) legs. The dissipator runs in `V_D` and `B_trotter`
+  performs explicit inter-basis rotations.
+"""
+abstract type AbstractTrotter{T<:AbstractFloat} end
+
+"""
     TrottTrott{T<:AbstractFloat}
 
     Stores precomputed data for Trotterized time evolution.
@@ -31,7 +49,7 @@
     (`eigvecs` of `λ_S`) and avoids any runtime basis alignment between the three
     coherent-term loops.
 """
-struct TrottTrott{T<:AbstractFloat}
+struct TrottTrott{T<:AbstractFloat} <: AbstractTrotter{T}
     t0::T
     num_trotter_steps_per_t0::Int
     eigvals_t0::Vector{Complex{T}}
@@ -161,6 +179,132 @@ end
 function _trotter_bohr_freqs(trottU_T_eigvals::Vector{ComplexF64}, t::Float64)
     bohr_freqs = angle.(trottU_T_eigvals) ./ t  # quasi Bohr frequencies due to Trotterization.
     return bohr_freqs .- bohr_freqs'  # dim×dim
+end
+
+# ---------------------------------------------------------------------------
+# qf-e4z.20 — independent per-leg Trotter caches.
+#
+# The shared-δt₀ scheme above (`TrottTrott` with non-`nothing` per-register
+# fields) couples three legs through a SINGLE elementary Strang step `δt₀ =
+# min(t0_D, t0_bm, t0_bp) / M_user`. Tightening any one register's substep
+# inflates the others. `TrotterTriple` decouples them: each leg gets its own
+# Trotterization, its own eigenbasis, and its own substep count. `B_trotter`
+# performs explicit inter-basis rotations to glue the three legs together.
+# ---------------------------------------------------------------------------
+
+"""
+    TrotterTriple{T<:AbstractFloat}  <:  AbstractTrotter{T}
+
+Three independent Strang Trotter caches (one per coherent-term leg) plus the
+inter-basis rotation matrices.
+
+# Fields
+- `D::TrottTrott{T}`: dissipative leg, canonical basis `V_D`. The final
+  Lindbladian / channel state `ρ` lives in `V_D`; `σ_β` rotates into `V_D`.
+- `b_minus::TrottTrott{T}`: outer coherent leg (`b_-(t)` loop).
+- `b_plus::TrottTrott{T}`:  inner coherent leg (`b_+(τ)` loop).
+- `R_bm_in_D = V_bm' · V_D`: maps `V_D` operator coords to `V_bm` via
+  `M_bm = R_bm_in_D · M_D · R_bm_in_D'`.
+- `R_bp_in_D = V_bp' · V_D`: same pattern, `D → b_+`.
+- `R_bm_in_bp = V_bm' · V_bp`: same pattern, `b_+ → b_-`.
+
+# `getproperty` aliasing
+Field access for the legacy names — `:t0`, `:eigvecs`, `:bohr_freqs`,
+`:eigvals_t0`, `:num_trotter_steps_per_t0` — transparently delegate to the
+`D` leg. This lets every TrotterDomain consumer that reads
+`trotter.eigvecs` / `trotter.bohr_freqs` / etc. work without modification.
+The legacy qf-d0w per-register accessors (`:eigvals_t0_b_minus`,
+`:eigvals_t0_b_plus`, `:t0_b_minus`, `:t0_b_plus`) are also exposed and map
+to the corresponding sub-cache's `eigvals_t0` / `t0` (so the legacy
+`B_trotter(::TrottTrott, ...)` could still consume a `TrotterTriple` —
+though dispatch routes to the dedicated `B_trotter(::TrotterTriple, ...)`
+method that uses explicit basis rotations).
+"""
+struct TrotterTriple{T<:AbstractFloat} <: AbstractTrotter{T}
+    D::TrottTrott{T}
+    b_minus::TrottTrott{T}
+    b_plus::TrottTrott{T}
+    R_bm_in_D::Matrix{Complex{T}}
+    R_bp_in_D::Matrix{Complex{T}}
+    R_bm_in_bp::Matrix{Complex{T}}
+end
+
+"""
+    TrotterTriple(ham::HamHam{T}, t0_D, t0_b_minus_evol, t0_b_plus_evol,
+                  M_D, M_b_minus, M_b_plus) -> TrotterTriple{T}
+
+Build three independent Strang Trotter caches at substeps
+`δt₀_X = t0_X / M_X` for `X ∈ {D, b_minus, b_plus}`.
+
+`t0_b_minus_evol` and `t0_b_plus_evol` are the **Trotter-step durations**
+of the outer (`b_-(t/σ)` → grid step `register_t0_b_minus / σ`) and inner
+(`b_+(τβ)` → grid step `β · register_t0_b_plus`) coherent-integral
+evolutions, exactly as in the qf-d0w `TrottTrott(ham, t0_D, t0_bm, t0_bp, M)`
+shared-δt₀ constructor — but each leg is Trotterized independently here
+with its OWN `M_X`, so the three substeps need not be commensurate.
+
+Each sub-cache is built via the legacy `TrottTrott(ham, t0_X, M_X)`
+single-cache constructor (per-register fields `nothing`). The inter-basis
+rotations are computed once and stored.
+"""
+function TrotterTriple(
+    hamiltonian::HamHam{T},
+    t0_D::Real,
+    t0_b_minus_evol::Real,
+    t0_b_plus_evol::Real,
+    M_D::Int,
+    M_b_minus::Int,
+    M_b_plus::Int,
+) where {T<:AbstractFloat}
+    M_D       > 0 || throw(ArgumentError("TrotterTriple: M_D must be > 0 (got $M_D)."))
+    M_b_minus > 0 || throw(ArgumentError("TrotterTriple: M_b_minus must be > 0 (got $M_b_minus)."))
+    M_b_plus  > 0 || throw(ArgumentError("TrotterTriple: M_b_plus must be > 0 (got $M_b_plus)."))
+    t0_D            > 0 || throw(ArgumentError("TrotterTriple: t0_D must be > 0 (got $t0_D)."))
+    t0_b_minus_evol > 0 || throw(ArgumentError("TrotterTriple: t0_b_minus_evol must be > 0 (got $t0_b_minus_evol)."))
+    t0_b_plus_evol  > 0 || throw(ArgumentError("TrotterTriple: t0_b_plus_evol must be > 0 (got $t0_b_plus_evol)."))
+
+    D       = TrottTrott(hamiltonian, t0_D,            M_D)
+    bminus  = TrottTrott(hamiltonian, t0_b_minus_evol, M_b_minus)
+    bplus   = TrottTrott(hamiltonian, t0_b_plus_evol,  M_b_plus)
+
+    # Inter-basis rotations. Convention: R_{Y←X} := V_Y' · V_X. Then for an
+    # operator M expressed in V_X-coords, M_Y = R_{Y←X} · M_X · R_{Y←X}'.
+    CT = Complex{T}
+    R_bm_in_D   = Matrix{CT}(bminus.eigvecs' * D.eigvecs)
+    R_bp_in_D   = Matrix{CT}(bplus.eigvecs'  * D.eigvecs)
+    R_bm_in_bp  = Matrix{CT}(bminus.eigvecs' * bplus.eigvecs)
+
+    return TrotterTriple{T}(D, bminus, bplus, R_bm_in_D, R_bp_in_D, R_bm_in_bp)
+end
+
+# Legacy field-access aliasing: trotter.eigvecs / .bohr_freqs / .t0 / etc.
+# all route to the D leg. Plus the qf-d0w per-leg accessors map to the
+# corresponding sub-cache fields.
+function Base.getproperty(t::TrotterTriple, s::Symbol)
+    if s === :D || s === :b_minus || s === :b_plus ||
+       s === :R_bm_in_D || s === :R_bp_in_D || s === :R_bm_in_bp
+        return getfield(t, s)
+    elseif s === :t0 || s === :eigvecs || s === :bohr_freqs ||
+           s === :eigvals_t0 || s === :num_trotter_steps_per_t0
+        return getproperty(getfield(t, :D), s)
+    elseif s === :t0_b_minus
+        return getfield(t, :b_minus).t0
+    elseif s === :t0_b_plus
+        return getfield(t, :b_plus).t0
+    elseif s === :eigvals_t0_b_minus
+        return getfield(t, :b_minus).eigvals_t0
+    elseif s === :eigvals_t0_b_plus
+        return getfield(t, :b_plus).eigvals_t0
+    else
+        return getfield(t, s)  # falls through and Julia raises on unknown.
+    end
+end
+
+function Base.propertynames(::TrotterTriple, private::Bool=false)
+    return (:D, :b_minus, :b_plus,
+            :R_bm_in_D, :R_bp_in_D, :R_bm_in_bp,
+            :t0, :eigvecs, :bohr_freqs, :eigvals_t0, :num_trotter_steps_per_t0,
+            :t0_b_minus, :t0_b_plus, :eigvals_t0_b_minus, :eigvals_t0_b_plus)
 end
 
 function compute_trotter_error(hamiltonian::HamHam, trotter::TrottTrott, t::Float64)
