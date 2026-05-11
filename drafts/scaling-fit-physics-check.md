@@ -79,6 +79,8 @@ Then refit and report:
 
 Even without the σ-constant control: a 5-seed re-run of the existing grid with extra β=1, β=2 cells and the `‖L‖_HS` annotation is enough to make `x = 0.82 ± 0.08` and `y = 0.42 ± 0.05` honest numbers with confounders quantified.
 
+> **FIXED IN qf-6vr (2026-05-11).** The β_phys / β_alg conflation called out in artifact candidate (1) is resolved at the code level. Every numerics driver that flows into the scaling fit now drives a β_phys grid; the sweep harness derives β_alg per cell via `ham.rescaling_factor`; sidecars expose both β_phys and β_alg + the rescaling factor; `fit_scaling` reads β_phys by default and tags the formula label accordingly (`β_phys^y` vs `β_alg^y`). The new canonical scaling-fit driver is `scripts/numerics_scaling_fit_ckg_smooth_metro.jl` (run it to regenerate the figure under the new convention; results note: `drafts/scaling-fit-bphys-rerun.md`). The other artifact candidates (norm-rescaling in y, σ=1/β confounding, seed sensitivity, kink-width β-dependence) are *not* addressed by this refactor and remain open. See `.claude-memory/beta_phys_beta_alg_convention.md` for the API summary.
+
 ## 5. Comparison to literature for this regime
 
 There is **no rigorous bound directly applicable** to disordered Heisenberg with site-and-bond Z+ZZ disorder at the temperatures probed:
