@@ -285,3 +285,236 @@ end
         @test result.trace_distances[end] <= result.trace_distances[1] + 1e-8
     end
 end
+
+# ============================================================================
+# qf-e4z.20 — independent per-leg Trotter caches (TrotterTriple).
+# ============================================================================
+
+@testset "qf-e4z.20 TrotterTriple — independent per-leg caches" begin
+    ham = N3_HAM
+    n = 3
+    beta = BETA
+    sigma = SIGMA
+
+    @testset "Struct invariants — rotations are unitary; composition consistent" begin
+        triple = TrotterTriple(ham, 0.5, 0.3, 0.1, 4, 2, 1)
+        @test triple isa AbstractTrotter
+        @test triple isa TrotterTriple
+        d = size(ham.data, 1)
+        # Each per-leg sub-cache is a legacy single-cache TrottTrott.
+        for leg in (triple.D, triple.b_minus, triple.b_plus)
+            @test leg isa TrottTrott
+            @test leg.eigvals_t0_b_minus === nothing
+            @test leg.eigvals_t0_b_plus  === nothing
+            @test isapprox(leg.eigvecs * leg.eigvecs', I; atol = 1e-10)
+        end
+        # Per-leg t0's recover the input.
+        @test triple.D.t0       ≈ 0.5
+        @test triple.b_minus.t0 ≈ 0.3
+        @test triple.b_plus.t0  ≈ 0.1
+        # Per-leg M counts.
+        @test triple.D.num_trotter_steps_per_t0       == 4
+        @test triple.b_minus.num_trotter_steps_per_t0 == 2
+        @test triple.b_plus.num_trotter_steps_per_t0  == 1
+
+        # Inter-basis rotations are unitary.
+        @test isapprox(triple.R_bm_in_D  * triple.R_bm_in_D',  I; atol = 1e-10)
+        @test isapprox(triple.R_bp_in_D  * triple.R_bp_in_D',  I; atol = 1e-10)
+        @test isapprox(triple.R_bm_in_bp * triple.R_bm_in_bp', I; atol = 1e-10)
+        # Composition: R_bm_in_D = V_bm' V_D = (V_bm' V_bp)(V_bp' V_D) = R_bm_in_bp · R_bp_in_D.
+        @test isapprox(triple.R_bm_in_D, triple.R_bm_in_bp * triple.R_bp_in_D; atol = 1e-10)
+    end
+
+    @testset "All-same legs → rotations are identity to machine precision" begin
+        triple = TrotterTriple(ham, 0.5, 0.5, 0.5, 4, 4, 4)
+        d = size(ham.data, 1)
+        @test isapprox(triple.R_bm_in_D,  I(d); atol = 1e-10)
+        @test isapprox(triple.R_bp_in_D,  I(d); atol = 1e-10)
+        @test isapprox(triple.R_bm_in_bp, I(d); atol = 1e-10)
+    end
+
+    @testset "Field aliasing: D-leg fields exposed via getproperty" begin
+        triple = TrotterTriple(ham, 0.5, 0.3, 0.1, 4, 2, 1)
+        @test triple.t0                       == triple.D.t0
+        @test triple.eigvecs                  === triple.D.eigvecs
+        @test triple.bohr_freqs               === triple.D.bohr_freqs
+        @test triple.eigvals_t0               === triple.D.eigvals_t0
+        @test triple.num_trotter_steps_per_t0 == triple.D.num_trotter_steps_per_t0
+        # Legacy qf-d0w per-leg accessors map to sub-cache fields.
+        @test triple.t0_b_minus           == triple.b_minus.t0
+        @test triple.t0_b_plus            == triple.b_plus.t0
+        @test triple.eigvals_t0_b_minus   === triple.b_minus.eigvals_t0
+        @test triple.eigvals_t0_b_plus    === triple.b_plus.eigvals_t0
+    end
+
+    @testset "Builder argument validation" begin
+        @test_throws ArgumentError TrotterTriple(ham, -0.1, 0.3, 0.1, 1, 1, 1)
+        @test_throws ArgumentError TrotterTriple(ham,  0.5, 0.0, 0.1, 1, 1, 1)
+        @test_throws ArgumentError TrotterTriple(ham,  0.5, 0.3, 0.1, 0, 1, 1)
+        @test_throws ArgumentError TrotterTriple(ham,  0.5, 0.3, 0.1, 1, 0, 1)
+        @test_throws ArgumentError TrotterTriple(ham,  0.5, 0.3, 0.1, 1, 1, -2)
+    end
+
+    @testset "B_trotter byte-identity at matched per-leg M counts vs legacy shared-δt₀" begin
+        # Reproduce the test fixture from the qf-d0w slope test: r_D = 8,
+        # r_b = 10, smooth Metropolis, β=10, n=3.
+        r_D = 8; r_b = 10
+        T_minus = 10.0; T_plus = 5.0
+        eta = 1e-3
+        w0_D = pi / (5 * beta)
+        t0_D = 2pi / (2^r_D * w0_D)
+        bd = _make_b_dicts(beta, sigma; r_b, T_minus, T_plus, eta)
+        t0_bm = bd.t0_minus; t0_bp = bd.t0_plus
+        b_minus = bd.b_minus; b_plus = bd.b_plus
+        t0_bm_evol = t0_bm / sigma
+        t0_bp_evol = beta * t0_bp
+
+        # Legacy shared-δt₀ at M_user = 2 picks δt₀ = min(t0_D, t0_bm_evol,
+        # t0_bp_evol) / 2. Per-leg M_X = round(t0_X / δt₀). Build the
+        # equivalent TrotterTriple at exactly the same per-leg counts.
+        M_user = 2
+        delta_t0 = min(t0_D, t0_bm_evol, t0_bp_evol) / M_user
+        M_D  = round(Int, t0_D / delta_t0)
+        M_bm = round(Int, t0_bm_evol / delta_t0)
+        M_bp = round(Int, t0_bp_evol / delta_t0)
+
+        trotter_legacy = TrottTrott(ham, t0_D, t0_bm_evol, t0_bp_evol, M_user)
+        triple         = TrotterTriple(ham, t0_D, t0_bm_evol, t0_bp_evol, M_D, M_bm, M_bp)
+
+        jumps_legacy = _build_jumps_in_basis(ham, trotter_legacy.eigvecs, n)
+        jumps_triple = _build_jumps_in_basis(ham, triple.eigvecs, n)
+        B_legacy = B_trotter(jumps_legacy, trotter_legacy, b_minus, b_plus, t0_bm, t0_bp, beta, sigma)
+        B_triple = B_trotter(jumps_triple, triple,         b_minus, b_plus, t0_bm, t0_bp, beta, sigma)
+
+        # Lift both to Hamiltonian eigenbasis for a basis-invariant comparison.
+        U_legacy = ham.eigvecs' * trotter_legacy.eigvecs
+        U_triple = ham.eigvecs' * triple.eigvecs
+        B_legacy_h = U_legacy * B_legacy * U_legacy'
+        B_triple_h = U_triple * B_triple * U_triple'
+        @test isapprox(B_legacy_h, B_triple_h; atol = 1e-12)
+    end
+
+    @testset "Slope -2 in joint M tightening (Strang 2nd order)" begin
+        # When all three per-leg M counts grow together, the Trotter error
+        # should drop as M^{-2}. Reproduces the qf-d0w slope test inside the
+        # new independent-cache scheme.
+        r_D = 8; r_b = 10
+        T_minus = 10.0; T_plus = 5.0
+        eta = 1e-3
+        w0_D = pi / (5 * beta)
+        t0_D = 2pi / (2^r_D * w0_D)
+        bd = _make_b_dicts(beta, sigma; r_b, T_minus, T_plus, eta)
+        t0_bm = bd.t0_minus; t0_bp = bd.t0_plus
+        b_minus = bd.b_minus; b_plus = bd.b_plus
+        t0_bm_evol = t0_bm / sigma
+        t0_bp_evol = beta * t0_bp
+
+        jumps_h = _build_jumps_in_basis(ham, ham.eigvecs, n)
+        B_ref   = B_time(jumps_h, ham, b_minus, b_plus, t0_bm, t0_bp, beta, sigma)
+
+        errs = Float64[]
+        for M in (1, 2, 4, 8)
+            triple = TrotterTriple(ham, t0_D, t0_bm_evol, t0_bp_evol, M, M, M)
+            jumps_t = _build_jumps_in_basis(ham, triple.eigvecs, n)
+            B_t = B_trotter(jumps_t, triple, b_minus, b_plus, t0_bm, t0_bp, beta, sigma)
+            U = ham.eigvecs' * triple.eigvecs
+            push!(errs, opnorm(B_ref - U * B_t * U'))
+        end
+        @test issorted(errs; rev = true)
+        # Each doubling of M should give roughly 4× improvement (Strang -2).
+        @test all(errs[k] / errs[k+1] > 3 for k in 1:length(errs)-1)
+    end
+
+    @testset "Independent leg-knob tightening (M_b_minus only)" begin
+        # Hold M_D = M_b_plus = 1 (coarse) and tighten M_b_minus. The error
+        # should fall as the outer-leg substep shrinks, independently of the
+        # other legs (no shared-δt₀ coupling).
+        r_D = 8; r_b = 10
+        T_minus = 10.0; T_plus = 5.0
+        eta = 1e-3
+        w0_D = pi / (5 * beta)
+        t0_D = 2pi / (2^r_D * w0_D)
+        bd = _make_b_dicts(beta, sigma; r_b, T_minus, T_plus, eta)
+        t0_bm = bd.t0_minus; t0_bp = bd.t0_plus
+        b_minus = bd.b_minus; b_plus = bd.b_plus
+        t0_bm_evol = t0_bm / sigma
+        t0_bp_evol = beta * t0_bp
+
+        jumps_h = _build_jumps_in_basis(ham, ham.eigvecs, n)
+        B_ref   = B_time(jumps_h, ham, b_minus, b_plus, t0_bm, t0_bp, beta, sigma)
+
+        errs = Float64[]
+        for M_bm in (1, 2, 4, 8, 16)
+            triple = TrotterTriple(ham, t0_D, t0_bm_evol, t0_bp_evol, 1, M_bm, 8)
+            jumps_t = _build_jumps_in_basis(ham, triple.eigvecs, n)
+            B_t = B_trotter(jumps_t, triple, b_minus, b_plus, t0_bm, t0_bp, beta, sigma)
+            U = ham.eigvecs' * triple.eigvecs
+            push!(errs, opnorm(B_ref - U * B_t * U'))
+        end
+        # Errors must strictly decrease as M_b_minus grows.
+        @test issorted(errs; rev = true)
+        # Aggressive improvement at large M_b_minus.
+        @test errs[end] / errs[1] < 0.01
+    end
+
+    @testset "make_trotter_for_config returns TrotterTriple for KMS+Trotter" begin
+        cfg_kms = make_config(Lindbladian(), TrotterDomain(); num_qubits=3, construction=KMS())
+        trotter_kms = make_trotter_for_config(N3_HAM, cfg_kms)
+        @test trotter_kms isa TrotterTriple
+        @test trotter_kms isa AbstractTrotter
+        # Legacy num_trotter_steps_per_t0 = 10 → all three legs at M=10.
+        @test trotter_kms.D.num_trotter_steps_per_t0       == 10
+        @test trotter_kms.b_minus.num_trotter_steps_per_t0 == 10
+        @test trotter_kms.b_plus.num_trotter_steps_per_t0  == 10
+
+        # GNS branch still returns legacy single-cache TrottTrott.
+        cfg_gns = make_config(Lindbladian(), TrotterDomain(); num_qubits=3, construction=GNS())
+        trotter_gns = make_trotter_for_config(N3_HAM, cfg_gns)
+        @test trotter_gns isa TrottTrott
+        @test !(trotter_gns isa TrotterTriple)
+    end
+
+    @testset "Per-leg M_user fields in Config + accessors" begin
+        cfg = Config(
+            sim = Lindbladian(),
+            domain = TrotterDomain(),
+            construction = KMS(),
+            num_qubits = 3,
+            with_linear_combination = true,
+            beta = BETA,
+            sigma = SIGMA,
+            s = 0.4,
+            a = BETA / 30.0,
+            num_energy_bits = NUM_ENERGY_BITS,
+            w0 = W0,
+            t0 = T0,
+            num_trotter_steps_per_t0 = 4,
+            num_trotter_steps_per_t0_b_minus = 12,
+        )
+        # Per-leg M_b_minus overrides legacy; the other two fall back to legacy.
+        @test register_M_D(cfg)        == 4
+        @test register_M_b_minus(cfg)  == 12
+        @test register_M_b_plus(cfg)   == 4
+
+        trotter = make_trotter_for_config(N3_HAM, cfg)
+        @test trotter isa TrotterTriple
+        @test trotter.D.num_trotter_steps_per_t0       == 4
+        @test trotter.b_minus.num_trotter_steps_per_t0 == 12
+        @test trotter.b_plus.num_trotter_steps_per_t0  == 4
+    end
+
+    @testset "construct_lindbladian with TrotterTriple (smoke)" begin
+        cfg = make_config(Lindbladian(), TrotterDomain(); num_qubits=3, construction=KMS())
+        trotter = make_trotter_for_config(N3_HAM, cfg)
+        @test trotter isa TrotterTriple
+        jumps = _build_jumps_in_basis(N3_HAM, trotter.eigvecs, n)
+        L = construct_lindbladian(jumps, cfg, N3_HAM; trotter=trotter)
+        @test size(L) == (64, 64)
+        # σ_β in V_D
+        sigma_beta = trotter.eigvecs' * N3_HAM.eigvecs * N3_HAM.gibbs *
+                     N3_HAM.eigvecs' * trotter.eigvecs
+        # ‖L · σ_β‖_HS should be small (residue of detailed balance); not
+        # asserting an exact value here, just that it's bounded.
+        @test norm(L * vec(sigma_beta)) < 1e-2
+    end
+end
