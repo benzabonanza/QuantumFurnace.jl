@@ -130,6 +130,10 @@ export fit_biexponential_decay, BiexpFitResult
 export estimate_mixing_time, MixingTimeEstimate
 export eigenmode_mixing_time
 export SimulationTimeBudget, compute_simulation_time
+
+# --- Empirical scaling-law extraction (qf-now) ---
+export ScalingFit, fit_scaling, predict_scaling, aicc_weights, compare_models,
+       formula_string, scaling_fit_grid
 # STAGING: LSIFramework, compute_LSI_alpha2
 
 # --- Internal Implementation ---
@@ -163,6 +167,7 @@ include("lindblad_action.jl")
 include("results.jl")
 include("fitting.jl")
 include("mixing.jl")
+include("scaling_fit.jl")
 # `errors.jl` retired in qf-6z9.4 — moved to `src/staging/errors.jl` (commented out)
 include("simulation_time.jl")
 

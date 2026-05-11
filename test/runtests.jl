@@ -70,6 +70,7 @@ const SANDBOX_FILES = String[
     "test_krylov_crossvalidation.jl",
     "test_fitting.jl",
     "test_mixing.jl",
+    "test_scaling_fit.jl",
     "test_simulation_time.jl",
     "test_smooth_metro_eta.jl",
     "test_gqsp_config.jl",
