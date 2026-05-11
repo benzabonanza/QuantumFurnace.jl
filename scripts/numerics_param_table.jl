@@ -74,12 +74,13 @@ ham_filename(n::Integer) = "heis_$(FAMILY_TAG)_periodic_n$(n).bson"
 # Per-cell parameter recipe
 # ---------------------------------------------------------------------------
 
-# Fixed integration-window choices (qf-7xt: ~3× the b_± supports at β=10 σ=0.1
-# so the truncation atol = 1e-12 sets the effective range).  Filter-independent
-# at the levels relevant for the recipe; (n, β)-shifts are absorbed by the
-# 1–2 bit safety margin in r_b± below.
-const T_MINUS = 18.0
-const T_PLUS  = 12.0
+# Recipe targets for the b_± integration windows (qf-7xt: ~3× the b_± supports
+# at β=10 σ=0.1 so the truncation atol = 1e-12 sets the effective range).  These
+# are TARGETS — the actual `T_±` per cell are nudged to satisfy the qf-d0w
+# shared-δt₀ commensurability constraint (β·t0_b± = integer · t0_D), so the
+# realised window is within ~10 % of the target.
+const T_MINUS_TARGET = 18.0
+const T_PLUS_TARGET  = 12.0
 
 # r_D table (filter × ε_target).  Baseline at (n=4, β=10) per
 # quadrature-convergence-summary.md; **+1 bit safety** for cross-(n, β)
@@ -111,11 +112,29 @@ function _r_bp(filter::Symbol, eps::Float64)
     end
 end
 
-# Trotter step counts (parameter-recommendations.md, still authoritative
-# for the ε-vs-M trade).  These set _smaller-of_-{Trotter, splitting} budget;
-# splitting δ_step below is the binding constraint for ε ≥ 1e-3.
-function _M_D(eps::Float64)
-    eps == 1e-3 && return 1
+# Trotter step counts.
+#
+# qf-e4z.5 audit 2026-05-11: the Strang error per OFT-grid sample scales as
+# O(δt₀³ ‖[H_a, H_b]‖²) where δt₀ = t0_D/M_D = 2π / (M_D · ω_range).  For our
+# σ = 1/β convention, ω_range = 2(‖H‖ + 8/β) is smaller at higher β, so t0_D
+# grows ≈ linearly with β — and the Trotter floor in the channel's fixed point
+# grows superlinearly.  Empirical floor at (n=3, β=10, δ=1e-3, M_D=1):
+#
+#   M_D = 1  →  floor ≈ 3.8 × 10⁻³  (Trotter-dominated)
+#   M_D = 2  →  floor ≈ 1.2 × 10⁻³
+#   M_D = 4  →  floor ≈ 9.7 × 10⁻⁴  (≈ irreducible NUFFT / quadrature floor)
+#   M_D ≥ 8  →  floor saturates at ≈ 9.7 × 10⁻⁴
+#
+# For ε = 1e-3 with the ~10⁻³ irreducible floor (no measurable improvement
+# from raising r_b±, r_D, krylovdim), the binding constraint is Trotter.
+# Pick M_D per β so the Trotter floor sits at the irreducible plateau:
+function _M_D(eps::Float64, beta::Float64)
+    if eps == 1e-3
+        beta ≤ 5.0  && return 1
+        beta ≤ 10.0 && return 4
+        beta ≤ 20.0 && return 8
+        return 16
+    end
     eps == 1e-4 && return 2
     eps == 1e-5 && return 4
     return 16  # 1e-6
@@ -123,9 +142,24 @@ end
 function _M_bm(eps::Float64); eps <= 1e-6 ? 2 : 1; end
 function _M_bp(eps::Float64); eps <= 1e-6 ? 2 : 1; end
 
-# δ_step from the jump-wise generator-splitting recipe (slope +2 in δ).
-function _delta_step(eps::Float64)
-    eps == 1e-3 && return 5e-2
+# δ_step from the jump-wise generator-splitting recipe.
+# The legacy recipe (`5e-2` for ε=1e-3) assumed slope +2 in δ, but the empirical
+# floor `‖ρ_∞ − ρ_β‖₁/2` measured by `predict_channel_trajectory` for the
+# TrotterDomain + GQSP channel scales closer to **slope +1** in δ, with a
+# β-dependent prefactor (qf-e4z.5 audit 2026-05-11):
+#
+#   β =  5 : floor/δ ≈ 0.06 – 0.10
+#   β = 10 : floor/δ ≈ 0.08 – 0.18
+#   β = 20 : floor/δ ≈ 0.04 – 0.34   (worst at n=3 — likely accidental near-resonance)
+#
+# To keep floor < ε with ~3× headroom, set δ ≈ ε / (3 · max floor/δ at that β):
+function _delta_step(eps::Float64, beta::Float64)
+    if eps == 1e-3
+        beta ≤ 5.0  && return 2.5e-3
+        beta ≤ 10.0 && return 1.0e-3
+        beta ≤ 20.0 && return 4.0e-4
+        return 2.0e-4
+    end
     eps == 1e-4 && return 1.5e-2
     eps == 1e-5 && return 5e-3
     return 1.5e-3  # 1e-6
@@ -179,16 +213,34 @@ function pick_channel_params(n::Integer, beta::Real, eps::Real, filter::Symbol;
     w0_D = isnan(omega_range) ? NaN : omega_range / 2.0^r_D
     t0_D = isnan(omega_range) ? NaN : 2π / (2.0^r_D * w0_D)
 
-    w0_bm = π / T_MINUS
-    w0_bp = π / T_PLUS
-    t0_bm = 2.0 * T_MINUS / 2.0^r_bm
-    t0_bp = 2.0 * T_PLUS  / 2.0^r_bp
+    # qf-e4z.5.1: pick t0_b± as integer multiples of t0_D/β so the qf-d0w
+    # shared-δt₀ check β·t0_b± / t0_D ∈ ℤ passes for `make_trotter_for_config`.
+    # k_b± = round(target · β / t0_D), clamped to ≥ 1 for defensive correctness.
+    # `T_±` and `w0_b±` are then derived from the picked t0_b± (so the OFT grid
+    # relation 2π = t0 · w0 · 2^r holds exactly).  The shift in T_± is < 10 % of
+    # the recipe target for our (β, ε) cells; quadrature safety is preserved by
+    # the 1-bit margin already baked into r_b±.
+    if isnan(t0_D)
+        t0_bm = 2.0 * T_MINUS_TARGET / 2.0^r_bm
+        t0_bp = 2.0 * T_PLUS_TARGET  / 2.0^r_bp
+    else
+        t0_bm_target = 2.0 * T_MINUS_TARGET / 2.0^r_bm
+        t0_bp_target = 2.0 * T_PLUS_TARGET  / 2.0^r_bp
+        k_bm = max(1, round(Int, beta * t0_bm_target / t0_D))
+        k_bp = max(1, round(Int, beta * t0_bp_target / t0_D))
+        t0_bm = k_bm * t0_D / beta
+        t0_bp = k_bp * t0_D / beta
+    end
+    T_minus = 2.0^(r_bm - 1) * t0_bm
+    T_plus  = 2.0^(r_bp - 1) * t0_bp
+    w0_bm = π / T_minus
+    w0_bp = π / T_plus
 
-    M_D    = _M_D(Float64(eps))
+    M_D    = _M_D(Float64(eps), Float64(beta))
     M_bm   = _M_bm(Float64(eps))
     M_bp   = _M_bp(Float64(eps))
 
-    delta = _delta_step(Float64(eps))
+    delta = _delta_step(Float64(eps), Float64(beta))
     eta   = _eta(Float64(eps), Float64(beta))
 
     # Filter-specific sub-fields
@@ -210,8 +262,10 @@ function pick_channel_params(n::Integer, beta::Real, eps::Real, filter::Symbol;
         r_bm = r_bm, w0_bm = Float64(w0_bm), t0_bm = Float64(t0_bm),
         # Inner coherent register
         r_bp = r_bp, w0_bp = Float64(w0_bp), t0_bp = Float64(t0_bp),
-        # Time-window choices
-        T_minus = T_MINUS, T_plus = T_PLUS,
+        # Time-window choices (qf-e4z.5.1: derived from the picked t0_b± so the
+        # OFT grid relation 2π = t0·w0·2^r holds exactly; the realised T_± is
+        # within ~10 % of the target T_MINUS_TARGET = 18, T_PLUS_TARGET = 12).
+        T_minus = Float64(T_minus), T_plus = Float64(T_plus),
         # Trotter Ms, δ, η
         M_D = M_D, M_bm = M_bm, M_bp = M_bp,
         delta = Float64(delta), eta = Float64(eta),
@@ -323,7 +377,7 @@ S1 specifically targets smooth-Metro CKG; pass other filters explicitly
 to extend.
 """
 function build_ideal_lindbladian_table(;
-        n_values::AbstractVector{<:Integer} = 3:6,
+        n_values::AbstractVector{<:Integer} = 3:9,
         beta_values::AbstractVector{<:Real} = [5.0, 10.0, 20.0],
         # ε=1e-6 dropped from default 2026-05-08 — derive from λ_2 in post-processing.
         # Pass `eps_values = [1e-3, 1e-6]` to opt back in (see header comment).
@@ -357,7 +411,8 @@ per `n` and computes `‖H‖ = opnorm(ham.data)` (used to derive `ω_range` and
 hence `w0_D`).  Hamiltonian filename: `heis_xxx_zzdisordered_periodic_n{n}.bson`.
 """
 function build_table(;
-        n_values::AbstractVector{<:Integer} = 3:6,
+        # qf-e4z.5 Phase B: extend to n=7..9 for the cluster-scale cells.
+        n_values::AbstractVector{<:Integer} = 3:9,
         beta_values::AbstractVector{<:Real} = [5.0, 10.0, 20.0],
         # ε=1e-6 dropped from default 2026-05-08 — derive from λ_2 in post-processing.
         # Pass `eps_values = [1e-3, 1e-6]` to opt back in (see header comment).
@@ -606,9 +661,9 @@ function write_doc(rows::Vector{NamedTuple}, sanity_report::Vector{NamedTuple};
         println(io, "  | Gaussian | 5 | 7 |")
         println(io, "  | Smooth / Kinky Metro | 5 | 15 |")
         println(io, "")
-        println(io, "- **Time windows**: T_- = 18, T_+ = 12 (~3× the b_± supports at β=10, σ=0.1).")
+        println(io, "- **Time-window targets**: T_- ≈ 18, T_+ ≈ 12 (~3× the b_± supports at β=10, σ=0.1).  The realised `T_±` per cell is the integer-multiple snap `2^(r_b±-1) · k_b± · t0_D / β` so the qf-d0w shared-δt₀ constructor accepts the natural Trotter steps (β·t0_b±, t0_D); within ~10 % of the target.")
         println(io, "- **w0_D = ω_range / 2^r_D** with **ω_range = 2(‖H‖ + 8σ)**, **σ = 1/β**.  ‖H‖ measured per fixture.")
-        println(io, "- **w0_b_-** = π/T_- = π/18.  **w0_b_+** = π/T_+ = π/12.  **t0_b_±** = 2T_±/2^r_b_±.")
+        println(io, "- **w0_b_±** = π/T_± (derived from realised T_±).  **t0_b_±** = k_b± · t0_D / β with k_b± = round(β · 2T_±_target / (2^r_b± · t0_D)).")
         println(io, "- **M_D**: 1, 2, 4, 16 for ε ∈ {1e-3, 1e-4, 1e-5, 1e-6}.  **M_b_±** = 1 (ε ≥ 1e-5) / 2 (ε = 1e-6).")
         println(io, "- **δ_step**: 5e-2, 1.5e-2, 5e-3, 1.5e-3 (jump-wise splitting recipe, slope +2 in δ).")
         println(io, "- **η** = ε / (3β).  Below t0' = 2T_+/2^r_b+ for all cells, so the η-cutoff branch in `_compute_b_plus_metro` is dead code (qf-7xt convention).")
