@@ -228,6 +228,86 @@ is sub-100ms per `construct_lindbladian` on the test sandbox.
 Generating script: `scripts/scratch_e4z20_independent_controllability.jl`.
 Refined recipe sweep at `/tmp/qf_test_proper_recipe.jl` (test artefact).
 
+## Scaling check at n ∈ {3, 4, 5}
+
+Quick controllability + cost scan with the same recipe family at larger
+system sizes. Script:
+`scripts/scratch_e4z20_scaling_n3_n4_n5.jl`.
+
+| $n$ | $d$ | recipe | residue | $\|\mathcal{L}\|$ build | cache |
+|---|---|---|---|---|---|
+| 3 | 8  | $(7,6,14),\ M=(64,64,1)$ | $7.25\times 10^{-7}$ | 5.5 s¹ | 7 KB |
+| 3 | 8  | $(8,6,14),\ M=(128,128,1)$ | $6.38\times 10^{-7}$ | 0.05 s | 7 KB |
+| 4 | 16 | $(7,6,14),\ M=(64,64,1)$ | $1.02\times 10^{-6}$ **borderline** | 0.34 s | 30 KB |
+| 4 | 16 | $(8,6,14),\ M=(128,128,1)$ | $7.36\times 10^{-7}$ | 0.50 s | 30 KB |
+| 5 | 32 | $(7,6,14),\ M=(64,64,1)$ | $2.36\times 10^{-7}$ ✓ | 21.4 s | 121 KB |
+| 5 | 32 | $(8,6,14),\ M=(128,128,1)$ | $1.21\times 10^{-7}$ ✓ | 49.0 s | 121 KB |
+
+¹ The first n=3 call includes JIT/precompile overhead; the +1 bit r_D row
+shows the post-warmup cost.
+
+**Verdict.** The qf-7xt minimal recipe $(7,6,14),\ M=(64,64,1)$ holds up
+across $n=3$ – $5$ to within a 1-bit $r_D$ bump at $n=4$ (qf-7xt's "1-2
+bit shift with $(n, \beta)$" prediction). $n=5$ is actually CHEAPER per
+bit than $n=3$ — the Bohr-frequency density grows with $n$, so the
+quadrature aliasing shrinks and the qf-7xt recipe is automatically
+tighter at larger system size.
+
+### Per-call cost breakdown
+
+`B_trotter(::TrotterTriple)` total wall vs. basis-rotation wall at
+$(r_D \in \{7,8,9\}, r_{b_-} = 6, r_{b_+} = 14), M = (128, 128, 1)$:
+
+| $n$ | $d$ | `B_trotter` total | rotation | ratio | cache MB | NUFFT KB |
+|---|---|---|---|---|---|---|
+| 3 | 8  | 19.1 ms  | 8.15 μs  | 0.043% | 0.01 | 121 |
+| 4 | 16 | 43.2 ms  | 45.3 μs  | 0.105% | 0.03 | 964 |
+| 5 | 32 | 241.1 ms | 262.8 μs | 0.109% | 0.12 | 7696 |
+
+**Rotation overhead stays under 0.15%** of total B_trotter wall across
+$n=3$ – $5$. The inner τ-loop ($O(N_{b_+} \cdot n_\text{jumps} \cdot d^3)$
+where $N_{b_+}$ is the truncated-grid effective size) dominates throughout.
+The user's concern about needing to cache the V_bp jump rotation inside
+`JumpOp` (which would save the 9-262μs per-call overhead) is unjustified
+at these system sizes — even at the worst measured ratio (0.11% at n=5),
+the per-call savings would be a wash.
+
+The ratio is essentially flat in $n$ because both rotation and inner loop
+scale as $n_\text{jumps} \cdot d^3$. At $n=9$ ($d=512$) the theoretical
+estimate from the issue (~18× rotation : inner-loop ratio) was a pessimistic
+bound; the truncated $b_+$ dictionary keeps $N_{b_+}$ in the tens-of-thousands
+range regardless of $n$, so the ratio stays $\le 1\%$ at all measured $n$.
+
+### Storage breakdown
+
+- **TrotterTriple cache**: 3 sub-caches (each holding `eigvecs`,
+  `eigvals_t0`, `bohr_freqs`) + 3 rotation matrices (each $d \times d$).
+  Total $\approx 12 d^2$ ComplexF64 (192 d² bytes). At $n=9$ ($d = 512$):
+  **48 MB** — well within the project's 256 GB OFT-cache target. About
+  $\sim 4\times$ the legacy single-cache footprint ($\approx 3 d^2$).
+- **NUFFT prefactor table**: unchanged from legacy. Built from
+  `triple.bohr_freqs = triple.D.bohr_freqs` (via the `getproperty`
+  alias) — the same data the qf-d0w shared-δt₀ `TrottTrott` used. Storage
+  scales as $N_\omega \cdot d^2$ where $N_\omega \sim 2^{r_D}$; at $n=5$,
+  $r_D = 9$, the table is 7.7 MB.
+
+### NUFFT impact
+
+**None.** The NUFFT prefactor pipeline (`_prepare_oft_nufft_prefactors`)
+reads `ham_or_trott.bohr_freqs`. For `TrotterTriple` this `getproperty`
+call routes to the dissipative leg's `bohr_freqs`. The legacy qf-d0w
+`TrottTrott` already exposed its single eigenbasis's bohr_freqs as
+`bohr_freqs` (derived from the shared-$\delta t_0$ Strang operator at
+duration $t_{0,D}$), and that is the same data the V_D leg produces in
+the new scheme. NUFFT cost and storage are byte-identical to before.
+
+The OFT inner-loop work in `apply_lindbladian!` / `construct_lindbladian`
+is also unchanged: dissipative jumps live in V_D basis (just as they did
+in the qf-d0w shared scheme), the NUFFT prefactor table is indexed by
+the V_D bohr_freqs, and the inner-product `oft!` call sees exactly the
+same data. Only the coherent term `B_trotter` was refactored — and that
+runs WITHOUT NUFFT (it uses `eigvals_t0` powers directly).
+
 ## Code — minimal recipe
 
 ```julia
