@@ -506,6 +506,108 @@ B_trotter(jumps::AbstractVector{<:JumpOp}, trotter::TrottTrott, b_minus, b_plus,
     beta::Real, sigma::Real) =
     B_trotter(jumps, trotter, b_minus, b_plus, trotter.t0, trotter.t0, beta, sigma)
 
+# ---------------------------------------------------------------------------
+# qf-e4z.20.3 — B_trotter on TrotterTriple (independent per-leg caches).
+#
+# Pipeline (jumps arrive in V_D basis; final B is returned in V_D):
+#
+#   1. Rotate jumps V_D → V_bp:   J_bp = R_bp_in_D · J_D · R_bp_in_D'.
+#   2. Inner τ-loop in V_bp:      runs against `triple.b_plus.eigvals_t0`,
+#                                  `triple.b_plus.t0`. Output: b_+_summand in V_bp.
+#   3. Rotate summand V_bp → V_bm: summand_bm = R_bm_in_bp · summand_bp · R_bm_in_bp'.
+#   4. Outer t-loop in V_bm:      runs against `triple.b_minus.eigvals_t0`,
+#                                  `triple.b_minus.t0`. Output: B in V_bm.
+#   5. Rotate B V_bm → V_D:       B_D = R_bm_in_D' · B_bm · R_bm_in_D.
+#
+# Convention: R_{Y←X} := V_Y' · V_X, so M_Y = R_{Y←X} · M_X · R_{Y←X}'.
+# The rotations are O(d^3) per call (6 GEMMs) — sub-dominant to the
+# threaded τ × jumps inner loop at d ≤ 64 and competitive at d ≤ 512.
+# ---------------------------------------------------------------------------
+function B_trotter(
+    jumps::AbstractVector{<:JumpOp},
+    triple::TrotterTriple,
+    b_minus, b_plus,
+    t0_outer::Real, t0_inner::Real,
+    beta, sigma,
+)
+    d  = size(triple.D.eigvecs, 1)
+    CT = Complex{eltype(triple.D.bohr_freqs)}
+
+    # Step 1: rotate jumps V_D → V_bp.  J_bp = R_bp_in_D · J_D · R_bp_in_D'.
+    R_bp_in_D = triple.R_bp_in_D
+    jumps_bp  = Vector{JumpOp}(undef, length(jumps))
+    @inbounds for (k, j) in pairs(jumps)
+        j_bp = Matrix{CT}(R_bp_in_D * j.in_eigenbasis * R_bp_in_D')
+        jumps_bp[k] = JumpOp(j.data, j_bp, j.orthogonal, j.hermitian)
+    end
+
+    # Step 2: inner τ-loop in V_bp. Reuses the existing threaded helper —
+    # `eigvals_inner = triple.b_plus.eigvals_t0` is diagonal in V_bp.
+    eigvals_inner = triple.b_plus.eigvals_t0
+    t0_step_inner = triple.b_plus.t0
+    tau_keys = collect(keys(b_plus))
+    n_jumps  = length(jumps_bp)
+    n_inner_work = length(tau_keys) * n_jumps
+
+    if Threads.nthreads() > 1 && n_inner_work >= OMEGA_THREAD_THRESHOLD
+        b_plus_summand_bp = _b_trotter_inner_threaded(
+            jumps_bp, eigvals_inner, b_plus, tau_keys, beta, t0_step_inner, d, CT)
+    else
+        b_plus_summand_bp = zeros(CT, d, d)
+        diag_u  = Vector{CT}(undef, d)
+        diag_u2 = Vector{CT}(undef, d)
+        tmp     = Matrix{CT}(undef, d, d)
+        M       = Matrix{CT}(undef, d, d)
+        for (tau, b_tau) in b_plus
+            num_t0_steps = Int(round(tau * beta / t0_step_inner))
+            @. diag_u  = eigvals_inner ^ num_t0_steps
+            @. diag_u2 = eigvals_inner ^ (-2 * num_t0_steps)
+            diag_u_row = transpose(diag_u)
+            for jump_a in jumps_bp
+                jump_a_eig = jump_a.in_eigenbasis
+                @. tmp = diag_u2 * jump_a_eig
+                mul!(M, jump_a_eig', tmp)
+                b_plus_summand_bp .+= b_tau .* diag_u .* M .* diag_u_row
+            end
+        end
+    end
+
+    # Step 3: rotate summand V_bp → V_bm.  summand_bm = R_bm_in_bp · summand_bp · R_bm_in_bp'.
+    R_bm_in_bp        = triple.R_bm_in_bp
+    b_plus_summand_bm = Matrix{CT}(R_bm_in_bp * b_plus_summand_bp * R_bm_in_bp')
+
+    # Step 4: outer t-loop in V_bm. `eigvals_outer = triple.b_minus.eigvals_t0`
+    # is diagonal in V_bm.
+    eigvals_outer = triple.b_minus.eigvals_t0
+    t0_step_outer = triple.b_minus.t0
+    t_keys = collect(keys(b_minus))
+    if Threads.nthreads() > 1 && length(t_keys) >= OMEGA_THREAD_THRESHOLD
+        B_bm = _b_trotter_outer_threaded(
+            eigvals_outer, b_plus_summand_bm, b_minus, t_keys, sigma, t0_step_outer, d, CT)
+    else
+        B_bm = zeros(CT, d, d)
+        diag_u = Vector{CT}(undef, d)
+        for (t, b_t) in b_minus
+            num_t0_steps = Int(round(t / (sigma * t0_step_outer)))
+            @. diag_u = eigvals_outer ^ num_t0_steps
+            diag_u_row = transpose(diag_u)
+            B_bm .+= b_t .* conj.(diag_u) .* b_plus_summand_bm .* diag_u_row
+        end
+    end
+
+    # Step 5: rotate V_bm → V_D.  B_D = R_bm_in_D' · B_bm · R_bm_in_D.
+    R_bm_in_D = triple.R_bm_in_D
+    B_D = Matrix{CT}(R_bm_in_D' * B_bm * R_bm_in_D)
+
+    return B_D .* (t0_outer * t0_inner)  # B in V_D
+end
+
+# Legacy form for TrotterTriple: forwards using `triple.D.t0` for both grid
+# spacings (matches the pre-qf-9z0 single-cache convention).
+B_trotter(jumps::AbstractVector{<:JumpOp}, triple::TrotterTriple, b_minus, b_plus,
+    beta::Real, sigma::Real) =
+    B_trotter(jumps, triple, b_minus, b_plus, triple.D.t0, triple.D.t0, beta, sigma)
+
 #* GQSP POLYNOMIAL APPROXIMATION ------------------------------------------------------------------------------------------
 """
     _coherent_unitary_step(jump, B, precomputed_data, t0_outer, t0_inner, delta_eff,
