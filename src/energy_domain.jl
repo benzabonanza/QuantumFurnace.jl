@@ -12,11 +12,11 @@ function pick_transition(config::Config{<:Any, <:Any, KMS}, w::Real)
     sqrtB = sqrt(config.beta / 4) * abs(w + config.beta * config.sigma^2 / 2)
     if config.s == 0 && config.a == 0
         return exp(-config.beta * max(w + config.beta * config.sigma^2 / 2, 0.0))
-    elseif config.s == 0 && config.a != 0
-        return exp(-2 * sqrtA * sqrtB - config.beta * w / 2 - config.beta^2 * config.sigma^2 / 4)
     else
         # Smooth Metropolis (thesis eq:smooth-metro). Handles any a, including a == 0
         # (the thesis-main case). At a == 0 reduces to γ_M^{(0)} × (1/2)[erfc(z_-) + e^{β|ω̃|}erfc(z_+)].
+        # The (s=0, a>0) "a-regularized, no smoothing" case is rejected by
+        # validate_config! and therefore unreachable here.
         u_min = sqrt(config.beta * config.sigma^2 * config.s / 2)
         transition_b0 = exp(-2 * sqrtA * sqrtB - config.beta * w / 2 - config.beta^2 * config.sigma^2 / 4)
         return transition_b0 * (erfc(sqrtA * u_min - sqrtB / u_min) + exp(4 * sqrtA * sqrtB) * erfc(sqrtA * u_min + sqrtB / u_min)) / 2
@@ -33,10 +33,10 @@ function pick_transition(config::Config{<:Any, <:Any, GNS}, w::Real)
     sqrtB = sqrt(config.beta / 4) * abs(w)
     if config.s == 0 && config.a == 0
         return exp(-config.beta * max(w, 0.0))
-    elseif config.s == 0 && config.a != 0
-        return exp(-2 * sqrtA * sqrtB - config.beta * w / 2)
     else
         # Smooth Metropolis (un-shifted GNS form). Handles any a, including a == 0.
+        # The (s=0, a>0) "a-regularized, no smoothing" case is rejected by
+        # validate_config! and therefore unreachable here.
         u_min = sqrt(config.beta * config.sigma^2 * config.s / 2)
         transition_b0 = exp(-2 * sqrtA * sqrtB - config.beta * w / 2)
         return transition_b0 * (erfc(sqrtA * u_min - sqrtB / u_min) + exp(4 * sqrtA * sqrtB) * erfc(sqrtA * u_min + sqrtB / u_min)) / 2
@@ -55,13 +55,10 @@ function _pick_transition_kms(config::Config{<:Any, <:Any, KMS})
 
     # sqrtA = sqrt((4 * a + 1) / 8)
     sqrtA = sqrt(config.beta / 4) * sqrt(4 * config.a + 1)
+    # The (s=0, a>0) "a-regularized, no smoothing" case is rejected by
+    # validate_config! and therefore unreachable here.
     if (config.s == 0 && config.a == 0)  # Kinky Metropolis (γ_M^{(0)})
         return w -> exp(-config.beta * max(w + config.beta * config.sigma^2 / 2, 0.0))
-    elseif (config.s == 0 && config.a != 0)  # a-regularized, no smoothing
-        return w -> begin
-            sqrtB = sqrt(config.beta / 4) * abs(w + config.beta * config.sigma^2 / 2)
-            return exp((- 2 * sqrtA * sqrtB - config.beta * w / 2 - config.beta^2 * config.sigma^2 / 4))
-        end
     else  # config.s != 0 — smooth Metropolis (thesis eq:smooth-metro), any a (incl. a == 0)
         return w -> begin
             sqrtB = sqrt(config.beta / 4) * abs(w + config.beta * config.sigma^2 / 2)
@@ -104,15 +101,11 @@ function _pick_transition_gns(config::Config{<:Any, <:Any, GNS})
     end
 
     sqrtA = sqrt(config.beta / 4) * sqrt(4 * config.a + 1)
+    # The (s=0, a>0) "a-regularized, no smoothing" case is rejected by
+    # validate_config! and therefore unreachable here.
     if (config.s == 0 && config.a == 0)
         # Kinky Metropolis — UN-SHIFTED.
         return w -> exp(-config.beta * max(w, 0.0))
-    elseif (config.s == 0 && config.a != 0)
-        # a-regularized, no smoothing — UN-SHIFTED.
-        return w -> begin
-            sqrtB = sqrt(config.beta / 4) * abs(w)
-            return exp((-2 * sqrtA * sqrtB - config.beta * w / 2))
-        end
     else  # config.s != 0 — smooth Metropolis (un-shifted GNS form), any a (incl. a == 0)
         return w -> begin
             sqrtB = sqrt(config.beta / 4) * abs(w)
@@ -134,13 +127,16 @@ the grid-independent replacement for the prior `1.0 / maximum(transition.(energy
 used to populate `gamma_norm_factor`.
 
 For every standard rate family currently supported (KMS / GNS Gaussian, kinky
-Metropolis, a-regularized, smooth Metropolis at any `s ≥ 0`, `a ≥ 0`), the
+Metropolis at `s = a = 0`, smooth Metropolis at any `s > 0, a ≥ 0`), the
 continuum supremum is exactly `1.0`:
 - Gaussian: `γ(ω) = exp(-(ω+ω_γ)²/(2σ_γ²))`, sup = 1 at `ω = -ω_γ`.
 - Kinky Metropolis (KMS): `γ(ω) = exp(-β·max(ω + βσ²/2, 0))`, sup = 1 on `ω ≤ -βσ²/2`.
 - Kinky Metropolis (GNS, un-shifted): `γ(ω) = exp(-β·max(ω, 0))`, sup = 1 on `ω ≤ 0`.
-- a-regularized and smooth Metropolis (any `s, a ≥ 0`): sup = 1, attained as
-  `ω → -∞` (smooth) or in closed form on the half-line (kinky).
+- Smooth Metropolis (any `a ≥ 0`, `s > 0`): sup = 1, attained as `ω → -∞`.
+
+The `(s = 0, a > 0)` "a-regularized, no smoothing" case is rejected by
+`validate_config!` (it is outside the thesis's `(a, s)` taxonomy: smoothing
+requires `s > 0`; kinky requires `s = a = 0`).
 
 The reciprocal of this value is what populates `gamma_norm_factor` in
 `_precompute_data` (so `gamma_norm_factor = 1 / pick_gamma_sup(config) = 1.0`
