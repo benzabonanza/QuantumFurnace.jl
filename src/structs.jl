@@ -123,7 +123,15 @@ Mixing legacy and new on the same field is rejected at validation.
     with_linear_combination::Bool
 
     # Physics parameters
+    # `beta` is the algorithm-side inverse temperature β_alg (against the
+    # rescaled spectrum stored in `ham.data` / `ham.eigvals`). Required.
+    # `beta_phys` is the optional physical inverse temperature β_phys (against
+    # the un-rescaled Hamiltonian); when set, `validate_config!(cfg, ham)`
+    # enforces `β_alg == β_phys · ham.rescaling_factor`. Drivers that author
+    # at the physical scale should set both: `β_phys = X` and
+    # `β_alg = X · ham.rescaling_factor` (see qf-6vr / Phase qf-bphys).
     beta::T
+    beta_phys::Union{T, Nothing} = nothing
     sigma::T
     gaussian_parameters::Union{Tuple{T, T}, Tuple{Nothing, Nothing}} = (nothing, nothing)
     a::Union{T, Nothing} = nothing
@@ -208,6 +216,37 @@ legacy field when the explicit per-term field is `nothing`.
 @inline register_t0_b_plus(cfg::Config) = cfg.t0_b_plus !== nothing ? cfg.t0_b_plus : cfg.t0
 @inline register_w0_b_plus(cfg::Config) = cfg.w0_b_plus !== nothing ? cfg.w0_b_plus : cfg.w0
 @inline register_r_b_plus(cfg::Config)  = cfg.num_energy_bits_b_plus !== nothing ? cfg.num_energy_bits_b_plus : cfg.num_energy_bits
+
+# ---------------------------------------------------------------------------
+# β_phys / β_alg accessors on Config (qf-6vr).
+#
+# `cfg.beta` always carries the algorithm-side β_alg (against the rescaled
+# spectrum). `cfg.beta_phys` is the optional physical inverse temperature
+# (against the un-rescaled Hamiltonian); when set, it must satisfy
+# `β_alg == β_phys · ham.rescaling_factor` (enforced by
+# `validate_config!(cfg, ham)` in `src/misc_tools.jl`).
+# ---------------------------------------------------------------------------
+
+"""
+    beta_alg(cfg::Config) -> T
+
+Algorithm-side inverse temperature β_alg, against the rescaled spectrum
+stored in the HamHam. Always available — `cfg.beta` is a required field.
+The 2-argument form `beta_alg(ham::HamHam, β_phys::Real)` (defined in
+`src/hamiltonian.jl`) converts a physical β to algorithm-side β.
+"""
+@inline beta_alg(cfg::Config) = cfg.beta
+
+"""
+    beta_phys(cfg::Config) -> Union{T, Nothing}
+
+Physical inverse temperature β_phys (against the un-rescaled Hamiltonian)
+stored on the Config, or `nothing` if the driver author did not set it.
+Use the 2-argument form `beta_phys(ham::HamHam, β_alg::Real)` (defined in
+`src/hamiltonian.jl`) to derive β_phys from the algorithm-side value via
+`ham.rescaling_factor`.
+"""
+@inline beta_phys(cfg::Config) = cfg.beta_phys
 
 """
     JumpOp

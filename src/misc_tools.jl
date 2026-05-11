@@ -396,6 +396,39 @@ function validate_config!(config::Config)
     return nothing
 end
 
+"""
+    validate_config!(config::Config, ham::HamHam; atol=1e-12, rtol=1e-10)
+
+Two-argument validation: runs the 1-arg `validate_config!(config)` checks
+**and**, when `config.beta_phys` is set, enforces the relation
+
+    config.beta == config.beta_phys · ham.rescaling_factor   (β_alg = β_phys · rescale)
+
+within the supplied tolerances. Throws `ArgumentError` on mismatch.
+
+Drivers that author at the *physical* temperature scale (the qf-6vr /
+β_phys-first contract) should set both `beta_phys = β_phys` and
+`beta = β_phys * ham.rescaling_factor` at construction and call this
+2-arg form once the HamHam is in hand, so the pair cannot drift apart.
+Callers that do not set `beta_phys` skip the consistency check; this
+matches the legacy contract where `cfg.beta` alone is the algorithm-side
+β_alg.
+"""
+function validate_config!(config::Config, ham::HamHam; atol::Real = 1e-12, rtol::Real = 1e-10)
+    validate_config!(config)
+    if config.beta_phys !== nothing
+        expected_beta_alg = config.beta_phys * ham.rescaling_factor
+        if !isapprox(config.beta, expected_beta_alg; atol=atol, rtol=rtol)
+            throw(ArgumentError(
+                "Inconsistent (β_phys, β_alg) pair: config.beta_phys=$(config.beta_phys) and " *
+                "ham.rescaling_factor=$(ham.rescaling_factor) imply β_alg=$(expected_beta_alg), " *
+                "but config.beta=$(config.beta). Set them at construction so " *
+                "`beta == beta_phys * ham.rescaling_factor`."))
+        end
+    end
+    return nothing
+end
+
 function _collect_config_errors!(errors::Vector{String}, config::Config{<:Any, BohrDomain})
     return # No specific checks
 end

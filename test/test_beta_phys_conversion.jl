@@ -76,4 +76,66 @@ const _BPC_HAM_ALG10 = QuantumFurnace._load_hamiltonian_bson(_BPC_HAM_PATH, 10.0
         ρ_eigen = gibbs_state_in_eigen(_BPC_HAM_ALG10, β_alg)
         @test isapprox(ρ_eigen, Matrix(_BPC_HAM_ALG10.gibbs); atol=1e-12)
     end
+
+    @testset "(d) Config accessors: beta_alg, beta_phys" begin
+        # Minimal valid Config{Lindbladian, BohrDomain, KMS, Float64}: BohrDomain
+        # has no Fourier register requirements, and a single Gaussian transition
+        # is enough to satisfy `validate_config!`.
+        rescale = _BPC_HAM_ALG10.rescaling_factor
+        β_phys_val = 1.0
+        β_alg_val = β_phys_val * rescale
+
+        cfg = Config(
+            sim = Lindbladian(), domain = BohrDomain(), construction = KMS(),
+            num_qubits = 3, with_linear_combination = true,
+            beta = β_alg_val, beta_phys = β_phys_val,
+            sigma = 1.0 / β_alg_val,
+            a = 0.0, s = 0.25,
+        )
+        @test beta_alg(cfg) == β_alg_val
+        @test beta_phys(cfg) == β_phys_val
+
+        # Config without β_phys: returns nothing
+        cfg_noφ = Config(
+            sim = Lindbladian(), domain = BohrDomain(), construction = KMS(),
+            num_qubits = 3, with_linear_combination = true,
+            beta = β_alg_val, sigma = 1.0 / β_alg_val, a = 0.0, s = 0.25,
+        )
+        @test beta_alg(cfg_noφ) == β_alg_val
+        @test beta_phys(cfg_noφ) === nothing
+    end
+
+    @testset "(e) validate_config!(cfg, ham) consistency" begin
+        rescale = _BPC_HAM_ALG10.rescaling_factor
+        β_phys_val = 1.0
+        β_alg_val = β_phys_val * rescale
+
+        # Consistent — must succeed
+        cfg_ok = Config(
+            sim = Lindbladian(), domain = BohrDomain(), construction = KMS(),
+            num_qubits = 3, with_linear_combination = true,
+            beta = β_alg_val, beta_phys = β_phys_val,
+            sigma = 1.0 / β_alg_val, a = 0.0, s = 0.25,
+        )
+        @test validate_config!(cfg_ok, _BPC_HAM_ALG10) === nothing
+
+        # Inconsistent: β_alg differs from β_phys * rescale by > tolerance
+        cfg_bad = Config(
+            sim = Lindbladian(), domain = BohrDomain(), construction = KMS(),
+            num_qubits = 3, with_linear_combination = true,
+            beta = β_alg_val * 1.1,            # 10% off
+            beta_phys = β_phys_val,
+            sigma = 1.0 / β_alg_val, a = 0.0, s = 0.25,
+        )
+        @test_throws ArgumentError validate_config!(cfg_bad, _BPC_HAM_ALG10)
+
+        # β_phys = nothing — skip the check (legacy-compatible path)
+        cfg_legacy = Config(
+            sim = Lindbladian(), domain = BohrDomain(), construction = KMS(),
+            num_qubits = 3, with_linear_combination = true,
+            beta = β_alg_val,
+            sigma = 1.0 / β_alg_val, a = 0.0, s = 0.25,
+        )
+        @test validate_config!(cfg_legacy, _BPC_HAM_ALG10) === nothing
+    end
 end
