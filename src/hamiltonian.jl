@@ -413,6 +413,215 @@ function _optimize_disordered_heisenberg(base_hamiltonian::Hermitian{ComplexF64}
     )
 end
 
+"""find_typical_heisenberg(num_qubits::Int, coeffs::Vector{Float64};
+    batch_size::Int=1000, periodic::Bool=true,
+    disordering_terms=[[Z]], disorder_strength=1.0) -> NamedTuple
+
+    Construct a 1D disordered Heisenberg Hamiltonian whose normalised sorted spectrum
+    is **closest** to the elementwise median sorted spectrum across `batch_size`
+    random disorder realisations.
+
+    This selects a "typical" realisation rather than an extremal one. Whereas
+    `find_ideal_heisenberg` maximises the minimum Bohr gap (and so can return outlier
+    spectra with anomalously large *or* small first gaps at small `n`),
+    `find_typical_heisenberg` picks the realisation whose entire sorted spectrum is
+    closest in L² to the ensemble median — i.e. the L²-Wasserstein-spectral-median.
+
+    Per-sample work is identical to `find_ideal_heisenberg`: build `H_base + H_disorder`,
+    rescale and shift the spectrum to the canonical algorithm range, then diagonalise.
+    After the sweep, the elementwise median of the sorted, bandwidth-normalised
+    spectra defines the consensus; the winning realisation is the one whose
+    spectrum minimises Euclidean distance to that median.
+
+    The returned NamedTuple has the same schema as `find_ideal_heisenberg`, plus an
+    extra diagnostic field `typicality_distance` (the L² distance of the chosen
+    sample's normalised spectrum to the ensemble-median spectrum). Use
+    `HamHam(raw, beta)` to wrap as a `HamHam` — extra fields are ignored by the
+    constructor.
+
+    # Arguments
+    - `num_qubits`: Spin-chain length.
+    - `coeffs`: Uniform exchange couplings ``[J_x, J_y, J_z]``.
+
+    # Keywords
+    - `batch_size`: Number of disorder realisations to sample (default 1000). Must
+      be ≥ 2 for the W₂ criterion to be meaningful; values ≥ a few hundred are
+      recommended for a stable median.
+    - `periodic`, `disordering_terms`, `disorder_strength`: same as `find_ideal_heisenberg`.
+
+    # Returns
+    NamedTuple with fields `matrix`, `terms`, `base_coeffs`, `disordering_terms`,
+    `disordering_coeffs`, `eigvals`, `eigvecs`, `nu_min`, `shift`, `rescaling_factor`,
+    `periodic`, `typicality_distance`.
+"""
+function find_typical_heisenberg(num_qubits::Int64,
+    coeffs::Vector{Float64}; batch_size::Int64 = 1000, periodic::Bool = true,
+    disordering_terms::Vector{Vector{Matrix{ComplexF64}}} = [[Z]],
+    disorder_strength::Float64 = 1.0)
+
+    terms = [[X, X], [Y, Y], [Z, Z]]
+    base_hamiltonian = _construct_base_ham(terms, coeffs, num_qubits; periodic=periodic)
+
+    return _optimize_typical_heisenberg(base_hamiltonian, terms, coeffs, num_qubits,
+        disordering_terms; batch_size=batch_size, periodic=periodic,
+        disorder_strength=disorder_strength)
+end
+
+"""find_typical_2d_heisenberg(Lx::Int, Ly::Int, coeffs::Vector{Float64};
+    batch_size::Int=1000, periodic_x::Bool=true, periodic_y::Bool=true,
+    disordering_terms=[[Z]], disorder_strength=1e-3) -> NamedTuple
+
+    2D analogue of [`find_typical_heisenberg`](@ref) on an `Lx × Ly` lattice with
+    nearest-neighbour Heisenberg bonds in both directions. The W₂-spectral-median
+    selection criterion is identical; see `find_typical_heisenberg` for details.
+
+    Returns the same NamedTuple schema as `find_ideal_2d_heisenberg`, plus
+    `typicality_distance`.
+"""
+function find_typical_2d_heisenberg(Lx::Int64, Ly::Int64,
+    coeffs::Vector{Float64}; batch_size::Int64 = 1000,
+    periodic_x::Bool = true, periodic_y::Bool = true,
+    disordering_terms::Vector{Vector{Matrix{ComplexF64}}} = [[Z]],
+    disorder_strength::Float64 = 1e-3)
+
+    if Lx < 1 || Ly < 1
+        throw(ArgumentError("Lx and Ly must be at least 1; got Lx=$Lx, Ly=$Ly"))
+    end
+
+    num_qubits = Lx * Ly
+    terms = [[X, X], [Y, Y], [Z, Z]]
+    base_hamiltonian = _construct_2d_heisenberg_base(Lx, Ly, terms, coeffs;
+        periodic_x=periodic_x, periodic_y=periodic_y)
+
+    return _optimize_typical_heisenberg(base_hamiltonian, terms, coeffs, num_qubits,
+        disordering_terms; batch_size=batch_size, periodic=(periodic_x && periodic_y),
+        disorder_strength=disorder_strength)
+end
+
+# Shared inner kernel for find_typical_heisenberg and find_typical_2d_heisenberg.
+# Mirrors _optimize_disordered_heisenberg but with a W₂-spectral-median selection
+# criterion in place of the greedy max-min-gap criterion. Per-sample work is
+# identical (build → rescale → diagonalise); only the across-sample selection
+# differs.
+function _optimize_typical_heisenberg(base_hamiltonian::Hermitian{ComplexF64},
+    terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64},
+    num_qubits::Int64, disordering_terms::Vector{Vector{Matrix{ComplexF64}}};
+    batch_size::Int64, periodic::Bool, disorder_strength::Float64)
+
+    if batch_size < 2
+        throw(ArgumentError(
+            "find_typical_* requires batch_size >= 2 (got $batch_size); the W₂ selector " *
+            "compares against an ensemble median and needs at least two samples"))
+    end
+
+    d = 2^num_qubits
+
+    # Per-sample storage: normalised sorted spectra (d × batch_size) and disorder
+    # coefficients. We only need eigvals during the sweep — full eigen()/eigvecs
+    # is computed once at the end on the chosen sample.
+    normalized_specs = Matrix{Float64}(undef, d, batch_size)
+    disordering_coeffs_by_sample = Vector{Vector{Vector{Float64}}}(undef, batch_size)
+    valid_mask = falses(batch_size)
+
+    p = Progress(batch_size; desc="Sampling Hamiltonians for W2-typical selection...")
+    for k in 1:batch_size
+        sample_coeffs = [zeros(Float64, num_qubits) for _ in disordering_terms]
+        for dc in sample_coeffs
+            rand!(dc)
+            dc .*= disorder_strength
+        end
+        disordering_ham = _construct_disordering_terms(disordering_terms, sample_coeffs, num_qubits)
+        total_ham = base_hamiltonian + disordering_ham
+        rescaling_factor, shift = _rescaling_and_shift_factors(total_ham)
+        rescaled_ham = (total_ham ./ rescaling_factor) + shift * I
+
+        # eigvals returns the spectrum already sorted ascending
+        eigvals_k = eigvals(Hermitian(rescaled_ham))
+
+        bw = eigvals_k[end] - eigvals_k[1]
+        if bw > 1e-14
+            @inbounds for i in 1:d
+                normalized_specs[i, k] = (eigvals_k[i] - eigvals_k[1]) / bw
+            end
+            valid_mask[k] = true
+        else
+            # Degenerate (e.g. disorder_strength == 0 and a symmetric base):
+            # exclude from the median / argmin
+            @inbounds for i in 1:d
+                normalized_specs[i, k] = NaN
+            end
+        end
+
+        disordering_coeffs_by_sample[k] = sample_coeffs
+        next!(p)
+    end
+
+    valid_count = sum(valid_mask)
+    if valid_count < 2
+        error("Only $valid_count valid (non-degenerate) samples among $batch_size; " *
+              "cannot compute W₂-spectral-median (increase batch_size or disorder_strength)")
+    end
+
+    # Elementwise median of the normalised sorted spectra across valid samples.
+    # By bandwidth-normalisation, median_spec[1] == 0 and median_spec[end] == 1,
+    # so the selection is driven by the interior d-2 levels.
+    median_spec = Vector{Float64}(undef, d)
+    buf = Vector{Float64}(undef, valid_count)
+    @inbounds for i in 1:d
+        j = 0
+        for k in 1:batch_size
+            if valid_mask[k]
+                j += 1
+                buf[j] = normalized_specs[i, k]
+            end
+        end
+        median_spec[i] = median(buf)
+    end
+
+    # argmin L² distance to median_spec
+    best_idx = 0
+    best_dist = Inf
+    @inbounds for k in 1:batch_size
+        valid_mask[k] || continue
+        dist_sq = 0.0
+        for i in 1:d
+            diff_i = normalized_specs[i, k] - median_spec[i]
+            dist_sq += diff_i * diff_i
+        end
+        dist_k = sqrt(dist_sq)
+        if dist_k < best_dist
+            best_dist = dist_k
+            best_idx = k
+        end
+    end
+    @assert best_idx > 0  # guaranteed by valid_count >= 2
+
+    # Reconstruct the chosen sample to obtain eigvecs (avoids storing d^2 complex
+    # entries per sample during the sweep).
+    best_disordering_coeffs = disordering_coeffs_by_sample[best_idx]
+    disordering_ham = _construct_disordering_terms(disordering_terms, best_disordering_coeffs, num_qubits)
+    total_ham = base_hamiltonian + disordering_ham
+    rescaling_factor, shift = _rescaling_and_shift_factors(total_ham)
+    rescaled_ham = (total_ham ./ rescaling_factor) + shift * I
+    rescaled_eigvals, rescaled_eigvecs = eigen(Hermitian(rescaled_ham))
+    nu_min = minimum(diff(rescaled_eigvals))
+
+    return (
+        matrix = rescaled_ham,
+        terms = terms,
+        base_coeffs = coeffs ./ rescaling_factor,
+        disordering_terms = disordering_terms,
+        disordering_coeffs = [dc ./ rescaling_factor for dc in best_disordering_coeffs],
+        eigvals = rescaled_eigvals,
+        eigvecs = rescaled_eigvecs,
+        nu_min = nu_min,
+        shift = shift,
+        rescaling_factor = rescaling_factor,
+        periodic = periodic,
+        typicality_distance = best_dist,
+    )
+end
+
 function _construct_base_ham(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64},
     num_qubits::Int64; periodic::Bool = true)
 

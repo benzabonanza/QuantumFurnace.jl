@@ -8,6 +8,7 @@ using Arpack
 using LinearAlgebra
 using SparseArrays
 using Random
+using Statistics: median
 using ProgressMeter
 using Roots
 using DataStructures
@@ -79,7 +80,8 @@ export trace_distance_h, trace_distance_nh, trace_norm_h, trace_norm_nh,
        fidelity, is_density_matrix, random_density_matrix,
        hermitianize!, validate_jump_pairing
 export gibbs_state, gibbs_state_in_eigen,
-       find_ideal_heisenberg, find_ideal_2d_heisenberg, load_hamiltonian,
+       find_ideal_heisenberg, find_ideal_2d_heisenberg,
+       find_typical_heisenberg, find_typical_2d_heisenberg, load_hamiltonian,
        create_bohr_dict, compute_trotter_error, make_trotter_for_config
 export pick_transition, pick_gamma_sup, create_alpha, create_alpha_gns, create_alpha_gauss,
        create_f, create_f_gauss, check_alpha_skew_symmetry
