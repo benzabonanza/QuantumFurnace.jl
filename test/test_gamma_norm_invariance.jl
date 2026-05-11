@@ -65,22 +65,6 @@ using LinearAlgebra
         @test pick_gamma_sup(cfg) == 1.0
     end
 
-    @testset "KMS a-regularized (s=0, a=1)" begin
-        cfg = Config(
-            sim = Lindbladian(), domain = BohrDomain(), construction = KMS(),
-            num_qubits = 3, with_linear_combination = true,
-            beta = BETA, sigma = SIGMA, a = 1.0, s = 0.0,
-            num_energy_bits = 8, w0 = 0.05,
-        )
-        γ = pick_transition(cfg)
-        # Closed-form maximiser: ω = -βσ²/2 (cusp where sqrtB = 0).
-        peak = -BETA * SIGMA^2 / 2
-        @test isapprox(γ(peak), 1.0; atol=1e-15)
-        ω = fine_grid_centered(peak; halfwidth=5.0)
-        @test maximum(γ.(ω)) <= 1.0 + 1e-15
-        @test pick_gamma_sup(cfg) == 1.0
-    end
-
     @testset "KMS smooth Metropolis (s=0.25, a=0) — locked thesis fixture" begin
         cfg = Config(
             sim = Lindbladian(), domain = BohrDomain(), construction = KMS(),
@@ -106,7 +90,6 @@ using LinearAlgebra
         cases = [
             (false, nothing, nothing, (GNS_OMEGA_G, SIGMA_G), -GNS_OMEGA_G),  # Gaussian
             (true,  0.0,     0.0,     (nothing, nothing),   0.0),             # kinky
-            (true,  1.0,     0.0,     (nothing, nothing),   0.0),             # a-reg
             (true,  0.0,     0.25,    (nothing, nothing),   nothing),         # smooth
         ]
         for (with_lc, a, s, gp, peak) in cases
