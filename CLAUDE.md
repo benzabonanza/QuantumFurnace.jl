@@ -50,6 +50,65 @@ Context-specific rules load automatically based on which files you're working wi
 - `.claude/rules/scripts.md` — standalone script conventions (loads for `scripts/`)
 - `.claude/rules/thesis-writing.md` — notation, reference papers, proof/review style (loads for `drafts/`, `proofs/`, `supplementary-informations/`)
 
+## Conventions: β_phys vs β_alg (qf-6vr / Phase qf-bphys)
+
+The Hamiltonian fixtures store a **rescaled** spectrum in `H.data` / `H.eigvals`
+that lives in `[0, 0.45]` for *every* `n` (see `_rescaling_and_shift_factors`
+in `src/hamiltonian.jl`). The single user-facing scale is therefore split:
+
+- **`β_phys`** — physical inverse temperature against the un-rescaled
+  Hamiltonian `H_phys`. The thing a physicist would type.
+- **`β_alg = β_phys · ham.rescaling_factor`** — algorithm-side inverse
+  temperature, against the rescaled spectrum that the simulator actually
+  sees. Equal to the legacy `cfg.beta`.
+
+For an extensive Hamiltonian (Heisenberg, TFIM) `ham.rescaling_factor`
+grows roughly linearly with `n`, so a sweep "at fixed `β_alg` across n"
+silently varies `β_phys` by the same factor — and a "fixed `β_phys` across
+n" sweep silently varies `β_alg`. Always be explicit about which one you
+mean. The qf-6vr layer keeps `cfg.beta` = β_alg for back-compat; the new
+fields and helpers are:
+
+| Object | Field / function | Convention |
+|---|---|---|
+| `HamHam` | `HamHam(raw, β)` (positional) | `β` = β_alg (legacy) |
+| `HamHam` | `HamHam(raw; beta_phys=…)` (keyword) | derives `β_alg = β_phys · rescale` |
+| `HamHam` | `beta_alg(ham, β_phys)` / `beta_phys(ham, β_alg)` | scalar conversion helpers |
+| `Config` | `cfg.beta` (= `beta_alg(cfg)`) | β_alg, required |
+| `Config` | `cfg.beta_phys` (= `beta_phys(cfg)`) | β_phys, optional (Union{T, Nothing}) |
+| `validate_config!(cfg, ham)` | 2-arg method | enforces `cfg.beta ≈ cfg.beta_phys · ham.rescaling_factor` when β_phys is set |
+| `sweep_mixing_times`, `sweep_channel_mixing` | positional `beta_values` | β_alg (legacy) |
+| `sweep_mixing_times`, `sweep_channel_mixing` | kwarg `beta_phys_values` | β_phys (qf-6vr); mutually exclusive with the positional |
+| Sidecar BSON | `:beta_phys`, `:beta_alg`, `:rescaling_factor` | always emitted |
+| Sidecar filename | `beta<β_alg>` vs `betaphys<β_phys>` | swap on mode (no collisions) |
+| `fit_scaling(::Vector{<:NamedTuple})` | `beta_kind = :auto` (default) | prefers `:beta_phys`, falls back to `:beta_alg`/`:beta` |
+| `ScalingFit` | `beta_kind ∈ {:phys, :alg}` | sets the formula label (`β_phys^y` vs `β_alg^y`) |
+| Test constants | `BETA` (= `BETA_ALG`) | β_alg, legacy semantics preserved |
+| Test constants | `BETA_PHYS`, `N3_BETA_PHYS` | β_phys derived from each fixture's rescaling_factor |
+
+The canonical β_phys sweep grid is **`{0.25, 0.5, 1.0}`** (decided
+2026-05-11, replaces the legacy β_alg grid `{5.0, 10.0, 20.0}`).
+Rationale: 0.25 is the smallest β_phys with meaningful thermal contrast
+(`S(ρ_β)/log(d)` ≈ 0.80 uniformly across n=3..10 — below that the Gibbs
+state is essentially uniform); 1.0 is the practical upper bound (σ =
+1/β_alg ≤ 0.04 at n ≥ 8, and the `default_smooth_s(β, σ) = (0.05/σ)²`
+rule would force `s` ≈ O(10) at n=11 to preserve the absolute kink width
+`σ·√s = 0.05` — a smooth-Metro kernel regime we have not characterised).
+
+All new numerics drivers write β_phys into the sidecar; the harness
+derives β_alg per cell. `migrate_bson_beta_phys.jl` annotates legacy
+β_alg-keyed sidecars with the new triple so plot scripts can read them
+under the same `fit_scaling` contract.
+
+**Caveat on the smooth-Metropolis `s` at large β_alg.** The legacy fixed
+`s = 0.25` is held in the current drivers; if a β_phys=1 cell at large n
+mixes terribly because the kink-width is now σ·√s ≈ 0.0025 (much narrower
+than the legacy 0.05), the choice is between (a) re-enabling
+`default_smooth_s` and verifying that s ≈ 25 still gives a physically
+sensible γ-rate, (b) holding σ = 0.1 fixed (decoupling the OFT filter
+width from β), or (c) reinstating the fixed s = 0.25 value. The choice
+hasn't been made yet — make the call after the first full sweep.
+
 ## Agents
 
 All agents run with `model: opus` and `effort: max`.

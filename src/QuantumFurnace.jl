@@ -83,6 +83,10 @@ export gibbs_state, gibbs_state_in_eigen,
        find_ideal_heisenberg, find_ideal_2d_heisenberg,
        find_typical_heisenberg, find_typical_2d_heisenberg, load_hamiltonian,
        create_bohr_dict, compute_trotter_error, make_trotter_for_config
+# β_phys ↔ β_alg helpers (qf-6vr) — convert physical and algorithm-side
+# inverse temperatures through `ham.rescaling_factor`. See docstrings in
+# `src/hamiltonian.jl` for the convention.
+export beta_alg, beta_phys
 export pick_transition, pick_gamma_sup, create_alpha, create_alpha_gns, create_alpha_gauss,
        create_f, create_f_gauss, check_alpha_skew_symmetry
 # `default_smooth_s` (src/bohr_domain.jl) intentionally not exported — internal

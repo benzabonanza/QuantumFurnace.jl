@@ -83,6 +83,8 @@ const SANDBOX_FILES = String[
     "test_validate_jump_pairing.jl",
     "test_qf_bm1_kwarg_threading.jl",
     "test_qf_sta_b_bohr_cache.jl",
+    "test_beta_phys_conversion.jl",
+    "test_beta_phys_sweep.jl",
 ]
 
 # Whole-file NO_SANDBOX test list. (Currently empty — every heavy test has

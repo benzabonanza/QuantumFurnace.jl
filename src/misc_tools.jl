@@ -36,6 +36,21 @@ Both paths reconstruct via `HamHam(raw_nt, beta)`, which infers `T` from
 `eltype(raw.eigvals)` and recomputes `bohr_freqs`, `bohr_dict`, and `gibbs`.
 """
 function _load_hamiltonian_bson(path::String, beta::Float64)
+    return HamHam(_parse_hamiltonian_bson(path), beta)
+end
+
+"""
+    _parse_hamiltonian_bson(path) -> NamedTuple
+
+Parse a Hamiltonian BSON file into the raw NamedTuple shape expected by
+`HamHam(::NamedTuple, beta)` / `HamHam(::NamedTuple; beta_phys=…)`, **without**
+constructing the HamHam wrapper. Handles both on-disk schemas (legacy
+`HamHam`-typed and current NamedTuple-typed) — see `_load_hamiltonian_bson` for
+schema details. The returned NamedTuple always carries `rescaling_factor`, so
+callers in β_phys-first mode can compute `β_alg = β_phys · rescaling_factor`
+before invoking the HamHam constructor.
+"""
+function _parse_hamiltonian_bson(path::String)
     raw = open(path) do io
         BSON.parse(io)
     end
@@ -51,7 +66,7 @@ function _load_hamiltonian_bson(path::String, beta::Float64)
         is_namedtuple = type_name isa AbstractVector && !isempty(type_name) &&
                         last(type_name) == "NamedTuple"
         if is_namedtuple
-            return HamHam(_namedtuple_schema_to_raw(ham_raw), beta)
+            return _namedtuple_schema_to_raw(ham_raw)
         end
         error("Unrecognised Hamiltonian BSON schema (length=$(length(fields)), type=$type_name)")
     end
@@ -80,7 +95,7 @@ function _load_hamiltonian_bson(path::String, beta::Float64)
     rescaling_factor = Float64(fields[12])
     periodic = Bool(fields[13])
 
-    raw_nt = (
+    return (
         matrix = data_matrix,
         terms = base_terms,
         base_coeffs = base_coeffs,
@@ -93,8 +108,6 @@ function _load_hamiltonian_bson(path::String, beta::Float64)
         rescaling_factor = rescaling_factor,
         periodic = periodic,
     )
-
-    return HamHam(raw_nt, beta)
 end
 
 """
@@ -415,6 +428,39 @@ function validate_config!(config::Config)
         throw(ArgumentError(error_message))
     end
 
+    return nothing
+end
+
+"""
+    validate_config!(config::Config, ham::HamHam; atol=1e-12, rtol=1e-10)
+
+Two-argument validation: runs the 1-arg `validate_config!(config)` checks
+**and**, when `config.beta_phys` is set, enforces the relation
+
+    config.beta == config.beta_phys · ham.rescaling_factor   (β_alg = β_phys · rescale)
+
+within the supplied tolerances. Throws `ArgumentError` on mismatch.
+
+Drivers that author at the *physical* temperature scale (the qf-6vr /
+β_phys-first contract) should set both `beta_phys = β_phys` and
+`beta = β_phys * ham.rescaling_factor` at construction and call this
+2-arg form once the HamHam is in hand, so the pair cannot drift apart.
+Callers that do not set `beta_phys` skip the consistency check; this
+matches the legacy contract where `cfg.beta` alone is the algorithm-side
+β_alg.
+"""
+function validate_config!(config::Config, ham::HamHam; atol::Real = 1e-12, rtol::Real = 1e-10)
+    validate_config!(config)
+    if config.beta_phys !== nothing
+        expected_beta_alg = config.beta_phys * ham.rescaling_factor
+        if !isapprox(config.beta, expected_beta_alg; atol=atol, rtol=rtol)
+            throw(ArgumentError(
+                "Inconsistent (β_phys, β_alg) pair: config.beta_phys=$(config.beta_phys) and " *
+                "ham.rescaling_factor=$(ham.rescaling_factor) imply β_alg=$(expected_beta_alg), " *
+                "but config.beta=$(config.beta). Set them at construction so " *
+                "`beta == beta_phys * ham.rescaling_factor`."))
+        end
+    end
     return nothing
 end
 

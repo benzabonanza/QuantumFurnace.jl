@@ -62,7 +62,12 @@ in log τ-space.
 - `n_data::Int`: Number of data points used in the fit.
 - `converged::Bool`: Whether LM optimization converged.
 - `n_values::Vector{Int}`: n values used (length `n_data`).
-- `beta_values::Vector{Float64}`: β values used.
+- `beta_values::Vector{Float64}`: β values used (either β_phys or β_alg
+  depending on the source — see `beta_kind`).
+- `beta_kind::Symbol`: `:phys` if `beta_values` are physical inverse
+  temperatures (against the un-rescaled Hamiltonian), `:alg` if they are
+  algorithm-side inverse temperatures (against the rescaled spectrum
+  stored in `ham.eigvals`). qf-6vr / Phase qf-bphys.
 - `log_tau_observed::Vector{Float64}`: Observed log τ values.
 - `log_tau_predicted::Vector{Float64}`: Model predictions at the data points.
 - `residuals::Vector{Float64}`: `log_tau_observed - log_tau_predicted`.
@@ -83,6 +88,7 @@ struct ScalingFit
     converged::Bool
     n_values::Vector{Int}
     beta_values::Vector{Float64}
+    beta_kind::Symbol  # :phys (qf-6vr default) or :alg (legacy / explicit)
     log_tau_observed::Vector{Float64}
     log_tau_predicted::Vector{Float64}
     residuals::Vector{Float64}
@@ -121,8 +127,11 @@ function _build_scaling_fit(
     log_τ::AbstractVector{<:Real},
     xdata::AbstractMatrix{<:Real},
     model_fn,
-    level::Real,
+    level::Real;
+    beta_kind::Symbol = :alg,
 )
+    beta_kind in (:phys, :alg) || throw(ArgumentError(
+        "beta_kind must be :phys or :alg (got :$beta_kind)"))
     p = coef(fit)
     n_param = length(p)
 
@@ -163,7 +172,7 @@ function _build_scaling_fit(
         Vector{Float64}(p), Vector{Float64}(se), ci_vec, covmat, corrmat,
         metrics.aicc, metrics.log_likelihood, rss, σ_resid,
         length(log_τ), fit.converged,
-        Vector{Int}(n_vals), Vector{Float64}(beta_vals),
+        Vector{Int}(n_vals), Vector{Float64}(beta_vals), beta_kind,
         Vector{Float64}(log_τ), Vector{Float64}(log_τ_pred),
         Vector{Float64}(resid),
     )
@@ -217,7 +226,10 @@ function fit_scaling(
     tau_vals::AbstractVector{<:Real};
     models = (:M0, :M1),
     level::Real = 0.95,
+    beta_kind::Symbol = :alg,
 )::Dict{Symbol, ScalingFit}
+    beta_kind in (:phys, :alg) || throw(ArgumentError(
+        "beta_kind must be :phys or :alg (got :$beta_kind)"))
 
     # --- Input validation ---
     N = length(n_vals)
@@ -250,7 +262,8 @@ function fit_scaling(
         fit = curve_fit(_scaling_M0_model, xdata, log_τ, p0)
         out[:M0] = _build_scaling_fit(:M0, (:c, :x, :y), fit,
                                        n_vals, beta_vals, log_τ, xdata,
-                                       _scaling_M0_model, level)
+                                       _scaling_M0_model, level;
+                                       beta_kind = beta_kind)
     end
 
     if :M1 in models
@@ -260,7 +273,8 @@ function fit_scaling(
         fit = curve_fit(_scaling_M1_model, xdata, log_τ, p0)
         out[:M1] = _build_scaling_fit(:M1, (:c, :x, :α), fit,
                                        n_vals, beta_vals, log_τ, xdata,
-                                       _scaling_M1_model, level)
+                                       _scaling_M1_model, level;
+                                       beta_kind = beta_kind)
     end
 
     return out
@@ -278,8 +292,8 @@ function fit_scaling(table::NamedTuple; kwargs...)
 end
 
 """
-    fit_scaling(results::Vector{<:NamedTuple}; source_filter=(:extrapolated,), kwargs...)
-        -> Dict{Symbol, ScalingFit}
+    fit_scaling(results::Vector{<:NamedTuple}; source_filter=(:extrapolated,),
+                beta_kind=:auto, kwargs...) -> Dict{Symbol, ScalingFit}
 
 Vector-of-NamedTuple convenience wrapper for the output of
 [`sweep_mixing_times`](@ref) and [`sweep_channel_mixing`](@ref). Entries with
@@ -291,12 +305,27 @@ extrapolated cells from the eigenmode τ_mix schema (qf-e4y); pass
 `(:extrapolated, :floor)` to also include the gap-based bound, but be aware
 that `:floor` cells have lower-bound semantics (the true τ_mix may be
 infinite) and will bias the fit.
+
+# β-field selection (qf-6vr)
+
+`beta_kind = :auto` (the default) inspects each NamedTuple in the order
+`:beta_phys → :beta_alg → :beta` and uses the first present field. The
+selected interpretation is stored on the returned `ScalingFit` as
+`beta_kind ∈ {:phys, :alg}`. Pass `:phys` or `:alg` explicitly to override:
+- `:phys` reads `:beta_phys`, falling back to `:beta_alg`/`beta · rescale`.
+  Throws if neither β_phys nor `:rescaling_factor` is present.
+- `:alg` reads `:beta_alg` or `:beta`, falling back to
+  `:beta_phys · rescaling_factor`. Throws if no β is recoverable.
 """
 function fit_scaling(
     results::Vector{<:NamedTuple};
     source_filter = (:extrapolated,),
+    beta_kind::Symbol = :auto,
     kwargs...,
 )
+    beta_kind in (:auto, :phys, :alg) || throw(ArgumentError(
+        "beta_kind must be :auto, :phys, or :alg (got :$beta_kind)"))
+
     # Channel sweeps use :tau_mix / :tau_mix_source; Lindbladian sweeps use
     # :mixing_time / :mixing_time_source. Support both.
     function _get_tau(r)
@@ -316,29 +345,74 @@ function fit_scaling(
         return nothing
     end
 
-    valid = NamedTuple[]
+    # qf-6vr: pick β from the appropriate field, honouring beta_kind. Returns
+    # (β::Float64, kind::Symbol) — kind is the field that was actually used
+    # (:phys when β_phys was read, :alg otherwise).
+    function _get_beta(r, kind::Symbol)
+        β_phys = haskey(r, :beta_phys) ? r.beta_phys : nothing
+        β_alg  = if haskey(r, :beta_alg)
+            r.beta_alg
+        elseif haskey(r, :beta)
+            r.beta
+        else
+            nothing
+        end
+        rescale = haskey(r, :rescaling_factor) ? r.rescaling_factor : nothing
+        β_phys = (β_phys === nothing || !(β_phys isa Real) || !isfinite(β_phys)) ?
+                  nothing : Float64(β_phys)
+        β_alg  = (β_alg  === nothing || !(β_alg  isa Real) || !isfinite(β_alg))  ?
+                  nothing : Float64(β_alg)
+        rescale = (rescale === nothing || !(rescale isa Real) || !isfinite(rescale)) ?
+                  nothing : Float64(rescale)
+
+        if kind === :phys
+            β_phys !== nothing && return (β_phys, :phys)
+            (β_alg !== nothing && rescale !== nothing) && return (β_alg / rescale, :phys)
+            return (nothing, :phys)
+        elseif kind === :alg
+            β_alg !== nothing && return (β_alg, :alg)
+            (β_phys !== nothing && rescale !== nothing) && return (β_phys * rescale, :alg)
+            return (nothing, :alg)
+        else  # :auto — prefer :beta_phys then :beta_alg/beta
+            β_phys !== nothing && return (β_phys, :phys)
+            β_alg  !== nothing && return (β_alg,  :alg)
+            return (nothing, :alg)
+        end
+    end
+
+    valid_pairs = Tuple{NamedTuple, Float64, Symbol}[]
     for r in results
-        haskey(r, :n) && haskey(r, :beta) || continue
+        haskey(r, :n) || continue
+        β, kind = _get_beta(r, beta_kind)
+        (β === nothing || !(β isa Real) || !isfinite(β) || β <= 0) && continue
         τ = _get_tau(r)
         τ === nothing && continue
         (τ isa Real && isfinite(τ) && τ > 0) || continue
         src = _get_source(r)
-        # Strict policy: if the caller specified a source_filter, require the
-        # source field to be present and match. Pass `source_filter = ()` to
-        # disable source filtering entirely.
         if !isempty(source_filter)
             (src !== nothing && src in source_filter) || continue
         end
-        push!(valid, r)
+        push!(valid_pairs, (r, β, kind))
     end
-    isempty(valid) && throw(ArgumentError(
-        "no valid entries found (need :n, :beta, finite positive :mixing_time or :tau_mix" *
-        " with :mixing_time_source/:tau_mix_source ∈ $source_filter)"))
+    isempty(valid_pairs) && throw(ArgumentError(
+        "no valid entries found (need :n, finite-positive β " *
+        "(:beta_phys / :beta_alg / :beta) and finite-positive :mixing_time " *
+        "or :tau_mix with :mixing_time_source/:tau_mix_source ∈ $source_filter)"))
 
-    n_vals = [Int(r.n) for r in valid]
-    β_vals = [Float64(r.beta) for r in valid]
-    τ_vals = Float64[_get_tau(r) for r in valid]
-    return fit_scaling(n_vals, β_vals, τ_vals; kwargs...)
+    n_vals = [Int(p[1].n) for p in valid_pairs]
+    β_vals = [p[2]        for p in valid_pairs]
+    τ_vals = Float64[_get_tau(p[1]) for p in valid_pairs]
+
+    # All entries must agree on a single β interpretation; reject mixed input
+    # rather than silently fit on an inconsistent scale.
+    used_kinds = unique(p[3] for p in valid_pairs)
+    if length(used_kinds) > 1
+        throw(ArgumentError(
+            "fit_scaling: entries disagree on β interpretation (kinds = $used_kinds). " *
+            "Pass beta_kind=:phys or :alg to force a single scale."))
+    end
+    chosen_kind = first(used_kinds)
+    return fit_scaling(n_vals, β_vals, τ_vals; beta_kind = chosen_kind, kwargs...)
 end
 
 # ---------------------------------------------------------------------------
@@ -446,12 +520,15 @@ function formula_string(fit::ScalingFit)
     C = exp(c)
     σC = isfinite(σc) ? C * σc : Inf
 
+    β_label = fit.beta_kind === :phys ? "β_phys" :
+              fit.beta_kind === :alg  ? "β_alg"  : "β"
+
     if fit.model === :M0
-        return @sprintf("τ_mix = (%.3g ± %.2g) · n^(%.2f ± %.2f) · β^(%.2f ± %.2f)",
-                        C, σC, x, σx, slope, σs)
+        return @sprintf("τ_mix = (%.3g ± %.2g) · n^(%.2f ± %.2f) · %s^(%.2f ± %.2f)",
+                        C, σC, x, σx, β_label, slope, σs)
     elseif fit.model === :M1
-        return @sprintf("τ_mix = (%.3g ± %.2g) · n^(%.2f ± %.2f) · exp((%.4f ± %.4f)·β)",
-                        C, σC, x, σx, slope, σs)
+        return @sprintf("τ_mix = (%.3g ± %.2g) · n^(%.2f ± %.2f) · exp((%.4f ± %.4f)·%s)",
+                        C, σC, x, σx, slope, σs, β_label)
     else
         return "(unknown model :$(fit.model))"
     end

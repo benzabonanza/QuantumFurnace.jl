@@ -257,14 +257,20 @@ using Random: MersenneTwister
         s0 = formula_string(fits[:M0])
         @test occursin("τ_mix", s0)
         @test occursin("n^", s0)
-        @test occursin("β^", s0)
+        # qf-6vr: formula_string disambiguates β with the explicit kind suffix.
+        @test occursin("β_alg^", s0)
         @test occursin("±", s0)
 
         s1 = formula_string(fits[:M1])
         @test occursin("τ_mix", s1)
         @test occursin("n^", s1)
         @test occursin("exp(", s1)
-        @test occursin("·β", s1)
+        @test occursin("·β_alg", s1)
+
+        # qf-6vr: explicit beta_kind=:phys tag flips the label in the formula.
+        fits_phys = fit_scaling(n_vals, β_vals, τ_vals; beta_kind = :phys)
+        s0_phys = formula_string(fits_phys[:M0])
+        @test occursin("β_phys^", s0_phys)
     end
 
     # ------------------------------------------------------------------------
