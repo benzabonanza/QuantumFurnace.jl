@@ -226,10 +226,11 @@ function _determine_filter_info(config::Config)
     end
     a_val = something(config.a, 0.0)
     s_val = something(config.s, 0.0)
-    if a_val > 0 && s_val > 0
+    # (a, s) taxonomy (qf-nq5): kinky Metropolis is exactly (s = 0, a = 0);
+    # smooth Metropolis is (s > 0, any a ≥ 0). The (s = 0, a > 0) case is
+    # rejected by validate_config!, so we don't need a third branch here.
+    if s_val > 0
         return :smooth_metropolis, Dict{Symbol, Float64}(:a => a_val, :s => s_val)
-    elseif a_val > 0
-        return :metropolis, Dict{Symbol, Float64}(:a => a_val)
     else
         return :kinky_metropolis, Dict{Symbol, Float64}()
     end

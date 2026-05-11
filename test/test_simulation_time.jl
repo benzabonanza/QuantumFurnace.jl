@@ -150,6 +150,40 @@
         @test budget.construction == :GNS
     end
 
+    # ---- qf-nq5: filter_type tag honours the (a, s) taxonomy ----
+    # Smooth Metropolis is exactly `s > 0` (any a ≥ 0); kinky Metropolis is
+    # `s = a = 0`. The thesis-default `a = 0, s = 0.25` must tag as smooth, not
+    # kinky. (s = 0, a > 0) is rejected upstream by validate_config!.
+    @testset "compute_simulation_time — filter_type taxonomy (qf-nq5)" begin
+        function _filter_cfg(; a, s, construction=KMS(), eta=0.05)
+            Config(;
+                sim = Thermalize(), domain = TimeDomain(), construction = construction,
+                num_qubits = NUM_QUBITS, with_linear_combination = true,
+                beta = BETA, sigma = SIGMA, a = a, s = s,
+                num_energy_bits = NUM_ENERGY_BITS, w0 = W0, t0 = T0,
+                num_trotter_steps_per_t0 = NUM_TROTTER_STEPS_PER_T0,
+                mixing_time = 1.0, delta = TEST_DELTA,
+                eta = eta,
+            )
+        end
+
+        # Thesis-default: a = 0, s > 0 → smooth Metropolis (a omitted from params Dict only when 0 is irrelevant)
+        bgt_thesis = compute_simulation_time(_filter_cfg(a = 0.0, s = 0.25), TEST_HAM, 10.0)
+        @test bgt_thesis.filter_type == :smooth_metropolis
+        @test bgt_thesis.filter_params[:s] == 0.25
+        @test bgt_thesis.filter_params[:a] == 0.0
+
+        # a-regularised smooth: a > 0, s > 0 → smooth Metropolis
+        bgt_areg = compute_simulation_time(_filter_cfg(a = BETA / 30.0, s = 0.4), TEST_HAM, 10.0)
+        @test bgt_areg.filter_type == :smooth_metropolis
+        @test bgt_areg.filter_params[:s] == 0.4
+
+        # Kinky: a = 0, s = 0 → kinky Metropolis (eta still required on TimeDomain)
+        bgt_kinky = compute_simulation_time(_filter_cfg(a = 0.0, s = 0.0), TEST_HAM, 10.0)
+        @test bgt_kinky.filter_type == :kinky_metropolis
+        @test isempty(bgt_kinky.filter_params)
+    end
+
     @testset "compute_simulation_time — TrotterDomain" begin
         config = make_config(Thermalize(), TrotterDomain())
         budget = compute_simulation_time(config, TEST_HAM, 10.0)
