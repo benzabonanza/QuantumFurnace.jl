@@ -43,14 +43,71 @@ this β_phys / n coupling (`drafts/scaling-fit-physics-check.md`).
 ## Default β grids
 
 - **Drivers calibrated at β_alg** (legacy): `[5.0, 10.0, 20.0]`
-- **Drivers calibrated at β_phys** (qf-6vr): `[1.0, 2.0, 3.0]` — the
-  operationally visible payoff of the refactor. Migrated drivers:
+- **Canonical qf-6vr β_phys grid** (decided 2026-05-11, after the
+  Gibbs-state entropy analysis): `[0.25, 0.5, 1.0]`. Used by every
+  migrated production driver:
   `numerics_ckg_vs_dll_taumix_comparison.jl`,
   `numerics_sweep_S3.jl`,
   `numerics_scaling_fit_ckg_smooth_metro.jl` (Task 8).
 - **Auxiliary drivers** kept on the legacy β_alg path (calibrated at the
   β_alg ranges that fed the existing parameter table):
   `numerics_p1_*.jl`, `numerics_S3_audit_floors.jl`, `numerics_param_table.jl`.
+
+### Why this grid
+
+Choice constraints from the Gibbs-state entropy analysis (xxx_zzdis fixture,
+seed 42, n ∈ {3..10}):
+
+- **Lower 0.25**: smallest β_phys with non-trivial thermal contrast.
+  S/log(d) ≈ 0.80 nearly *uniformly across n=3..10* — the same fractional
+  entropy at every system size. Below 0.25 (e.g. β_phys=0.1) one gets
+  S/log(d) > 0.96, essentially infinite-temperature; the Gibbs state is
+  maximally mixed and τ_mix(β) carries no β-signal worth fitting.
+- **Upper 1.0**: practical ceiling. β_alg at the corners:
+  n=3 → 26.8, n=6 → 52.9, n=10 → 90.3, n=11 → ~99. The OFT filter width
+  σ = 1/β_alg drops to ~0.01 at n=10. The legacy quadrature recipe
+  (`quadrature_register_recipe_qf_7xt`) is calibrated up to β_alg ≈ 20;
+  the register sizing audit for β_alg ≈ 90 is feasible but ugly. Above
+  β_phys=1 the audit becomes pathological without further σ-tightening.
+- **Factor-4 log-spacing**: same span as the legacy grid `{5, 10, 20}`,
+  which the original physics-check (`drafts/scaling-fit-physics-check.md`)
+  already noted as "barely enough" for M0 vs M1 discrimination (ΔAICc≈3.6
+  in the "weak preference" zone). A wider span isn't available under the
+  current constraints; if M0/M1 discrimination matters, add a 4th/5th
+  point with denser log-spacing later.
+
+### `s` blowup caveat at β_phys=1, large n
+
+The qf-96o rule `default_smooth_s(β, σ) = (0.05/σ)²` is designed to keep
+the *absolute* kink width `σ·√s = 0.05` constant across β-sweeps. With
+σ = 1/β_alg, the rule reads `s = (0.05·β_alg)²`. At the high corner
+(β_phys=1, n=11): β_alg ≈ 99, so `s ≈ 25` — far outside the historical
+[0, 1] range of s values we have tested.
+
+**Status (2026-05-11):** all migrated drivers hold `s = 0.25` fixed (the
+legacy thesis convention), NOT the `default_smooth_s` rule. We do not yet
+know:
+
+1. Whether a smooth-Metro γ-rate with s = O(10) is physically meaningful
+   (the smoothing kernel may suppress the transition rate at positive ν
+   so heavily that the dissipator's spectral coverage collapses).
+2. How much s = O(10) suppresses γ vs the optimal kinky-Metropolis
+   value γ_kinky ≈ exp(-βν/2) at low-T.
+3. Whether `τ_mix` at β_phys=1 cells is dominated by the kink-resolution
+   issue (in which case `default_smooth_s` would help) or by the
+   σ-narrowness (filter spectral coverage issue, which neither s rule
+   addresses).
+
+**Decision deferred** until the first full β_phys ∈ {0.25, 0.5, 1.0}
+sweep lands. Mitigation choices then are:
+
+- (a) Switch to `default_smooth_s` and accept large s, characterising the
+  γ-rate suppression at one cell first.
+- (b) Hold σ = 0.1 (or σ = c/β with c < 1, per `sigma_sweep_findings_qf_bw1`
+  optimum at σ ≈ 0.25/β) fixed independent of β, decoupling the kink
+  width from β.
+- (c) Reinstate the fixed s = 0.25 value (current driver default) and
+  document the kink-width drift as a known artifact of the β-sweep.
 
 ## Why the minimal-churn strategy
 

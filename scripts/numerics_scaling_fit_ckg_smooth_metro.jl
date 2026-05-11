@@ -13,11 +13,23 @@
 # coupling artifact — see drafts/scaling-fit-physics-check.md).
 #
 # Sweep grid (Phase A: smoke / laptop budget):
-#   n_values       = [3, 4, 5, 6, 7, 8]      — fits in a few hours on the laptop
-#   β_phys_values  = [1.0, 2.0, 3.0]         — replaces legacy β_alg ∈ {5, 10, 20}
+#   n_values       = [3, 4, 5, 6, 7, 8]        — fits in a few hours on the laptop
+#   β_phys_values  = [0.25, 0.5, 1.0]          — qf-6vr canonical grid (replaces
+#                                                legacy β_alg ∈ {5, 10, 20})
 #   construction   = KMS, domain = EnergyDomain, filter = nothing
-#   smooth-Metro: a = 0, s = 0.25 (locked thesis convention)
+#   smooth-Metro: a = 0, s = 0.25 (legacy fixed value — see CAVEAT below)
 #   target_eps     = 1e-3, method = :krylov, seeds = [42] (single seed)
+#
+# CAVEAT (qf-6vr / `s` blowup at β_phys=1, n≥9): the σ=1/β_alg convention
+# combined with the qf-96o `default_smooth_s(β,σ) = (0.05/σ)²` rule would
+# force s ≈ 25 at (β_phys=1, n=11) to preserve the absolute kink width
+# σ·√s = 0.05. We do not know yet how a smooth-Metro kernel with s=O(10)
+# affects the γ-rate suppression vs the optimal kinky Metropolis, nor what
+# it does to the τ_mix. This script holds s = 0.25 fixed (legacy thesis
+# convention) until that question is resolved. If the β_phys=1 cells
+# scale terribly, revisit either (a) the s-vs-β rule, (b) the σ-vs-β
+# convention (σ = c/β with c < 1 per `sigma_sweep_findings_qf_bw1`), or
+# (c) reinstate fixed σ = 0.1 as a control sweep.
 #
 # Outputs:
 #   scripts/output/sweep_S1_ckg_ideal_betaphys/                     per-cell BSON sidecars
@@ -58,8 +70,16 @@ println("[init] hostname = $(gethostname())")
 
 const SMOKE_MODE = get(ENV, "SMOKE", "0") == "1"
 
-const N_VALUES         = SMOKE_MODE ? [3]            : [3, 4, 5, 6, 7, 8]
-const BETA_PHYS_VALUES = SMOKE_MODE ? [1.0]          : [1.0, 2.0, 3.0]
+const N_VALUES         = SMOKE_MODE ? [3]              : [3, 4, 5, 6, 7, 8]
+# qf-6vr canonical β_phys grid (decided 2026-05-11 from the Gibbs-state
+# entropy analysis): three log-spaced values factor-2 apart, factor-4 total
+# span. 0.25 is the lower bound (below is essentially uniform/infinite-T:
+# S/log(d) > 0.96 across all n); 1.0 is the practical upper bound (σ at
+# n=10 is already 0.011, and σ·√s_default would force s ≈ 25, which is
+# physically defined but pushes the smooth-Metro kernel into a regime
+# we haven't tested — `default_smooth_s(β,σ)` may need to be capped or
+# the legacy s=0.25 reinstated if the τ_mix at β_phys=1 looks bad).
+const BETA_PHYS_VALUES = SMOKE_MODE ? [0.25]           : [0.25, 0.5, 1.0]
 const TARGET_EPS       = 1e-3
 const T_MAX_FACTOR     = 5.0
 const T_GRID_LEN       = 81

@@ -24,15 +24,18 @@
 #   3) DLL Metropolis filter    — matrix-free DLL apply (qf-lkb.9, BohrDomain)
 #
 # Sweep grid (3 × 3 × 3 = 27 cells):
-#   n ∈ {3, 4, 5},  β_phys ∈ {1.0, 2.0, 3.0},  construction × filter as above.
+#   n ∈ {3, 4, 5},  β_phys ∈ {0.25, 0.5, 1.0},  construction × filter as above.
 #
 # PHYSICS CHECK (qf-6vr / Phase qf-bphys): β is now the *physical* inverse
 # temperature against the un-rescaled Hamiltonian. The sweep harness reads
-# `ham.rescaling_factor` per cell and derives `β_alg = β_phys · rescaling_factor`;
-# at n=5 the n=5 fixture's `rescaling_factor` is in the same ballpark as at
-# n=3 (≈ 20–32), so β_phys ∈ {1, 2, 3} corresponds to β_alg ranges that the
-# param-table calibration still covers. The β_phys grid (1, 2, 3) replaces
-# the legacy β_alg grid (1, 2, 5, 10).
+# `ham.rescaling_factor` per cell and derives `β_alg = β_phys · rescaling_factor`.
+# The canonical β_phys grid `{0.25, 0.5, 1.0}` was decided 2026-05-11 from
+# the Gibbs-state entropy analysis: 0.25 is the smallest β_phys with
+# meaningful thermal contrast (S/log(d) ≈ 0.80 uniformly across n=3..10);
+# 1.0 is the practical upper bound (above, σ = 1/β_alg gets too tight at
+# large n for the OFT register sizing and the `s` smoothing parameter
+# would have to grow to O(10) to preserve the absolute kink width).
+# Replaces the legacy β_alg grid (1, 2, 5, 10).
 #
 # Output:
 #   drafts/figures/numerics/ckg_vs_dll_taumix_betaphys.{png, pdf}     (figure)
@@ -92,9 +95,12 @@ using Plots
 # fixture family covers exactly n ∈ {3, 4, 5}; n=6,7 extension requires
 # generating fresh fixtures or switching to heis_xxx_zzdisordered_periodic_n*.
 const N_VALUES         = [3, 4, 5]
-# qf-6vr: β_phys ∈ {1, 2, 3} replaces legacy β_alg ∈ {1, 2, 5, 10}.
-# β_alg is derived per cell from `ham.rescaling_factor` (see sweep harness).
-const BETA_PHYS_VALUES = [1.0, 2.0, 3.0]
+# qf-6vr canonical β_phys grid (decided 2026-05-11). 0.25 is the smallest
+# β_phys with meaningful thermal contrast (below: S/log(d) > 0.96, essentially
+# uniform); 1.0 is the practical upper bound (σ = 1/β_alg ≤ 0.04 at n=10,
+# already pushes the smooth-Metro `s` parameter into untested territory at
+# the highest n). Replaces legacy β_alg ∈ {1, 2, 5, 10}.
+const BETA_PHYS_VALUES = [0.25, 0.5, 1.0]
 const TARGET_EPS       = 1e-3
 const T_MAX_FACTOR     = 5.0      # PHYSICS CHECK: per qf-lkb.3 testset finding
 const T_GRID_LEN       = 81       # bi-exp fitting wants ≥ 50 well-spaced samples
@@ -104,9 +110,9 @@ const SEEDS            = [42]      # single seed; this script targets the figure
 
 # ── Thesis colour palette (memory: reference_thesis_colors.md) ───────────────
 const COLOR_BETA_PHYS = Dict(
-    1.0 => "#5C7794",   # slateblue
-    2.0 => "#5F8B8E",   # dustyteal
-    3.0 => "#7A2E39",   # bordeaux
+    0.25 => "#5C7794",   # slateblue  (warm)
+    0.5  => "#5F8B8E",   # dustyteal  (intermediate)
+    1.0  => "#7A2E39",   # bordeaux   (cold)
 )
 const COLOR_N = Dict(
     3 => "#2D5A3D",      # pinegreen
@@ -310,7 +316,7 @@ function build_panel_vs_n(results::Vector{<:NamedTuple}, title::String;
             marker = :circle,
             markersize = 5,
             linewidth = 2,
-            label = @sprintf("β_phys=%.0f", β_phys))
+            label = @sprintf("β_phys=%.2f", β_phys))
     end
     return plt
 end

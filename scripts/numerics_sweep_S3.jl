@@ -5,7 +5,7 @@
 # jump-sweep splitting. Feeds plots P5 (channel-vs-ideal), P6 (Ham-sim-time
 # scaling), P7 (filter-family smooth-Metro arm).
 #
-# Cells: family = 1D-XXX-zzdis, β_phys ∈ {1, 2, 3}, ε = 1e-3, filter = smooth_metro.
+# Cells: family = 1D-XXX-zzdis, β_phys ∈ {0.25, 0.5, 1.0}, ε = 1e-3, filter = smooth_metro.
 #   Phase A: n ∈ {3, 4, 5, 6}        — laptop smoke test.
 #   Phase B: n ∈ {7, 8, 9} incremental — bail at first cell exceeding 1 h.
 #
@@ -46,7 +46,12 @@ println("[init] hostname = $(gethostname())")
 # --- Constants ------------------------------------------------------------
 
 const OUTPUT_DIR    = joinpath(@__DIR__, "output", "sweep_S3_channel_betaphys")
-const BETAS_PHYS    = [1.0, 2.0, 3.0]     # qf-6vr: β_phys grid (replaces legacy [5, 10, 20] β_alg)
+# qf-6vr canonical β_phys grid (decided 2026-05-11). Lower 0.25 = smallest
+# β_phys with meaningful thermal contrast (S/log d ≈ 0.80 across n);
+# upper 1.0 = practical ceiling (σ = 1/β_alg tightens to 0.01 at n=10,
+# `default_smooth_s` would force s ≈ 25 — untested kernel regime; if
+# β_phys=1 cells mix terribly, revisit the s rule or the σ-vs-β convention).
+const BETAS_PHYS    = [0.25, 0.5, 1.0]
 const EPSILONS      = [1e-3]              # ε=1e-3 only per qf-e4z.5 decision 2026-05-08
 const FILTER_KINDS  = [:smooth_metro]
 const PHASE_A_N     = collect(3:6)

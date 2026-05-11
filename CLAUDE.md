@@ -86,11 +86,28 @@ fields and helpers are:
 | Test constants | `BETA` (= `BETA_ALG`) | β_alg, legacy semantics preserved |
 | Test constants | `BETA_PHYS`, `N3_BETA_PHYS` | β_phys derived from each fixture's rescaling_factor |
 
-The β_phys default sweep grid is `[1.0, 2.0, 3.0]` (replaces the legacy
-β_alg grid `[5.0, 10.0, 20.0]`). All new numerics drivers write β_phys
-into the sidecar; the harness derives β_alg per cell. `migrate_bson_beta_phys.jl`
-annotates legacy β_alg-keyed sidecars with the new triple so plot scripts
-can read them under the same `fit_scaling` contract.
+The canonical β_phys sweep grid is **`{0.25, 0.5, 1.0}`** (decided
+2026-05-11, replaces the legacy β_alg grid `{5.0, 10.0, 20.0}`).
+Rationale: 0.25 is the smallest β_phys with meaningful thermal contrast
+(`S(ρ_β)/log(d)` ≈ 0.80 uniformly across n=3..10 — below that the Gibbs
+state is essentially uniform); 1.0 is the practical upper bound (σ =
+1/β_alg ≤ 0.04 at n ≥ 8, and the `default_smooth_s(β, σ) = (0.05/σ)²`
+rule would force `s` ≈ O(10) at n=11 to preserve the absolute kink width
+`σ·√s = 0.05` — a smooth-Metro kernel regime we have not characterised).
+
+All new numerics drivers write β_phys into the sidecar; the harness
+derives β_alg per cell. `migrate_bson_beta_phys.jl` annotates legacy
+β_alg-keyed sidecars with the new triple so plot scripts can read them
+under the same `fit_scaling` contract.
+
+**Caveat on the smooth-Metropolis `s` at large β_alg.** The legacy fixed
+`s = 0.25` is held in the current drivers; if a β_phys=1 cell at large n
+mixes terribly because the kink-width is now σ·√s ≈ 0.0025 (much narrower
+than the legacy 0.05), the choice is between (a) re-enabling
+`default_smooth_s` and verifying that s ≈ 25 still gives a physically
+sensible γ-rate, (b) holding σ = 0.1 fixed (decoupling the OFT filter
+width from β), or (c) reinstating the fixed s = 0.25 value. The choice
+hasn't been made yet — make the call after the first full sweep.
 
 ## Agents
 
