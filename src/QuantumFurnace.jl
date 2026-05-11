@@ -92,7 +92,8 @@ export X, Y, Z, Had,
 export validate_config!
 export register_t0_D, register_w0_D, register_r_D,
        register_t0_b_minus, register_w0_b_minus, register_r_b_minus,
-       register_t0_b_plus, register_w0_b_plus, register_r_b_plus
+       register_t0_b_plus, register_w0_b_plus, register_r_b_plus,
+       register_M_D, register_M_b_minus, register_M_b_plus
 export oft!
 
 # --- Filters (DLL-1) ---

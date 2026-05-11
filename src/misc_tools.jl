@@ -197,51 +197,73 @@ type and can specialise on it.
     isnothing(config.filter) ? GaussianFilter(config.sigma) : config.filter
 
 """
-    make_trotter_for_config(hamiltonian, config) -> TrottTrott
+    make_trotter_for_config(hamiltonian, config) -> AbstractTrotter
 
-Build a `TrottTrott` consistent with the per-register grids of `config`.
+Build a Trotter cache consistent with the per-register grids of `config`.
 For `config.domain isa TrotterDomain`:
 
-- **KMS coherent (`with_coherent(config.construction)`)** — calls the
-  qf-d0w shared-δt₀ constructor with the natural per-register Trotter steps
-  derived from the integration variables in the coherent integrals:
+- **KMS coherent (`with_coherent(config.construction)`)** — returns a
+  qf-e4z.20 [`TrotterTriple`](@ref): three **independent** Strang
+  Trotterizations, one per coherent-term leg, sized by the per-leg
+  substep counts `register_M_X(config)` and the natural per-leg Trotter
+  step derived from the integration variables of the coherent integrals:
 
   - `b_-(t/σ)` evolves under `exp(-iH·t/σ)` over the outer grid
-    `t = k · register_t0_b_minus(config)` — natural step
+    `t = k · register_t0_b_minus(config)` — natural Trotter step
     `t0_b_minus_evol = register_t0_b_minus(config) / config.sigma`.
   - `b_+(τβ)` evolves under `exp(-iH·τβ)` over the inner grid
-    `τ = k · register_t0_b_plus(config)`  — natural step
+    `τ = k · register_t0_b_plus(config)`  — natural Trotter step
     `t0_b_plus_evol  = config.beta · register_t0_b_plus(config)`.
 
-  (For the project convention `σ = 1/β` the two scalings coincide; written in
-  general form so that any future runs with `σ ≠ 1/β` still yield exact
+  (For the project convention `σ = 1/β` the two scalings coincide; written
+  in general form so that any future runs with `σ ≠ 1/β` still yield exact
   integer step counts in `B_trotter`.)
+
+  Per-leg M counts `(M_D, M_b_minus, M_b_plus)` are resolved via
+  `register_M_X(config)`. If the per-leg fields are unset, all three default
+  to the legacy `config.num_trotter_steps_per_t0`. The three legs have NO
+  commensurability constraint; each `δt₀_X = t0_X / M_X` is independent.
 
 - **GNS / no-coherent** — calls the legacy single-cache constructor
   `TrottTrott(ham, t0_D, M_user)`; there is no coherent term so the
   per-register caches would be unused.
 
 Throws `ArgumentError` if `config.num_trotter_steps_per_t0` or
-`register_t0_D(config)` is `nothing`, or if the integer-M condition fails
-(forwarded from the shared-δt₀ constructor).
+`register_t0_D(config)` is `nothing` (the legacy default is the fallback
+for unset per-leg M's).
 """
 function make_trotter_for_config(hamiltonian::HamHam, config::Config)
     config.domain isa TrotterDomain ||
         throw(ArgumentError("make_trotter_for_config: config.domain must be TrotterDomain (got $(typeof(config.domain)))."))
-    M_user = config.num_trotter_steps_per_t0
-    M_user === nothing &&
-        throw(ArgumentError("make_trotter_for_config: config.num_trotter_steps_per_t0 must be set."))
+    M_user_legacy = config.num_trotter_steps_per_t0
     t0_D = register_t0_D(config)
     t0_D === nothing &&
         throw(ArgumentError("make_trotter_for_config: register_t0_D(config) must be set."))
     if with_coherent(config.construction)
-        # b_-(t/σ): outer evolution per grid step = t0_grid_b_minus / σ.
-        # b_+(τβ): inner evolution per grid step = β · t0_grid_b_plus.
+        # Per-leg evolution steps:
+        #   b_-(t/σ): outer evolution per grid step = t0_grid_b_minus / σ.
+        #   b_+(τβ): inner evolution per grid step = β · t0_grid_b_plus.
         t0_bm_evol = register_t0_b_minus(config) / config.sigma
         t0_bp_evol = config.beta * register_t0_b_plus(config)
-        return TrottTrott(hamiltonian, t0_D, t0_bm_evol, t0_bp_evol, M_user)
+
+        # Per-leg substep counts. If the per-leg field is unset, fall back
+        # to the legacy `num_trotter_steps_per_t0`. At least one of the
+        # legacy field / all per-leg fields must be provided.
+        M_D  = register_M_D(config)
+        M_bm = register_M_b_minus(config)
+        M_bp = register_M_b_plus(config)
+        if M_D === nothing || M_bm === nothing || M_bp === nothing
+            throw(ArgumentError(
+                "make_trotter_for_config: per-leg M counts must be resolvable; got " *
+                "M_D=$M_D, M_b_minus=$M_bm, M_b_plus=$M_bp (set " *
+                "`num_trotter_steps_per_t0` for a common default or " *
+                "`num_trotter_steps_per_t0_X` for per-leg control)."))
+        end
+        return TrotterTriple(hamiltonian, t0_D, t0_bm_evol, t0_bp_evol, M_D, M_bm, M_bp)
     else
-        return TrottTrott(hamiltonian, t0_D, M_user)
+        M_user_legacy === nothing &&
+            throw(ArgumentError("make_trotter_for_config: config.num_trotter_steps_per_t0 must be set (GNS branch)."))
+        return TrottTrott(hamiltonian, t0_D, M_user_legacy)
     end
 end
 

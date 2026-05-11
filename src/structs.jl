@@ -150,6 +150,19 @@ Mixing legacy and new on the same field is rejected at validation.
     eta::Union{T, Nothing} = nothing
     num_trotter_steps_per_t0::Union{Int, Nothing} = nothing
 
+    # qf-e4z.20.2 — per-leg Strang substep counts for the independent
+    # `TrotterTriple` scheme. Each leg's substep is `δt₀_X = t0_X / M_X` where
+    # `t0_X` is the leg's natural Trotter step (matching the convention used by
+    # `make_trotter_for_config`). All three default to `nothing`; resolver
+    # accessors `register_M_X(cfg)` fall back to the legacy
+    # `num_trotter_steps_per_t0` when the per-leg field is `nothing`. The
+    # legacy field thus continues to behave as the "common M_user" knob, and
+    # any caller that wants TRULY independent control sets only the fields it
+    # cares about (the others are filled from the legacy default).
+    num_trotter_steps_per_t0_D::Union{Int, Nothing} = nothing
+    num_trotter_steps_per_t0_b_minus::Union{Int, Nothing} = nothing
+    num_trotter_steps_per_t0_b_plus::Union{Int, Nothing} = nothing
+
     # Thermalize-specific
     mixing_time::Union{T, Nothing} = nothing
     delta::Union{T, Nothing} = nothing
@@ -208,6 +221,21 @@ legacy field when the explicit per-term field is `nothing`.
 @inline register_t0_b_plus(cfg::Config) = cfg.t0_b_plus !== nothing ? cfg.t0_b_plus : cfg.t0
 @inline register_w0_b_plus(cfg::Config) = cfg.w0_b_plus !== nothing ? cfg.w0_b_plus : cfg.w0
 @inline register_r_b_plus(cfg::Config)  = cfg.num_energy_bits_b_plus !== nothing ? cfg.num_energy_bits_b_plus : cfg.num_energy_bits
+
+"""
+    register_M_D(cfg)        register_M_b_minus(cfg)     register_M_b_plus(cfg)
+
+Per-leg Strang substep counts for the qf-e4z.20 `TrotterTriple` scheme.
+Each accessor returns the leg-specific field if set, otherwise falls back to
+the legacy single-knob `cfg.num_trotter_steps_per_t0`. Used by
+`make_trotter_for_config` to size each leg's Trotterization independently.
+"""
+@inline register_M_D(cfg::Config) =
+    cfg.num_trotter_steps_per_t0_D       !== nothing ? cfg.num_trotter_steps_per_t0_D       : cfg.num_trotter_steps_per_t0
+@inline register_M_b_minus(cfg::Config) =
+    cfg.num_trotter_steps_per_t0_b_minus !== nothing ? cfg.num_trotter_steps_per_t0_b_minus : cfg.num_trotter_steps_per_t0
+@inline register_M_b_plus(cfg::Config) =
+    cfg.num_trotter_steps_per_t0_b_plus  !== nothing ? cfg.num_trotter_steps_per_t0_b_plus  : cfg.num_trotter_steps_per_t0
 
 """
     JumpOp
