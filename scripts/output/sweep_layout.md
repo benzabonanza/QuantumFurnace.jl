@@ -24,6 +24,21 @@ The driver writes a sidecar through either of two entry points:
 
 `fit_scaling(::Vector{<:NamedTuple}; beta_kind = :auto)` reads `:beta_phys` preferentially, falling back to `:beta_alg`/`:beta`. The returned `ScalingFit` carries `beta_kind ∈ {:phys, :alg}` so `formula_string` prints the correct β label (`β_phys^y` vs `β_alg^y`).
 
+### Migrating legacy β_alg-keyed sidecars
+
+`scripts/migrate_bson_beta_phys.jl` walks one or more output directories
+and emits a `.betaphys.bson` companion next to every legacy sidecar that
+only carries `:beta`. The annotated copy adds `:beta_alg`, `:beta_phys`,
+and `:rescaling_factor` derived from the matching Hamiltonian fixture
+(`hamiltonians/heis_<family>_periodic_n<n>.bson`). The original BSON is
+preserved unchanged. Idempotent — re-runs skip already-migrated files.
+
+```
+julia --project scripts/migrate_bson_beta_phys.jl                 # default scan
+julia --project scripts/migrate_bson_beta_phys.jl --dry-run        # report-only
+julia --project scripts/migrate_bson_beta_phys.jl --dir <path>    # target one dir
+```
+
 ## Channel sweeps (`sweep_channel_mixing` — qf-e4z.2)
 
 ### Sidecar filename
