@@ -740,7 +740,7 @@ the ideal-L `predict_lindbladian_trajectory` which targets `e^{tL} rho_0`.
 - `tol::Real = 1e-10`: reserved (no-op currently — the dense small-space
   eigendecomposition has no tolerance knob).
 - `save_states::Bool = false`: also return the reconstructed rho_k.
-- `trotter::Union{Nothing, TrottTrott} = nothing`: required for TrotterDomain.
+- `trotter::Union{Nothing, AbstractTrotter} = nothing`: required for TrotterDomain.
 
 # Returns
 NamedTuple with `t = collect(k_grid) .* δ`, `distances` (trace distance to
@@ -777,7 +777,7 @@ function predict_channel_trajectory(
     krylovdim::Integer = 40,
     tol::Real = 1e-10,
     save_states::Bool = false,
-    trotter::Union{Nothing, TrottTrott} = nothing,
+    trotter::Union{Nothing, AbstractTrotter} = nothing,
     allow_unpaired_nonhermitian::Bool = false,
     workspace::Union{Nothing, Workspace{KrylovSpectrum}} = nothing,
 )::NamedTuple where {T<:Complex}

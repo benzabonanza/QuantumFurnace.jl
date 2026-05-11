@@ -13,7 +13,7 @@
 """
 function _precompute_coherent_B(
     jumps::AbstractVector{<:JumpOp},
-    ham_or_trott::Union{HamHam, TrottTrott},
+    ham_or_trott::Union{HamHam, AbstractTrotter},
     config::Config,
     precomputed_data;
     )
@@ -81,7 +81,7 @@ end
         hamiltonian::HamHam,
         config::Config{Thermalize},
         precomputed_data;
-        trotter::Union{Nothing, TrottTrott}=nothing,
+        trotter::Union{Nothing, AbstractTrotter}=nothing,
     ) -> Union{Nothing, Vector{Matrix{<:Complex}}}
 
     Precompute per-jump coherent unitaries for Kraus thermalization:
@@ -96,7 +96,7 @@ function _precompute_coherent_unitary(
     hamiltonian::HamHam,
     config::Config{Thermalize},
     precomputed_data;
-    trotter::Union{Nothing, TrottTrott}=nothing,
+    trotter::Union{Nothing, AbstractTrotter}=nothing,
     delta_scale::Real = 1.0  # for randomized channels
     )
 

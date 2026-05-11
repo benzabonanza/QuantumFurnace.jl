@@ -221,7 +221,7 @@ is `abs(real(lambda_2))` where lambda_2 is the second eigenvalue sorted by |Re(l
 - `jumps::Vector{JumpOp}`: Jump operators
 
 # Keyword Arguments
-- `trotter::Union{TrottTrott, Nothing}=nothing`: Trotter object (required for TrotterDomain)
+- `trotter::Union{AbstractTrotter, Nothing}=nothing`: Trotter object (required for TrotterDomain)
 - `krylovdim::Int=30`: Krylov subspace dimension
 - `howmany::Int=4`: Number of eigenvalues to compute
 - `tol::Real=1e-10`: Convergence tolerance
@@ -235,7 +235,7 @@ function krylov_spectral_gap(
     config::Config{Lindbladian},
     hamiltonian::HamHam,
     jumps::Vector{JumpOp};
-    trotter::Union{TrottTrott, Nothing}=nothing,
+    trotter::Union{AbstractTrotter, Nothing}=nothing,
     krylovdim::Int=30,
     howmany::Int=4,
     tol::Real=1e-10,
@@ -338,7 +338,7 @@ function krylov_spectral_gap(
     config::Config{Thermalize},
     hamiltonian::HamHam,
     jumps::Vector{JumpOp};
-    trotter::Union{TrottTrott, Nothing}=nothing,
+    trotter::Union{AbstractTrotter, Nothing}=nothing,
     krylovdim::Int=30,
     howmany::Int=4,
     tol::Real=1e-10,
@@ -438,7 +438,7 @@ and `Config{Thermalize}` (CPTP channel matvec with `:LM` targeting and delta con
 - `jumps::Vector{JumpOp}`: Jump operators
 - `config::Config`: Lindbladian or Thermalize configuration
 - `hamiltonian::HamHam`: Hamiltonian with eigenbasis data
-- `trotter::Union{TrottTrott, Nothing}=nothing`: Trotter object (required for TrotterDomain)
+- `trotter::Union{AbstractTrotter, Nothing}=nothing`: Trotter object (required for TrotterDomain)
 
 # Keyword Arguments
 - `krylovdim::Int=30`: Krylov subspace dimension
@@ -455,7 +455,7 @@ function run_krylov_spectrum(
     jumps::Vector{JumpOp},
     config::Config{S,D,C,T},
     hamiltonian::HamHam,
-    trotter::Union{TrottTrott, Nothing}=nothing;
+    trotter::Union{AbstractTrotter, Nothing}=nothing;
     krylovdim::Int=30,
     howmany::Int=4,
     tol::Real=1e-10,

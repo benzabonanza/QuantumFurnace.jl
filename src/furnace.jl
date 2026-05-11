@@ -1,5 +1,5 @@
 function construct_lindbladian(jumps::Vector{JumpOp}, config::Config{Lindbladian}, hamiltonian::HamHam;
-    trotter::Union{TrottTrott, Nothing}=nothing,
+    trotter::Union{AbstractTrotter, Nothing}=nothing,
     include_coherent::Bool=true,
     allow_unpaired_nonhermitian::Bool=false)
 
@@ -80,7 +80,7 @@ Constructs the full Lindbladian superoperator, finds the two eigenvalues nearest
 - `jumps::Vector{JumpOp}`: Jump operators
 - `config::Config{Lindbladian}`: Lindbladian configuration
 - `hamiltonian::HamHam`: Hamiltonian with eigenbasis data
-- `trotter::Union{TrottTrott, Nothing}=nothing`: Trotter object (required for TrotterDomain)
+- `trotter::Union{AbstractTrotter, Nothing}=nothing`: Trotter object (required for TrotterDomain)
 
 # Returns
 `LindbladResults` with eigenvalues, fixed point, gap mode, spectral gap, and metadata.
@@ -89,7 +89,7 @@ function run_lindblad(
     jumps::Vector{JumpOp},
     config::Config{Lindbladian,D,C,T},
     hamiltonian::HamHam{T},
-    trotter::Union{TrottTrott, Nothing}=nothing;
+    trotter::Union{AbstractTrotter, Nothing}=nothing;
     allow_unpaired_nonhermitian::Bool=false,
 ) where {D, C, T<:AbstractFloat}
 
@@ -146,7 +146,7 @@ history in a `ThermalizeResults` struct.
 - `jumps::Vector{JumpOp}`: Jump operators
 - `config::Config{Thermalize}`: Thermalization configuration (provides mixing_time, delta)
 - `hamiltonian::HamHam`: Hamiltonian with eigenbasis data
-- `trotter::Union{TrottTrott, Nothing}=nothing`: Trotter object (required for TrotterDomain)
+- `trotter::Union{AbstractTrotter, Nothing}=nothing`: Trotter object (required for TrotterDomain)
 
 # Keyword Arguments
 - `initial_dm::Union{Nothing, Matrix{<:Complex}}=nothing`: Initial density matrix (defaults to maximally mixed I/d)
@@ -161,7 +161,7 @@ function run_thermalize(
     jumps::Vector{JumpOp},
     config::Config{Thermalize,D,C,T},
     hamiltonian::HamHam{T},
-    trotter::Union{TrottTrott, Nothing}=nothing;
+    trotter::Union{AbstractTrotter, Nothing}=nothing;
     initial_dm::Union{Nothing, Matrix{<:Complex}}=nothing,
     rng::AbstractRNG = Random.default_rng(),
     rescale_by_inv_prob::Union{Bool, Nothing} = nothing,

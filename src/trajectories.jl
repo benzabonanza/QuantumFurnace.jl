@@ -62,7 +62,7 @@ function _build_trajectory_workspace(
     config::Config{<:Union{Thermalize, Trajectory},D,C,T},
     hamiltonian::HamHam,
     jumps::Vector{JumpOp};
-    trotter::Union{TrottTrott,Nothing}=nothing,
+    trotter::Union{AbstractTrotter,Nothing}=nothing,
     delta::Real = config.delta,
     rescale_by_inv_prob::Union{Bool, Nothing} = nothing,
 ) where {D<:AbstractDomain, C<:AbstractConstruction, T<:AbstractFloat}
@@ -286,7 +286,7 @@ end
 
 function _precompute_R(
     jumps::AbstractVector{<:JumpOp},
-    ham_or_trott::Union{HamHam, TrottTrott},
+    ham_or_trott::Union{HamHam, AbstractTrotter},
     config::Config{Thermalize, D},
     precomputed_data,
     scratch::ThermalizeScratch{<:Complex},
@@ -507,7 +507,7 @@ end
 
 function _precompute_R_threaded_timetrot!(
     jumps::AbstractVector{<:JumpOp},
-    ham_or_trott::Union{HamHam, TrottTrott},
+    ham_or_trott::Union{HamHam, AbstractTrotter},
     config::Config{Thermalize, D},
     precomputed_data,
     scratch::ThermalizeScratch{CT},
@@ -935,7 +935,7 @@ function _build_framework_and_seed(
     config::Config{<:Union{Thermalize, Trajectory}},
     psi0::Vector{<:Complex},
     hamiltonian::HamHam;
-    trotter::Union{TrottTrott,Nothing}=nothing,
+    trotter::Union{AbstractTrotter,Nothing}=nothing,
     delta::Real = config.delta,
     seed::Union{Int,Nothing} = nothing,
     allow_unpaired_nonhermitian::Bool = false,
@@ -969,7 +969,7 @@ function run_trajectories(
     config::Config{<:Union{Thermalize, Trajectory}},
     psi0::Vector{<:Complex},
     hamiltonian::HamHam;
-    trotter::Union{TrottTrott,Nothing}=nothing,
+    trotter::Union{AbstractTrotter,Nothing}=nothing,
     total_time::Real = config.mixing_time,
     delta::Real = config.delta,
     ntraj::Int = 1,
@@ -1085,7 +1085,7 @@ function run_observable_trajectories(
     config::Config{<:Union{Thermalize, Trajectory}},
     psi0::Vector{<:Complex},
     hamiltonian::HamHam;
-    trotter::Union{TrottTrott,Nothing}=nothing,
+    trotter::Union{AbstractTrotter,Nothing}=nothing,
     total_time::Real = config.mixing_time,
     delta::Real = config.delta,
     ntraj::Int = 1,
@@ -1562,7 +1562,7 @@ Unified trajectory runner. Mode is determined by keyword arguments:
 - `jumps::Vector{JumpOp}`: Jump operators.
 - `config::Config{Thermalize}`: Thermalization configuration.
 - `hamiltonian::HamHam`: Hamiltonian data (provides Gibbs reference via `hamiltonian.gibbs`).
-- `trotter::Union{TrottTrott, Nothing}=nothing`: Trotter object (required for TrotterDomain).
+- `trotter::Union{AbstractTrotter, Nothing}=nothing`: Trotter object (required for TrotterDomain).
 
 # Required Keyword Arguments
 - `psi0::Vector{<:Complex}`: Initial state vector (required).
@@ -1589,7 +1589,7 @@ function run_trajectory(
     jumps::Vector{JumpOp},
     config::Config{<:Union{Thermalize, Trajectory}},
     hamiltonian::HamHam,
-    trotter::Union{TrottTrott, Nothing}=nothing;
+    trotter::Union{AbstractTrotter, Nothing}=nothing;
     psi0::Vector{<:Complex},
     ntraj::Int = 1,
     total_time::Real = config.mixing_time,

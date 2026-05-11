@@ -10,7 +10,7 @@ function Workspace(
     config::Config{Lindbladian},
     hamiltonian::HamHam,
     jumps::Vector{JumpOp};
-    trotter::Union{TrottTrott, Nothing}=nothing,
+    trotter::Union{AbstractTrotter, Nothing}=nothing,
 )
     # Determine ham_or_trott (mirrors construct_lindbladian in furnace.jl)
     ham_or_trott = if config.domain isa TrotterDomain
@@ -164,7 +164,7 @@ function _accumulate_R_total!(
     ws_hermitian::Vector{Bool},
     precomputed_data,
     config::Config{<:Any, D},
-    ham_or_trott::Union{HamHam, TrottTrott},
+    ham_or_trott::Union{HamHam, AbstractTrotter},
 ) where {T<:Complex, D<:Union{TimeDomain, TrotterDomain}}
     (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors) = precomputed_data
     prefactor = precomputed_data.oft_domain_prefactor * gamma_norm_factor
@@ -655,7 +655,7 @@ function Workspace(
     config::Config{Lindbladian, BohrDomain, DLL},
     hamiltonian::HamHam,
     jumps::Vector{JumpOp};
-    trotter::Union{TrottTrott, Nothing}=nothing,
+    trotter::Union{AbstractTrotter, Nothing}=nothing,
 )
     @assert trotter === nothing  "DLL BohrDomain does not use Trotter"
 
@@ -733,7 +733,7 @@ function Workspace(
     config::Config{Thermalize},
     hamiltonian::HamHam,
     jumps::Vector{JumpOp};
-    trotter::Union{TrottTrott, Nothing}=nothing,
+    trotter::Union{AbstractTrotter, Nothing}=nothing,
 )
     # Determine ham_or_trott
     ham_or_trott = if config.domain isa TrotterDomain

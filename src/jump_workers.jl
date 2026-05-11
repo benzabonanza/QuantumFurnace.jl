@@ -197,7 +197,7 @@ end
 function _jump_contribution!(
     L_target::AbstractMatrix{<:Complex},
     jump::JumpOp,
-    ham_or_trott::Union{HamHam, TrottTrott},
+    ham_or_trott::Union{HamHam, AbstractTrotter},
     config::Config{Lindbladian, D},
     precomputed_data,
     ws::Workspace{Lindbladian};

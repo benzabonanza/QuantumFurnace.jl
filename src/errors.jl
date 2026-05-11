@@ -19,7 +19,7 @@ Returns a NamedTuple with fields:
 function compute_oft_trotter_error(
     jump_data::Matrix{ComplexF64},
     hamiltonian::HamHam,
-    trotter::TrottTrott;
+    trotter::AbstractTrotter;
     num_energy_bits::Int = 12,
     w0::Float64 = 0.05,
     sigma::Float64 = 0.08,
@@ -91,7 +91,7 @@ function compute_oft_trotter_error_all_jumps(
     jump_paulis::Vector{Vector{Matrix{ComplexF64}}},
     num_qubits::Int,
     hamiltonian::HamHam,
-    trotter::TrottTrott;
+    trotter::AbstractTrotter;
     kwargs...
 )
     norm_factor = sqrt(length(jump_paulis) * num_qubits)

@@ -33,7 +33,7 @@ with 6 observables: `["Z1", "X1", "Z1_Zhalf", "H", "Rand_traceless", "Mz_stagg"]
   k=pi momentum component for coupling to gap modes in non-zero momentum sectors.
 """
 function build_preset_trajectory_observables(hamiltonian::HamHam, num_qubits::Int;
-                                              trotter::Union{TrottTrott, Nothing}=nothing)
+                                              trotter::Union{AbstractTrotter, Nothing}=nothing)
     dim = size(hamiltonian.data, 1)
 
     # Select basis transformation matrix
@@ -90,12 +90,14 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    _gibbs_in_trotter_basis(hamiltonian::HamHam, trotter::TrottTrott) -> Hermitian
+    _gibbs_in_trotter_basis(hamiltonian::HamHam, trotter::AbstractTrotter) -> Hermitian
 
 Compute the Gibbs state in the Trotter eigenbasis.
-Follows the same Trotter basis transform as run_thermalize.
+Follows the same Trotter basis transform as run_thermalize. For a
+`TrotterTriple` the basis is the dissipative leg `V_D` (via the
+`trotter.eigvecs` getproperty alias).
 """
-function _gibbs_in_trotter_basis(hamiltonian::HamHam, trotter::TrottTrott)
+function _gibbs_in_trotter_basis(hamiltonian::HamHam, trotter::AbstractTrotter)
     return Hermitian(trotter.eigvecs' * hamiltonian.eigvecs * hamiltonian.gibbs *
                      hamiltonian.eigvecs' * trotter.eigvecs)
 end
@@ -170,7 +172,7 @@ function run_trajectories_convergence(
     batch_size::Int = 1000,
     n_batches::Int = 10,
     seed::Union{Int,Nothing} = nothing,
-    trotter::Union{TrottTrott,Nothing} = nothing,
+    trotter::Union{AbstractTrotter,Nothing} = nothing,
     total_time::Real = config.mixing_time,
     delta::Real = config.delta,
     allow_unpaired_nonhermitian::Bool = false,
@@ -303,7 +305,7 @@ function run_trajectories_adaptive(
     min_batches::Int = 5,
     window_size::Int = 3,
     seed::Union{Int,Nothing} = nothing,
-    trotter::Union{TrottTrott,Nothing} = nothing,
+    trotter::Union{AbstractTrotter,Nothing} = nothing,
     total_time::Real = config.mixing_time,
     delta::Real = config.delta,
     allow_unpaired_nonhermitian::Bool = false,

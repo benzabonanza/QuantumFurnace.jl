@@ -35,7 +35,7 @@ end
 
 function _precompute_data(
     config::Config{Lindbladian, BohrDomain},
-    ham_or_trott::Union{HamHam, TrottTrott}
+    ham_or_trott::Union{HamHam, AbstractTrotter}
 )
 
     alpha = _pick_alpha(config)
@@ -88,7 +88,7 @@ end
 
 function _precompute_data(
     config::Config{<:Any, EnergyDomain},
-    ham_or_trott::Union{HamHam, TrottTrott}
+    ham_or_trott::Union{HamHam, AbstractTrotter}
 )
     energy_labels, = _precompute_labels(config)
     transition = pick_transition(config)
@@ -182,7 +182,7 @@ end
 
 function _precompute_data(
     config::Config{<:Any, D},
-    ham_or_trott::Union{HamHam, TrottTrott}
+    ham_or_trott::Union{HamHam, AbstractTrotter}
 ) where {D<:Union{TimeDomain, TrotterDomain}}
     energy_labels, time_labels = _precompute_labels(config)  # dissipative grid (qf-9z0)
     oft_time_labels = _truncate_time_labels_for_oft(time_labels, config.sigma; filter=_resolve_filter(config))
@@ -344,7 +344,7 @@ Returns a NamedTuple `(; K0s, U_residuals)` where each is a `Vector{Matrix{CT}}`
 """
 function _precompute_per_jump_channels(
     jumps::AbstractVector{<:JumpOp},
-    ham_or_trott::Union{HamHam, TrottTrott},
+    ham_or_trott::Union{HamHam, AbstractTrotter},
     config::Config{Thermalize},
     precomputed_data;
     rescale_by_inv_prob::Bool = true,
@@ -394,7 +394,7 @@ Used by `run_thermalize` for both `:sweep` (called S times in order) and
     U_coherent::Union{Nothing, Matrix{<:Complex}},
     K0::Matrix{<:Complex},
     U_residual::Matrix{<:Complex},
-    ham_or_trott::Union{HamHam, TrottTrott},
+    ham_or_trott::Union{HamHam, AbstractTrotter},
     config::Config{Thermalize},
     precomputed_data,
     jump_weight_scaling::Real,
