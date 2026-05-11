@@ -10,6 +10,8 @@ Hamiltonian-generation task (qf-k1u.5), plus a sanity check on the refactored
 
 using LinearAlgebra
 using SparseArrays
+using Random
+using Statistics: median
 
 @testset "Heisenberg Hamiltonian builders" begin
 
@@ -207,6 +209,127 @@ using SparseArrays
         @test length(h.disordering_terms) == 1
         @test length(h.disordering_coeffs) == 1
         @test isapprox(tr(h.gibbs), 1.0; atol=1e-12)
+    end
+
+    # find_typical_heisenberg / find_typical_2d_heisenberg ----------------------------
+    # W₂-spectral-median selector across a batch of disorder realisations.
+    # See bd issue qf-n72 for context (n=6 gap-outlier with find_ideal_*).
+    @testset "find_typical_heisenberg: returns a valid raw NamedTuple" begin
+        using Random; Random.seed!(20260511)
+        raw = find_typical_heisenberg(3, [1.0, 1.0, 1.0]; batch_size=50,
+            disordering_terms=[Vector{Matrix{ComplexF64}}([Z])], disorder_strength=1.0)
+        @test raw.nu_min > 0
+        @test size(raw.matrix) == (8, 8)
+        @test size(raw.eigvecs) == (8, 8)
+        @test length(raw.eigvals) == 8
+        @test raw.periodic === true
+        @test length(raw.disordering_coeffs) == 1
+        @test length(raw.disordering_coeffs[1]) == 3
+        @test raw.typicality_distance >= 0
+        # Spectrum still lives in [0, 0.45]
+        @test minimum(raw.eigvals) ≥ -1e-10
+        @test maximum(raw.eigvals) ≤ 0.45 + 1e-10
+        @test isapprox(raw.matrix, raw.matrix'; atol=1e-12)
+    end
+
+    @testset "find_typical_heisenberg: HamHam wrap end-to-end (extra fields ignored)" begin
+        using Random; Random.seed!(20260512)
+        raw = find_typical_heisenberg(3, [1.0, 1.0, 1.0]; batch_size=30,
+            disordering_terms=[Vector{Matrix{ComplexF64}}([Z])], disorder_strength=1.0)
+        ham = HamHam(raw, 1.0)
+        @test ham isa HamHam{Float64}
+        @test size(ham.data) == (8, 8)
+        @test ham.nu_min > 0
+        @test isapprox(tr(ham.gibbs), 1.0; atol=1e-10)
+    end
+
+    @testset "find_typical_2d_heisenberg: returns a valid raw NamedTuple" begin
+        using Random; Random.seed!(20260513)
+        raw = find_typical_2d_heisenberg(2, 2, [1.0, 1.0, 1.5];
+            batch_size=30, periodic_x=true, periodic_y=true,
+            disordering_terms=[Vector{Matrix{ComplexF64}}([Z])], disorder_strength=1e-2)
+        @test raw.nu_min > 0
+        @test size(raw.matrix) == (16, 16)
+        @test length(raw.eigvals) == 16
+        @test raw.periodic === true
+        @test length(raw.disordering_coeffs[1]) == 4
+        @test raw.typicality_distance >= 0
+        @test minimum(raw.eigvals) ≥ -1e-10
+        @test maximum(raw.eigvals) ≤ 0.45 + 1e-10
+    end
+
+    @testset "find_typical_2d_heisenberg: HamHam wrap end-to-end" begin
+        using Random; Random.seed!(20260514)
+        raw = find_typical_2d_heisenberg(2, 2, [1.0, 1.0, 1.5]; batch_size=20)
+        ham = HamHam(raw, 1.0)
+        @test ham isa HamHam{Float64}
+        @test size(ham.data) == (16, 16)
+        @test isapprox(tr(ham.gibbs), 1.0; atol=1e-10)
+    end
+
+    @testset "find_typical_*: argument validation" begin
+        # W₂ selector is meaningless with 0 or 1 samples
+        @test_throws ArgumentError find_typical_heisenberg(3, [1.0, 1.0, 1.0]; batch_size=1)
+        @test_throws ArgumentError find_typical_heisenberg(3, [1.0, 1.0, 1.0]; batch_size=0)
+        # Inherits the 2D lattice-size guard
+        @test_throws ArgumentError find_typical_2d_heisenberg(0, 2, [1.0, 1.0, 1.0]; batch_size=10)
+        @test_throws ArgumentError find_typical_2d_heisenberg(2, 0, [1.0, 1.0, 1.0]; batch_size=10)
+    end
+
+    @testset "find_typical_heisenberg: determinism under fixed RNG seed" begin
+        using Random
+        Random.seed!(20260515)
+        raw_a = find_typical_heisenberg(3, [1.0, 1.0, 1.0]; batch_size=40,
+            disordering_terms=[Vector{Matrix{ComplexF64}}([Z])], disorder_strength=1.0)
+        Random.seed!(20260515)
+        raw_b = find_typical_heisenberg(3, [1.0, 1.0, 1.0]; batch_size=40,
+            disordering_terms=[Vector{Matrix{ComplexF64}}([Z])], disorder_strength=1.0)
+        @test raw_a.eigvals ≈ raw_b.eigvals
+        @test raw_a.typicality_distance ≈ raw_b.typicality_distance
+        @test isapprox(raw_a.matrix, raw_b.matrix; atol=1e-12)
+    end
+
+    @testset "find_typical_heisenberg: chosen sample is min-L²-to-median by construction" begin
+        # Independently recompute the L²-to-median distance over a fresh batch and
+        # confirm the function would pick the same realisation. We do this by
+        # running with seed S and verifying the returned typicality_distance
+        # equals min over the same seed-S batch.
+        using Random
+        n = 3
+        d = 2^n
+        B = 40
+        seed = 20260516
+        coeffs = [1.0, 1.0, 1.0]
+        strength = 1.0
+        dis_terms = [Vector{Matrix{ComplexF64}}([Z])]
+
+        # Independent reference loop reproducing what the inner kernel does
+        Random.seed!(seed)
+        base_ref = QuantumFurnace._construct_base_ham(
+            Vector{Matrix{ComplexF64}}[[X, X], [Y, Y], [Z, Z]], coeffs, n; periodic=true)
+        specs = Matrix{Float64}(undef, d, B)
+        for k in 1:B
+            sc = [zeros(Float64, n) for _ in dis_terms]
+            for dc in sc
+                rand!(dc); dc .*= strength
+            end
+            dh = QuantumFurnace._construct_disordering_terms(dis_terms, sc, n)
+            total = base_ref + dh
+            rsf, sh = QuantumFurnace._rescaling_and_shift_factors(total)
+            rescaled = (total ./ rsf) + sh * I
+            ev = eigvals(Hermitian(rescaled))
+            bw = ev[end] - ev[1]
+            specs[:, k] = (ev .- ev[1]) ./ bw
+        end
+        med = [median(@view specs[i, :]) for i in 1:d]
+        dists = [sqrt(sum((specs[:, k] .- med).^2)) for k in 1:B]
+        min_dist = minimum(dists)
+
+        # Now run the actual find_typical_heisenberg with the same seed
+        Random.seed!(seed)
+        raw = find_typical_heisenberg(n, coeffs; batch_size=B,
+            disordering_terms=dis_terms, disorder_strength=strength)
+        @test isapprox(raw.typicality_distance, min_dist; rtol=1e-12)
     end
 
     @testset "HamHam ctor (multi-term disorder) forwards `periodic` kwarg" begin

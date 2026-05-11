@@ -31,6 +31,7 @@ const SANDBOX_FILES = String[
     "test_register_validation.jl",
     "test_register_independence.jl",
     "test_hamiltonian.jl",
+    "test_find_typical_extra.jl",
     "test_compilation.jl",
     "test_trotter_caches.jl",
     "test_trajectory_fixes.jl",
