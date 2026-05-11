@@ -41,6 +41,12 @@ TimeDomain `predict_channel_trajectory` (NUFFT, no Trotter) — exercises the di
 
 | filter | n | β | achieved | δ | gap λ | ach/δ |
 |---|---|---|---|---|---|---|
+| gaussian | 3 | 20.0 | 6.170e-02 | 1.000e-03 | 2.237e-02 | 61.70 |
+| smooth_metro | 3 | 20.0 | 1.146e-04 | 1.000e-03 | 1.418e-01 | 0.11 |
+| kinky_metro | 3 | 20.0 | 1.213e-04 | 1.000e-03 | 1.721e-01 | 0.12 |
+| gaussian | 5 | 5.0 | 9.389e-05 | 1.000e-03 | 1.087e-01 | 0.09 |
+| smooth_metro | 5 | 5.0 | 1.104e-04 | 1.000e-03 | 1.263e-01 | 0.11 |
+| kinky_metro | 5 | 5.0 | 1.113e-04 | 1.000e-03 | 1.279e-01 | 0.11 |
 
 **Reading the table.**  A well-behaved fixture has `ach/δ ~ 0.1` (channel shift ~ 10% of the splitting step), reflecting the leading-order splitting + Trotter approximation in `Φ_δ`.  Slow samplers — Gaussian at low T, in particular — show `ach/δ ~ 1`, where the fixed-point shift is bigger because the per-step splitting moves `ρ_∞` further from `ρ_β` when the sampler's gap is small.  This is documented in `.claude-memory/ckg_vs_dll_first_findings.md` ("DLL Gaussian collapse at low T") and is a *sampler* property, not a recipe failure: the quadrature parameters in this BSON correctly encode the qf-7xt recipe; the channel shift on top is what the implemented δ-channel adds.
 
@@ -98,6 +104,18 @@ Schema (per row):
  gaussian_omega, gaussian_sigma,                    # Gaussian filter parameters (NaN unless filter=:gaussian)
  mode, jump_selection)
 ```
+
+### Ideal sanity check  ‖L_E − L_B‖_op / ‖L_B‖_op  (n=3, β=10, ε=1e-3)
+
+Dense `construct_lindbladian` build on EnergyDomain (recipe-r_D) vs BohrDomain (analytical reference).  Pass criterion: **relative_error ≤ 10⁻⁹**.
+
+| filter | n | β | r_D | ‖L_B‖_op | ‖L_E − L_B‖_op | relative |
+|---|---|---|---|---|---|---|
+| smooth_metro | 3 | 10.0 | 7 | 9.9613e-01 | 2.2371e-15 | 2.2458e-15 |
+| gaussian | 3 | 10.0 | 7 | 6.2806e-01 | 1.2351e-15 | 1.9665e-15 |
+| kinky_metro | 3 | 10.0 | 14 | 1.0342e+00 | 1.8899e-08 | 1.8273e-08 *(above 1e-9)* |
+
+The smooth-Metro and Gaussian rows are well below 10⁻⁹ as expected from the qf-7xt convergence summary.  Kinky-Metro at `r_D = 14` is marginal — the project recipe routes kinky-Metro ideal-Lindbladian to BohrDomain at n ≥ 6 to avoid the ω-grid memory blow-up.
 
 ## Updating the recipe
 

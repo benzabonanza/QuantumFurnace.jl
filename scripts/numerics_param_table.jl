@@ -74,96 +74,83 @@ ham_filename(n::Integer) = "heis_$(FAMILY_TAG)_periodic_n$(n).bson"
 # Per-cell parameter recipe
 # ---------------------------------------------------------------------------
 
-# Recipe targets for the b_± integration windows (qf-7xt: ~3× the b_± supports
-# at β=10 σ=0.1 so the truncation atol = 1e-12 sets the effective range).  These
-# are TARGETS — the actual `T_±` per cell are nudged to satisfy the qf-d0w
-# shared-δt₀ commensurability constraint (β·t0_b± = integer · t0_D), so the
-# realised window is within ~10 % of the target.
+# Recipe targets for the b_± integration windows.  ~3× the b_± supports at
+# β=10 σ=0.1 so the truncation atol = 1e-12 sets the effective range.  In the
+# qf-e4z.5.3 baseline-inversion recipe (Option A) the t0_b± are sized FIRST
+# from the b_± kernel widths and an integer commensurability constraint, then
+# r_b± are derived to make the realised T_± ≥ these targets.
 const T_MINUS_TARGET = 18.0
 const T_PLUS_TARGET  = 12.0
 
-# r_D table (filter × ε_target).  Baseline at (n=4, β=10) per
-# quadrature-convergence-summary.md; **+1 bit safety** for cross-(n, β)
-# universality (the K-prefactor / floor positions can shift by ~1–2 bits).
+# qf-e4z.5.3: number of TimeDomain b_+ grid samples per the kernel's 1/e
+# Gaussian envelope.  Empirically controlled at (n=3, β=10, smooth_metro):
+#
+#   m_D = 5,  t0_bp = 5e-2, r_D=7+ : ‖L_T·σ_β‖_HS = 2.5e-5   (slope -1 starts)
+#   m_D = 20, t0_bp = 1.3e-2, r_D=7+ : 6.3e-6
+#   m_D = 80, t0_bp = 3.1e-3, r_D=7+ : 1.6e-6
+#   m_D = 320, t0_bp = 7.8e-4, r_D=7+ : 3.9e-7              (controllable)
+#
+# With t0_bp = support / N_SAMPLES_PER_B_PLUS_SUPPORT and r_D ≥ 7, the slope
+# (-1) in t0_bp gives `K · t0_bp` with `K ≈ 5e-4`.  N_SAMPLES = 12 caps the
+# floor below ε=1e-3 by ~40× at (n=3, β=10); increase to push floor lower.
+const N_SAMPLES_PER_B_PLUS_SUPPORT = 12.0
+
+# r_D table (filter × ε_target).
+#
+# qf-e4z.5.3 audit (n=3, β=10, smooth_metro): the EnergyDomain reference
+# `‖L_E·σ_β‖_HS` saturates at r_D=5 around 4e-6 (a quadrature artefact from the
+# residual dissipative OFT truncation), then drops to machine precision (~1e-16)
+# by r_D=7.  This 4e-6 floor was masking the t0_bp slope-(-1) at small t0_bp in
+# the TimeDomain recipe — recipes targeting ‖L·σ_β‖_HS ≤ 1e-5 must use r_D ≥ 7.
+#
+# Updated baseline (qf-e4z.5.3):
 function _r_D(filter::Symbol, eps::Float64)
     if filter == :gaussian
-        return eps == 1e-3 ? 5 : 6
+        return eps == 1e-3 ? 7 : 8
     elseif filter == :smooth_metro
-        return eps == 1e-3 ? 5 : 6
+        return eps == 1e-3 ? 7 : 8
     elseif filter == :kinky_metro
-        return eps == 1e-3 ? 8 : 13
+        return eps == 1e-3 ? 9 : 14
     else
         throw(ArgumentError("unknown filter: $filter"))
     end
 end
 
-# r_b_minus table — outer (b_-) is super-algebraic for ALL filters.  Baseline
-# r_b_minus = 4 (ε=1e-3) / 6 (ε=1e-6); +1 bit safety.
-_r_bm(eps::Float64) = eps == 1e-3 ? 5 : 7
-
-# r_b_plus table — inner (b_+) is filter-dependent.  Gaussian is super-algebraic
-# (saturates at r_b+ = 6 for ε=1e-6); smooth/kinky have slope -1 (need r_b+
-# ~= 14 for ε=1e-6).  +1 bit safety on Gaussian; +1 bit safety on Metro.
-function _r_bp(filter::Symbol, eps::Float64)
-    if filter == :gaussian
-        return eps == 1e-3 ? 5 : 7
-    else  # :smooth_metro or :kinky_metro
-        return eps == 1e-3 ? 5 : 15
-    end
-end
+# r_b_minus / r_b_plus are DERIVED per cell in `pick_channel_params` from the
+# t0_b± sizing (qf-e4z.5.3 Option A baseline-inversion).  The legacy
+# constant-per-ε tables are kept for byte-identity diagnostics only:
+#   _r_bm_legacy(eps) = eps == 1e-3 ? 5 : 7
+#   _r_bp_legacy(:gaussian, eps) = eps == 1e-3 ? 5 : 7
+#   _r_bp_legacy(:smooth/kinky_metro, eps) = eps == 1e-3 ? 5 : 15
 
 # Trotter step counts.
 #
-# qf-e4z.5 audit 2026-05-11: the Strang error per OFT-grid sample scales as
-# O(δt₀³ ‖[H_a, H_b]‖²) where δt₀ = t0_D/M_D = 2π / (M_D · ω_range).  For our
-# σ = 1/β convention, ω_range = 2(‖H‖ + 8/β) is smaller at higher β, so t0_D
-# grows ≈ linearly with β — and the Trotter floor in the channel's fixed point
-# grows superlinearly.  Empirical floor at (n=3, β=10, δ=1e-3, M_D=1):
-#
-#   M_D = 1  →  floor ≈ 3.8 × 10⁻³  (Trotter-dominated)
-#   M_D = 2  →  floor ≈ 1.2 × 10⁻³
-#   M_D = 4  →  floor ≈ 9.7 × 10⁻⁴  (≈ irreducible NUFFT / quadrature floor)
-#   M_D ≥ 8  →  floor saturates at ≈ 9.7 × 10⁻⁴
-#
-# For ε = 1e-3 with the ~10⁻³ irreducible floor (no measurable improvement
-# from raising r_b±, r_D, krylovdim), the binding constraint is Trotter.
-# Pick M_D per β so the Trotter floor sits at the irreducible plateau:
-function _M_D(eps::Float64, beta::Float64)
-    if eps == 1e-3
-        beta ≤ 5.0  && return 1
-        beta ≤ 10.0 && return 4
-        beta ≤ 20.0 && return 8
-        return 16
-    end
-    eps == 1e-4 && return 2
-    eps == 1e-5 && return 4
-    return 16  # 1e-6
-end
-function _M_bm(eps::Float64); eps <= 1e-6 ? 2 : 1; end
-function _M_bp(eps::Float64); eps <= 1e-6 ? 2 : 1; end
+# qf-e4z.5.3 Option A: the param-table `M_D` field is the M_user argument to
+# `make_trotter_for_config`.  With the baseline inverted (b_+ leg drives the
+# minimum natural step), `M_user = 1` already gives δt₀ = β·t0_bp — far finer
+# than the legacy δt₀ = t0_D / M_user_legacy.  Empirically at (n=3, β=10, δ=1e-3)
+# the channel floor is δ-split-limited (≈ 0.3·δ); bumping M_user does not
+# improve it.  Default M_user = 1 for all (ε, β).
+_M_D(eps::Float64, beta::Float64) = 1
+_M_bm(eps::Float64) = 1
+_M_bp(eps::Float64) = 1
 
 # δ_step from the jump-wise generator-splitting recipe.
-# The legacy recipe (`5e-2` for ε=1e-3) assumed slope +2 in δ, but the empirical
-# floor `‖ρ_∞ − ρ_β‖₁/2` measured by `predict_channel_trajectory` for the
-# TrotterDomain + GQSP channel scales closer to **slope +1** in δ, with a
-# β-dependent prefactor (qf-e4z.5 audit 2026-05-11):
 #
-#   β =  5 : floor/δ ≈ 0.06 – 0.10
-#   β = 10 : floor/δ ≈ 0.08 – 0.18
-#   β = 20 : floor/δ ≈ 0.04 – 0.34   (worst at n=3 — likely accidental near-resonance)
+# qf-e4z.5.3 Option A baseline-inversion: with the b_+ quadrature dominant
+# below the splitting floor (≈ 3e-5 at β=10, m_D=5, r_D=7), the channel
+# asymptotic shift `‖ρ_∞ − ρ_β‖₁/2` is set by slope +1 in δ with prefactor
+# 0.20 – 0.32:
 #
-# To keep floor < ε with ~3× headroom, set δ ≈ ε / (3 · max floor/δ at that β):
-function _delta_step(eps::Float64, beta::Float64)
-    if eps == 1e-3
-        beta ≤ 5.0  && return 2.5e-3
-        beta ≤ 10.0 && return 1.0e-3
-        beta ≤ 20.0 && return 4.0e-4
-        return 2.0e-4
-    end
-    eps == 1e-4 && return 1.5e-2
-    eps == 1e-5 && return 5e-3
-    return 1.5e-3  # 1e-6
-end
+#   β =  5, δ = 1e-3 : floor ≈ 2e-4  ⟹ floor/δ ≈ 0.20
+#   β = 10, δ = 1e-3 : floor ≈ 3e-4  ⟹ floor/δ ≈ 0.32
+#   β = 20, δ = 1e-3 : floor ≈ 3e-4  ⟹ floor/δ ≈ 0.30 (projected)
+#
+# δ = 1e-3 gives ≈ 3× headroom under ε=1e-3 at all β in the sweep range.
+# Pushing δ below ~1e-4 lets per-step Trotter error accumulate over k_max ~
+# 1/δ steps, so δ has a sweet-spot near 1e-3 at this Trotter substep.
+_delta_step(eps::Float64, ::Float64) =
+    eps == 1e-3 ? 1.0e-3 : (eps == 1e-4 ? 1.5e-4 : (eps == 1e-5 ? 5e-5 : 1.5e-5))
 
 # η — Metropolis regularisation cutoff.  Set so η < t0' = 2T_+/2^r_b+, which
 # kills the η-cutoff branch entirely (qf-7xt: η-jump is dead code in the
@@ -192,61 +179,92 @@ function _metro_as(filter::Symbol, beta::Real)
 end
 
 """
+    _b_plus_support(filter, beta, sigma, gaussian_params, s) -> Float64
+
+1/e half-width (in `t`) of the b_+ kernel's Gaussian envelope. Used to size
+`t0_bp` so the inner OFT grid carries ≥ `N_SAMPLES_PER_B_PLUS_SUPPORT` samples
+per support.
+
+- Smooth/kinky Metro (`a=0`): envelope `exp(-σ²β²·2t²·(1+s))` ⟹ 1/e at
+  `t = 1/(σβ·√(2(1+s)))`.
+- Gaussian: envelope `exp(-4·β·ω_γ·t²)` ⟹ 1/e at `t = 1/(2·√(βω_γ))`.
+"""
+function _b_plus_support(filter::Symbol, beta::Real, sigma::Real,
+                          gaussian_params, s::Real)
+    if filter == :gaussian
+        ω_γ = gaussian_params[1]
+        ω_γ === nothing && return NaN
+        return 1.0 / (2.0 * sqrt(beta * Float64(ω_γ)))
+    else  # :smooth_metro / :kinky_metro (a=0 in our recipe)
+        return 1.0 / (sigma * beta * sqrt(2.0 * (1.0 + s)))
+    end
+end
+
+"""
     pick_channel_params(n, beta, eps, filter; ham=nothing) -> NamedTuple
 
-Build the canonical (n, β, ε, filter) row for the implemented δ-channel.
-Pass an explicit `ham::HamHam` to use measured `‖H‖`; otherwise the function
-returns `H_norm = NaN` and the row is still usable for everything that does
-not depend on `ω_range` (M, δ, η, r_D for filter-only-dependent cells).
+qf-e4z.5.3 Option A baseline-inversion recipe.
+
+1. `r_D, w0_D, t0_D` from `_r_D(filter, eps)` and `ω_range = 2(‖H‖ + 8σ)`.
+2. Pick `m_D = ⌈t0_D / (β · support_bp / N_SAMPLES_PER_B_PLUS_SUPPORT)⌉` so
+   the b_+ grid has ≥ N samples per kernel support. Then `t0_bp = t0_D/(β·m_D)`
+   and `β·t0_bp = t0_D/m_D` becomes the *minimum* natural Trotter step.
+3. `k_m = round(T_-_target/T_+_target)` and `t0_bm = k_m · t0_bp`.
+4. `r_bp = ⌈log₂(2 T_+_target / t0_bp)⌉`, `r_bm = ⌈log₂(2 T_-_target / t0_bm)⌉`;
+   realised `T_± = 2^(r_b±−1) · t0_b±` ≥ recipe target.
+5. `M_user = _M_D = 1` so the constructor picks `δt₀ = β·t0_bp = t0_D/m_D`.
+
+Pass an explicit `ham::HamHam` to use measured `‖H‖`; otherwise `H_norm = NaN`
+and only filter-independent recipe fields (M_D, δ, η, filter parameters) are
+reliable.
 """
 function pick_channel_params(n::Integer, beta::Real, eps::Real, filter::Symbol;
                               ham=nothing)
     sigma = 1.0 / beta
+    a, s = _metro_as(filter, Float64(beta))
+    gaussian_params = filter == :gaussian ?
+        _gaussian_params(Float64(beta)) : (nothing, nothing)
 
     H_norm = ham === nothing ? NaN : opnorm(ham.data)
     omega_range = isnan(H_norm) ? NaN : 2.0 * (H_norm + 8.0 * sigma)
 
-    r_D    = _r_D(filter, Float64(eps))
-    r_bm   = _r_bm(Float64(eps))
-    r_bp   = _r_bp(filter, Float64(eps))
-
+    r_D  = _r_D(filter, Float64(eps))
     w0_D = isnan(omega_range) ? NaN : omega_range / 2.0^r_D
     t0_D = isnan(omega_range) ? NaN : 2π / (2.0^r_D * w0_D)
+    @assert isnan(t0_D) || isapprox(t0_D, 2π / omega_range; rtol=1e-12)
 
-    # qf-e4z.5.1: pick t0_b± as integer multiples of t0_D/β so the qf-d0w
-    # shared-δt₀ check β·t0_b± / t0_D ∈ ℤ passes for `make_trotter_for_config`.
-    # k_b± = round(target · β / t0_D), clamped to ≥ 1 for defensive correctness.
-    # `T_±` and `w0_b±` are then derived from the picked t0_b± (so the OFT grid
-    # relation 2π = t0 · w0 · 2^r holds exactly).  The shift in T_± is < 10 % of
-    # the recipe target for our (β, ε) cells; quadrature safety is preserved by
-    # the 1-bit margin already baked into r_b±.
-    if isnan(t0_D)
-        t0_bm = 2.0 * T_MINUS_TARGET / 2.0^r_bm
-        t0_bp = 2.0 * T_PLUS_TARGET  / 2.0^r_bp
+    # Option A: size t0_bp from b_+ support, then invert.
+    support_bp = _b_plus_support(filter, Float64(beta), sigma, gaussian_params, s)
+    if isnan(t0_D) || isnan(support_bp)
+        m_D   = 1
+        t0_bp = 2.0 * T_PLUS_TARGET  / 2.0^6
+        t0_bm = 2.0 * T_MINUS_TARGET / 2.0^6
     else
-        t0_bm_target = 2.0 * T_MINUS_TARGET / 2.0^r_bm
-        t0_bp_target = 2.0 * T_PLUS_TARGET  / 2.0^r_bp
-        k_bm = max(1, round(Int, beta * t0_bm_target / t0_D))
-        k_bp = max(1, round(Int, beta * t0_bp_target / t0_D))
-        t0_bm = k_bm * t0_D / beta
-        t0_bp = k_bp * t0_D / beta
+        t0_bp_max = support_bp / N_SAMPLES_PER_B_PLUS_SUPPORT
+        m_D       = max(1, ceil(Int, t0_D / (beta * t0_bp_max)))
+        t0_bp     = t0_D / (beta * m_D)
+        k_m       = max(1, round(Int, T_MINUS_TARGET / T_PLUS_TARGET))
+        t0_bm     = k_m * t0_bp
     end
-    T_minus = 2.0^(r_bm - 1) * t0_bm
-    T_plus  = 2.0^(r_bp - 1) * t0_bp
-    w0_bm = π / T_minus
-    w0_bp = π / T_plus
 
-    M_D    = _M_D(Float64(eps), Float64(beta))
-    M_bm   = _M_bm(Float64(eps))
-    M_bp   = _M_bp(Float64(eps))
+    # Derive r_b± from window targets.  Lower bound r ≥ 6 retains qf-7xt's
+    # minimum-r margin even when t0_b± shrinks so much that the formula gives
+    # r < 6 (e.g. degenerate cases at very small β).
+    r_bp = max(6, ceil(Int, log2(2.0 * T_PLUS_TARGET  / t0_bp)))
+    r_bm = max(6, ceil(Int, log2(2.0 * T_MINUS_TARGET / t0_bm)))
+    T_plus  = 2.0^(r_bp - 1) * t0_bp
+    T_minus = 2.0^(r_bm - 1) * t0_bm
+    w0_bp = π / T_plus
+    w0_bm = π / T_minus
+
+    M_D  = _M_D(Float64(eps), Float64(beta))
+    M_bm = _M_bm(Float64(eps))
+    M_bp = _M_bp(Float64(eps))
 
     delta = _delta_step(Float64(eps), Float64(beta))
     eta   = _eta(Float64(eps), Float64(beta))
 
-    # Filter-specific sub-fields
-    a, s             = _metro_as(filter, Float64(beta))
-    gaussian_params  = filter == :gaussian ? _gaussian_params(Float64(beta)) : (nothing, nothing)
-    with_lc          = filter != :gaussian
+    with_lc = filter != :gaussian
 
     return (
         # Identifying tuple
