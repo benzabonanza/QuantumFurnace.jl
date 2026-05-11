@@ -2,7 +2,7 @@
 
 julia_version = "1.12.5"
 manifest_format = "2.0"
-project_hash = "d98331ae0f29e6ebb3e9d6582f9436aa67729901"
+project_hash = "bd85c66a739750f94b303d6653f13c67dcc71677"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "f7304359109c768cf32dc5fa2d371565bb63b68a"
@@ -649,7 +649,7 @@ version = "2.11.2"
     Enzyme = "7da242da-08ed-463a-9acd-ee780be4f1d9"
 
 [[deps.QuantumFurnace]]
-deps = ["Arpack", "BSON", "BenchmarkTools", "DataStructures", "Dates", "FINUFFT", "KrylovKit", "LibGit2", "LinearAlgebra", "LsqFit", "Pkg", "Printf", "Profile", "ProgressMeter", "QuadGK", "Random", "Roots", "SparseArrays", "SpecialFunctions"]
+deps = ["Arpack", "BSON", "BenchmarkTools", "DataStructures", "Dates", "FINUFFT", "KrylovKit", "LibGit2", "LinearAlgebra", "LsqFit", "Pkg", "Printf", "Profile", "ProgressMeter", "QuadGK", "Random", "Roots", "SparseArrays", "SpecialFunctions", "Statistics"]
 path = "."
 uuid = "572f92bd-4202-48dc-8017-a9da11cbf84d"
 version = "0.1.0"
