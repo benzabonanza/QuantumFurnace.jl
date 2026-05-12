@@ -59,12 +59,7 @@ const SANDBOX_FILES = String[
     "test_dll_kossakowski.jl",
     "test_dll_kms_db.jl",
     "test_discriminant.jl",
-    "test_kms_geometry.jl",
-    "test_lindblad_action.jl",
-    "test_predict_lindbladian.jl",
-    "test_predict_channel.jl",
     "test_predict_workspace_reuse.jl",
-    "test_faithful_apply_delta_channel.jl",
     "test_sweep_channel_mixing.jl",
     "test_krylov_matvec.jl",
     "test_krylov_eigsolve.jl",
@@ -87,22 +82,41 @@ const SANDBOX_FILES = String[
     "test_beta_phys_sweep.jl",
 ]
 
-# Whole-file NO_SANDBOX test list. (Currently empty — every heavy test has
-# been tuned, with only specific subtests gated inline. Add a file here if a
-# future test cannot fit the sandbox envelope at all.)
-const NO_SANDBOX_FILES = String[]
+# Whole-file NO_SANDBOX test list. Heavy files that don't fit the cumulative
+# sandbox envelope even after the per-file `GC.gc(true)` between includes.
+# Run them with `QUANTUMFURNACE_FULL_TESTS=true julia --project -e 'using Pkg; Pkg.test()'`
+# outside the sandbox.
+const NO_SANDBOX_FILES = String[
+    # Each of these builds large dense Lindbladians, large NUFFT-prefactor
+    # workspaces (num_energy_bits=12 ⇒ N=4096), or both, at multiple (n, β)
+    # cells. In isolation they fit (~1 GB peak), but combined with the ~30
+    # preceding files they push cumulative RSS past the 3.5 GB sandbox cap.
+    # The β_phys / β_alg correctness check that exercises these paths is
+    # instead kept in `test_beta_phys_conversion.jl::(f)`, sized for sandbox.
+    "test_kms_geometry.jl",
+    "test_lindblad_action.jl",
+    "test_predict_lindbladian.jl",
+    "test_predict_channel.jl",
+    "test_faithful_apply_delta_channel.jl",
+]
 
 const RUN_FULL = get(ENV, "QUANTUMFURNACE_FULL_TESTS", "false") == "true"
 
 @testset "QuantumFurnace.jl" begin
-    for f in SANDBOX_FILES
-        include(f)
+    for (i, f) in enumerate(SANDBOX_FILES)
+        rss_before = round(Int, Sys.maxrss()/1024^2)
+        t = @elapsed include(f)
         # Force a full GC between test files. Each file accumulates large
         # NUFFT working buffers (FINUFFT plans, Lindbladian dense matrices)
         # that Julia's pool would keep around indefinitely. Without this
         # cumulative pressure pushes the suite over the sandbox cap, even
         # though every individual file fits comfortably (qf-5nz).
         GC.gc(true)
+        rss_after = round(Int, Sys.maxrss()/1024^2)
+        println(stderr, "[", lpad(i, 2), "/", length(SANDBOX_FILES), "] ",
+                rpad(f, 45), " rss=", lpad(rss_after, 5), "MB ",
+                "Δ=", lpad(rss_after - rss_before, 5), "MB  ",
+                round(t, digits=1), "s")
     end
 
     if RUN_FULL
