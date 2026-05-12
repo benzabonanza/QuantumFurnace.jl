@@ -1050,7 +1050,7 @@ cluster-job resumability.
 
 # Arguments
 - `n_values`: vector of qubit counts. Each `n` requires
-  `<hamiltonian_dir>/heis_disordered_periodic_n<n>.bson` to exist.
+  `<hamiltonian_dir>/heis_xxx_zzdisordered_periodic_n<n>.bson` to exist.
 - `beta_values`: vector of inverse temperatures.
 
 # Keywords
@@ -1161,7 +1161,7 @@ function sweep_mixing_times(
     tol::Real = 1e-10,
     output_dir::Union{Nothing, AbstractString} = nothing,
     hamiltonian_dir::AbstractString = joinpath(dirname(@__DIR__), "hamiltonians"),
-    hamiltonian_filename::Function = n -> "heis_disordered_periodic_n$(n).bson",
+    hamiltonian_filename::Function = n -> "heis_xxx_zzdisordered_periodic_n$(n).bson",
     use_threads::Bool = true,
     skip_existing::Bool = true,
     # qf-e4z: thread per-cell ideal-Lindbladian recipe from the parameter table

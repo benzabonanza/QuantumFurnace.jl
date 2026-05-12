@@ -8,10 +8,10 @@ using LinearAlgebra
 # `HamHam(raw, beta)` form.
 const _BPC_SRC_ROOT = dirname(@__DIR__)
 const _BPC_HAM_PATH = joinpath(_BPC_SRC_ROOT, "hamiltonians",
-                               "heis_disordered_periodic_n3.bson")
+                               "heis_xxx_zzdisordered_periodic_n3.bson")
 
-# Reuse the test-helpers loader (which already lifts the legacy 14-field BSON
-# schema into the NamedTuple needed by HamHam(raw; beta_phys=...)).
+# Reuse the test-helpers loader (parses the NamedTuple-typed BSON into the
+# raw shape needed by HamHam(raw; beta_phys=...)).
 const _BPC_HAM_ALG10 = QuantumFurnace._load_hamiltonian_bson(_BPC_HAM_PATH, 10.0)
 
 @testset "qf-6vr Task 1 — β_phys / β_alg helpers + HamHam keyword constructor" begin
@@ -250,8 +250,10 @@ const _BPC_HAM_ALG10 = QuantumFurnace._load_hamiltonian_bson(_BPC_HAM_PATH, 10.0
         # The captured ρ_∞ from the Krylov eigendecomposition must agree with
         # ρ_phys.  BohrDomain is analytic so the residual is FP-only, but the
         # KrylovKit Arnoldi `tol = 1e-10` setting controls the leading-mode
-        # null-space accuracy — atol≈5e-9 is the realistic floor here.
-        @test isapprox(Matrix(res.rho_inf), Matrix(ρ_phys_eigen); atol=5e-9)
+        # null-space accuracy — atol≈5e-8 is the realistic floor here for the
+        # qf-2kd find_typical n=3 fixture (observed ~2.6e-8 in worst-case
+        # off-diagonals; the earlier find_ideal fixture sat at ~5e-9).
+        @test isapprox(Matrix(res.rho_inf), Matrix(ρ_phys_eigen); atol=5e-8)
         # Distance at horizon is gap-limited; just assert it is shrinking.
         @test res.distances[end] < res.distances[1]
         @test res.distances[end] < 1e-3

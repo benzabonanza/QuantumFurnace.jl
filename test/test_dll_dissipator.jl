@@ -191,7 +191,7 @@
     # ---------------------------------------------------------------------
     @testset "(h) NUFFT slice == explicit Riemann sum (n=3, ε=1e-12)" begin
         source_root = dirname(@__DIR__)
-        ham_path = joinpath(source_root, "hamiltonians", "heis_disordered_periodic_n3.bson")
+        ham_path = joinpath(source_root, "hamiltonians", "heis_xxx_zzdisordered_periodic_n3.bson")
         for beta in _DLL_BETAS
             ham = _load_test_hamiltonian(ham_path, Float64(beta))
             jump_paulis = [[X], [Y], [Z]]

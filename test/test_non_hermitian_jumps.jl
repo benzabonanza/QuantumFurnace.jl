@@ -33,7 +33,7 @@
     # `make_dll_n3_system`-style loader.
     function _load_n3_ham(beta::Real)
         source_root = dirname(@__DIR__)
-        ham_path = joinpath(source_root, "hamiltonians", "heis_disordered_periodic_n3.bson")
+        ham_path = joinpath(source_root, "hamiltonians", "heis_xxx_zzdisordered_periodic_n3.bson")
         return QuantumFurnace._load_hamiltonian_bson(ham_path, Float64(beta))
     end
 

@@ -11,9 +11,11 @@ This function uses `BSON.parse` to load the raw field data and reconstructs the 
 with the new fully-initialized struct definition.
 """
 function load_hamiltonian(type::String, num_qubits::Int; beta::Float64)
+    type == "heis" || error("load_hamiltonian: only type=\"heis\" is supported " *
+                            "(maps to heis_xxx_zzdisordered_periodic_n*.bson). Got: $type")
     project_root = Pkg.project().path |> dirname
     data_dir = joinpath(project_root, "hamiltonians")
-    output_filename = join([type, "disordered", "periodic", "n$num_qubits"], "_") * ".bson"
+    output_filename = "heis_xxx_zzdisordered_periodic_n$(num_qubits).bson"
     ham_path = joinpath(data_dir, output_filename)
     return _load_hamiltonian_bson(ham_path, beta)
 end
@@ -21,18 +23,12 @@ end
 """
     _load_hamiltonian_bson(path, beta) -> HamHam{Float64}
 
-Low-level BSON loader that handles two on-disk schemas:
+Low-level BSON loader for the `heis_xxx_zzdisordered_periodic_n*` family
+produced by `hamiltonians/generate_hamiltonians.jl` (find_typical_heisenberg
+with [[Z],[Z,Z]] disorder). The on-disk format is a NamedTuple-typed BSON
+where `raw[:hamiltonian]` is a NamedTuple with multi-term `disordering_terms`.
 
-  1. Legacy `HamHam`-typed BSON files where `raw[:hamiltonian]` is a serialised
-     struct with 14 positional fields (single-term `disordering_term`).
-     Used by the legacy `heis_disordered_periodic_n*.bson` family.
-
-  2. NamedTuple-typed BSON files where `raw[:hamiltonian]` is a NamedTuple
-     with multi-term `disordering_terms`. Used by the newer
-     `heis_xxx_zzdisordered_periodic_n*` and `heis_xxx_clean_periodic_n*`
-     families produced by `hamiltonians/generate_hamiltonians.jl`.
-
-Both paths reconstruct via `HamHam(raw_nt, beta)`, which infers `T` from
+Reconstructs via `HamHam(raw_nt, beta)`, which infers `T` from
 `eltype(raw.eigvals)` and recomputes `bohr_freqs`, `bohr_dict`, and `gibbs`.
 """
 function _load_hamiltonian_bson(path::String, beta::Float64)
@@ -44,11 +40,15 @@ end
 
 Parse a Hamiltonian BSON file into the raw NamedTuple shape expected by
 `HamHam(::NamedTuple, beta)` / `HamHam(::NamedTuple; beta_phys=…)`, **without**
-constructing the HamHam wrapper. Handles both on-disk schemas (legacy
-`HamHam`-typed and current NamedTuple-typed) — see `_load_hamiltonian_bson` for
-schema details. The returned NamedTuple always carries `rescaling_factor`, so
-callers in β_phys-first mode can compute `β_alg = β_phys · rescaling_factor`
-before invoking the HamHam constructor.
+constructing the HamHam wrapper. Only the NamedTuple-typed schema produced by
+`find_typical_heisenberg` / `find_ideal_heisenberg` is supported.
+
+The returned NamedTuple always carries `rescaling_factor`, so callers in
+β_phys-first mode can compute `β_alg = β_phys · rescaling_factor` before
+invoking the HamHam constructor. Extra fields on the on-disk NamedTuple
+beyond the canonical 11 (e.g. `typicality_distance` from
+`find_typical_heisenberg`) are silently dropped — `HamHam(raw, beta)` only
+consumes the canonical fields anyway.
 """
 function _parse_hamiltonian_bson(path::String)
     raw = open(path) do io
@@ -56,70 +56,28 @@ function _parse_hamiltonian_bson(path::String)
     end
 
     ham_raw = raw[:hamiltonian]
-    fields = ham_raw[:data]
-
-    # NamedTuple-typed schema (new families) has 11 positional fields and the
-    # `:type` blob declares a NamedTuple. Legacy `HamHam`-typed schema has 14
-    # positional fields (bohr_freqs/bohr_dict/gibbs slots are `nothing`).
-    if length(fields) != 14
-        type_name = ham_raw[:type][:name]  # Vector{Any} like ["Core", "NamedTuple"]
-        is_namedtuple = type_name isa AbstractVector && !isempty(type_name) &&
-                        last(type_name) == "NamedTuple"
-        if is_namedtuple
-            return _namedtuple_schema_to_raw(ham_raw)
-        end
-        error("Unrecognised Hamiltonian BSON schema (length=$(length(fields)), type=$type_name)")
-    end
-
-    # Legacy HamHam field order (14 fields):
-    #   1:data, 2:bohr_freqs(nothing), 3:bohr_dict(nothing), 4:base_terms,
-    #   5:base_coeffs, 6:disordering_term, 7:disordering_coeffs,
-    #   8:eigvals, 9:eigvecs, 10:nu_min, 11:shift, 12:rescaling_factor,
-    #   13:periodic, 14:gibbs
-    cache = IdDict()
-    init = @__MODULE__
-
-    data_matrix = BSON.raise_recursive(fields[1], cache, init)::Matrix{ComplexF64}
-    base_terms = Vector{Vector{Matrix{ComplexF64}}}(BSON.raise_recursive(fields[4], cache, init))
-    base_coeffs = BSON.raise_recursive(fields[5], cache, init)::Vector{Float64}
-    disordering_term_raw = let dt = BSON.raise_recursive(fields[6], cache, init)
-        dt === nothing ? nothing : Vector{Matrix{ComplexF64}}(dt)
-    end
-    disordering_coeffs_raw = let dc = BSON.raise_recursive(fields[7], cache, init)
-        dc === nothing ? nothing : Vector{Float64}(dc)
-    end
-    eigvals_vec = BSON.raise_recursive(fields[8], cache, init)::Vector{Float64}
-    eigvecs_mat = BSON.raise_recursive(fields[9], cache, init)::Matrix{ComplexF64}
-    nu_min = Float64(fields[10])
-    shift = Float64(fields[11])
-    rescaling_factor = Float64(fields[12])
-    periodic = Bool(fields[13])
-
-    return (
-        matrix = data_matrix,
-        terms = base_terms,
-        base_coeffs = base_coeffs,
-        disordering_term = disordering_term_raw,
-        disordering_coeffs = disordering_coeffs_raw,
-        eigvals = eigvals_vec,
-        eigvecs = eigvecs_mat,
-        nu_min = nu_min,
-        shift = shift,
-        rescaling_factor = rescaling_factor,
-        periodic = periodic,
-    )
+    type_name = ham_raw[:type][:name]
+    is_namedtuple = type_name isa AbstractVector && !isempty(type_name) &&
+                    last(type_name) == "NamedTuple"
+    is_namedtuple ||
+        error("Unrecognised Hamiltonian BSON schema (expected NamedTuple, got " *
+              "type=$type_name). The legacy `HamHam`-typed schema is no longer " *
+              "supported; regenerate via `hamiltonians/generate_hamiltonians.jl`.")
+    return _namedtuple_schema_to_raw(ham_raw)
 end
 
 """
     _namedtuple_schema_to_raw(ham_raw::Dict) -> NamedTuple
 
-Convert a `BSON.parse`-d NamedTuple-typed Hamiltonian (new families) into the
-NamedTuple shape expected by `HamHam(::NamedTuple, beta)`.
+Convert a `BSON.parse`-d NamedTuple-typed Hamiltonian into the NamedTuple
+shape expected by `HamHam(::NamedTuple, beta)`.
 
 `ham_raw` is the parsed `raw[:hamiltonian]` Dict — a `:tag => :struct` blob
-with `:data` a 11-element vector matching the NamedTuple field order:
-`(matrix, terms, base_coeffs, disordering_terms, disordering_coeffs,
-eigvals, eigvecs, nu_min, shift, rescaling_factor, periodic)`.
+with `:data` a vector whose first 11 entries match the canonical NamedTuple
+field order: `(matrix, terms, base_coeffs, disordering_terms,
+disordering_coeffs, eigvals, eigvecs, nu_min, shift, rescaling_factor,
+periodic)`. Trailing fields (e.g. `typicality_distance` from
+`find_typical_heisenberg`) are ignored.
 """
 function _namedtuple_schema_to_raw(ham_raw::Dict)
     cache = IdDict()

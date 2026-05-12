@@ -32,7 +32,7 @@ Returns the same shape as `make_test_system`.
 """
 function make_dll_n3_system(beta::Real)
     source_root = dirname(@__DIR__)
-    ham_path = joinpath(source_root, "hamiltonians", "heis_disordered_periodic_n3.bson")
+    ham_path = joinpath(source_root, "hamiltonians", "heis_xxx_zzdisordered_periodic_n3.bson")
     ham = _load_test_hamiltonian(ham_path, Float64(beta))
     jump_paulis = [[X], [Y], [Z]]
     num_jumps = length(jump_paulis) * 3
@@ -131,7 +131,7 @@ function make_test_system(; num_qubits::Int=NUM_QUBITS, trotter::Union{Nothing, 
     # Load Hamiltonian directly using the source tree path
     # (load_hamiltonian uses Pkg.project().path which points to a temp dir during Pkg.test())
     source_root = dirname(@__DIR__)
-    ham_path = joinpath(source_root, "hamiltonians", "heis_disordered_periodic_n$(num_qubits).bson")
+    ham_path = joinpath(source_root, "hamiltonians", "heis_xxx_zzdisordered_periodic_n$(num_qubits).bson")
     hamiltonian = _load_test_hamiltonian(ham_path, BETA)
 
     # Create jump operators: single-site Paulis (X, Y, Z) on each site

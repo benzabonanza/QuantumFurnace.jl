@@ -9,7 +9,7 @@ using BSON
 
 const _BPS_SRC_ROOT = dirname(@__DIR__)
 const _BPS_HAM_PATH = joinpath(_BPS_SRC_ROOT, "hamiltonians",
-                               "heis_disordered_periodic_n3.bson")
+                               "heis_xxx_zzdisordered_periodic_n3.bson")
 
 # Read the rescaling_factor once so we can predict the derived β_alg.
 const _BPS_HAM = QuantumFurnace._load_hamiltonian_bson(_BPS_HAM_PATH, 10.0)

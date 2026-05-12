@@ -165,14 +165,14 @@ using QuantumFurnace
         result = krylov_spectral_gap(config_therm, TEST_HAM, TEST_JUMPS;
             krylovdim=30, howmany=4)
 
-        # Threshold rationale (gap rtol=3e-3): channel path has O(delta^2) error from eigenvalue
+        # Threshold rationale (gap rtol=1e-2): channel path has O(delta^2) error from eigenvalue
         # conversion lambda_L = (mu-1)/delta. For delta=0.01, the absolute gap error is ~3e-4.
-        # rtol=3e-3 gives ~10x margin at the n=4 KMS smooth-Metro fixture (post-qf-etx the gap
-        # is its true continuum value ≈ 0.127; pre-qf-etx the gap was artificially inflated by
-        # the grid-dependent 1/gamma_norm_factor sample-sup, which cancelled some of the relative
-        # error). Looser than Lindbladian path due to channel approximation.
+        # On the n=4 KMS smooth-Metro fixture (post-qf-2kd find_typical) the gap is ≈ 0.099, so
+        # rtol=1e-2 gives ~3x margin. (Earlier qf-etx-era find_ideal fixtures had a gap ≈ 0.127
+        # and held rtol=3e-3 comfortably; the smaller find_typical-selected gap tightens the
+        # ratio without changing the underlying O(delta^2) physics.)
         gap_err = abs(result.spectral_gap - dense_result.spectral_gap) / dense_result.spectral_gap
-        @test isapprox(result.spectral_gap, dense_result.spectral_gap; rtol=3e-3)
+        @test isapprox(result.spectral_gap, dense_result.spectral_gap; rtol=1e-2)
         @info "Channel eigsolve gap accuracy" krylov_gap=result.spectral_gap dense_gap=dense_result.spectral_gap relative_error=gap_err rtol=3e-3
 
         # Channel-specific fields are populated

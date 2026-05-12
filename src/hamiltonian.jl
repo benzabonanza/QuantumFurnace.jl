@@ -178,13 +178,11 @@ end
     HamHam(raw::NamedTuple, beta) -> HamHam{T}
 
 Construct a fully-initialized HamHam from a NamedTuple of raw data (as returned by
-`find_ideal_heisenberg`) plus inverse temperature `beta`.
+`find_typical_heisenberg` / `find_ideal_heisenberg`) plus inverse temperature `beta`.
 
 Infers T from `eltype(raw.eigvals)`. Computes `bohr_freqs`, `bohr_dict`, and `gibbs`
-from the raw eigvals.
-
-Supports both legacy single-term format (with `disordering_term` field) and the current
-multi-term format (with `disordering_terms` field).
+from the raw eigvals. Extra NamedTuple fields beyond the canonical 11 (e.g.
+`typicality_distance` from `find_typical_heisenberg`) are silently ignored.
 """
 function HamHam(raw::NamedTuple, beta::Real)
     T = eltype(raw.eigvals)
@@ -255,32 +253,19 @@ beta_phys(ham::HamHam{T}, beta_alg::Real) where {T<:AbstractFloat} = T(beta_alg 
 """
     _unpack_disordering_fields(raw::NamedTuple, T) -> (terms, coeffs)
 
-Convert disordering fields from a NamedTuple into the multi-term format.
-Handles legacy NamedTuples with singular `disordering_term`/`disordering_coeffs` fields
-by wrapping them into vectors.
+Unpack the multi-term `disordering_terms` / `disordering_coeffs` NamedTuple
+fields produced by `find_typical_heisenberg` / `find_ideal_heisenberg` into
+the `Vector{Vector{Matrix{Complex{T}}}}` / `Vector{Vector{T}}` shape that the
+HamHam struct stores. Returns `(nothing, nothing)` when the NamedTuple has no
+`disordering_terms` key or when the field is `nothing`.
 """
 function _unpack_disordering_fields(raw::NamedTuple, ::Type{T}) where {T}
-    # New multi-term format
-    if haskey(raw, :disordering_terms)
-        if raw.disordering_terms === nothing
-            return (nothing, nothing)
-        end
-        terms = [Vector{Matrix{Complex{T}}}(t) for t in raw.disordering_terms]
-        coeffs = [Vector{T}(c) for c in raw.disordering_coeffs]
-        return (terms, coeffs)
+    if !haskey(raw, :disordering_terms) || raw.disordering_terms === nothing
+        return (nothing, nothing)
     end
-
-    # Legacy single-term format
-    if haskey(raw, :disordering_term)
-        if raw.disordering_term === nothing
-            return (nothing, nothing)
-        end
-        terms = [Vector{Matrix{Complex{T}}}(raw.disordering_term)]
-        coeffs = [Vector{T}(raw.disordering_coeffs)]
-        return (terms, coeffs)
-    end
-
-    return (nothing, nothing)
+    terms = [Vector{Matrix{Complex{T}}}(t) for t in raw.disordering_terms]
+    coeffs = [Vector{T}(c) for c in raw.disordering_coeffs]
+    return (terms, coeffs)
 end
 
 """find_ideal_heisenberg(num_qubits::Int, coeffs::Vector{Float64};

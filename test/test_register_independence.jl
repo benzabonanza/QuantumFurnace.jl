@@ -19,7 +19,7 @@ const _NUM_QUBITS_REG_INDEP = 3
 # Need a fresh n=3 fixture at β = 5 (test_helpers's TEST_HAM is at β=BETA=10).
 function _make_reg_indep_fixture()
     src_root = dirname(@__DIR__)
-    ham_path = joinpath(src_root, "hamiltonians", "heis_disordered_periodic_n3.bson")
+    ham_path = joinpath(src_root, "hamiltonians", "heis_xxx_zzdisordered_periodic_n3.bson")
     ham = QuantumFurnace._load_hamiltonian_bson(ham_path, _BETA_REG_INDEP)
     jump_paulis = [[X], [Y], [Z]]
     num_jumps = length(jump_paulis) * _NUM_QUBITS_REG_INDEP
@@ -206,7 +206,7 @@ end
     @testset "DLL KMS-DB rel_norm <= 1e-7 at beta in {5, 10}" begin
         for β in (5.0, 10.0)
             src_root = dirname(@__DIR__)
-            ham_path = joinpath(src_root, "hamiltonians", "heis_disordered_periodic_n3.bson")
+            ham_path = joinpath(src_root, "hamiltonians", "heis_xxx_zzdisordered_periodic_n3.bson")
             ham_β = QuantumFurnace._load_hamiltonian_bson(ham_path, β)
             jumps = sys.jumps  # jumps in eigenbasis depend on Hamiltonian, but for n=3
             # Build at the right β explicitly:

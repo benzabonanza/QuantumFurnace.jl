@@ -125,7 +125,7 @@ end
 @testset "qf-etx.2: _precompute_data has grid-independent gamma_norm_factor" begin
     n = 3
     src_root = dirname(@__DIR__)
-    ham_path = joinpath(src_root, "hamiltonians", "heis_disordered_periodic_n$(n).bson")
+    ham_path = joinpath(src_root, "hamiltonians", "heis_xxx_zzdisordered_periodic_n$(n).bson")
     ham = QuantumFurnace._load_hamiltonian_bson(ham_path, 10.0)
 
     register_pairs = [(8, 0.05), (10, 0.025)]
@@ -157,7 +157,7 @@ end
 @testset "qf-etx.3: BohrDomain construct_lindbladian register invariance" begin
     n = 3
     src_root = dirname(@__DIR__)
-    ham_path = joinpath(src_root, "hamiltonians", "heis_disordered_periodic_n$(n).bson")
+    ham_path = joinpath(src_root, "hamiltonians", "heis_xxx_zzdisordered_periodic_n$(n).bson")
     ham = QuantumFurnace._load_hamiltonian_bson(ham_path, 10.0)
 
     jump_paulis = [[X], [Y], [Z]]
@@ -210,7 +210,7 @@ end
 @testset "qf-etx.4: BohrDomain ↔ EnergyDomain agreement (no /gnf workaround)" begin
     n = 3
     src_root = dirname(@__DIR__)
-    ham_path = joinpath(src_root, "hamiltonians", "heis_disordered_periodic_n$(n).bson")
+    ham_path = joinpath(src_root, "hamiltonians", "heis_xxx_zzdisordered_periodic_n$(n).bson")
     ham = QuantumFurnace._load_hamiltonian_bson(ham_path, 10.0)
 
     jump_paulis = [[X], [Y], [Z]]
@@ -266,7 +266,7 @@ end
 @testset "qf-etx.5: Krylov route invariance" begin
     n = 3
     src_root = dirname(@__DIR__)
-    ham_path = joinpath(src_root, "hamiltonians", "heis_disordered_periodic_n$(n).bson")
+    ham_path = joinpath(src_root, "hamiltonians", "heis_xxx_zzdisordered_periodic_n$(n).bson")
     ham = QuantumFurnace._load_hamiltonian_bson(ham_path, 10.0)
 
     jump_paulis = [[X], [Y], [Z]]
@@ -330,7 +330,7 @@ end
 @testset "qf-etx.6: Simulator routes register invariance" begin
     n = 3
     src_root = dirname(@__DIR__)
-    ham_path = joinpath(src_root, "hamiltonians", "heis_disordered_periodic_n$(n).bson")
+    ham_path = joinpath(src_root, "hamiltonians", "heis_xxx_zzdisordered_periodic_n$(n).bson")
     ham = QuantumFurnace._load_hamiltonian_bson(ham_path, 10.0)
 
     jump_paulis = [[X], [Y], [Z]]
@@ -403,7 +403,7 @@ end
 @testset "qf-etx.7: GQSP α_be block-encoding invariant" begin
     n = 3
     src_root = dirname(@__DIR__)
-    ham_path = joinpath(src_root, "hamiltonians", "heis_disordered_periodic_n$(n).bson")
+    ham_path = joinpath(src_root, "hamiltonians", "heis_xxx_zzdisordered_periodic_n$(n).bson")
     ham = QuantumFurnace._load_hamiltonian_bson(ham_path, 10.0)
 
     jump_paulis = [[X], [Y], [Z]]

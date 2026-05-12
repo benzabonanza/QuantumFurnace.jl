@@ -14,7 +14,7 @@ end-to-end. This file is the regression test guarding that fix.
 @testset "qf-bm1 run_trajectory kwarg threading regression" begin
     # Build a small fixture
     ham_path = joinpath(dirname(@__DIR__), "hamiltonians",
-                        "heis_disordered_periodic_n3.bson")
+                        "heis_xxx_zzdisordered_periodic_n3.bson")
     ham = QuantumFurnace._load_hamiltonian_bson(ham_path, 5.0)
     n = 3
     dim = 2^n
