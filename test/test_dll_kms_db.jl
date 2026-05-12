@@ -246,6 +246,15 @@
     # therefore set by `t0` alone.
     # ---------------------------------------------------------------------
     # ---------------------------------------------------------------------
+    # qf-x56.5: the (j-sb) sandbox shadow of (j) lives in its own file
+    # `test_dll_kms_db_sandbox.jl` so that the inter-file `GC.gc(true)`
+    # in runtests.jl clears the (a)..(i) NUFFT workspaces before the
+    # Nt = 4096 (r_D = 12) Bohr ↔ Time pair runs. Inlining it here pushed
+    # cumulative RSS over the sandbox cap; moving it out of this file
+    # keeps the per-file Δ small.
+    # ---------------------------------------------------------------------
+
+    # ---------------------------------------------------------------------
     # (j) is gated NO_SANDBOX (qf-5nz): the legacy N=12 / Nt=4096 grid is
     # required to demonstrate convergence to the FINUFFT precision floor
     # (err5_fine ≤ 1e-9, err10_fine ≤ 1e-7). Coarsening Nt would invalidate

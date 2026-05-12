@@ -58,6 +58,7 @@ const SANDBOX_FILES = String[
     "test_dll_coherent.jl",
     "test_dll_kossakowski.jl",
     "test_dll_kms_db.jl",
+    "test_dll_kms_db_sandbox.jl",
     "test_discriminant.jl",
     "test_predict_workspace_reuse.jl",
     "test_sweep_channel_mixing.jl",
@@ -80,6 +81,12 @@ const SANDBOX_FILES = String[
     "test_qf_sta_b_bohr_cache.jl",
     "test_beta_phys_conversion.jl",
     "test_beta_phys_sweep.jl",
+    # qf-x56: sandbox shadows of the NO_SANDBOX files.
+    "test_kms_geometry_sandbox.jl",
+    "test_lindblad_action_sandbox.jl",
+    "test_predict_sandbox.jl",
+    "test_faithful_apply_delta_channel_sandbox.jl",
+    "test_trajectory_validation_sandbox.jl",
 ]
 
 # Whole-file NO_SANDBOX test list. Heavy files that don't fit the cumulative
