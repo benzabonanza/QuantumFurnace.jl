@@ -939,10 +939,11 @@ function _build_framework_and_seed(
     delta::Real = config.delta,
     seed::Union{Int,Nothing} = nothing,
     allow_unpaired_nonhermitian::Bool = false,
+    verbose::Bool = false,
 )
     validate_config!(config)
     validate_jump_pairing(jumps; allow_unpaired_nonhermitian=allow_unpaired_nonhermitian)
-    _print_press(config)
+    verbose && _print_press(config)
 
     ws = _build_trajectory_workspace(config, hamiltonian, jumps; trotter=trotter, delta=delta)
 
@@ -977,6 +978,7 @@ function run_trajectories(
     save_every::Int = 1,
     seed::Union{Int,Nothing} = nothing,
     allow_unpaired_nonhermitian::Bool = false,
+    verbose::Bool = false,
 )
 
     @assert ntraj >= 1
@@ -986,6 +988,7 @@ function run_trajectories(
         jumps, config, psi0, hamiltonian;
         trotter=trotter, delta=delta, seed=seed,
         allow_unpaired_nonhermitian=allow_unpaired_nonhermitian,
+        verbose=verbose,
     )
 
     CT = eltype(psi0)
@@ -1094,6 +1097,7 @@ function run_observable_trajectories(
     seed::Union{Int,Nothing} = nothing,
     reconstruct_dm::Bool = false,
     allow_unpaired_nonhermitian::Bool = false,
+    verbose::Bool = false,
 )
     @assert ntraj >= 1
     @assert save_every >= 1
@@ -1102,6 +1106,7 @@ function run_observable_trajectories(
         jumps, config, psi0, hamiltonian;
         trotter=trotter, delta=delta, seed=seed,
         allow_unpaired_nonhermitian=allow_unpaired_nonhermitian,
+        verbose=verbose,
     )
 
     CT = eltype(psi0)

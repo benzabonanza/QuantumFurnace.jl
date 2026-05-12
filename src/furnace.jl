@@ -1,12 +1,15 @@
 function construct_lindbladian(jumps::Vector{JumpOp}, config::Config{Lindbladian}, hamiltonian::HamHam;
     trotter::Union{AbstractTrotter, Nothing}=nothing,
     include_coherent::Bool=true,
-    allow_unpaired_nonhermitian::Bool=false)
+    allow_unpaired_nonhermitian::Bool=false,
+    verbose::Bool=false)
 
     validate_jump_pairing(jumps; allow_unpaired_nonhermitian=allow_unpaired_nonhermitian)
 
-    domain_name = replace(string(typeof(config.domain)), "Domain" => "")
-    println("Constructing Liouvillian ($(domain_name))")
+    if verbose
+        domain_name = replace(string(typeof(config.domain)), "Domain" => "")
+        println("Constructing Liouvillian ($(domain_name))")
+    end
 
     ham_or_trott = if config.domain isa TrotterDomain
         trotter === nothing && error("A Trotter object must be provided for the TrotterDomain")
@@ -91,17 +94,18 @@ function run_lindblad(
     hamiltonian::HamHam{T},
     trotter::Union{AbstractTrotter, Nothing}=nothing;
     allow_unpaired_nonhermitian::Bool=false,
+    verbose::Bool=false,
 ) where {D, C, T<:AbstractFloat}
 
     t_start = time()
 
     validate_config!(config)
     validate_jump_pairing(jumps; allow_unpaired_nonhermitian=allow_unpaired_nonhermitian)
-    _print_press(config)
+    verbose && _print_press(config)
 
     liouv = construct_lindbladian(jumps, config, hamiltonian; trotter=trotter,
-        allow_unpaired_nonhermitian=allow_unpaired_nonhermitian)
-    @printf("Done.\n")
+        allow_unpaired_nonhermitian=allow_unpaired_nonhermitian, verbose=verbose)
+    verbose && @printf("Done.\n")
 
     # Arpack shift-invert eigensolver
     shift = 1e-9 * (1 + 1im)
@@ -153,6 +157,7 @@ history in a `ThermalizeResults` struct.
 - `rng::AbstractRNG=Random.default_rng()`: Random number generator (used only when `config.jump_selection == :random`)
 - `rescale_by_inv_prob::Union{Bool, Nothing}=nothing`: Override the rate-rescaling rule. By default, the choice follows `config.jump_selection`: `:random` ⇒ rescale rates by `S = |jumps|` (1 substep per outer δ-step, `E[step] ≈ e^{δ𝓛}`); `:sweep` ⇒ bare rates and `S` substeps per outer δ-step (`Φ_𝓐 = e^{δ𝓛_S}∘⋯∘e^{δ𝓛_1} ≈ e^{δ𝓛}`).
 - `save_every::Int=1`: Record trace distance every `save_every` outer steps. Default 1 preserves per-step recording. Convergence cutoff is only checked at save points.
+- `verbose::Bool=false`: When true, print the parameter "press" once at the start and the running trace-distance every save_every step. Default `false` keeps tests / batch runs silent.
 
 # Returns
 `ThermalizeResults` with final density matrix, trace distances, time steps, and metadata.
@@ -167,6 +172,7 @@ function run_thermalize(
     rescale_by_inv_prob::Union{Bool, Nothing} = nothing,
     save_every::Int = 1,
     allow_unpaired_nonhermitian::Bool = false,
+    verbose::Bool = false,
 ) where {D, C, T<:AbstractFloat}
 
     dim = size(hamiltonian.data, 1)
@@ -183,7 +189,7 @@ function run_thermalize(
     validate_config!(config)
     validate_jump_pairing(jumps; allow_unpaired_nonhermitian=allow_unpaired_nonhermitian)
     @assert save_every >= 1 "save_every must be >= 1"
-    _print_press(config)
+    verbose && _print_press(config)
 
     if config.domain isa TrotterDomain
         @assert trotter !== nothing
@@ -253,7 +259,7 @@ function run_thermalize(
                 dist = trace_distance_h(Hermitian(evolving_dm), gibbs)
                 push!(trace_distances, dist)
                 push!(recorded_steps, step)
-                @printf("Dist to Gibbs: %s\n", dist)
+                verbose && @printf("Dist to Gibbs: %s\n", dist)
                 if dist < convergence_cutoff
                     break
                 end
