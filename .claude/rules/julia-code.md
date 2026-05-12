@@ -81,13 +81,15 @@ Default test command (sandbox-safe — this is what the assistant must use):
 
 ```
 JULIA_NUM_THREADS=4 OPENBLAS_NUM_THREADS=1 \
-  julia --project -e 'using Pkg; Pkg.test(julia_args=["--heap-size-hint=2G"])'
+  julia --project -e 'using Pkg; Pkg.test(julia_args=["--heap-size-hint=1500M"])'
 ```
 
-The `--heap-size-hint=2G` flag is **required** inside the sandbox: it caps Julia's
-heap target so cumulative buffers from the ~50 test files do not push RSS past
-the ~1.8 GB available to the test process. `runtests.jl` prints a per-file RSS
-trace on stderr so OOM regressions are immediately visible.
+The `--heap-size-hint=1500M` flag is **required** inside the sandbox: it caps
+Julia's heap target so cumulative buffers from the ~50 test files do not push
+RSS past the ~1.8 GB available to the test process. Empirically the suite
+peaks at ~1.3 GB RSS at this setting, leaving comfortable headroom.
+`runtests.jl` prints a per-file RSS trace on stderr so OOM regressions are
+immediately visible.
 
 Full suite — only safe **outside the sandbox** (developer machine with ≥ 16 GB RAM):
 
