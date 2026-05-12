@@ -100,14 +100,25 @@ derives β_alg per cell. `migrate_bson_beta_phys.jl` annotates legacy
 β_alg-keyed sidecars with the new triple so plot scripts can read them
 under the same `fit_scaling` contract.
 
-**Caveat on the smooth-Metropolis `s` at large β_alg.** The legacy fixed
-`s = 0.25` is held in the current drivers; if a β_phys=1 cell at large n
-mixes terribly because the kink-width is now σ·√s ≈ 0.0025 (much narrower
-than the legacy 0.05), the choice is between (a) re-enabling
-`default_smooth_s` and verifying that s ≈ 25 still gives a physically
-sensible γ-rate, (b) holding σ = 0.1 fixed (decoupling the OFT filter
-width from β), or (c) reinstating the fixed s = 0.25 value. The choice
-hasn't been made yet — make the call after the first full sweep.
+**Smooth-Metropolis `s` convention — DECIDED 2026-05-12: fixed `s = 0.25,
+a = 0`** for all production CKG smooth-Metro sweeps. The alternative
+`default_smooth_s(β, σ) = (0.05/σ)²` was tested in the P1 v4 redo
+(qf-e4z.21) and shown to **destroy γ(ω) at high β_alg**: with σ·√s = 0.05
+absolute, the smoothing window swamps σ ≈ 1/β_alg whenever σ ≲ 0.05, and
+γ(ω) never reaches 1 even for deeply energy-decreasing ω (at n=7,
+β_phys=1, γ(ω=−0.1) = 0.72 with s=9.48 vs 1.00 with s=0.25). The
+Metropolis acceptance shape collapses, CKG τ_mix degrades 2–3× vs DLL.
+
+Fixed `s = 0.25` keeps **relative** smoothing σ·√s = σ/2 constant across
+β, so γ stays sharp at every temperature. The cost is that as β_alg
+grows beyond ~50, the kink kernel becomes narrower in absolute units —
+the energy quadrature may need `r_D = 8` instead of 7 to maintain ≤ 10⁻⁹
+vs Bohr. At n ≤ 8 with the canonical β_phys grid this is benign (r_D = 7
+gives ≤ 10⁻⁷ vs Bohr at the worst cell, well below thesis-target ε =
+10⁻³). Beyond n ≈ 8 + high β_phys, two levers: bump `r_D` to 8 (cheap,
+linear in 2^r_D), or modestly widen `s` (e.g. 0.4) to recover r_D = 7.
+See `drafts/error-analysis/quadrature-convergence-summary-v2.md` for the
+full discussion.
 
 ## Agents
 
