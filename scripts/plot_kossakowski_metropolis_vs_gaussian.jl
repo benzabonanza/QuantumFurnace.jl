@@ -19,7 +19,7 @@
 #
 # This is THE motivating qualitative contrast for swapping Gaussian → Metropolis.
 #
-# System: n=3 disordered Heisenberg fixture (heis_disordered_periodic_n3.bson),
+# System: n=3 disordered Heisenberg fixture (heis_xxx_zzdisordered_periodic_n3.bson),
 # rescaled to ‖H‖ ≤ 0.45 so all Bohr frequencies fit inside the flat top
 # |ν| ≤ S/2 = 1 (S=2 default).
 #
@@ -47,7 +47,7 @@ const S_meta   = 2.0  # Metropolis bump radius
 
 # ── Build n=3 fixture ────────────────────────────────────────────────────────
 script_dir = @__DIR__
-ham_path = joinpath(script_dir, "..", "hamiltonians", "heis_disordered_periodic_n3.bson")
+ham_path = joinpath(script_dir, "..", "hamiltonians", "heis_xxx_zzdisordered_periodic_n3.bson")
 @info "Loading n=3 disordered Heisenberg fixture" ham_path
 ham = _load_test_hamiltonian(ham_path, first(β_values))
 @info "Hamiltonian (rescaled): max|eigval| = $(maximum(abs.(ham.eigvals)))"

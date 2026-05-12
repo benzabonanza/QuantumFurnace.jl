@@ -45,7 +45,7 @@ const β_values = (5.0, 10.0, 20.0)
 const S_meta   = 2.0
 
 # ── Build n=3 fixture ────────────────────────────────────────────────────────
-ham_path = joinpath(@__DIR__, "..", "hamiltonians", "heis_disordered_periodic_n3.bson")
+ham_path = joinpath(@__DIR__, "..", "hamiltonians", "heis_xxx_zzdisordered_periodic_n3.bson")
 ham = _load_test_hamiltonian(ham_path, first(β_values))
 unique_freqs = sort(collect(keys(ham.bohr_dict)))
 Nfreq = length(unique_freqs)

@@ -32,7 +32,7 @@ const BETA       = 10.0
 const SIGMA      = 1.0 / BETA
 
 ham_path = joinpath(@__DIR__, "..", "hamiltonians",
-                    "heis_disordered_periodic_n$(NUM_QUBITS).bson")
+                    "heis_xxx_zzdisordered_periodic_n$(NUM_QUBITS).bson")
 ham = QuantumFurnace._load_hamiltonian_bson(ham_path, BETA)
 d   = size(ham.data, 1)
 

@@ -28,7 +28,7 @@ const SMOOTH_A = BETA / 30.0
 const ETA = 1e-3
 
 const HAM = QF._load_hamiltonian_bson(
-    joinpath(@__DIR__, "..", "hamiltonians", "heis_disordered_periodic_n3.bson"), BETA)
+    joinpath(@__DIR__, "..", "hamiltonians", "heis_xxx_zzdisordered_periodic_n3.bson"), BETA)
 const DIM = size(HAM.data, 1)
 
 const OMEGA_RANGE = 2.5

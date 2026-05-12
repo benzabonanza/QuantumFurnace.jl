@@ -186,7 +186,7 @@ println("="^72)
 flush(stdout)
 
 ham_path = joinpath(dirname(@__DIR__), "hamiltonians",
-                     "heis_disordered_periodic_n$(N_QUBITS).bson")
+                     "heis_xxx_zzdisordered_periodic_n$(N_QUBITS).bson")
 isfile(ham_path) || error("Hamiltonian fixture missing: $ham_path")
 ham = _load_hamiltonian_bson(ham_path, BETA_VALUES[1])  # placeholder; rebuilt per β
 jumps_template = _build_jump_set(ham, N_QUBITS)

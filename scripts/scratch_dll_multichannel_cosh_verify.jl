@@ -187,7 +187,7 @@ println("-"^96)
 println("Hypothesis: cosh²(β·c_max/4) tames the cost when c_max ≤ ν_max(H).")
 println()
 
-ham = _load_test_hamiltonian(joinpath(@__DIR__, "..", "hamiltonians", "heis_disordered_periodic_n$(N).bson"), BETA)
+ham = _load_test_hamiltonian(joinpath(@__DIR__, "..", "hamiltonians", "heis_xxx_zzdisordered_periodic_n$(N).bson"), BETA)
 
 # Same Pauli jumps as the audit script.
 function build_paulis_jumps(ham, n)

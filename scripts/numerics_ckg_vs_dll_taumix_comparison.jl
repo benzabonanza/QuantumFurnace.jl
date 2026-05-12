@@ -17,7 +17,7 @@
 # (`integrate_to_gibbs` + `estimate_mixing_time(...; model=:biexp,
 # extrapolate=true)`) over the (n, β) product for three constructions on the
 # same disordered Heisenberg fixture family
-# (`hamiltonians/heis_disordered_periodic_n<n>.bson`):
+# (`hamiltonians/heis_xxx_zzdisordered_periodic_n<n>.bson`):
 #
 #   1) CKG (KMS, EnergyDomain) — matrix-free `apply_lindbladian!` (Workspace path)
 #   2) DLL Gaussian filter      — matrix-free DLL apply (qf-lkb.9, BohrDomain)
@@ -91,7 +91,7 @@ using Plots
 
 # ── Sweep grid ────────────────────────────────────────────────────────────────
 # n_values = {3, 4, 5}: n=5 is now affordable in EnergyDomain CKG (qf-lkb.11)
-# and matrix-free DLL (qf-lkb.9). The legacy heis_disordered_periodic_n*.bson
+# and matrix-free DLL (qf-lkb.9). The legacy heis_xxx_zzdisordered_periodic_n*.bson
 # fixture family covers exactly n ∈ {3, 4, 5}; n=6,7 extension requires
 # generating fresh fixtures or switching to heis_xxx_zzdisordered_periodic_n*.
 const N_VALUES         = [3, 4, 5]

@@ -22,7 +22,7 @@ num_qubits = 3
 beta       = 10.0
 
 ham_path = joinpath(@__DIR__, "..", "hamiltonians",
-                    "heis_disordered_periodic_n$(num_qubits).bson")
+                    "heis_xxx_zzdisordered_periodic_n$(num_qubits).bson")
 
 raw = open(ham_path) do io; BSON.parse(io) end
 fields = raw[:hamiltonian][:data]

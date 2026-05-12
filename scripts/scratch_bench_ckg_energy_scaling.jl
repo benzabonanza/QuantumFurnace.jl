@@ -106,13 +106,13 @@ n_values = [3, 4, 5, 6, 7]
 # take ~5 minutes per measurement and is the entire pain point qf-lkb.11 fixes.
 bohr_n_max = 4
 
-# Pick the fixture family. Legacy heis_disordered_periodic_n* covers n=3..5;
+# Pick the fixture family. Legacy heis_xxx_zzdisordered_periodic_n* covers n=3..5;
 # the newer heis_xxx_zzdisordered_periodic_n* family extends to n=10 and
 # eliminates the bipartite-pairing collisions for even n (see memory:
 # Bohr Frequency Collision Root Cause). For the cross-n benchmark we want
 # uniform physics, so use the newer family throughout.
 function fixture_path(n::Integer)
-    legacy = joinpath(HAM_DIR, "heis_disordered_periodic_n$(n).bson")
+    legacy = joinpath(HAM_DIR, "heis_xxx_zzdisordered_periodic_n$(n).bson")
     new_fam = joinpath(HAM_DIR, "heis_xxx_zzdisordered_periodic_n$(n).bson")
     return n <= 5 && isfile(legacy) ? legacy : new_fam
 end

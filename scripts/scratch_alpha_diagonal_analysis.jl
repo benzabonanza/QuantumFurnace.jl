@@ -71,7 +71,7 @@ vector, and the number of single-site Pauli couplings (3n).
 """
 function load_fixture(n::Int, beta::Real)
     source_root = dirname(@__DIR__)
-    ham_path = joinpath(source_root, "hamiltonians", "heis_disordered_periodic_n$(n).bson")
+    ham_path = joinpath(source_root, "hamiltonians", "heis_xxx_zzdisordered_periodic_n$(n).bson")
     ham = QuantumFurnace._load_hamiltonian_bson(ham_path, Float64(beta))
     bohr_freqs = sort!(collect(keys(ham.bohr_dict)))
     num_jumps = 3 * n  # X, Y, Z on each site

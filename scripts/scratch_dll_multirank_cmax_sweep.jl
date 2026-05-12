@@ -285,7 +285,7 @@ println("="^110)
 flush(stdout)
 
 ham_path = joinpath(dirname(@__DIR__), "hamiltonians",
-                     "heis_disordered_periodic_n$(N_QUBITS).bson")
+                     "heis_xxx_zzdisordered_periodic_n$(N_QUBITS).bson")
 isfile(ham_path) || error("Hamiltonian fixture missing: $ham_path")
 
 results = NamedTuple[]

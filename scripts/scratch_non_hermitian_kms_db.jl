@@ -41,7 +41,7 @@ const SIGMA_MINUS = ComplexF64[0 0; 1 0]
 
 #* Build n=3 system ---------------------------------------------------------
 function _load_n3_ham(beta)
-    ham_path = joinpath(SOURCE_ROOT, "hamiltonians", "heis_disordered_periodic_n3.bson")
+    ham_path = joinpath(SOURCE_ROOT, "hamiltonians", "heis_xxx_zzdisordered_periodic_n3.bson")
     return QuantumFurnace._load_hamiltonian_bson(ham_path, Float64(beta))
 end
 

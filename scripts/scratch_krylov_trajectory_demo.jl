@@ -42,7 +42,7 @@ function demo_lindbladian(n::Int, beta::Real)
     else
         β -> begin
             ham_path = joinpath(dirname(@__DIR__), "hamiltonians",
-                                "heis_disordered_periodic_n$(n).bson")
+                                "heis_xxx_zzdisordered_periodic_n$(n).bson")
             ham = QuantumFurnace._load_hamiltonian_bson(ham_path, β)
             jp = ([X], [Y], [Z])
             num_jumps = length(jp) * n
@@ -126,7 +126,7 @@ function demo_channel(n::Int, beta::Real, delta::Real, num_steps::Int = 30000)
     else
         β -> begin
             ham_path = joinpath(dirname(@__DIR__), "hamiltonians",
-                                "heis_disordered_periodic_n$(n).bson")
+                                "heis_xxx_zzdisordered_periodic_n$(n).bson")
             ham = QuantumFurnace._load_hamiltonian_bson(ham_path, β)
             jp = ([X], [Y], [Z])
             num_jumps = length(jp) * n

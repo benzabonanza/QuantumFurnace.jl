@@ -73,7 +73,7 @@ const TARGET_EPS_L    = 1e-3
 const TARGET_EPS_K    = 1e-3
 const OUTPUT_PATH     = joinpath(@__DIR__, "output", "benchmark_lmode_vs_kmode.bson")
 const HAM_DIR         = joinpath(@__DIR__, "..", "hamiltonians")
-const HAM_PATH(n)     = joinpath(HAM_DIR, "heis_disordered_periodic_n$n.bson")
+const HAM_PATH(n)     = joinpath(HAM_DIR, "heis_xxx_zzdisordered_periodic_n$n.bson")
 
 # ---------------------------------------------------------------------------
 # System builders

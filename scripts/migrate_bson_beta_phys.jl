@@ -46,15 +46,15 @@ const DEFAULT_DIRS = String[
 const HAM_DIR = joinpath(@__DIR__, "..", "hamiltonians")
 
 # Map a record's `:family` (Symbol or String) to the on-disk fixture pattern.
-# When the record carries no `:family`, fall back to the legacy
-# `heis_disordered_periodic_n*` family that the pre-qf-6vr sweeps used.
+# When the record carries no `:family`, fall back to the current 1D family
+# `heis_xxx_zzdisordered_periodic_n*` (qf-2kd: find_typical + [[Z],[Z,Z]]).
 function _ham_path_for(record::AbstractDict)
     n_raw = get(record, :n, nothing)
     n_raw === nothing && return (nothing, "missing :n field")
     n = Int(n_raw)
     family_raw = get(record, :family, nothing)
     family = if family_raw === nothing
-        "disordered"
+        "xxx_zzdisordered"
     elseif family_raw isa Symbol
         String(family_raw)
     else

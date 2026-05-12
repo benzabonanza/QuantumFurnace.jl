@@ -72,7 +72,7 @@ for n in (3, 4, 5)
     println("="^80)
     flush(stdout)
     ham = QF._load_hamiltonian_bson(
-        joinpath(pwd(), "hamiltonians", "heis_disordered_periodic_n$n.bson"), BETA)
+        joinpath(pwd(), "hamiltonians", "heis_xxx_zzdisordered_periodic_n$n.bson"), BETA)
     probe(n, ham, "qf-7xt:      (r_D=7, r_bm=6, r_bp=14, M=64,64,1)";
           r_D=7, r_bm=6, r_bp=14, M_D=64, M_bm=64, M_bp=1)
     probe(n, ham, "+1 bit r_D:  (r_D=8, r_bm=6, r_bp=14, M=128,128,1)";
@@ -95,7 +95,7 @@ flush(stdout)
 flush(stdout)
 for n in (3, 4, 5)
     ham = QF._load_hamiltonian_bson(
-        joinpath(pwd(), "hamiltonians", "heis_disordered_periodic_n$n.bson"), BETA)
+        joinpath(pwd(), "hamiltonians", "heis_xxx_zzdisordered_periodic_n$n.bson"), BETA)
     r_D = n == 3 ? 7 : (n == 4 ? 8 : 9)
     cfg, triple, jumps, residue, triple_bytes, _ =
         probe(n, ham, "(r_D=$r_D, r_bm=6, r_bp=14, M=128,128,1)";

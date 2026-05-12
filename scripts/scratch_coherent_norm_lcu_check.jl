@@ -96,7 +96,7 @@ results = Dict{Tuple{Int,Float64}, NamedTuple}()
 
 for n in NS
     ham_path = joinpath(@__DIR__, "..", "hamiltonians",
-                         "heis_disordered_periodic_n$(n).bson")
+                         "heis_xxx_zzdisordered_periodic_n$(n).bson")
     isfile(ham_path) || (@warn "missing fixture, skipping" n; continue)
 
     # β-independent: ham eigvals + jumps. (Loaded once per n.)

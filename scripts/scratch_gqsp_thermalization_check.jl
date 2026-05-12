@@ -34,7 +34,7 @@ end
 
 function load_n3_system()
     project_root = Pkg.project().path |> dirname
-    ham_path = joinpath(project_root, "hamiltonians", "heis_disordered_periodic_n$(NUM_QUBITS).bson")
+    ham_path = joinpath(project_root, "hamiltonians", "heis_xxx_zzdisordered_periodic_n$(NUM_QUBITS).bson")
     raw = open(ham_path) do io
         BSON.parse(io)
     end
