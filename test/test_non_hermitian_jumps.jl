@@ -121,7 +121,7 @@
     affecting only the unitary evolution, not the fixed point), so a
     diagonal H_T-Gibbs is the wrong reference.
     """
-    function _trotter_kms_db_target(ham::HamHam, trotter::TrottTrott)
+    function _trotter_kms_db_target(ham::HamHam, trotter::AbstractTrotter)
         gibbs_comp = ham.eigvecs * ham.gibbs * ham.eigvecs'
         return Hermitian(trotter.eigvecs' * gibbs_comp * trotter.eigvecs)
     end
@@ -134,7 +134,15 @@
         # β=5: discretisation in Energy/Time saturates near machine precision,
         # so we can demand ≤ 1e-10. β=10 saturates at the quadrature floor
         # (~5e-6) — we relax accordingly.
-        for (β, tol_machine, tol_quad) in [(5.0, 1e-10, 1e-10), (10.0, 1e-10, 5e-5)]
+        # tol_trotter is separated from tol_quad because the TrotterDomain
+        # construction carries its own Strang error in addition to the
+        # Energy/Time quadrature error.  At β=5 the EnergyDomain / TimeDomain
+        # discretisation saturates near machine precision, but Trotter sits
+        # just above 1e-10 at the default per-leg substep counts (qf-e4z.20).
+        for (β, tol_machine, tol_quad, tol_trotter) in [
+            (5.0,  1e-10, 1e-10, 5e-10),
+            (10.0, 1e-10, 5e-5,  5e-5),
+        ]
             @testset "β=$β" begin
                 ham = _load_n3_ham(β)
 
@@ -167,7 +175,7 @@
                 L = Matrix{ComplexF64}(construct_lindbladian(jumps, cfg, ham; trotter=trotter))
                 gibbs_T = _trotter_kms_db_target(ham, trotter)
                 res = verify_detailed_balance(L, gibbs_T)
-                @test res.relative_norm < tol_quad
+                @test res.relative_norm < tol_trotter
             end
         end
     end

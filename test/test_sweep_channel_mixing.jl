@@ -64,8 +64,32 @@
             k_grid = unique(round.(Int, exp10.(range(0, 4, length=40))))
             res_direct = predict_channel_trajectory(cfg, ham, jumps, rho_0, k_grid;
                                                      krylovdim=30)
-            tau_mix_direct = log(d / 1e-3) / res_direct.spectral_gap
 
+            # Mirror the post-processing that sweep_channel_mixing performs
+            # (src/lindblad_action.jl::sweep_channel_mixing).  In the
+            # :extrapolated branch `r.tau_mix` is the eigenmode bisection
+            # crossing, NOT `log(d/ε)/gap` — the latter is only used as the
+            # :floor fallback.
+            ε = 1e-3
+            lambda_eff = log.(res_direct.eigenvalues) ./ res_direct.delta_used
+            t_upper_ch = res_direct.spectral_gap > 0 ?
+                max(res_direct.t[end], 5.0 * log(d / ε) / res_direct.spectral_gap) :
+                res_direct.t[end]
+            res_eig = eigenmode_mixing_time(
+                lambda_eff, res_direct.c, res_direct.R_modes,
+                res_direct.rho_inf, res_direct.sigma_beta, ε;
+                t_upper = t_upper_ch,
+            )
+            tau_mix_direct = if res_eig.source === :extrapolated &&
+                                 isfinite(res_eig.mixing_time) && res_eig.mixing_time > 0
+                res_eig.mixing_time
+            elseif res_direct.spectral_gap > 0
+                log(d / ε) / res_direct.spectral_gap
+            else
+                NaN
+            end
+
+            @test r.tau_mix_source === res_eig.source
             @test isapprox(r.lambda_gap_channel, res_direct.spectral_gap, rtol=1e-12)
             @test isapprox(r.tau_mix, tau_mix_direct, rtol=1e-10)
             @test isapprox(r.achieved_dist_at_kmax, res_direct.distances[end], rtol=1e-12)
