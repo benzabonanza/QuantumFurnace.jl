@@ -8,6 +8,9 @@
 ### Krylov for fixed point / spectral gap, never full eigendecomp
 - See [Krylov for fixed-point + gap](feedback_krylov_for_fixed_point_and_gap.md). Use `krylov_spectral_gap(config, ham, jumps; ...)` from `src/krylov_eigsolve.jl`; returns `fixed_point` and `spectral_gap` from matvec `eigsolve` (smallest |Re(λ)| pair). Never call `eigen()` on a dense d²×d² superoperator for fixed-point / gap analysis — only build the dense superoperator when genuinely needed (norm comparisons, KMS geometry).
 
+### Coherent term ON by default; flag dissipator-only runs explicitly (2026-05-12)
+- See [Coherent term on by default](feedback_coherent_term_on_by_default.md). All Lindbladian APIs default to `include_coherent=true` — the physical KMS Lindbladian. Setting `include_coherent=false` yields a dissipator-only operator (non-physical, no KMS DB). Only use it when explicitly isolating dissipator quadrature, and always call out the limitation in script header, output naming, and summary drafts — never present dissipator-only numbers as full-Lindbladian register sizing. Rule encoded in `.claude/rules/julia-code.md` (Coherent Term section) and `.claude/rules/scripts.md`.
+
 ### construct_lindbladian, not build_dense_superoperator, for dense Lindbladian superops
 - See [construct_lindbladian over build_dense_superop](feedback_construct_lindbladian_over_build_dense_superop.md). For a `Config{Lindbladian}`, the canonical dense d²×d² superop comes from `construct_lindbladian(jumps, cfg, ham)` in `src/furnace.jl` — BLAS-vectorised in-place per-jump assembly. `build_dense_superoperator` (`src/kms_geometry.jl`) is a generic d²-matvec fallback only for matvec closures with no direct constructor (channel walks, custom diagnostics).
 

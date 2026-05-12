@@ -48,6 +48,19 @@ When solving for fixed points, spectral gaps, or trajectory simulations, prefer 
 - Only build dense `d² × d²` superoperators when genuinely needed (norm comparisons, KMS geometry, dense cross-checks at small n)
 - `eigen()` on a dense superoperator for fixed-point / gap analysis is forbidden in production code paths
 
+## Coherent Term: ON by Default
+
+Simulations and any matvec / Krylov use of the Lindbladian MUST include the coherent term unless the user has explicitly asked for a dissipator-only diagnostic.
+
+- The canonical API surfaces — `apply_lindbladian!`, `apply_adjoint_lindbladian!`, `construct_lindbladian`, `predict_lindbladian_trajectory`, `lindblad_action_integrate`, `krylov_spectral_gap` — all default to `include_coherent = true`. The default IS the physical KMS Lindbladian
+  $$\mathcal L(\rho) = -i[H + B, \rho] + \sum_\omega A(\omega) \rho A(\omega)^\dagger \gamma(\omega) - \{R/2, \rho\}.$$
+- Setting `include_coherent = false` masks the $i[B, \rho]$ commutator: the workspace's `G_left = +iB^\top - R/2`, `G_right = -iB^\top - R/2` are still built (so B_time / B_bohr / B_trotter is still constructed), but the matvec uses $(G_\text{left} + G_\text{right})/2 = -R/2$, dropping the unitary part. The resulting operator is the **dissipator only**, not "the Lindbladian without coherent" — it does not satisfy KMS detailed balance and its spectrum / gap / fixed point are not the physical ones.
+- Only set `include_coherent = false` when explicitly isolating the dissipator for a register-sizing / quadrature-error diagnostic. When you do:
+  - Document the choice in a code comment, in the script header, and in any report / draft you produce.
+  - State the limitation prominently in user-visible output — never report a "Lindbladian sweep" if `include_coherent = false`; call it a **dissipator-only sweep**.
+  - Remember the coherent registers (`r_b_minus, r_b_plus`) have their own quadrature error structure; sizing them via a dissipator sweep is wrong. See [Quadrature register recipe v2](../../.claude-memory/quadrature_register_recipe_v2.md): TimeDomain coherent caps at ε ≈ 10⁻⁶ from the slope-(−1) t = 0 L'Hôpital sample, so for ε ≤ 10⁻⁹ on the full Lindbladian use EnergyDomain (where `B_energy ≡ B_bohr` closed-form).
+- For Krylov spectral-gap / fixed-point work: the coherent term shifts the spectrum (B is Hermitian, contributes $-iB^\top$ which is anti-Hermitian — purely imaginary spectrum). Dropping it changes both the gap and the steady state. Never drop it to "simplify the eigenproblem".
+
 ## Register Sizing from the Sweep Table
 
 For QPE / quadrature register sizes (`num_energy_bits_X`, `t0_X`, `w0_X` for X ∈ {D, b_minus, b_plus}), use the values from the canonical sweep table — do not invent or guess.
