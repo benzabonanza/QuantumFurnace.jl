@@ -266,4 +266,94 @@ using QuantumFurnace
         @info "Eigenvalue conversion consistency" max_conversion_error=conversion_err atol=1e-10
     end
 
+    # ========================================================================
+    # Testset 9 — qf-8fr: symmetric Hamiltonians do NOT collapse the Arnoldi.
+    #
+    # Classical 1D Ising H = sum Z_i Z_{i+1} is invariant under translation and
+    # spin-flip (otimes_i X). The maximally mixed state I/d is a fixed point
+    # of both symmetries; if `krylov_spectral_gap` seeded Arnoldi with I/d
+    # (the pre-qf-8fr default), the Krylov subspace would stay in the trivial
+    # symmetric sector and miss the true gap eigenmode — which is the
+    # spin-flip-odd magnetisation at lambda = -4.45e-2 for n=4. The patched
+    # `_krylov_default_x0` adds a small traceless GUE perturbation, breaking
+    # the symmetry while preserving the trace-1 normalisation. This test
+    # would FAIL on the pre-qf-8fr code (returns the 2nd-symmetric-sector
+    # eigenvalue, ~3.8x too large at n=4).
+    # ========================================================================
+    @testset "krylov_spectral_gap — symmetric system regression (qf-8fr)" begin
+        # n=3 keeps the sandbox cheap. Periodic classical Ising, no disorder.
+        n_ising = 3
+        terms_zz = Vector{Vector{Matrix{ComplexF64}}}([[Z, Z]])
+        coeffs_zz = [1.0]
+        base_ham = QuantumFurnace._construct_base_ham(terms_zz, coeffs_zz, n_ising;
+                                                      periodic=true)
+        rescaling_factor, shift = QuantumFurnace._rescaling_and_shift_factors(base_ham)
+        d_ising = 2^n_ising
+        rescaled_mat = Matrix(base_ham) ./ rescaling_factor .+ shift * I(d_ising)
+        eigvals_rs, eigvecs_rs = eigen(Hermitian(rescaled_mat))
+
+        # Build a HamHam directly via the raw-NamedTuple constructor.
+        raw = (
+            matrix = rescaled_mat,
+            terms = terms_zz,
+            base_coeffs = coeffs_zz ./ rescaling_factor,
+            disordering_terms = nothing,
+            disordering_coeffs = nothing,
+            eigvals = eigvals_rs,
+            eigvecs = eigvecs_rs,
+            nu_min = minimum(diff(eigvals_rs)),
+            shift = shift,
+            rescaling_factor = rescaling_factor,
+            periodic = true,
+        )
+        β_phys = 0.5
+        ham_ising = HamHam(raw; beta_phys=β_phys)
+        jumps_ising = QuantumFurnace._build_jump_set(ham_ising, n_ising)
+        β_alg = beta_alg(ham_ising, β_phys)
+
+        # CKG smooth-Metropolis EnergyDomain Config (matches the qf-8fr sweep).
+        σ = 1.0 / β_alg
+        H_norm = maximum(abs, ham_ising.eigvals)
+        omega_range = 2.0 * (H_norm + 8 * σ)
+        r_D = 7
+        w0_D = omega_range / 2.0^r_D
+        t0_D = 2π / (2.0^r_D * w0_D)
+        cfg_e = Config(
+            sim = Lindbladian(), domain = EnergyDomain(), construction = KMS(),
+            num_qubits = n_ising, with_linear_combination = true,
+            beta = β_alg, beta_phys = β_phys, sigma = σ,
+            a = 0.0, s = 0.25, gaussian_parameters = (nothing, nothing),
+            num_energy_bits_D = r_D, w0_D = w0_D, t0_D = t0_D,
+            num_trotter_steps_per_t0 = 10, filter = nothing,
+        )
+
+        # Dense reference: build L explicitly, take the |Re|-second smallest.
+        L_dense = construct_lindbladian(jumps_ising, cfg_e, ham_ising)
+        ev_dense = eigvals(L_dense)
+        perm = sortperm(real.(ev_dense); by=abs)
+        gap_dense = abs(real(ev_dense[perm[2]]))
+
+        # Krylov: must match dense to rtol=1e-6 with the patched x_0.
+        res = krylov_spectral_gap(cfg_e, ham_ising, jumps_ising;
+                                  krylovdim=40, howmany=4)
+        @test isapprox(res.spectral_gap, gap_dense; rtol=1e-6)
+        @info "qf-8fr classical Ising regression" n=n_ising β_phys=β_phys gap_krylov=res.spectral_gap gap_dense=gap_dense rel_err=abs(res.spectral_gap - gap_dense)/gap_dense
+
+        # Also exercise BohrDomain — same physical Lindbladian, different domain wiring.
+        cfg_b = Config(
+            sim = Lindbladian(), domain = BohrDomain(), construction = KMS(),
+            num_qubits = n_ising, with_linear_combination = true,
+            beta = β_alg, beta_phys = β_phys, sigma = σ,
+            a = 0.0, s = 0.25, gaussian_parameters = (nothing, nothing),
+            num_energy_bits_D = r_D, w0_D = w0_D, t0_D = t0_D,
+            num_trotter_steps_per_t0 = 10, filter = nothing,
+        )
+        res_b = krylov_spectral_gap(cfg_b, ham_ising, jumps_ising;
+                                    krylovdim=40, howmany=4)
+        @test isapprox(res_b.spectral_gap, gap_dense; rtol=1e-6)
+        # Energy ≡ Bohr to machine precision for classical Ising (no quadrature error).
+        @test isapprox(res.spectral_gap, res_b.spectral_gap; rtol=1e-10)
+        @info "qf-8fr Energy ≡ Bohr cross-check" gap_E=res.spectral_gap gap_B=res_b.spectral_gap
+    end
+
 end  # @testset "Krylov Eigsolve"
