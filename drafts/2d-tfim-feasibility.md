@@ -6,6 +6,27 @@
 **Summary**: `scripts/output/sweep_2d_tfim/sweep_2d_tfim_summary.bson`
 **Log**: `scripts/output/sweep_2d_tfim/sweep.log`
 
+> **Retrospective correction (2026-05-14, physics-checker review for qf-1jj)**:
+> the "disordered phase" classification of the $(h = 1, \beta_{\rm phys} = 0.5)$
+> operating point used throughout this note is **incorrect** — strictly,
+> $T = 2.0 J$ at $h = J$ sits at most $\sim 3\%$ BELOW $T_c(h{=}1) \approx 2.07 J$
+> per Hesselmann–Wessel 2016 (arXiv:1602.02096) SSE-QMC, putting us narrowly
+> INSIDE the ordered "dome", not above it. The numerics ($\lambda_{\rm gap}$,
+> $\tau_{\rm mix}$, Energy↔Bohr cross-checks, RSS) are all correct as
+> measured — but the flat $\lambda_{\rm gap,phys} \approx 0.285$ across n=6
+> and n=8 is **pre-asymptotic finite-size behaviour, NOT the expected
+> $\Omega(1)$ disordered-phase gap**. The sandbox cells $n \le 8$ have
+> $\sqrt{n}$ range $0.83$ — far too narrow to resolve the asymptotic
+> stretched-exponential $\exp(-\gamma \sqrt{n})$ decay that's predicted
+> for any Lindbladian quasi-local Gibbs sampler in the ordered phase
+> (Lubetzky–Sly 2013 classical; Gamarnik–Kiani–Zlokapa 2024 quantum lower
+> bound $T_{\rm mix} \ge 2^{n^{1/2 - o(1)}}$). Cite this note as
+> *"narrowly inside the ordered phase at the critical line"*, not as
+> *"disordered phase"*. The qf-1jj follow-up runs at $(h = 1.5,
+> \beta_{\rm phys} = 2.0)$ which is unambiguously inside the dome
+> (73% margin below $T_c$); compare against that. Phase-diagram
+> reference: [[T_c(h) for 2D TFIM]].
+
 ## Headlines
 
 - **All three sandbox cells completed** (n=4, 6, 8) inside 16.3 min — comfortably under the 1 h budget. n=8 dominated at 768 s; n=4 and n=6 are under 10 s each on EnergyDomain.
