@@ -2,6 +2,9 @@
 
 ## Project Defaults
 
+### Thesis scope: finite-dim only — infinite-dim mentioned but never prioritised (2026-05-14)
+- See [Thesis scope finite-dim only](feedback_thesis_scope_finite_dim_only.md). The thesis works exclusively with finite-dimensional Hilbert spaces (spins, fermions on a lattice with bounded local Fock dim, qubits/qudits). Infinite-dim / bosonic / continuous-variable Gibbs samplers (Becker 2026, Bose–Hubbard, oscillator chains) are out of scope. In any synthesis, frontier ranking, or chapter focus: mention infinite-dim once with an `[OUT-OF-SCOPE: infinite-dim]` tag, but never place it in a top-N "where quantum could first beat classical" list. The thesis machinery (KMS-DB construction, Trotter/energy/Bohr quadrature ladders, Krylov spectral analysis, numerics chapter) is built and tested only for finite-dim — infinite-dim needs a different functional-analytic framework the thesis does not develop.
+
 ### Thesis target precision: split — ε=1e-6 algorithm-level, ε≈1e-5 simulated-algorithm (revised 2026-05-04)
 - See [Thesis target precision split](thesis_target_precision_1e6.md). The prior "ε=10⁻⁶ everywhere" framing is **scratched**. Two regimes: (1) **Algorithm-level** Lindbladian fixed-point analysis (Krylov, no δ scheme) → ε = 10⁻⁶. (2) **Simulated-algorithm** plots (Thermalize / Trajectory CPTP Kraus scheme) are floored at ε ≈ δ²/λ ≈ 10⁻⁵ since δ ≥ 10⁻³. Always clarify which regime when citing precision targets. See also [δ and t0 floors](project_delta_t0_floor.md).
 
