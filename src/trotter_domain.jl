@@ -72,6 +72,7 @@ falls back to `eigvals_t0` for both the outer `b_-(t)` and inner `b_+(τ)` loops
 which reproduces the pre-qf-d0w behaviour byte-for-byte.
 """
 function TrottTrott(hamiltonian::HamHam{T}, t::Real, num_trotter_steps::Int64) where {T<:AbstractFloat}
+    _check_1d_trotter_compatible(hamiltonian)
     t_f64 = Float64(t)
     # Trotter computation always in Float64 (Pauli matrices are ComplexF64 constants).
     # Convert results to T at the end.
@@ -126,6 +127,7 @@ function TrottTrott(
     t0_b_minus > 0 || throw(ArgumentError("TrottTrott shared-δt₀: t0_b_minus must be > 0 (got $t0_b_minus)."))
     t0_b_plus > 0  || throw(ArgumentError("TrottTrott shared-δt₀: t0_b_plus must be > 0 (got $t0_b_plus)."))
 
+    _check_1d_trotter_compatible(hamiltonian)
     natural = (Float64(t0_D), Float64(t0_b_minus), Float64(t0_b_plus))
     delta_t0 = minimum(natural) / M_user
     M_D, M_bm, M_bp = _shared_delta_t0_steps(natural, delta_t0)
@@ -317,6 +319,55 @@ function compute_trotter_error(hamiltonian::HamHam, trotter::TrottTrott, t::Floa
     return norm(exact_time_evolution - trotter_time_evolution)
 end
 
+"""
+    _check_1d_trotter_compatible(ham; tol=1e-10)
+
+Verify that the 1D-chain decomposition assumed by `_trotterize2` matches the
+stored Hamiltonian `ham.data`. The 1D Trotter places base and two-site
+disorder bonds on consecutive qubits `(q, q+1)` (with optional wrap when
+`ham.periodic`). A 2D HamHam from `find_*_2d_heisenberg` stores a different
+bond structure that `_trotterize2` cannot represent.
+
+Returns the operator-norm deviation between the 1D reconstruction and
+`ham.data`. Callers that require a 1D-chain HamHam (currently the
+`TrottTrott` constructors) should throw on `err > tol`.
+
+The check costs one extra `_construct_base_ham` + `_construct_disordering_terms`
+plus an `opnorm` on a `2^n × 2^n` matrix — negligible against the rest of the
+Trotter construction at the sandbox n ≤ 8 envelope.
+"""
+function _check_1d_trotter_compatible(ham::HamHam{T}; tol::Real=1e-10) where {T<:AbstractFloat}
+    n = Int(log2(size(ham.data, 1)))
+    rescale = Float64(ham.rescaling_factor)
+    # Reconstruct the 1D-chain Hamiltonian the way _trotterize2 sees it.
+    H_phys = Matrix{ComplexF64}(_construct_base_ham(
+        Vector{Vector{Matrix{ComplexF64}}}(ham.base_terms),
+        Vector{Float64}(ham.base_coeffs) .* rescale,
+        n;
+        periodic=ham.periodic,
+    ))
+    if ham.disordering_terms !== nothing
+        H_phys .+= Matrix(_construct_disordering_terms(
+            Vector{Vector{Matrix{ComplexF64}}}(ham.disordering_terms),
+            [Vector{Float64}(c) .* rescale for c in ham.disordering_coeffs],
+            n;
+            periodic=ham.periodic,
+        ))
+    end
+    H_alg = H_phys ./ rescale .+ Float64(ham.shift) * Matrix{ComplexF64}(I, 2^n, 2^n)
+    err = opnorm(H_alg .- Matrix{ComplexF64}(ham.data))
+    if err > tol
+        throw(ArgumentError(
+            "_trotterize2 / TrottTrott expects a 1D-chain HamHam. The stored " *
+            "`ham.data` deviates from `_construct_base_ham(...) + " *
+            "_construct_disordering_terms(...)` (with `periodic = ham.periodic`) " *
+            "by ‖ΔH‖_op = $err > tol = $tol. This usually means a 2D HamHam " *
+            "from `find_*_2d_heisenberg` was passed; `_trotterize2` does not " *
+            "yet model 2D lattice bond structure (see qf-91g.3)."))
+    end
+    return err
+end
+
 function _trotterize2(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
     """
     2nd-order Strang Trotter for 1D chain Hamiltonians with 1- and 2-site terms.
@@ -327,8 +378,10 @@ function _trotterize2(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
 
     **Limitation**: this is a 1D-chain Trotterizer. Passing a 2D HamHam yields
     an operator that does not reproduce `exp(-i δ H_2D)` — the bond structure of
-    the 2D lattice (right + up neighbours) is not modeled here. 2D HamHams are
-    currently only used in EnergyDomain/BohrDomain pipelines.
+    the 2D lattice (right + up neighbours) is not modeled here. The
+    `_check_1d_trotter_compatible` guard (invoked from `TrottTrott` constructors)
+    throws on this mismatch so 2D HamHams cannot reach this function silently.
+    2D HamHams are currently only used in EnergyDomain/BohrDomain pipelines.
     """
     timestep::Float64 = t / num_trotter_steps
     num_qubits::Int64 = Int(log2(size(hamiltonian.data)[1]))

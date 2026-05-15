@@ -370,6 +370,31 @@ end
     end
 
     # ------------------------------------------------------------------
+    # (o) 2D HamHam fed to TrottTrott raises an explicit error.
+    # ------------------------------------------------------------------
+    @testset "(o) TrottTrott rejects 2D HamHam (qf-91g.3 guard)" begin
+        Random.seed!(91)
+        raw2d = find_typical_2d_heisenberg(2, 3, HEIS_COEFFS; batch_size=4,
+            disordering_terms=Vector{Matrix{ComplexF64}}[[Z]],
+            disorder_strength=1e-2, periodic_x=true, periodic_y=true)
+        ham2d = HamHam(raw2d, 1.0)
+        @test_throws ArgumentError TrottTrott(ham2d, 0.5, 4)
+        @test_throws ArgumentError TrottTrott(ham2d, 0.5, 0.5, 0.5, 4)
+
+        # 1D HamHam (PBC + OBC) still constructs fine
+        Random.seed!(91)
+        raw1d_pbc = find_typical_heisenberg(4, HEIS_COEFFS; batch_size=4,
+            disordering_terms=Vector{Matrix{ComplexF64}}[[Z]],
+            disorder_strength=1.0, periodic=true)
+        Random.seed!(91)
+        raw1d_obc = find_typical_heisenberg(4, HEIS_COEFFS; batch_size=4,
+            disordering_terms=Vector{Matrix{ComplexF64}}[[Z]],
+            disorder_strength=1.0, periodic=false)
+        @test TrottTrott(HamHam(raw1d_pbc, 1.0), 0.5, 4) isa TrottTrott
+        @test TrottTrott(HamHam(raw1d_obc, 1.0), 0.5, 4) isa TrottTrott
+    end
+
+    # ------------------------------------------------------------------
     # (n) Cross-domain Krylov spectral gap on OBC fixture.
     # ------------------------------------------------------------------
     # qf-91g: an OBC fixture must produce a well-defined Lindbladian with a

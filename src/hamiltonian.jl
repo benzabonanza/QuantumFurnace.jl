@@ -841,6 +841,16 @@ up-neighbour bond (i, j)→(i, j+1) that emanate from `(i, j)`. Wrap-around
 bonds in each direction are included only when the corresponding periodic
 flag is true and the lattice has length > 1 in that direction.
 
+**Disorder correlation note**: the x- and y-bond disorder coefficients
+sharing the same per-site random number means the disorder is *correlated*
+across the two bond directions, not i.i.d. per-bond. This is appropriate
+for ε ≈ 1e-3 symmetry-breaking (the only requirement is that the
+coefficients are generically non-zero so every relevant symmetry is
+broken). For strong-disorder MBL-style fixtures where bond-level
+independence is expected, use the per-bond builder
+[`_construct_disordering_terms_2d_per_bond`] (not implemented — file a
+beads issue when the use case arises).
+
 Throws `ArgumentError` for term lengths other than 1 or 2.
 """
 function _construct_disordering_terms_2d(Lx::Int64, Ly::Int64,
