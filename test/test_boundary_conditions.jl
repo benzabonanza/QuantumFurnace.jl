@@ -112,16 +112,16 @@ end
     end
 
     # ------------------------------------------------------------------
-    # (d) 1D find_typical_heisenberg fixture honours `periodic`.
+    # (d) 1D build_heis_1d fixture honours `periodic`.
     # ------------------------------------------------------------------
-    @testset "(d) 1D find_typical_heisenberg fixture BC propagation" begin
+    @testset "(d) 1D build_heis_1d fixture BC propagation" begin
         for n in (3, 4, 5)
             dis_terms = Vector{Matrix{ComplexF64}}[[Z], [Z, Z]]
             Random.seed!(91)
-            raw_pbc = find_typical_heisenberg(n, HEIS_COEFFS; batch_size=8,
+            raw_pbc = build_heis_1d(n, HEIS_COEFFS; seed=91, 
                 disordering_terms=dis_terms, disorder_strength=1.0, periodic=true)
             Random.seed!(91)
-            raw_obc = find_typical_heisenberg(n, HEIS_COEFFS; batch_size=8,
+            raw_obc = build_heis_1d(n, HEIS_COEFFS; seed=91, 
                 disordering_terms=dis_terms, disorder_strength=1.0, periodic=false)
             @test raw_pbc.periodic === true
             @test raw_obc.periodic === false
@@ -227,13 +227,12 @@ end
     end
 
     # ------------------------------------------------------------------
-    # (i) 2D find_typical_2d_heisenberg fixture honours periodic_x/y.
+    # (i) 2D build_tfim_2d fixture honours periodic_x / periodic_y.
     # ------------------------------------------------------------------
-    @testset "(i) 2D find_typical_2d fixture mixed-BC propagation" begin
+    @testset "(i) 2D build_tfim_2d mixed-BC propagation" begin
         Lx, Ly = 2, 3
         for (px, py) in ((true, true), (true, false), (false, true), (false, false))
-            Random.seed!(91)
-            raw = find_typical_2d_heisenberg(Lx, Ly, HEIS_COEFFS; batch_size=4,
+            raw = build_tfim_2d(Lx, Ly; J=1.0, h=1.0, seed=91,
                 disordering_terms=Vector{Matrix{ComplexF64}}[[Z], [Z, Z]],
                 disorder_strength=1e-2,
                 periodic_x=px, periodic_y=py)
@@ -242,20 +241,16 @@ end
         end
 
         # The four BC variants give four distinct matrices (different bond sets)
-        Random.seed!(91)
-        raw_pp = find_typical_2d_heisenberg(Lx, Ly, HEIS_COEFFS; batch_size=4,
+        raw_pp = build_tfim_2d(Lx, Ly; J=1.0, h=1.0, seed=91,
             disordering_terms=Vector{Matrix{ComplexF64}}[[Z], [Z, Z]],
             disorder_strength=1e-2, periodic_x=true, periodic_y=true)
-        Random.seed!(91)
-        raw_pf = find_typical_2d_heisenberg(Lx, Ly, HEIS_COEFFS; batch_size=4,
+        raw_pf = build_tfim_2d(Lx, Ly; J=1.0, h=1.0, seed=91,
             disordering_terms=Vector{Matrix{ComplexF64}}[[Z], [Z, Z]],
             disorder_strength=1e-2, periodic_x=true, periodic_y=false)
-        Random.seed!(91)
-        raw_fp = find_typical_2d_heisenberg(Lx, Ly, HEIS_COEFFS; batch_size=4,
+        raw_fp = build_tfim_2d(Lx, Ly; J=1.0, h=1.0, seed=91,
             disordering_terms=Vector{Matrix{ComplexF64}}[[Z], [Z, Z]],
             disorder_strength=1e-2, periodic_x=false, periodic_y=true)
-        Random.seed!(91)
-        raw_ff = find_typical_2d_heisenberg(Lx, Ly, HEIS_COEFFS; batch_size=4,
+        raw_ff = build_tfim_2d(Lx, Ly; J=1.0, h=1.0, seed=91,
             disordering_terms=Vector{Matrix{ComplexF64}}[[Z], [Z, Z]],
             disorder_strength=1e-2, periodic_x=false, periodic_y=false)
         @test !isapprox(raw_pp.matrix, raw_pf.matrix; atol=1e-8)
@@ -298,11 +293,11 @@ end
         # _trotterize2 is U ≈ exp(+i δ H), see misc_tools docstrings.
         for n in (3, 4, 5)
             Random.seed!(91)
-            raw_pbc = find_typical_heisenberg(n, HEIS_COEFFS; batch_size=4,
+            raw_pbc = build_heis_1d(n, HEIS_COEFFS; seed=91, 
                 disordering_terms=Vector{Matrix{ComplexF64}}[[Z], [Z, Z]],
                 disorder_strength=1.0, periodic=true)
             Random.seed!(91)
-            raw_obc = find_typical_heisenberg(n, HEIS_COEFFS; batch_size=4,
+            raw_obc = build_heis_1d(n, HEIS_COEFFS; seed=91, 
                 disordering_terms=Vector{Matrix{ComplexF64}}[[Z], [Z, Z]],
                 disorder_strength=1.0, periodic=false)
             ham_pbc = HamHam(raw_pbc, 1.0)
@@ -329,7 +324,7 @@ end
     @testset "(l) Strang Trotter 2nd-order error at OBC" begin
         n = 3
         Random.seed!(91)
-        raw = find_typical_heisenberg(n, HEIS_COEFFS; batch_size=4,
+        raw = build_heis_1d(n, HEIS_COEFFS; seed=91, 
             disordering_terms=Vector{Matrix{ComplexF64}}[[Z], [Z, Z]],
             disorder_strength=1.0, periodic=false)
         ham = HamHam(raw, 1.0)
@@ -351,11 +346,11 @@ end
     @testset "(m) 1st-order trotterize honours periodic" begin
         n = 3
         Random.seed!(91)
-        raw_pbc = find_typical_heisenberg(n, HEIS_COEFFS; batch_size=4,
+        raw_pbc = build_heis_1d(n, HEIS_COEFFS; seed=91, 
             disordering_terms=Vector{Matrix{ComplexF64}}[[Z]],
             disorder_strength=1.0, periodic=true)
         Random.seed!(91)
-        raw_obc = find_typical_heisenberg(n, HEIS_COEFFS; batch_size=4,
+        raw_obc = build_heis_1d(n, HEIS_COEFFS; seed=91, 
             disordering_terms=Vector{Matrix{ComplexF64}}[[Z]],
             disorder_strength=1.0, periodic=false)
         ham_pbc = HamHam(raw_pbc, 1.0)
@@ -373,8 +368,7 @@ end
     # (o) 2D HamHam fed to TrottTrott raises an explicit error.
     # ------------------------------------------------------------------
     @testset "(o) TrottTrott rejects 2D HamHam (qf-91g.3 guard)" begin
-        Random.seed!(91)
-        raw2d = find_typical_2d_heisenberg(2, 3, HEIS_COEFFS; batch_size=4,
+        raw2d = build_tfim_2d(2, 3; J=1.0, h=1.0, seed=91,
             disordering_terms=Vector{Matrix{ComplexF64}}[[Z]],
             disorder_strength=1e-2, periodic_x=true, periodic_y=true)
         ham2d = HamHam(raw2d, 1.0)
@@ -382,12 +376,10 @@ end
         @test_throws ArgumentError TrottTrott(ham2d, 0.5, 0.5, 0.5, 4)
 
         # 1D HamHam (PBC + OBC) still constructs fine
-        Random.seed!(91)
-        raw1d_pbc = find_typical_heisenberg(4, HEIS_COEFFS; batch_size=4,
+        raw1d_pbc = build_heis_1d(4, HEIS_COEFFS; seed=91,
             disordering_terms=Vector{Matrix{ComplexF64}}[[Z]],
             disorder_strength=1.0, periodic=true)
-        Random.seed!(91)
-        raw1d_obc = find_typical_heisenberg(4, HEIS_COEFFS; batch_size=4,
+        raw1d_obc = build_heis_1d(4, HEIS_COEFFS; seed=91, 
             disordering_terms=Vector{Matrix{ComplexF64}}[[Z]],
             disorder_strength=1.0, periodic=false)
         @test TrottTrott(HamHam(raw1d_pbc, 1.0), 0.5, 4) isa TrottTrott
@@ -406,11 +398,11 @@ end
 
         n = 3
         Random.seed!(91)
-        raw_pbc = find_typical_heisenberg(n, HEIS_COEFFS; batch_size=4,
+        raw_pbc = build_heis_1d(n, HEIS_COEFFS; seed=91, 
             disordering_terms=Vector{Matrix{ComplexF64}}[[Z]],
             disorder_strength=1.0, periodic=true)
         Random.seed!(91)
-        raw_obc = find_typical_heisenberg(n, HEIS_COEFFS; batch_size=4,
+        raw_obc = build_heis_1d(n, HEIS_COEFFS; seed=91, 
             disordering_terms=Vector{Matrix{ComplexF64}}[[Z]],
             disorder_strength=1.0, periodic=false)
         ham_pbc = HamHam(raw_pbc, 5.0)

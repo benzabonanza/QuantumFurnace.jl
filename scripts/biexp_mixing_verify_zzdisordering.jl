@@ -43,13 +43,14 @@ for num_qubits in qubit_range
     println("▓"^70)
 
     # ── 1. Generate Hamiltonian with Z+ZZ disordering ─────────────────────
-    println("\n  Generating Hamiltonian (batch_size=200)...")
+    println("\n  Generating Hamiltonian (seed=42)...")
     flush(stdout)
 
-    raw = find_ideal_heisenberg(num_qubits, coeffs;
-        batch_size     = 200,
-        periodic       = true,
-        disordering_terms = [[Z], [Z, Z]],
+    raw = build_heis_1d(num_qubits, coeffs;
+        seed = 42,
+        periodic = true,
+        disordering_terms = Vector{Matrix{ComplexF64}}[[Z], [Z, Z]],
+        disorder_strength = 1.0,
     )
     hamiltonian = HamHam(raw, beta)
 

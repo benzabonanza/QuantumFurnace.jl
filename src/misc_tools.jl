@@ -24,8 +24,9 @@ end
     _load_hamiltonian_bson(path, beta) -> HamHam{Float64}
 
 Low-level BSON loader for the `heis_xxx_zzdisordered_periodic_n*` family
-produced by `hamiltonians/generate_hamiltonians.jl` (find_typical_heisenberg
-with [[Z],[Z,Z]] disorder). The on-disk format is a NamedTuple-typed BSON
+produced by `hamiltonians/generate_hamiltonians.jl` (legacy fixtures) or by
+[`build_heis_1d`] / [`build_tfim_2d`] (current). The on-disk format is a
+NamedTuple-typed BSON
 where `raw[:hamiltonian]` is a NamedTuple with multi-term `disordering_terms`.
 
 Reconstructs via `HamHam(raw_nt, beta)`, which infers `T` from
@@ -41,14 +42,15 @@ end
 Parse a Hamiltonian BSON file into the raw NamedTuple shape expected by
 `HamHam(::NamedTuple, beta)` / `HamHam(::NamedTuple; beta_phys=…)`, **without**
 constructing the HamHam wrapper. Only the NamedTuple-typed schema produced by
-`find_typical_heisenberg` / `find_ideal_heisenberg` is supported.
+[`build_heis_1d`] / [`build_tfim_2d`] (or the legacy fixtures with the same
+schema) is supported.
 
 The returned NamedTuple always carries `rescaling_factor`, so callers in
 β_phys-first mode can compute `β_alg = β_phys · rescaling_factor` before
 invoking the HamHam constructor. Extra fields on the on-disk NamedTuple
-beyond the canonical 11 (e.g. `typicality_distance` from
-`find_typical_heisenberg`) are silently dropped — `HamHam(raw, beta)` only
-consumes the canonical fields anyway.
+beyond the canonical 11 (e.g. `typicality_distance` from legacy
+find_typical fixtures, or `seed`/`Lx`/`Ly`/etc. from the new builders) are
+silently dropped — `HamHam(raw, beta)` only consumes the canonical fields.
 """
 function _parse_hamiltonian_bson(path::String)
     raw = open(path) do io
@@ -76,8 +78,9 @@ shape expected by `HamHam(::NamedTuple, beta)`.
 with `:data` a vector whose first 11 entries match the canonical NamedTuple
 field order: `(matrix, terms, base_coeffs, disordering_terms,
 disordering_coeffs, eigvals, eigvecs, nu_min, shift, rescaling_factor,
-periodic)`. Trailing fields (e.g. `typicality_distance` from
-`find_typical_heisenberg`) are ignored.
+periodic)`. Trailing fields (e.g. `typicality_distance` from legacy
+fixtures, or `seed` / `disorder_strength` / `Lx` / `Ly` / `J` / `h` from
+the current builders) are ignored.
 """
 function _namedtuple_schema_to_raw(ham_raw::Dict)
     cache = IdDict()

@@ -179,11 +179,11 @@ end
     HamHam(raw::NamedTuple, beta) -> HamHam{T}
 
 Construct a fully-initialized HamHam from a NamedTuple of raw data (as returned by
-`find_typical_heisenberg` / `find_ideal_heisenberg`) plus inverse temperature `beta`.
+[`build_heis_1d`] / [`build_tfim_2d`]) plus inverse temperature `beta`.
 
 Infers T from `eltype(raw.eigvals)`. Computes `bohr_freqs`, `bohr_dict`, and `gibbs`
 from the raw eigvals. Extra NamedTuple fields beyond the canonical 11 (e.g.
-`typicality_distance` from `find_typical_heisenberg`) are silently ignored.
+`seed`, `disorder_strength`, `Lx`, `Ly`, `J`, `h` from the builders) are silently ignored.
 """
 function HamHam(raw::NamedTuple, beta::Real)
     T = eltype(raw.eigvals)
@@ -241,7 +241,7 @@ spectrum stored in `ham.data` / `ham.eigvals`). The relation is
     β_alg = β_phys · ham.rescaling_factor.
 
 `ham.rescaling_factor ≈ 2(λ_max − λ_min)/(1 − ε)` is set at construction by
-`find_ideal_heisenberg` to map the physical spectrum into `[0, 0.45]`. For
+[`build_heis_1d`] / [`build_tfim_2d`] to map the physical spectrum into `[0, 0.45]`. For
 extensive Hamiltonians (Heisenberg, TFIM) it grows roughly linearly with the
 qubit count `n`, so a sweep "at fixed `β_alg` across n" silently varies
 `β_phys` by the same factor — and vice versa. Use these helpers whenever
@@ -255,8 +255,8 @@ beta_phys(ham::HamHam{T}, beta_alg::Real) where {T<:AbstractFloat} = T(beta_alg 
     _unpack_disordering_fields(raw::NamedTuple, T) -> (terms, coeffs)
 
 Unpack the multi-term `disordering_terms` / `disordering_coeffs` NamedTuple
-fields produced by `find_typical_heisenberg` / `find_ideal_heisenberg` into
-the `Vector{Vector{Matrix{Complex{T}}}}` / `Vector{Vector{T}}` shape that the
+fields produced by [`build_heis_1d`] / [`build_tfim_2d`] into the
+`Vector{Vector{Matrix{Complex{T}}}}` / `Vector{Vector{T}}` shape that the
 HamHam struct stores. Returns `(nothing, nothing)` when the NamedTuple has no
 `disordering_terms` key or when the field is `nothing`.
 """
@@ -269,408 +269,164 @@ function _unpack_disordering_fields(raw::NamedTuple, ::Type{T}) where {T}
     return (terms, coeffs)
 end
 
-"""find_ideal_heisenberg(num_qubits::Int, coeffs::Vector{Float64};
-    batch_size::Int=1, periodic::Bool=true,
-    disordering_terms=[[Z]], disorder_strength=1.0) -> NamedTuple
 
-    Constructs and optimizes a disordered 1D Heisenberg Hamiltonian to maximize the minimum level spacing (smallest Bohr frequency).
-
-    The function generates `batch_size` random realizations of the disordering fields. For each realization, it constructs the Hamiltonian:
-    ```math
-    H = H_{base} + H_{disorder}
-    ```
-    where ``H_{base}`` is the Heisenberg chain defined by `coeffs` (XX, YY, ZZ interaction strengths) and ``H_{disorder}`` is the sum of all disordering terms with random per-site coefficients drawn from `[0, disorder_strength)`.
-
-    The Hamiltonian is rescaled and shifted to ensure the spectrum fits within specific bounds.
-
-    # Arguments
-    - `num_qubits`: The number of sites on the spin chain.
-    - `coeffs`: A vector of the uniform interaction strengths for ``\\sigma_x \\sigma_x``, ``\\sigma_y \\sigma_y``, and ``\\sigma_z \\sigma_z`` terms respectively.
-
-    # Keywords
-    - `batch_size`: The number of random disorder configurations to sample (default: 1).
-    - `periodic`: If `true`, applies periodic boundary conditions to the chain.
-    - `disordering_terms`: A vector of Pauli terms for disorder, e.g. `[[Z]]` (default) or `[[Z], [Z,Z]]`.
-      Each term gets its own random per-site coefficients.
-    - `disorder_strength`: Scale factor for the random coefficients (default 1.0). Use ε ≈ 1e-3
-      for "clean + ε-disorder" Hamiltonians where disorder only lifts exact degeneracies.
-
-    # Returns
-    - `NamedTuple`: Raw Hamiltonian data with fields: `matrix`, `terms`, `base_coeffs`,
-      `disordering_terms`, `disordering_coeffs`, `eigvals`, `eigvecs`, `nu_min`, `shift`,
-      `rescaling_factor`, `periodic`. Use `HamHam(raw, beta)` to construct a fully-initialized HamHam.
 """
-function find_ideal_heisenberg(num_qubits::Int64,
-    coeffs::Vector{Float64}; batch_size::Int64 = 1, periodic::Bool = true,
-    disordering_terms::Vector{Vector{Matrix{ComplexF64}}} = [[Z]],
-    disorder_strength::Float64 = 1.0)
+    build_heis_1d(num_qubits, coeffs; seed, periodic=true,
+        disordering_terms=[[Z], [Z,Z]], disorder_strength=0.1) -> NamedTuple
 
-    terms = [[X, X], [Y, Y], [Z, Z]]
-    base_hamiltonian = _construct_base_ham(terms, coeffs, num_qubits; periodic=periodic)
+Build ONE disordered 1D Heisenberg fixture at the given random seed. No batch,
+no spectral-typicality selector — the disorder draw is fully reproducible
+from `seed`.
 
-    build_disorder = sample_coeffs -> _construct_disordering_terms(disordering_terms,
-        sample_coeffs, num_qubits; periodic=periodic)
+Produces a NamedTuple with fields
+`matrix, terms, base_coeffs, disordering_terms, disordering_coeffs, eigvals,
+eigvecs, nu_min, shift, rescaling_factor, periodic, seed, disorder_strength`
+so that `HamHam(raw, β)` / `HamHam(raw; beta_phys=β)` accept it unchanged
+(extra fields beyond the canonical 11 are silently ignored).
 
-    return _optimize_disordered_heisenberg(base_hamiltonian, terms, coeffs, num_qubits,
-        disordering_terms, build_disorder; batch_size=batch_size,
-        periodic=periodic, disorder_strength=disorder_strength)
-end
+# Methodology
+Downstream analyses that want a disorder average should generate N
+realisations across N seeds, run the observable of interest at each, and
+report median + IQR / min-max band. The qf-yi4 decision (2026-05-15)
+deprecated the prior find_typical / find_ideal spectral-selector
+approach because its "typicality" criterion (L² to bandwidth-normalised
+median spectrum) has no physical justification for any specific
+observable.
 
-"""find_ideal_2d_heisenberg(Lx::Int, Ly::Int, coeffs::Vector{Float64};
-    batch_size::Int=1, periodic_x::Bool=true, periodic_y::Bool=true,
-    disordering_terms=[[Z]], disorder_strength=1e-3) -> NamedTuple
+# Arguments
+- `num_qubits`: chain length.
+- `coeffs`: `[J_x, J_y, J_z]` uniform exchange couplings.
 
-    Constructs and optimizes a 2D anisotropic Heisenberg Hamiltonian on an `Lx × Ly`
-    square lattice. Bonds are placed along the right neighbour (x-direction) and the
-    up neighbour (y-direction); periodic boundary conditions wrap each direction.
-
-    The Hamiltonian is
-    ```math
-    H = \\sum_{\\langle i,j\\rangle} \\big(J_x X_i X_j + J_y Y_i Y_j + J_z Z_i Z_j\\big)
-        + \\sum_{q,k} c_{k,q} P^{(k)}_q,
-    ```
-    where ``\\langle i,j\\rangle`` runs over nearest-neighbour bonds in the 2D lattice.
-    For Ising-anisotropic couplings (``J_z > J_x = J_y``) the bulk model has a finite-
-    temperature thermal phase transition into a Néel-ordered ground state. The 2D
-    isotropic model (XXX) does not exhibit a finite-T transition due to Mermin–Wagner.
-
-    Site-to-qubit ordering: site ``(i, j)`` with ``1 \\le i \\le L_x``, ``1 \\le j \\le L_y``
-    is mapped to qubit index ``q = (i-1) \\, L_y + (j-1) + 1``. Adjacent ``j`` values
-    correspond to consecutive qubit indices; adjacent ``i`` values are separated by ``L_y``.
-
-    # Arguments
-    - `Lx`, `Ly`: Lattice dimensions; total qubit count is `num_qubits = Lx * Ly`.
-    - `coeffs`: Uniform exchange couplings ``[J_x, J_y, J_z]``.
-
-    # Keywords
-    - `batch_size`: Random-disorder realisations to sample (default 1). For very weak
-      disorder the optimisation surface is flat — use `batch_size ≥ 200`.
-    - `periodic_x`, `periodic_y`: Periodic boundary conditions per direction.
-    - `disordering_terms`: Pauli terms used as on-site/two-site disorder (default `[[Z]]`).
-    - `disorder_strength`: Per-coefficient scale (default 1e-3 for the "clean + ε" use case).
-
-    # Returns
-    - `NamedTuple` with the same schema as `find_ideal_heisenberg` so it is
-      compatible with `HamHam(raw, beta)`. The boolean `periodic` field is set to
-      `periodic_x && periodic_y`.
+# Keywords
+- `seed`: MersenneTwister seed for the per-site disorder draw.
+- `periodic`: 1D-chain BCs for both base and 2-site disorder.
+- `disordering_terms`: Pauli terms for disorder, e.g. `[[Z], [Z, Z]]` (default).
+- `disorder_strength`: per-coefficient amplitude `c ∈ [0, disorder_strength)`.
 """
-function find_ideal_2d_heisenberg(Lx::Int64, Ly::Int64,
-    coeffs::Vector{Float64}; batch_size::Int64 = 1,
-    periodic_x::Bool = true, periodic_y::Bool = true,
-    disordering_terms::Vector{Vector{Matrix{ComplexF64}}} = [[Z]],
-    disorder_strength::Float64 = 1e-3)
+function build_heis_1d(num_qubits::Int, coeffs::Vector{Float64};
+        seed::Int,
+        periodic::Bool=true,
+        disordering_terms::Vector{Vector{Matrix{ComplexF64}}}=Vector{Matrix{ComplexF64}}[[Z], [Z, Z]],
+        disorder_strength::Float64=0.1)
 
-    if Lx < 1 || Ly < 1
-        throw(ArgumentError("Lx and Ly must be at least 1; got Lx=$Lx, Ly=$Ly"))
+    base_terms = Vector{Matrix{ComplexF64}}[[X, X], [Y, Y], [Z, Z]]
+    base_hamiltonian = _construct_base_ham(base_terms, coeffs, num_qubits; periodic=periodic)
+
+    rng = MersenneTwister(seed)
+    sample_coeffs = [zeros(Float64, num_qubits) for _ in disordering_terms]
+    for dc in sample_coeffs
+        rand!(rng, dc)
+        dc .*= disorder_strength
     end
+    disordering_ham = _construct_disordering_terms(disordering_terms, sample_coeffs, num_qubits;
+        periodic=periodic)
 
-    num_qubits = Lx * Ly
-    terms = [[X, X], [Y, Y], [Z, Z]]
-    base_hamiltonian = _construct_2d_heisenberg_base(Lx, Ly, terms, coeffs;
-        periodic_x=periodic_x, periodic_y=periodic_y)
-
-    build_disorder = sample_coeffs -> _construct_disordering_terms_2d(Lx, Ly,
-        disordering_terms, sample_coeffs;
-        periodic_x=periodic_x, periodic_y=periodic_y)
-
-    return _optimize_disordered_heisenberg(base_hamiltonian, terms, coeffs, num_qubits,
-        disordering_terms, build_disorder; batch_size=batch_size,
-        periodic=(periodic_x && periodic_y), disorder_strength=disorder_strength)
-end
-
-# Shared inner kernel for find_ideal_heisenberg and find_ideal_2d_heisenberg:
-# generate `batch_size` random realisations of the disorder field, keep the one
-# with the largest minimum Bohr gap after rescaling/shifting.
-#
-# `build_disorder(sample_coeffs)` is a closure injected by the caller. 1D callers
-# use `_construct_disordering_terms(..., periodic=periodic)`; 2D callers use
-# `_construct_disordering_terms_2d(..., periodic_x=..., periodic_y=...)`. The
-# kernel itself stays geometry-agnostic.
-function _optimize_disordered_heisenberg(base_hamiltonian::Hermitian{ComplexF64},
-    terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64},
-    num_qubits::Int64, disordering_terms::Vector{Vector{Matrix{ComplexF64}}},
-    build_disorder::Function;
-    batch_size::Int64, periodic::Bool, disorder_strength::Float64)
-
-    best_nu_min = -1.0
-    best_ham_matrix = Matrix{ComplexF64}(undef, 0, 0)
-    best_eigvals = Float64[]
-    best_eigvecs = Matrix{ComplexF64}(undef, 0, 0)
-    best_shift = 0.0
-    best_rescaling_factor = 1.0
-    best_disordering_coeffs = [Float64[] for _ in disordering_terms]
-    all_disordering_coeffs = [zeros(Float64, num_qubits) for _ in disordering_terms]
-
-    p = Progress(batch_size; desc="Optimizing disordered Heisenberg Hamiltonian...")
-    for _ in 1:batch_size
-        for dc in all_disordering_coeffs
-            rand!(dc)
-            dc .*= disorder_strength
-        end
-        disordering_ham = build_disorder(all_disordering_coeffs)
-
-        total_ham = base_hamiltonian + disordering_ham
-        rescaling_factor, shift = _rescaling_and_shift_factors(total_ham)
-
-        rescaled_ham = (total_ham ./ rescaling_factor) + shift * I
-
-        rescaled_eigvals, rescaled_eigvecs = eigen(Hermitian(rescaled_ham))
-        nu_min = minimum(diff(rescaled_eigvals))
-        if nu_min > best_nu_min
-            best_nu_min = nu_min
-            best_ham_matrix = copy(rescaled_ham)
-            best_disordering_coeffs = [copy(dc) for dc in all_disordering_coeffs]
-            best_eigvals = rescaled_eigvals
-            best_eigvecs = rescaled_eigvecs
-            best_shift = shift
-            best_rescaling_factor = rescaling_factor
-
-            next!(p, showvalues = [(:nu_min, best_nu_min)])
-        else
-            next!(p)
-        end
-    end
-
-    if best_nu_min < 0
-        error("Optimization failed to find a valid Hamiltonian")
-    end
-
-    return (
-        matrix = best_ham_matrix,
-        terms = terms,
-        base_coeffs = coeffs ./ best_rescaling_factor,
-        disordering_terms = disordering_terms,
-        disordering_coeffs = [dc ./ best_rescaling_factor for dc in best_disordering_coeffs],
-        eigvals = best_eigvals,
-        eigvecs = best_eigvecs,
-        nu_min = best_nu_min,
-        shift = best_shift,
-        rescaling_factor = best_rescaling_factor,
-        periodic = periodic,
-    )
-end
-
-"""find_typical_heisenberg(num_qubits::Int, coeffs::Vector{Float64};
-    batch_size::Int=1000, periodic::Bool=true,
-    disordering_terms=[[Z]], disorder_strength=1.0) -> NamedTuple
-
-    Construct a 1D disordered Heisenberg Hamiltonian whose normalised sorted spectrum
-    is **closest** to the elementwise median sorted spectrum across `batch_size`
-    random disorder realisations.
-
-    This selects a "typical" realisation rather than an extremal one. Whereas
-    `find_ideal_heisenberg` maximises the minimum Bohr gap (and so can return outlier
-    spectra with anomalously large *or* small first gaps at small `n`),
-    `find_typical_heisenberg` picks the realisation whose entire sorted spectrum is
-    closest in L² to the ensemble median — i.e. the L²-Wasserstein-spectral-median.
-
-    Per-sample work is identical to `find_ideal_heisenberg`: build `H_base + H_disorder`,
-    rescale and shift the spectrum to the canonical algorithm range, then diagonalise.
-    After the sweep, the elementwise median of the sorted, bandwidth-normalised
-    spectra defines the consensus; the winning realisation is the one whose
-    spectrum minimises Euclidean distance to that median.
-
-    The returned NamedTuple has the same schema as `find_ideal_heisenberg`, plus an
-    extra diagnostic field `typicality_distance` (the L² distance of the chosen
-    sample's normalised spectrum to the ensemble-median spectrum). Use
-    `HamHam(raw, beta)` to wrap as a `HamHam` — extra fields are ignored by the
-    constructor.
-
-    # Arguments
-    - `num_qubits`: Spin-chain length.
-    - `coeffs`: Uniform exchange couplings ``[J_x, J_y, J_z]``.
-
-    # Keywords
-    - `batch_size`: Number of disorder realisations to sample (default 1000). Must
-      be ≥ 2 for the W₂ criterion to be meaningful; values ≥ a few hundred are
-      recommended for a stable median.
-    - `periodic`, `disordering_terms`, `disorder_strength`: same as `find_ideal_heisenberg`.
-
-    # Returns
-    NamedTuple with fields `matrix`, `terms`, `base_coeffs`, `disordering_terms`,
-    `disordering_coeffs`, `eigvals`, `eigvecs`, `nu_min`, `shift`, `rescaling_factor`,
-    `periodic`, `typicality_distance`.
-"""
-function find_typical_heisenberg(num_qubits::Int64,
-    coeffs::Vector{Float64}; batch_size::Int64 = 1000, periodic::Bool = true,
-    disordering_terms::Vector{Vector{Matrix{ComplexF64}}} = [[Z]],
-    disorder_strength::Float64 = 1.0)
-
-    terms = [[X, X], [Y, Y], [Z, Z]]
-    base_hamiltonian = _construct_base_ham(terms, coeffs, num_qubits; periodic=periodic)
-
-    build_disorder = sample_coeffs -> _construct_disordering_terms(disordering_terms,
-        sample_coeffs, num_qubits; periodic=periodic)
-
-    return _optimize_typical_heisenberg(base_hamiltonian, terms, coeffs, num_qubits,
-        disordering_terms, build_disorder; batch_size=batch_size,
-        periodic=periodic, disorder_strength=disorder_strength)
-end
-
-"""find_typical_2d_heisenberg(Lx::Int, Ly::Int, coeffs::Vector{Float64};
-    batch_size::Int=1000, periodic_x::Bool=true, periodic_y::Bool=true,
-    disordering_terms=[[Z]], disorder_strength=1e-3) -> NamedTuple
-
-    2D analogue of [`find_typical_heisenberg`](@ref) on an `Lx × Ly` lattice with
-    nearest-neighbour Heisenberg bonds in both directions. The W₂-spectral-median
-    selection criterion is identical; see `find_typical_heisenberg` for details.
-
-    Returns the same NamedTuple schema as `find_ideal_2d_heisenberg`, plus
-    `typicality_distance`.
-"""
-function find_typical_2d_heisenberg(Lx::Int64, Ly::Int64,
-    coeffs::Vector{Float64}; batch_size::Int64 = 1000,
-    periodic_x::Bool = true, periodic_y::Bool = true,
-    disordering_terms::Vector{Vector{Matrix{ComplexF64}}} = [[Z]],
-    disorder_strength::Float64 = 1e-3)
-
-    if Lx < 1 || Ly < 1
-        throw(ArgumentError("Lx and Ly must be at least 1; got Lx=$Lx, Ly=$Ly"))
-    end
-
-    num_qubits = Lx * Ly
-    terms = [[X, X], [Y, Y], [Z, Z]]
-    base_hamiltonian = _construct_2d_heisenberg_base(Lx, Ly, terms, coeffs;
-        periodic_x=periodic_x, periodic_y=periodic_y)
-
-    build_disorder = sample_coeffs -> _construct_disordering_terms_2d(Lx, Ly,
-        disordering_terms, sample_coeffs;
-        periodic_x=periodic_x, periodic_y=periodic_y)
-
-    return _optimize_typical_heisenberg(base_hamiltonian, terms, coeffs, num_qubits,
-        disordering_terms, build_disorder; batch_size=batch_size,
-        periodic=(periodic_x && periodic_y), disorder_strength=disorder_strength)
-end
-
-# Shared inner kernel for find_typical_heisenberg and find_typical_2d_heisenberg.
-# Mirrors _optimize_disordered_heisenberg but with a W₂-spectral-median selection
-# criterion in place of the greedy max-min-gap criterion. Per-sample work is
-# identical (build → rescale → diagonalise); only the across-sample selection
-# differs.
-#
-# `build_disorder(sample_coeffs)` is a closure injected by the caller. 1D callers
-# use `_construct_disordering_terms(..., periodic=periodic)`; 2D callers use
-# `_construct_disordering_terms_2d(..., periodic_x=..., periodic_y=...)`. The
-# kernel stays geometry-agnostic.
-function _optimize_typical_heisenberg(base_hamiltonian::Hermitian{ComplexF64},
-    terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64},
-    num_qubits::Int64, disordering_terms::Vector{Vector{Matrix{ComplexF64}}},
-    build_disorder::Function;
-    batch_size::Int64, periodic::Bool, disorder_strength::Float64)
-
-    if batch_size < 2
-        throw(ArgumentError(
-            "find_typical_* requires batch_size >= 2 (got $batch_size); the W₂ selector " *
-            "compares against an ensemble median and needs at least two samples"))
-    end
-
-    d = 2^num_qubits
-
-    # Per-sample storage: normalised sorted spectra (d × batch_size) and disorder
-    # coefficients. We only need eigvals during the sweep — full eigen()/eigvecs
-    # is computed once at the end on the chosen sample.
-    normalized_specs = Matrix{Float64}(undef, d, batch_size)
-    disordering_coeffs_by_sample = Vector{Vector{Vector{Float64}}}(undef, batch_size)
-    valid_mask = falses(batch_size)
-
-    p = Progress(batch_size; desc="Sampling Hamiltonians for W2-typical selection...")
-    for k in 1:batch_size
-        sample_coeffs = [zeros(Float64, num_qubits) for _ in disordering_terms]
-        for dc in sample_coeffs
-            rand!(dc)
-            dc .*= disorder_strength
-        end
-        disordering_ham = build_disorder(sample_coeffs)
-        total_ham = base_hamiltonian + disordering_ham
-        rescaling_factor, shift = _rescaling_and_shift_factors(total_ham)
-        rescaled_ham = (total_ham ./ rescaling_factor) + shift * I
-
-        # eigvals returns the spectrum already sorted ascending
-        eigvals_k = eigvals(Hermitian(rescaled_ham))
-
-        bw = eigvals_k[end] - eigvals_k[1]
-        if bw > 1e-14
-            @inbounds for i in 1:d
-                normalized_specs[i, k] = (eigvals_k[i] - eigvals_k[1]) / bw
-            end
-            valid_mask[k] = true
-        else
-            # Degenerate (e.g. disorder_strength == 0 and a symmetric base):
-            # exclude from the median / argmin
-            @inbounds for i in 1:d
-                normalized_specs[i, k] = NaN
-            end
-        end
-
-        disordering_coeffs_by_sample[k] = sample_coeffs
-        next!(p)
-    end
-
-    valid_count = sum(valid_mask)
-    if valid_count < 2
-        error("Only $valid_count valid (non-degenerate) samples among $batch_size; " *
-              "cannot compute W₂-spectral-median (increase batch_size or disorder_strength)")
-    end
-
-    # Elementwise median of the normalised sorted spectra across valid samples.
-    # By bandwidth-normalisation, median_spec[1] == 0 and median_spec[end] == 1,
-    # so the selection is driven by the interior d-2 levels.
-    median_spec = Vector{Float64}(undef, d)
-    buf = Vector{Float64}(undef, valid_count)
-    @inbounds for i in 1:d
-        j = 0
-        for k in 1:batch_size
-            if valid_mask[k]
-                j += 1
-                buf[j] = normalized_specs[i, k]
-            end
-        end
-        median_spec[i] = median(buf)
-    end
-
-    # argmin L² distance to median_spec
-    best_idx = 0
-    best_dist = Inf
-    @inbounds for k in 1:batch_size
-        valid_mask[k] || continue
-        dist_sq = 0.0
-        for i in 1:d
-            diff_i = normalized_specs[i, k] - median_spec[i]
-            dist_sq += diff_i * diff_i
-        end
-        dist_k = sqrt(dist_sq)
-        if dist_k < best_dist
-            best_dist = dist_k
-            best_idx = k
-        end
-    end
-    @assert best_idx > 0  # guaranteed by valid_count >= 2
-
-    # Reconstruct the chosen sample to obtain eigvecs (avoids storing d^2 complex
-    # entries per sample during the sweep).
-    best_disordering_coeffs = disordering_coeffs_by_sample[best_idx]
-    disordering_ham = build_disorder(best_disordering_coeffs)
-    total_ham = base_hamiltonian + disordering_ham
+    total_ham = Hermitian(Matrix(base_hamiltonian) + Matrix(disordering_ham))
     rescaling_factor, shift = _rescaling_and_shift_factors(total_ham)
-    rescaled_ham = (total_ham ./ rescaling_factor) + shift * I
+    rescaled_ham = (Matrix(total_ham) ./ rescaling_factor) + shift * I(2^num_qubits)
     rescaled_eigvals, rescaled_eigvecs = eigen(Hermitian(rescaled_ham))
     nu_min = minimum(diff(rescaled_eigvals))
 
     return (
         matrix = rescaled_ham,
-        terms = terms,
+        terms = base_terms,
         base_coeffs = coeffs ./ rescaling_factor,
         disordering_terms = disordering_terms,
-        disordering_coeffs = [dc ./ rescaling_factor for dc in best_disordering_coeffs],
+        disordering_coeffs = [dc ./ rescaling_factor for dc in sample_coeffs],
         eigvals = rescaled_eigvals,
         eigvecs = rescaled_eigvecs,
         nu_min = nu_min,
         shift = shift,
         rescaling_factor = rescaling_factor,
         periodic = periodic,
-        typicality_distance = best_dist,
+        seed = seed,
+        disorder_strength = disorder_strength,
     )
 end
+
+"""
+    build_tfim_2d(Lx, Ly; J=1.0, h=1.0, seed, periodic_x=true, periodic_y=true,
+        disordering_terms=[[Z], [Z,Z]], disorder_strength=1e-3) -> NamedTuple
+
+Build ONE 2D transverse-field Ising fixture
+    H = −J Σ_{<i,j>} Z_i Z_j − h Σ_i X_i + ε·(per-site Z + per-bond ZZ)
+at the given seed. Two-site disorder rides actual nearest-neighbour
+lattice bonds via [`_construct_disordering_terms_2d`] (right + up
+neighbour per site), respecting `periodic_x` / `periodic_y` independently.
+
+Schema matches [`build_heis_1d`] plus `Lx, Ly, J, h` diagnostic fields.
+`HamHam(raw, β)` / `HamHam(raw; beta_phys=β)` accept it unchanged.
+
+# Operating-point references (see memory `tc_2d_tfim_phase_diagram.md`)
+- Disordered: `h > h_c ≈ 3.044` puts the ground state in the
+  paramagnetic phase at any temperature (e.g. `h = 3.5`).
+- Ordered:    `h < h_c`, `β_phys > 1/T_c(h)` puts the system in the
+  symmetry-broken phase (e.g. `h = 1.0`, `β_phys ≥ 2.0`, `T_c(1) ≈ 2.07`).
+
+# Keywords
+- `J`: ZZ exchange coupling (negative-sign convention: −J Σ ZZ).
+- `h`: transverse field magnitude (negative-sign convention: −h Σ X).
+- `seed`: MersenneTwister seed.
+- `periodic_x`, `periodic_y`: per-direction BCs.
+- `disordering_terms`, `disorder_strength`: as in [`build_heis_1d`], placed on
+   the 2D lattice via the 2D builder.
+"""
+function build_tfim_2d(Lx::Int, Ly::Int;
+        J::Float64=1.0, h::Float64=1.0,
+        seed::Int,
+        periodic_x::Bool=true, periodic_y::Bool=true,
+        disordering_terms::Vector{Vector{Matrix{ComplexF64}}}=Vector{Matrix{ComplexF64}}[[Z], [Z, Z]],
+        disorder_strength::Float64=1e-3)
+
+    if Lx < 1 || Ly < 1
+        throw(ArgumentError("Lx and Ly must be at least 1; got Lx=$Lx, Ly=$Ly"))
+    end
+
+    num_qubits = Lx * Ly
+    H_bond = _construct_2d_heisenberg_base(Lx, Ly,
+        Vector{Matrix{ComplexF64}}[[Z, Z]], [-J];
+        periodic_x=periodic_x, periodic_y=periodic_y)
+    # Transverse field as a uniform per-site X coefficient (single-site, no BC issue).
+    field_coeffs = fill(-h, num_qubits)
+    H_field = _construct_disordering_terms(
+        Vector{Matrix{ComplexF64}}[[X]], [field_coeffs], num_qubits)
+    base_clean = Hermitian(Matrix(H_bond) + Matrix(H_field))
+
+    rng = MersenneTwister(seed)
+    sample_coeffs = [zeros(Float64, num_qubits) for _ in disordering_terms]
+    for dc in sample_coeffs
+        rand!(rng, dc)
+        dc .*= disorder_strength
+    end
+    disordering_ham = _construct_disordering_terms_2d(Lx, Ly,
+        disordering_terms, sample_coeffs;
+        periodic_x=periodic_x, periodic_y=periodic_y)
+
+    total_ham = Hermitian(Matrix(base_clean) + Matrix(disordering_ham))
+    rescaling_factor, shift = _rescaling_and_shift_factors(total_ham)
+    rescaled_ham = (Matrix(total_ham) ./ rescaling_factor) + shift * I(2^num_qubits)
+    rescaled_eigvals, rescaled_eigvecs = eigen(Hermitian(rescaled_ham))
+    nu_min = minimum(diff(rescaled_eigvals))
+
+    return (
+        matrix = rescaled_ham,
+        terms = Vector{Matrix{ComplexF64}}[[Z, Z], [X]],
+        base_coeffs = [-J / rescaling_factor, -h / rescaling_factor],
+        disordering_terms = disordering_terms,
+        disordering_coeffs = [dc ./ rescaling_factor for dc in sample_coeffs],
+        eigvals = rescaled_eigvals,
+        eigvecs = rescaled_eigvecs,
+        nu_min = nu_min,
+        shift = shift,
+        rescaling_factor = rescaling_factor,
+        periodic = periodic_x && periodic_y,
+        seed = seed,
+        disorder_strength = disorder_strength,
+        Lx = Lx, Ly = Ly,
+        J = J, h = h,
+    )
+end
+
 
 function _construct_base_ham(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64},
     num_qubits::Int64; periodic::Bool = true)
@@ -801,12 +557,11 @@ placements, so OBC fixtures get an OBC disordering Hamiltonian.
   - `periodic=false`: drops the wrap-around bond.
 
 # 2D caveat
-This is a **1D-chain builder**. When called from a 2D fixture builder
-(`find_typical_2d_heisenberg`, `find_ideal_2d_heisenberg`) with a two-site
-disordering term, the term gets placed on 1D-chain bonds `(q, q+1)` on the
-linearised site index — NOT on the actual 2D lattice bonds. For 2D fixtures
-that need disorder on lattice bonds, use [`_construct_disordering_terms_2d`].
-Single-site disorder in 2D is unaffected (site-local).
+This is a **1D-chain builder**. Calling it directly with a 2D HamHam and
+two-site disorder places the disorder on 1D-chain bonds `(q, q+1)` on
+the linearised site index — NOT on the actual 2D lattice bonds. The 2D
+fixture builder [`build_tfim_2d`] uses [`_construct_disordering_terms_2d`]
+instead. Single-site disorder is unaffected (site-local).
 """
 function _construct_disordering_terms(terms::Vector{Vector{Matrix{ComplexF64}}},
     coeffs::Vector{Vector{Float64}}, num_qubits::Int64; periodic::Bool=true)

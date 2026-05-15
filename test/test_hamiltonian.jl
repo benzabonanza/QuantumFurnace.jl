@@ -1,11 +1,12 @@
 """
 Tests for Heisenberg Hamiltonian builders in `src/hamiltonian.jl`.
 
-Covers the new 2D builders (`_pad_two_site_op`, `_construct_2d_heisenberg_base`,
-`find_ideal_2d_heisenberg`) introduced in the Phase 48 thesis-numerics
-Hamiltonian-generation task (qf-k1u.5), plus a sanity check on the refactored
-`find_ideal_heisenberg` (the 1D variant must keep working with the new
-`disorder_strength` keyword and the shared inner kernel).
+Covers the underlying primitives (`_pad_two_site_op`,
+`_construct_2d_heisenberg_base`, `_construct_disordering_terms*`) plus
+the public seed-driven builders [`build_heis_1d`] and [`build_tfim_2d`]
+that replaced the find_typical_* / find_ideal_* spectral-selector path
+(qf-yi4, 2026-05-15). HamHam constructor coverage (direct, single-term,
+multi-term with periodic) closes out the file.
 """
 
 using LinearAlgebra
@@ -126,61 +127,117 @@ using Statistics: median
         @test sum(abs2, Matrix(ham_pbc_3)) ≈ 18 * 2^9  rtol=1e-10
     end
 
-    # find_ideal_2d_heisenberg ---------------------------------------------------------
-    @testset "find_ideal_2d_heisenberg: returns a valid raw NamedTuple" begin
-        raw = find_ideal_2d_heisenberg(2, 2, [1.0, 1.0, 1.5];
-            batch_size=10, periodic_x=true, periodic_y=true,
-            disordering_terms=[[Z]], disorder_strength=1e-2)
+    # build_heis_1d / build_tfim_2d (qf-yi4 replacements for find_*) -----------------
+    @testset "build_heis_1d: returns a valid raw NamedTuple" begin
+        raw = build_heis_1d(3, [1.0, 1.0, 1.0]; seed=20260515,
+            disordering_terms=Vector{Matrix{ComplexF64}}[[Z]], disorder_strength=1.0)
         @test raw.nu_min > 0
-        @test size(raw.matrix) == (16, 16)
-        @test size(raw.eigvecs) == (16, 16)
-        @test length(raw.eigvals) == 16
+        @test size(raw.matrix) == (8, 8)
+        @test size(raw.eigvecs) == (8, 8)
+        @test length(raw.eigvals) == 8
         @test raw.periodic === true
+        @test length(raw.disordering_terms) == 1
         @test length(raw.disordering_coeffs) == 1
-        @test length(raw.disordering_coeffs[1]) == 4
-
-        # Spectrum lives in [0, 0.5*(1-eps)] = [0, 0.45] after the rescaling/shift step
+        @test length(raw.disordering_coeffs[1]) == 3
+        @test raw.seed === 20260515
+        @test raw.disorder_strength == 1.0
         @test minimum(raw.eigvals) ≥ -1e-10
         @test maximum(raw.eigvals) ≤ 0.45 + 1e-10
-
-        # Hermiticity preserved through the pipeline
         @test isapprox(raw.matrix, raw.matrix'; atol=1e-12)
     end
 
-    @testset "find_ideal_2d_heisenberg: HamHam wrap end-to-end" begin
-        raw = find_ideal_2d_heisenberg(2, 2, [1.0, 1.0, 1.5]; batch_size=5)
+    @testset "build_heis_1d: HamHam wrap end-to-end (extra fields ignored)" begin
+        raw = build_heis_1d(3, [1.0, 1.0, 1.0]; seed=20260516, disorder_strength=1.0)
         ham = HamHam(raw, 1.0)
         @test ham isa HamHam{Float64}
-        @test size(ham.data) == (16, 16)
+        @test size(ham.data) == (8, 8)
         @test ham.nu_min > 0
         @test isapprox(tr(ham.gibbs), 1.0; atol=1e-10)
     end
 
-    @testset "find_ideal_2d_heisenberg: argument validation" begin
-        @test_throws ArgumentError find_ideal_2d_heisenberg(0, 2, [1.0, 1.0, 1.0])
-        @test_throws ArgumentError find_ideal_2d_heisenberg(2, 0, [1.0, 1.0, 1.0])
+    @testset "build_heis_1d: same seed gives identical fixture" begin
+        raw_a = build_heis_1d(4, [1.0, 1.0, 1.0]; seed=20260517,
+            disordering_terms=Vector{Matrix{ComplexF64}}[[Z], [Z, Z]],
+            disorder_strength=0.5)
+        raw_b = build_heis_1d(4, [1.0, 1.0, 1.0]; seed=20260517,
+            disordering_terms=Vector{Matrix{ComplexF64}}[[Z], [Z, Z]],
+            disorder_strength=0.5)
+        @test raw_a.eigvals ≈ raw_b.eigvals
+        @test isapprox(raw_a.matrix, raw_b.matrix; atol=1e-14)
     end
 
-    # find_ideal_heisenberg backward compatibility (refactored shared inner kernel) -----
-    @testset "find_ideal_heisenberg: still works after refactor (default disorder_strength=1.0)" begin
-        raw = find_ideal_heisenberg(3, [1.0, 1.0, 1.0]; batch_size=5,
-            disordering_terms=[[Z], [Z, Z]])
-        @test raw.nu_min > 0
-        @test size(raw.matrix) == (8, 8)
-        @test raw.periodic === true
-        @test length(raw.disordering_terms) == 2
-        @test length(raw.disordering_coeffs) == 2
+    @testset "build_heis_1d: different seeds give different fixtures" begin
+        raw_a = build_heis_1d(4, [1.0, 1.0, 1.0]; seed=1, disorder_strength=0.5)
+        raw_b = build_heis_1d(4, [1.0, 1.0, 1.0]; seed=2, disorder_strength=0.5)
+        @test !isapprox(raw_a.matrix, raw_b.matrix; atol=1e-8)
     end
 
-    @testset "find_ideal_heisenberg: disorder_strength scales the per-coefficient magnitude" begin
-        # Run with strength=1e-2 — every disordering coefficient is bounded by ε / rescaling_factor.
-        # Rescaling typically divides by the spectrum width which is O(n) for n=4 Heisenberg, so
-        # the scaled coefficients are at most ~1e-2 / O(n) ≪ 1.
-        raw = find_ideal_heisenberg(3, [1.0, 1.0, 1.0]; batch_size=5,
-            disordering_terms=[[Z]], disorder_strength=1e-2)
-        # raw.disordering_coeffs[1] is rescaled, so all entries ≤ 1e-2 / rescaling_factor < 1e-2
+    @testset "build_heis_1d: disorder_strength bounds the per-coefficient magnitude" begin
+        raw = build_heis_1d(3, [1.0, 1.0, 1.0]; seed=20260518,
+            disordering_terms=Vector{Matrix{ComplexF64}}[[Z]], disorder_strength=1e-2)
+        # raw.disordering_coeffs is the *rescaled* version; each rescaled entry is at
+        # most `disorder_strength / rescaling_factor` < 1e-2.
         @test all(abs.(raw.disordering_coeffs[1]) .≤ 1e-2)
     end
+
+    @testset "build_heis_1d: OBC vs PBC produce different fixtures" begin
+        raw_pbc = build_heis_1d(4, [1.0, 1.0, 1.0]; seed=20260519,
+            disordering_terms=Vector{Matrix{ComplexF64}}[[Z], [Z, Z]],
+            disorder_strength=1.0, periodic=true)
+        raw_obc = build_heis_1d(4, [1.0, 1.0, 1.0]; seed=20260519,
+            disordering_terms=Vector{Matrix{ComplexF64}}[[Z], [Z, Z]],
+            disorder_strength=1.0, periodic=false)
+        @test raw_pbc.periodic === true
+        @test raw_obc.periodic === false
+        @test !isapprox(raw_pbc.matrix, raw_obc.matrix; atol=1e-8)
+    end
+
+    @testset "build_tfim_2d: returns a valid raw NamedTuple" begin
+        raw = build_tfim_2d(2, 2; J=1.0, h=1.0, seed=20260520,
+            periodic_x=true, periodic_y=true,
+            disordering_terms=Vector{Matrix{ComplexF64}}[[Z]],
+            disorder_strength=1e-2)
+        @test raw.nu_min > 0
+        @test size(raw.matrix) == (16, 16)
+        @test length(raw.eigvals) == 16
+        @test raw.periodic === true
+        @test raw.Lx == 2
+        @test raw.Ly == 2
+        @test raw.J == 1.0
+        @test raw.h == 1.0
+        @test length(raw.disordering_coeffs[1]) == 4
+        @test minimum(raw.eigvals) ≥ -1e-10
+        @test maximum(raw.eigvals) ≤ 0.45 + 1e-10
+    end
+
+    @testset "build_tfim_2d: HamHam wrap end-to-end" begin
+        raw = build_tfim_2d(2, 2; J=1.0, h=1.0, seed=20260521, disorder_strength=1e-3)
+        ham = HamHam(raw, 2.0)
+        @test ham isa HamHam{Float64}
+        @test size(ham.data) == (16, 16)
+        @test isapprox(tr(ham.gibbs), 1.0; atol=1e-10)
+    end
+
+    @testset "build_tfim_2d: mixed periodic_x / periodic_y all distinct" begin
+        rawpp = build_tfim_2d(2, 3; J=1.0, h=1.5, seed=20260522,
+            periodic_x=true,  periodic_y=true,  disorder_strength=1e-3)
+        rawpf = build_tfim_2d(2, 3; J=1.0, h=1.5, seed=20260522,
+            periodic_x=true,  periodic_y=false, disorder_strength=1e-3)
+        rawfp = build_tfim_2d(2, 3; J=1.0, h=1.5, seed=20260522,
+            periodic_x=false, periodic_y=true,  disorder_strength=1e-3)
+        rawff = build_tfim_2d(2, 3; J=1.0, h=1.5, seed=20260522,
+            periodic_x=false, periodic_y=false, disorder_strength=1e-3)
+        @test !isapprox(rawpp.matrix, rawpf.matrix; atol=1e-8)
+        @test !isapprox(rawpp.matrix, rawfp.matrix; atol=1e-8)
+        @test !isapprox(rawpp.matrix, rawff.matrix; atol=1e-8)
+        @test !isapprox(rawpf.matrix, rawfp.matrix; atol=1e-8)
+    end
+
+    @testset "build_tfim_2d: argument validation" begin
+        @test_throws ArgumentError build_tfim_2d(0, 2; seed=1)
+        @test_throws ArgumentError build_tfim_2d(2, 0; seed=1)
+    end
+
 
     @testset "HamHam ctor (no disorder): direct coverage" begin
         # Ctor (1) was reachable only transitively via the NamedTuple ctor (3)
@@ -209,127 +266,6 @@ using Statistics: median
         @test length(h.disordering_terms) == 1
         @test length(h.disordering_coeffs) == 1
         @test isapprox(tr(h.gibbs), 1.0; atol=1e-12)
-    end
-
-    # find_typical_heisenberg / find_typical_2d_heisenberg ----------------------------
-    # W₂-spectral-median selector across a batch of disorder realisations.
-    # See bd issue qf-n72 for context (n=6 gap-outlier with find_ideal_*).
-    @testset "find_typical_heisenberg: returns a valid raw NamedTuple" begin
-        using Random; Random.seed!(20260511)
-        raw = find_typical_heisenberg(3, [1.0, 1.0, 1.0]; batch_size=50,
-            disordering_terms=[Vector{Matrix{ComplexF64}}([Z])], disorder_strength=1.0)
-        @test raw.nu_min > 0
-        @test size(raw.matrix) == (8, 8)
-        @test size(raw.eigvecs) == (8, 8)
-        @test length(raw.eigvals) == 8
-        @test raw.periodic === true
-        @test length(raw.disordering_coeffs) == 1
-        @test length(raw.disordering_coeffs[1]) == 3
-        @test raw.typicality_distance >= 0
-        # Spectrum still lives in [0, 0.45]
-        @test minimum(raw.eigvals) ≥ -1e-10
-        @test maximum(raw.eigvals) ≤ 0.45 + 1e-10
-        @test isapprox(raw.matrix, raw.matrix'; atol=1e-12)
-    end
-
-    @testset "find_typical_heisenberg: HamHam wrap end-to-end (extra fields ignored)" begin
-        using Random; Random.seed!(20260512)
-        raw = find_typical_heisenberg(3, [1.0, 1.0, 1.0]; batch_size=30,
-            disordering_terms=[Vector{Matrix{ComplexF64}}([Z])], disorder_strength=1.0)
-        ham = HamHam(raw, 1.0)
-        @test ham isa HamHam{Float64}
-        @test size(ham.data) == (8, 8)
-        @test ham.nu_min > 0
-        @test isapprox(tr(ham.gibbs), 1.0; atol=1e-10)
-    end
-
-    @testset "find_typical_2d_heisenberg: returns a valid raw NamedTuple" begin
-        using Random; Random.seed!(20260513)
-        raw = find_typical_2d_heisenberg(2, 2, [1.0, 1.0, 1.5];
-            batch_size=30, periodic_x=true, periodic_y=true,
-            disordering_terms=[Vector{Matrix{ComplexF64}}([Z])], disorder_strength=1e-2)
-        @test raw.nu_min > 0
-        @test size(raw.matrix) == (16, 16)
-        @test length(raw.eigvals) == 16
-        @test raw.periodic === true
-        @test length(raw.disordering_coeffs[1]) == 4
-        @test raw.typicality_distance >= 0
-        @test minimum(raw.eigvals) ≥ -1e-10
-        @test maximum(raw.eigvals) ≤ 0.45 + 1e-10
-    end
-
-    @testset "find_typical_2d_heisenberg: HamHam wrap end-to-end" begin
-        using Random; Random.seed!(20260514)
-        raw = find_typical_2d_heisenberg(2, 2, [1.0, 1.0, 1.5]; batch_size=20)
-        ham = HamHam(raw, 1.0)
-        @test ham isa HamHam{Float64}
-        @test size(ham.data) == (16, 16)
-        @test isapprox(tr(ham.gibbs), 1.0; atol=1e-10)
-    end
-
-    @testset "find_typical_*: argument validation" begin
-        # W₂ selector is meaningless with 0 or 1 samples
-        @test_throws ArgumentError find_typical_heisenberg(3, [1.0, 1.0, 1.0]; batch_size=1)
-        @test_throws ArgumentError find_typical_heisenberg(3, [1.0, 1.0, 1.0]; batch_size=0)
-        # Inherits the 2D lattice-size guard
-        @test_throws ArgumentError find_typical_2d_heisenberg(0, 2, [1.0, 1.0, 1.0]; batch_size=10)
-        @test_throws ArgumentError find_typical_2d_heisenberg(2, 0, [1.0, 1.0, 1.0]; batch_size=10)
-    end
-
-    @testset "find_typical_heisenberg: determinism under fixed RNG seed" begin
-        using Random
-        Random.seed!(20260515)
-        raw_a = find_typical_heisenberg(3, [1.0, 1.0, 1.0]; batch_size=40,
-            disordering_terms=[Vector{Matrix{ComplexF64}}([Z])], disorder_strength=1.0)
-        Random.seed!(20260515)
-        raw_b = find_typical_heisenberg(3, [1.0, 1.0, 1.0]; batch_size=40,
-            disordering_terms=[Vector{Matrix{ComplexF64}}([Z])], disorder_strength=1.0)
-        @test raw_a.eigvals ≈ raw_b.eigvals
-        @test raw_a.typicality_distance ≈ raw_b.typicality_distance
-        @test isapprox(raw_a.matrix, raw_b.matrix; atol=1e-12)
-    end
-
-    @testset "find_typical_heisenberg: chosen sample is min-L²-to-median by construction" begin
-        # Independently recompute the L²-to-median distance over a fresh batch and
-        # confirm the function would pick the same realisation. We do this by
-        # running with seed S and verifying the returned typicality_distance
-        # equals min over the same seed-S batch.
-        using Random
-        n = 3
-        d = 2^n
-        B = 40
-        seed = 20260516
-        coeffs = [1.0, 1.0, 1.0]
-        strength = 1.0
-        dis_terms = [Vector{Matrix{ComplexF64}}([Z])]
-
-        # Independent reference loop reproducing what the inner kernel does
-        Random.seed!(seed)
-        base_ref = QuantumFurnace._construct_base_ham(
-            Vector{Matrix{ComplexF64}}[[X, X], [Y, Y], [Z, Z]], coeffs, n; periodic=true)
-        specs = Matrix{Float64}(undef, d, B)
-        for k in 1:B
-            sc = [zeros(Float64, n) for _ in dis_terms]
-            for dc in sc
-                rand!(dc); dc .*= strength
-            end
-            dh = QuantumFurnace._construct_disordering_terms(dis_terms, sc, n)
-            total = base_ref + dh
-            rsf, sh = QuantumFurnace._rescaling_and_shift_factors(total)
-            rescaled = (total ./ rsf) + sh * I
-            ev = eigvals(Hermitian(rescaled))
-            bw = ev[end] - ev[1]
-            specs[:, k] = (ev .- ev[1]) ./ bw
-        end
-        med = [median(@view specs[i, :]) for i in 1:d]
-        dists = [sqrt(sum((specs[:, k] .- med).^2)) for k in 1:B]
-        min_dist = minimum(dists)
-
-        # Now run the actual find_typical_heisenberg with the same seed
-        Random.seed!(seed)
-        raw = find_typical_heisenberg(n, coeffs; batch_size=B,
-            disordering_terms=dis_terms, disorder_strength=strength)
-        @test isapprox(raw.typicality_distance, min_dist; rtol=1e-12)
     end
 
     @testset "HamHam ctor (multi-term disorder) forwards `periodic` kwarg" begin
