@@ -125,7 +125,8 @@ function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float6
     end
 
     base_hamiltonian = _construct_base_ham(terms, coeffs, num_qubits; periodic=periodic)
-    disordering_hamiltonian = _construct_disordering_terms(disordering_terms, disordering_coeffs, num_qubits)
+    disordering_hamiltonian = _construct_disordering_terms(disordering_terms, disordering_coeffs, num_qubits;
+        periodic=periodic)
     disordered_ham = base_hamiltonian + disordering_hamiltonian
 
     rescaling_factor, shift = _rescaling_and_shift_factors(disordered_ham)
@@ -307,9 +308,12 @@ function find_ideal_heisenberg(num_qubits::Int64,
     terms = [[X, X], [Y, Y], [Z, Z]]
     base_hamiltonian = _construct_base_ham(terms, coeffs, num_qubits; periodic=periodic)
 
+    build_disorder = sample_coeffs -> _construct_disordering_terms(disordering_terms,
+        sample_coeffs, num_qubits; periodic=periodic)
+
     return _optimize_disordered_heisenberg(base_hamiltonian, terms, coeffs, num_qubits,
-        disordering_terms; batch_size=batch_size, periodic=periodic,
-        disorder_strength=disorder_strength)
+        disordering_terms, build_disorder; batch_size=batch_size,
+        periodic=periodic, disorder_strength=disorder_strength)
 end
 
 """find_ideal_2d_heisenberg(Lx::Int, Ly::Int, coeffs::Vector{Float64};
@@ -365,17 +369,27 @@ function find_ideal_2d_heisenberg(Lx::Int64, Ly::Int64,
     base_hamiltonian = _construct_2d_heisenberg_base(Lx, Ly, terms, coeffs;
         periodic_x=periodic_x, periodic_y=periodic_y)
 
+    build_disorder = sample_coeffs -> _construct_disordering_terms_2d(Lx, Ly,
+        disordering_terms, sample_coeffs;
+        periodic_x=periodic_x, periodic_y=periodic_y)
+
     return _optimize_disordered_heisenberg(base_hamiltonian, terms, coeffs, num_qubits,
-        disordering_terms; batch_size=batch_size, periodic=(periodic_x && periodic_y),
-        disorder_strength=disorder_strength)
+        disordering_terms, build_disorder; batch_size=batch_size,
+        periodic=(periodic_x && periodic_y), disorder_strength=disorder_strength)
 end
 
 # Shared inner kernel for find_ideal_heisenberg and find_ideal_2d_heisenberg:
 # generate `batch_size` random realisations of the disorder field, keep the one
 # with the largest minimum Bohr gap after rescaling/shifting.
+#
+# `build_disorder(sample_coeffs)` is a closure injected by the caller. 1D callers
+# use `_construct_disordering_terms(..., periodic=periodic)`; 2D callers use
+# `_construct_disordering_terms_2d(..., periodic_x=..., periodic_y=...)`. The
+# kernel itself stays geometry-agnostic.
 function _optimize_disordered_heisenberg(base_hamiltonian::Hermitian{ComplexF64},
     terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64},
-    num_qubits::Int64, disordering_terms::Vector{Vector{Matrix{ComplexF64}}};
+    num_qubits::Int64, disordering_terms::Vector{Vector{Matrix{ComplexF64}}},
+    build_disorder::Function;
     batch_size::Int64, periodic::Bool, disorder_strength::Float64)
 
     best_nu_min = -1.0
@@ -393,7 +407,7 @@ function _optimize_disordered_heisenberg(base_hamiltonian::Hermitian{ComplexF64}
             rand!(dc)
             dc .*= disorder_strength
         end
-        disordering_ham = _construct_disordering_terms(disordering_terms, all_disordering_coeffs, num_qubits)
+        disordering_ham = build_disorder(all_disordering_coeffs)
 
         total_ham = base_hamiltonian + disordering_ham
         rescaling_factor, shift = _rescaling_and_shift_factors(total_ham)
@@ -485,9 +499,12 @@ function find_typical_heisenberg(num_qubits::Int64,
     terms = [[X, X], [Y, Y], [Z, Z]]
     base_hamiltonian = _construct_base_ham(terms, coeffs, num_qubits; periodic=periodic)
 
+    build_disorder = sample_coeffs -> _construct_disordering_terms(disordering_terms,
+        sample_coeffs, num_qubits; periodic=periodic)
+
     return _optimize_typical_heisenberg(base_hamiltonian, terms, coeffs, num_qubits,
-        disordering_terms; batch_size=batch_size, periodic=periodic,
-        disorder_strength=disorder_strength)
+        disordering_terms, build_disorder; batch_size=batch_size,
+        periodic=periodic, disorder_strength=disorder_strength)
 end
 
 """find_typical_2d_heisenberg(Lx::Int, Ly::Int, coeffs::Vector{Float64};
@@ -516,9 +533,13 @@ function find_typical_2d_heisenberg(Lx::Int64, Ly::Int64,
     base_hamiltonian = _construct_2d_heisenberg_base(Lx, Ly, terms, coeffs;
         periodic_x=periodic_x, periodic_y=periodic_y)
 
+    build_disorder = sample_coeffs -> _construct_disordering_terms_2d(Lx, Ly,
+        disordering_terms, sample_coeffs;
+        periodic_x=periodic_x, periodic_y=periodic_y)
+
     return _optimize_typical_heisenberg(base_hamiltonian, terms, coeffs, num_qubits,
-        disordering_terms; batch_size=batch_size, periodic=(periodic_x && periodic_y),
-        disorder_strength=disorder_strength)
+        disordering_terms, build_disorder; batch_size=batch_size,
+        periodic=(periodic_x && periodic_y), disorder_strength=disorder_strength)
 end
 
 # Shared inner kernel for find_typical_heisenberg and find_typical_2d_heisenberg.
@@ -526,9 +547,15 @@ end
 # criterion in place of the greedy max-min-gap criterion. Per-sample work is
 # identical (build → rescale → diagonalise); only the across-sample selection
 # differs.
+#
+# `build_disorder(sample_coeffs)` is a closure injected by the caller. 1D callers
+# use `_construct_disordering_terms(..., periodic=periodic)`; 2D callers use
+# `_construct_disordering_terms_2d(..., periodic_x=..., periodic_y=...)`. The
+# kernel stays geometry-agnostic.
 function _optimize_typical_heisenberg(base_hamiltonian::Hermitian{ComplexF64},
     terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64},
-    num_qubits::Int64, disordering_terms::Vector{Vector{Matrix{ComplexF64}}};
+    num_qubits::Int64, disordering_terms::Vector{Vector{Matrix{ComplexF64}}},
+    build_disorder::Function;
     batch_size::Int64, periodic::Bool, disorder_strength::Float64)
 
     if batch_size < 2
@@ -553,7 +580,7 @@ function _optimize_typical_heisenberg(base_hamiltonian::Hermitian{ComplexF64},
             rand!(dc)
             dc .*= disorder_strength
         end
-        disordering_ham = _construct_disordering_terms(disordering_terms, sample_coeffs, num_qubits)
+        disordering_ham = build_disorder(sample_coeffs)
         total_ham = base_hamiltonian + disordering_ham
         rescaling_factor, shift = _rescaling_and_shift_factors(total_ham)
         rescaled_ham = (total_ham ./ rescaling_factor) + shift * I
@@ -622,7 +649,7 @@ function _optimize_typical_heisenberg(base_hamiltonian::Hermitian{ComplexF64},
     # Reconstruct the chosen sample to obtain eigvecs (avoids storing d^2 complex
     # entries per sample during the sweep).
     best_disordering_coeffs = disordering_coeffs_by_sample[best_idx]
-    disordering_ham = _construct_disordering_terms(disordering_terms, best_disordering_coeffs, num_qubits)
+    disordering_ham = build_disorder(best_disordering_coeffs)
     total_ham = base_hamiltonian + disordering_ham
     rescaling_factor, shift = _rescaling_and_shift_factors(total_ham)
     rescaled_ham = (total_ham ./ rescaling_factor) + shift * I
@@ -757,8 +784,32 @@ function _construct_2d_heisenberg_base(Lx::Int64, Ly::Int64,
     return Hermitian(Matrix(hamiltonian))
 end
 
+"""
+    _construct_disordering_terms(terms, coeffs, num_qubits; periodic=true)
+        -> Hermitian{ComplexF64, Matrix{ComplexF64}}
+
+Build the per-site disordering Hamiltonian on a 1D chain of `num_qubits` sites
+from a list of Pauli terms `terms` and per-site coefficient vectors `coeffs`.
+The `periodic` flag controls whether two-site terms wrap around the chain
+boundary; `pad_term(...; periodic=false)` returns zero for wrap-around
+placements, so OBC fixtures get an OBC disordering Hamiltonian.
+
+# Semantics
+- Single-site terms (e.g. `[Z]`): one Pauli per site, no boundary issue.
+- Two-site terms (e.g. `[Z, Z]`): bond `(q, q+1)` along a 1D chain.
+  - `periodic=true` (default): adds the wrap-around bond `(num_qubits, 1)`.
+  - `periodic=false`: drops the wrap-around bond.
+
+# 2D caveat
+This is a **1D-chain builder**. When called from a 2D fixture builder
+(`find_typical_2d_heisenberg`, `find_ideal_2d_heisenberg`) with a two-site
+disordering term, the term gets placed on 1D-chain bonds `(q, q+1)` on the
+linearised site index — NOT on the actual 2D lattice bonds. For 2D fixtures
+that need disorder on lattice bonds, use [`_construct_disordering_terms_2d`].
+Single-site disorder in 2D is unaffected (site-local).
+"""
 function _construct_disordering_terms(terms::Vector{Vector{Matrix{ComplexF64}}},
-    coeffs::Vector{Vector{Float64}}, num_qubits::Int64)
+    coeffs::Vector{Vector{Float64}}, num_qubits::Int64; periodic::Bool=true)
 
     disordering_hamiltonian::SparseMatrixCSC{ComplexF64} = spzeros(2^num_qubits, 2^num_qubits)
     for (term, term_coeffs) in zip(terms, coeffs)
@@ -766,7 +817,78 @@ function _construct_disordering_terms(terms::Vector{Vector{Matrix{ComplexF64}}},
             throw(ArgumentError("Each disordering coefficient vector must have length num_qubits ($num_qubits), got $(length(term_coeffs))"))
         end
         for q in 1:num_qubits
-            disordering_hamiltonian += term_coeffs[q] * pad_term(term, num_qubits, q)
+            disordering_hamiltonian += term_coeffs[q] * pad_term(term, num_qubits, q; periodic=periodic)
+        end
+    end
+
+    return Hermitian(Matrix(disordering_hamiltonian))
+end
+
+"""
+    _construct_disordering_terms_2d(Lx, Ly, terms, coeffs; periodic_x=true, periodic_y=true)
+        -> Hermitian{ComplexF64, Matrix{ComplexF64}}
+
+2D-lattice version of [`_construct_disordering_terms`]. Places single-site
+terms at each of the `num_qubits = Lx * Ly` sites and two-site terms on the
+nearest-neighbour bonds of the `Lx × Ly` square lattice (right neighbour
+along x, up neighbour along y; site-to-qubit map matches
+`_construct_2d_heisenberg_base`).
+
+Per-term `coeffs` is a length-`num_qubits` vector: site `(i, j)` carries
+`coeffs[k][site_index(i, j)]`. For two-site terms, that coefficient is
+applied to BOTH the right-neighbour bond (i, j)→(i+1, j) and the
+up-neighbour bond (i, j)→(i, j+1) that emanate from `(i, j)`. Wrap-around
+bonds in each direction are included only when the corresponding periodic
+flag is true and the lattice has length > 1 in that direction.
+
+Throws `ArgumentError` for term lengths other than 1 or 2.
+"""
+function _construct_disordering_terms_2d(Lx::Int64, Ly::Int64,
+    terms::Vector{Vector{Matrix{ComplexF64}}},
+    coeffs::Vector{Vector{Float64}};
+    periodic_x::Bool=true, periodic_y::Bool=true)
+
+    num_qubits = Lx * Ly
+    site_index(i, j) = (i - 1) * Ly + (j - 1) + 1
+
+    disordering_hamiltonian::SparseMatrixCSC{ComplexF64} = spzeros(2^num_qubits, 2^num_qubits)
+    for (term, term_coeffs) in zip(terms, coeffs)
+        if length(term_coeffs) != num_qubits
+            throw(ArgumentError("Each disordering coefficient vector must have length num_qubits ($num_qubits), got $(length(term_coeffs))"))
+        end
+        if length(term) == 1
+            # Single-site: site-local Pauli at each lattice site
+            for i in 1:Lx, j in 1:Ly
+                q = site_index(i, j)
+                disordering_hamiltonian += term_coeffs[q] * pad_term(term, num_qubits, q; periodic=true)
+            end
+        elseif length(term) == 2
+            # Two-site: place on actual nearest-neighbour lattice bonds, mirroring
+            # _construct_2d_heisenberg_base. Per-site coeff is applied to both the
+            # site's right-bond and up-bond.
+            for i in 1:Lx, j in 1:Ly
+                c = term_coeffs[site_index(i, j)]
+                # Right neighbour (x-direction): (i, j) -> (i+1, j)
+                if i < Lx
+                    disordering_hamiltonian += c * _pad_two_site_op(term, num_qubits,
+                        site_index(i, j), site_index(i + 1, j))
+                elseif periodic_x && Lx > 1
+                    disordering_hamiltonian += c * _pad_two_site_op(term, num_qubits,
+                        site_index(Lx, j), site_index(1, j))
+                end
+                # Up neighbour (y-direction): (i, j) -> (i, j+1)
+                if j < Ly
+                    disordering_hamiltonian += c * _pad_two_site_op(term, num_qubits,
+                        site_index(i, j), site_index(i, j + 1))
+                elseif periodic_y && Ly > 1
+                    disordering_hamiltonian += c * _pad_two_site_op(term, num_qubits,
+                        site_index(i, Ly), site_index(i, 1))
+                end
+            end
+        else
+            throw(ArgumentError(
+                "_construct_disordering_terms_2d only supports 1- or 2-site terms, " *
+                "got length-$(length(term))"))
         end
     end
 

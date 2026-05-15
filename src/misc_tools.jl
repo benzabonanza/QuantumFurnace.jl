@@ -627,10 +627,25 @@ function pauli_string_to_matrix(paulistring::Vector{String})
     return pauli_matrices
 end
 
-function expm_pauli_padded(pauli_list::Vector{Matrix{ComplexF64}}, coeff::Float64, num_qubits::Int64, position::Int64)
-    """Arg e.g. NN terms: [X, X], and it pads it with identities in the rest of the sites. Then creates the expm."""
+function expm_pauli_padded(pauli_list::Vector{Matrix{ComplexF64}}, coeff::Float64, num_qubits::Int64, position::Int64; periodic::Bool=true)
+    """
+    Build `exp(i · coeff · P)` for a Pauli string `P = pauli_list[1] ⊗ … ⊗ pauli_list[end]` placed at
+    `position`. Closed-form `cos(coeff) I + i sin(coeff) P` holds because every Pauli string squares to I.
 
-    padded_term = pad_term(pauli_list, num_qubits, position)
+    With `periodic=false` and a multi-site term whose support would wrap past `num_qubits`, the term
+    does not exist in the open-boundary Hamiltonian. We return `I` rather than `cos(coeff) I` — the
+    Pauli-squared identity breaks once `P = 0`, so the closed form is no longer valid; the right
+    multiplicative neutral element is the identity. This guarantees `_compute_U_group` and
+    `_trotterize2` produce the OBC Trotter without spurious phase factors at the boundary.
+    """
+
+    term_length = length(pauli_list)
+    last_position = position + term_length - 1
+    if !periodic && last_position > num_qubits
+        return Matrix{ComplexF64}(I, 2^num_qubits, 2^num_qubits)
+    end
+
+    padded_term = pad_term(pauli_list, num_qubits, position; periodic=periodic)
     expm = cos(coeff) * I(2^num_qubits) + 1im * sin(coeff) * padded_term
     return expm
 end

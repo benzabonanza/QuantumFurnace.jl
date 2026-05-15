@@ -318,12 +318,24 @@ function compute_trotter_error(hamiltonian::HamHam, trotter::TrottTrott, t::Floa
 end
 
 function _trotterize2(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
-    """For 1 and 2 site Hamiltonians"""
+    """
+    2nd-order Strang Trotter for 1D chain Hamiltonians with 1- and 2-site terms.
+
+    Honors `hamiltonian.periodic`: with `periodic=false`, every 2-site term whose
+    placement would wrap past site `num_qubits` is dropped (via the `periodic`
+    kwarg of `expm_pauli_padded`). 1-site terms have no boundary issue.
+
+    **Limitation**: this is a 1D-chain Trotterizer. Passing a 2D HamHam yields
+    an operator that does not reproduce `exp(-i δ H_2D)` — the bond structure of
+    the 2D lattice (right + up neighbours) is not modeled here. 2D HamHams are
+    currently only used in EnergyDomain/BohrDomain pipelines.
+    """
     timestep::Float64 = t / num_trotter_steps
     num_qubits::Int64 = Int(log2(size(hamiltonian.data)[1]))
     dim = 2^num_qubits
     odd_system::Bool = (num_qubits % 2 == 1)
-    is_bdr_strange::Bool = (odd_system && hamiltonian.periodic)
+    periodic::Bool = hamiltonian.periodic
+    is_bdr_strange::Bool = (odd_system && periodic)
 
     U::Matrix{ComplexF64} = exp(im * t * Float64(hamiltonian.shift)) * I(2^num_qubits)  # Shift
 
@@ -331,22 +343,22 @@ function _trotterize2(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
 
     # Base terms
     odd_sites = collect(1:2:(num_qubits - 1))
-    U_odd = _compute_U_group(groups.commuting[1], groups.commuting[2], odd_sites, num_qubits, timestep)
+    U_odd = _compute_U_group(groups.commuting[1], groups.commuting[2], odd_sites, num_qubits, timestep; periodic=periodic)
 
     even_sites = collect(2:2:num_qubits)
-    U_even = _compute_U_group(groups.commuting[1], groups.commuting[2], even_sites, num_qubits, timestep)
+    U_even = _compute_U_group(groups.commuting[1], groups.commuting[2], even_sites, num_qubits, timestep; periodic=periodic)
 
     U_odd_bdr = Matrix{ComplexF64}(I, dim, dim)
-    if is_bdr_strange  # Strange odd boundary
+    if is_bdr_strange  # Strange odd boundary — only present for PBC
         odd_bdr_site = [num_qubits]
-        U_odd_bdr *= _compute_U_group(groups.commuting[1], groups.commuting[2], odd_bdr_site, num_qubits, timestep)
+        U_odd_bdr *= _compute_U_group(groups.commuting[1], groups.commuting[2], odd_bdr_site, num_qubits, timestep; periodic=periodic)
     end
 
-    # 1-site terms in the Hamiltonian (with same coeffs on all sites)
+    # 1-site terms in the Hamiltonian (with same coeffs on all sites). No BC issue.
     U_1site_terms = I(2^num_qubits)
     if length(groups.one_sites[1]) != 0
         all_sites = collect(1:num_qubits)
-        U_1site_terms = _compute_U_group(groups.one_sites[1], groups.one_sites[2], all_sites, num_qubits, timestep)
+        U_1site_terms = _compute_U_group(groups.one_sites[1], groups.one_sites[2], all_sites, num_qubits, timestep; periodic=periodic)
     end
 
     # disordering part (per-site terms with different coeffs on each site, i.e. disordered)
@@ -357,7 +369,7 @@ function _trotterize2(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
             for q in 1:num_qubits
                 coeff_f64 = Float64(term_coeffs[q])
                 expm_disordering_pauli_term = expm_pauli_padded(term_f64,
-                        timestep * coeff_f64 / 2, num_qubits, q)
+                        timestep * coeff_f64 / 2, num_qubits, q; periodic=periodic)
                 U_disordering *= expm_disordering_pauli_term
             end
         end
@@ -369,7 +381,7 @@ function _trotterize2(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
         for (term, coupling) in zip(groups.noncommuting[1], groups.noncommuting[2])
             for q in 1:num_qubits
                 term_f64 = Vector{Matrix{ComplexF64}}(term)
-                expm_pauli_term = expm_pauli_padded(term_f64, timestep * Float64(coupling) / 2, num_qubits, q)
+                expm_pauli_term = expm_pauli_padded(term_f64, timestep * Float64(coupling) / 2, num_qubits, q; periodic=periodic)
                 push!(sequence_2site_not_commuting, expm_pauli_term)
             end
         end
@@ -433,13 +445,13 @@ function group_hamiltonian_terms(hamiltonian::HamHam{T}) where {T<:AbstractFloat
 end
 
 function _compute_U_group(terms, couplings, sites::Vector{Int64},
-    num_qubits::Int64, timestep::Float64)::Matrix{ComplexF64}
+    num_qubits::Int64, timestep::Float64; periodic::Bool=true)::Matrix{ComplexF64}
 
     U_group = Matrix{ComplexF64}(I, 2^num_qubits, 2^num_qubits)
     for q in sites
         for (term, coupling) in zip(terms, couplings)
             term_f64 = Vector{Matrix{ComplexF64}}(term)
-            expm_pauli_term = expm_pauli_padded(term_f64, timestep * Float64(coupling) / 2, num_qubits, q)
+            expm_pauli_term = expm_pauli_padded(term_f64, timestep * Float64(coupling) / 2, num_qubits, q; periodic=periodic)
             U_group *= expm_pauli_term
         end
     end
@@ -447,10 +459,11 @@ function _compute_U_group(terms, couplings, sites::Vector{Int64},
 end
 
 function trotterize(hamiltonian::HamHam, T::Float64, num_trotter_steps::Int64)
-    """1st order Trotter, periodic"""
+    """1st order Trotter. Honors `hamiltonian.periodic`."""
 
     timestep::Float64 = T / num_trotter_steps
     num_qubits::Int64 = Int(log2(size(hamiltonian.data)[1]))
+    periodic::Bool = hamiltonian.periodic
 
     U::Matrix{ComplexF64} = exp(im * T * Float64(hamiltonian.shift)) * I(2^num_qubits)  # Shift
     p = Progress(num_trotter_steps)
@@ -459,7 +472,7 @@ function trotterize(hamiltonian::HamHam, T::Float64, num_trotter_steps::Int64)
         for q in 1:num_qubits
             for (i, term) in enumerate(hamiltonian.base_terms)
                     term_f64 = Vector{Matrix{ComplexF64}}(term)
-                    expm_pauli_term = expm_pauli_padded(term_f64, timestep * Float64(hamiltonian.base_coeffs[i]), num_qubits, q)
+                    expm_pauli_term = expm_pauli_padded(term_f64, timestep * Float64(hamiltonian.base_coeffs[i]), num_qubits, q; periodic=periodic)
                     U *= expm_pauli_term
             end
 
@@ -469,7 +482,7 @@ function trotterize(hamiltonian::HamHam, T::Float64, num_trotter_steps::Int64)
                     dis_term_f64 = Vector{Matrix{ComplexF64}}(dis_term)
                     expm_disordering_pauli_term = expm_pauli_padded(dis_term_f64,
                                                                 timestep * Float64(dis_coeffs[q]),
-                                                                num_qubits, q)
+                                                                num_qubits, q; periodic=periodic)
                     U *= expm_disordering_pauli_term
                 end
             end
