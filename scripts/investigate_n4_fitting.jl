@@ -23,9 +23,11 @@ for num_qubits in [3, 4, 5]
     @printf("  n = %d\n", num_qubits)
     println("="^70)
 
-    # Generate Hamiltonian with Z+ZZ
-    raw = find_ideal_heisenberg(num_qubits, coeffs;
-        batch_size=200, periodic=true, disordering_terms=[[Z], [Z, Z]])
+    # Generate Hamiltonian with Z+ZZ (qf-yi4: deterministic seed, no selector)
+    raw = build_heis_1d(num_qubits, coeffs;
+        seed=42, periodic=true,
+        disordering_terms=Vector{Matrix{ComplexF64}}[[Z], [Z, Z]],
+        disorder_strength=1.0)
     hamiltonian = HamHam(raw, beta)
 
     dim = 2^num_qubits

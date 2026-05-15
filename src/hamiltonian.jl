@@ -370,6 +370,14 @@ Schema matches [`build_heis_1d`] plus `Lx, Ly, J, h` diagnostic fields.
 - `periodic_x`, `periodic_y`: per-direction BCs.
 - `disordering_terms`, `disorder_strength`: as in [`build_heis_1d`], placed on
    the 2D lattice via the 2D builder.
+
+**Caveat**: with `disorder_strength = 0` on a fully symmetric lattice
+(no symmetry-breaking field) the Hamiltonian retains exact Z₂ /
+translation degeneracies, which produce machine-precision `nu_min ≈
+1e-17` and rank-> 1 Lindbladian fixed points. Use a small
+`disorder_strength` (default `1e-3`) when you need the Bohr-pairing /
+Krylov-gap code paths to remain well-conditioned; or pass the
+qf-8fr Krylov GUE-traceless seed downstream.
 """
 function build_tfim_2d(Lx::Int, Ly::Int;
         J::Float64=1.0, h::Float64=1.0,

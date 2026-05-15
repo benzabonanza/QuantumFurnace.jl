@@ -49,10 +49,12 @@ const a_reg      = 0.1
 const s_smooth   = 0.4
 const β_values   = (1.0, 5.0, 10.0)
 
-# ── Build disordered Heisenberg ──────────────────────────────────────────────
-Random.seed!(seed)
-@info "Building disordered Heisenberg (n=$num_qubits, periodic, Z disorder)…"
-raw = find_ideal_heisenberg(num_qubits, coeffs; batch_size=batch_size, periodic=true)
+# ── Build disordered Heisenberg (qf-yi4: deterministic seed, no selector) ────
+@info "Building disordered Heisenberg (n=$num_qubits, periodic, seed=$seed)…"
+raw = build_heis_1d(num_qubits, coeffs;
+                    seed = seed, periodic = true,
+                    disordering_terms = Vector{Matrix{ComplexF64}}[[Z]],
+                    disorder_strength = 1.0)
 ham = HamHam(raw, first(β_values))
 unique_freqs = sort(collect(keys(ham.bohr_dict)))
 K = length(unique_freqs)
