@@ -255,4 +255,88 @@ using QuantumFurnace
         evs = eigvals(Hermitian((res.rho_final .+ res.rho_final') ./ 2))
         @test minimum(real.(evs)) > -1e-7
     end
+
+    # -----------------------------------------------------------------------
+    # (f) qf-e4z.26: parity-symmetric Hamiltonian regression
+    #
+    # Mirrors the qf-8fr regression test for krylov_spectral_gap
+    # (`test_krylov_eigsolve.jl::"krylov_spectral_gap — symmetric system
+    # regression (qf-8fr)"`). Verifies that `predict_lindbladian_trajectory`
+    # also reports the TRUE Lindbladian gap on a symmetry-preserving fixture,
+    # not the parity-even sector gap.
+    #
+    # Setup: classical 1D Ising n=3 PBC, β_phys=0.5, CKG smooth-Metropolis
+    # EnergyDomain. The Hamiltonian H = Σ Z_i Z_{i+1} commutes with the
+    # spin-flip P = X^⊗N, so L̂ commutes with P̂[ρ] = PρP. With the buggy
+    # Arnoldi seed `x_0 = vec(I/d)`, the reported `spectral_gap` was the
+    # 2nd-symmetric-sector mode at λ ≈ -0.169 instead of the true gap at
+    # λ ≈ -0.045 in the spin-flip-odd magnetisation sector (the original
+    # qf-8fr classical-Ising-n=4 finding generalises to n=3).
+    # -----------------------------------------------------------------------
+    @testset "(f) predict_lindbladian_trajectory — symmetric system regression (qf-e4z.26)" begin
+        n_ising = 3
+        terms_zz = Vector{Vector{Matrix{ComplexF64}}}([[Z, Z]])
+        coeffs_zz = [1.0]
+        base_ham = QuantumFurnace._construct_base_ham(terms_zz, coeffs_zz, n_ising;
+                                                      periodic=true)
+        rescaling_factor, shift = QuantumFurnace._rescaling_and_shift_factors(base_ham)
+        d_ising = 2^n_ising
+        rescaled_mat = Matrix(base_ham) ./ rescaling_factor .+ shift * I(d_ising)
+        eigvals_rs, eigvecs_rs = eigen(Hermitian(rescaled_mat))
+
+        raw = (
+            matrix = rescaled_mat,
+            terms = terms_zz,
+            base_coeffs = coeffs_zz ./ rescaling_factor,
+            disordering_terms = nothing,
+            disordering_coeffs = nothing,
+            eigvals = eigvals_rs,
+            eigvecs = eigvecs_rs,
+            nu_min = minimum(diff(eigvals_rs)),
+            shift = shift,
+            rescaling_factor = rescaling_factor,
+            periodic = true,
+        )
+        β_phys = 0.5
+        ham_ising = HamHam(raw; beta_phys=β_phys)
+        jumps_ising = QuantumFurnace._build_jump_set(ham_ising, n_ising)
+        β_alg = beta_alg(ham_ising, β_phys)
+
+        σ = 1.0 / β_alg
+        H_norm = maximum(abs, ham_ising.eigvals)
+        omega_range = 2.0 * (H_norm + 8 * σ)
+        r_D = 7
+        w0_D = omega_range / 2.0^r_D
+        t0_D = 2π / (2.0^r_D * w0_D)
+        cfg = Config(
+            sim = Lindbladian(), domain = EnergyDomain(), construction = KMS(),
+            num_qubits = n_ising, with_linear_combination = true,
+            beta = β_alg, beta_phys = β_phys, sigma = σ,
+            a = 0.0, s = 0.25, gaussian_parameters = (nothing, nothing),
+            num_energy_bits_D = r_D, w0_D = w0_D, t0_D = t0_D,
+            num_trotter_steps_per_t0 = 10, filter = nothing,
+        )
+
+        # Dense reference gap from construct_lindbladian
+        L_dense = construct_lindbladian(jumps_ising, cfg, ham_ising)
+        ev_dense = eigvals(Matrix(L_dense))
+        perm = sortperm(real.(ev_dense); by=abs)
+        gap_dense = abs(real(ev_dense[perm[2]]))
+
+        # predict_lindbladian_trajectory from symmetric rho_0 = I/d:
+        # post-qf-e4z.26 must report the TRUE gap (pre-fix returned the
+        # parity-even-sector gap, which is larger).
+        rho_0 = Matrix{ComplexF64}(I(d_ising) / d_ising)
+        t_grid = collect(range(0.0, 100.0, length=21))
+        traj = predict_lindbladian_trajectory(cfg, ham_ising, jumps_ising, rho_0, t_grid;
+                                              krylovdim=40)
+        # qf-e4z.27 tightens rtol from 1e-6 → 1e-8: the spectral_gap is
+        # now sourced from a dedicated `krylov_spectral_gap` pass with
+        # KrylovKit thick restart, which converges to KrylovKit `tol=1e-10`
+        # by construction (vs the qf-e4z.26 single-pass band-aid that
+        # only achieved 1e-6 due to MGS Arnoldi noise on the 1e-6
+        # perturbed seed).
+        @test isapprox(traj.spectral_gap, gap_dense; rtol=1e-8)
+        @info "qf-e4z.26 classical Ising parity regression" n=n_ising β_phys=β_phys gap_predict=traj.spectral_gap gap_dense=gap_dense rel_err=abs(traj.spectral_gap - gap_dense)/gap_dense
+    end
 end

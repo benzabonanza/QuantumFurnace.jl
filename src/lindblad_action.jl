@@ -345,32 +345,58 @@ end
 
 
 # ---------------------------------------------------------------------------
-# qf-ev5.{3,4}: Krylov spectral-expansion trajectory
+# qf-ev5.{3,4} / qf-e4z.27: Krylov spectral-expansion trajectory
 # ---------------------------------------------------------------------------
 #
-# Idea: instead of integrating d/dt rho = L(rho) step-by-step, build the
-# leading h eigenpairs of L matrix-free (right + adjoint Krylov), biorthogonalise,
-# project rho_0 - rho_inf onto the slow-mode subspace, and evaluate
+# Idea: build the leading m eigenpairs of L matrix-free in a single m-step
+# Arnoldi factorisation seeded at `vec(rho_0)`, project rho_0 - rho_inf
+# onto the captured Krylov subspace via the Galerkin Q-lift, and evaluate
 #
 #   rho(t) = rho_inf + sum_{i ne 0}  c_i * exp(lambda_i * t) * R_i
 #
-# at any t in O(h * d^2). Cost is dominated by the two Krylov eigsolves
-# (~ h * krylov_iter matvecs, typically ~30-100 for tight convergence), to be
-# compared with `lindblad_action_integrate`'s ~ length(t_grid) *
-# krylov_exp_subspace ~ 1000-3000 matvecs. Both routes return the same
-# NamedTuple shape so the bi-exp + mixing pipeline plugs in unchanged.
+# at any t in O(m * d^2). Cost is dominated by the m matvecs of the single
+# Arnoldi factorisation, to be compared with `lindblad_action_integrate`'s
+# ~ length(t_grid) * krylov_exp_subspace ~ 1000-3000 matvecs.
 #
-# Adjoint subtlety: L preserves trace ⇒ L*(I) = 0 exactly, so vec(I/d) is an
-# exact eigenvector of L* and Arnoldi terminates on the first matvec. The
-# adjoint eigsolve must therefore start from a *generic* Hermitian seed.
+# qf-e4z.27: separation of concerns. The trajectory predictor needs two
+# different things from the Krylov subspace:
+#   (a) accurate Galerkin reconstruction of rho_0's orbit under L  — seed
+#       with vec(rho_0); the captured subspace span{ρ_0, Lρ_0, L²ρ_0, …}
+#       contains rho_0 exactly and reconstructs the trajectory tightly.
+#   (b) the true Lindbladian spectral gap — captured reliably only when
+#       parity-odd modes have non-trivial seed overlap; pure rho_0 = I/d
+#       on a parity-symmetric L misses the parity-odd sector entirely.
+#
+# These are incompatible in a single Arnoldi run (eps-perturbing the
+# rho_0 seed by GUE either fails at large n with small eps or pollutes
+# trajectory accuracy at small n with large eps — see qf-e4z.26/.27
+# audit findings). So we use TWO complementary Krylov passes:
+#
+#   1. `_krylov_spectral_decomposition` (here): single-seed Arnoldi from
+#      vec(rho_0) for the trajectory. The `eigenvalues[2]` reported is
+#      the P̂-EVEN-sub-spectrum gap whenever ρ_0 and L share a symmetry,
+#      but the trajectory of ρ_0 itself only excites P̂-even modes, so
+#      this is the CORRECT decay rate for the captured trajectory.
+#   2. `krylov_spectral_gap` (called from `predict_lindbladian_trajectory`
+#      / `predict_channel_trajectory`): seed = I/d + 1e-10·H_GUE +
+#      KrylovKit thick restart. Captures parity-odd modes reliably at
+#      every n. Reports the true Lindbladian gap.
+#
+# The two routines share matvec infrastructure (apply_lindbladian! /
+# apply_delta_channel!) and add ~50 % matvec overhead total — see the
+# `total_matvecs` field of the returned NamedTuples for the cumulative
+# cost.
+#
+# Spot-check verification on the qf-e4z.23/.26 fixtures lives in
+# `drafts/qf-e4z-23-audit-findings.md`.
 
 """
     _arnoldi_factorize(f, x0, m) -> (Q, H, broke)
 
-Plain Arnoldi factorization: build orthonormal basis `Q` and upper-Hessenberg
+Plain Arnoldi factorisation: build orthonormal basis `Q` and upper-Hessenberg
 `H` such that `f(Q[:, j]) ≈ Q[:, 1:j+1] * H[1:j+1, j]` for each j ≤ m.
-Returns the full `m`-step factorization, or a smaller one if the basis breaks
-down before step `m` (in which case `broke=true`). Uses modified
+Returns the full `m`-step factorisation, or a smaller one if the basis
+breaks down before step `m` (in which case `broke=true`). Uses modified
 Gram–Schmidt with one reorthogonalisation pass for stability.
 
 Output: `Q::Matrix{T}` (size N × m_eff), `H::Matrix{T}` (size m_eff × m_eff).
@@ -408,35 +434,62 @@ end
 
 """
     _krylov_spectral_decomposition(forward_apply!, rho_0, dim; krylovdim,
-                                   tol, fwd_init)
+                                   tol, fwd_init, sort_mode)
 
 Compute a biorthogonal eigendecomposition of a generic linear operator F on
 operator space (matvec via `forward_apply!(out, in)`) restricted to a
-Krylov subspace of dimension `krylovdim`, and project `rho_0 - rho_inf`
-onto the slow-mode subspace.
+Krylov subspace of dimension `krylovdim` seeded at `vec(rho_0)`, and
+project `rho_0 - rho_inf` onto that subspace.
 
 Algorithm (single forward Arnoldi, no adjoint Krylov needed):
-1. Run plain Arnoldi: `f(Q[:, j]) ≈ Q[:, 1:j+1] * H[1:j+1, j]`, with `Q`
-   orthonormal in the standard ℓ² (HS) inner product.
-2. Diagonalise the small Hessenberg `H = W * Λ * W^{-1}` densely.
-3. Right eigvecs in operator space: `R_i = reshape(Q * W[:, i], dim, dim)`.
-4. Left eigvecs (biorthogonal duals): `L_i = reshape(Q * V[:, i], dim, dim)`
-   where `V = (W^{-1})'`. By construction `<L_i, R_j>_HS = delta_{ij}` to
-   the orthonormality of `Q` and the inverse relation `V' W = I`.
-5. Coefficients: `c_i = <L_i, rho_0 - rho_inf>_HS = (V' Q' vec(rho_0 - rho_inf))[i]`.
+1. Run plain MGS Arnoldi from `x_0 = vec(rho_0)`:
+   `f(Q[:, j]) ≈ Q[:, 1:j+1] * H[1:j+1, j]`, with `Q` orthonormal in the
+   standard ℓ² (HS) inner product. The captured Krylov subspace
+   `span{vec(rho_0), L·vec(rho_0), L²·vec(rho_0), …}` is tightly aligned
+   with `rho_0`'s orbit under F — `rho_0 ∈ span(Q)` exactly.
+2. Diagonalise the small Hessenberg `H = W · Λ · W^{-1}` densely.
+3. Right eigvecs in operator space: `R_i = reshape(Q · W[:, i], dim, dim)`.
+4. Left eigvecs (biorthogonal duals): `L_i = reshape(Q · V[:, i], dim, dim)`
+   where `V = (W^{-1})'`. The Q-lift gives `<L_i, R_j>_HS = δ_{ij}`
+   exactly to machine precision regardless of how degenerate the
+   eigenvalues of H are.
+5. Coefficients: `c_i = <L_i, rho_0 - rho_inf>_HS = (V' · Q' · vec(rho_0 - rho_inf))[i]`.
 
 The fixed point `rho_inf` is taken as the eigenvector with smallest
-`|Re(lambda)|`, hermitised + trace-normalised.
+`|Re(lambda)|` (Lindbladian) or `|μ|` closest to 1 (channel), hermitised
++ trace-normalised.
+
+# Symmetry caveat (qf-e4z.27)
+
+If `F` and `rho_0` share an exact symmetry — `[L̂, P̂] = 0` and `P̂[rho_0] = rho_0`
+for a unitary superoperator P̂[ρ] = PρP — then Arnoldi from `vec(rho_0)`
+stays inside the P̂-even sector, and the eigenmodes in the P̂-odd sector
+are silently missed. Specifically:
+* `eigenvalues[2]` and the captured `R_modes` reflect the **P̂-even
+  sub-spectrum**, not the full L spectrum. For 1D Heisenberg + Z/ZZ
+  disorder (P = Z^⊗N), the captured "gap" overestimates the true
+  Lindbladian gap by 17–25 % at n ≥ 5.
+* The trajectory `rho(t) = e^{tL} rho_0` is unaffected: P̂-odd modes
+  have projection coefficients `c_i ≡ 0` for P̂-even `rho_0` by
+  symmetry, so the parity-even sub-trajectory IS the full trajectory
+  of `rho_0` under L.
+
+Callers that need the TRUE Lindbladian gap on symmetric fixtures should
+combine this routine with a separate `krylov_spectral_gap` call (which
+uses `_krylov_default_x0`'s GUE-perturbed seed + KrylovKit's thick
+restart to capture parity-odd modes reliably). `predict_lindbladian_trajectory`
+and `predict_channel_trajectory` do this automatically — see the
+`spectral_gap` field of their returned NamedTuples.
 
 # Returns
 NamedTuple with
-- `eigenvalues::Vector{ComplexF64}`  — eigenvalues sorted by |Re| ascending
+- `eigenvalues::Vector{ComplexF64}`  — eigenvalues sorted with steady state at idx 1
 - `R_modes::Vector{Matrix}`          — right eigvecs (R_modes[1] = rho_inf)
 - `L_modes::Vector{Matrix}`          — biorthogonal left eigvecs
 - `c::Vector{ComplexF64}`            — biorthogonal projection coefficients
 - `rho_inf::Matrix`                  — hermitised, trace-normalised steady state
-- `matvec_count::Int`                — total matvecs of `forward_apply!`
-- `converged::Bool`                  — true if Arnoldi did not break down
+- `matvec_count::Int`                — number of matvecs of `forward_apply!`
+- `converged::Bool`                  — true if Arnoldi did not break down early
 """
 function _krylov_spectral_decomposition(
     forward_apply!::F1,
@@ -459,27 +512,29 @@ function _krylov_spectral_decomposition(
         return copy(vec(out_buf))
     end
 
-    # Arnoldi seed: rho_0. Generically has nonzero overlap with all relevant
-    # slow modes so Arnoldi locks onto them. Pure I/d would also work for
-    # the forward problem (only L^*(I) = 0 makes I the trivial adjoint
-    # eigenvector; for the forward L applied to I/d, the slow non-steady
-    # components are typically O(1) for non-trivial Hamiltonians).
+    # Single-seed Arnoldi from vec(rho_0): the captured Krylov subspace is
+    # tightly aligned with rho_0's orbit ⇒ trajectory reconstruction is
+    # exact at t=0 and accurate up to Krylov-truncation error at every t.
+    #
+    # qf-e4z.27 note: this seed silently misses P̂-odd eigenmodes when L
+    # and rho_0 share an exact symmetry P̂[ρ] = PρP (the reported
+    # `eigenvalues[2]` is the P̂-even sub-spectrum gap, not the true
+    # Lindbladian gap). The trajectory of rho_0 itself is unaffected
+    # (P̂-odd projection coefficients vanish by symmetry), so we use this
+    # seed for trajectory accuracy and patch in the true Lindbladian gap
+    # at the `predict_lindbladian_trajectory` / `predict_channel_trajectory`
+    # call site via a separate `krylov_spectral_gap` invocation.
     x0 = if fwd_init === nothing
-        vec(rho_0)
+        Vector{T}(vec(rho_0))
     else
         Vector{T}(fwd_init)
     end
     m_target = min(Int(krylovdim), dim2)
 
-    # Single forward Arnoldi factorisation. No adjoint Krylov needed: the
-    # biorthogonal left eigvecs are derived from the small dense
-    # eigendecomposition of H, which is unitarily related to a sub-block
-    # of L's Schur form. This is tighter than running an independent
-    # adjoint Krylov and matching by eigenvalue (which fails when forward
-    # and adjoint Arnoldi capture different fast-mode subsets).
     Q, H, broke = _arnoldi_factorize(fwd_vec, x0, m_target)
     m = size(H, 1)
     m >= 2 || error("Arnoldi broke down with only $m basis vectors; cannot decompose")
+    matvec_count = m
 
     # Diagonalise H densely. eigen returns columns of W as right eigvecs;
     # we form V = (W^{-1})' so V' W = I (the biorthogonality condition).
@@ -538,7 +593,7 @@ function _krylov_spectral_decomposition(
         L_modes      = L_modes,
         c            = Complex{Float64}.(c),
         rho_inf      = rho_inf,
-        matvec_count = m,  # Arnoldi performs exactly m matvecs
+        matvec_count = matvec_count,
         converged    = !broke,
     )
 end
@@ -677,14 +732,31 @@ function predict_lindbladian_trajectory(
         save_states && (states[k] = copy(rho_t))
     end
 
-    spectral_gap = h >= 2 ? abs(real(decomp.eigenvalues[2])) : NaN
+    # Spectral gap (qf-e4z.27): the gap reported by the decomp's
+    # `eigenvalues[2]` is the leading P̂-EVEN-sub-spectrum eigenvalue
+    # whenever `rho_0` and the Lindbladian share a discrete symmetry
+    # (e.g. rho_0 = I/d on 1D Heisenberg + Z/ZZ disorder, P = Z^⊗N).
+    # We patch this via a separate `krylov_spectral_gap` call, which
+    # seeds Arnoldi with `_krylov_default_x0` (I/d + 1e-10·H_GUE) and
+    # uses KrylovKit's thick-restart Krylov–Schur to amplify the small
+    # parity-odd content reliably at every n. The reported
+    # `spectral_gap` therefore tracks the TRUE Lindbladian gap, while
+    # the trajectory itself stays accurate via the rho_0-aligned
+    # decomp above.
+    gap_res = krylov_spectral_gap(
+        config, hamiltonian, jumps;
+        krylovdim=max(30, Int(krylovdim)÷2), howmany=4, tol=tol,
+        allow_unpaired_nonhermitian=allow_unpaired_nonhermitian,
+    )
+    spectral_gap = gap_res.spectral_gap
+    total_matvecs = decomp.matvec_count + gap_res.matvec_count
 
     return (
         t              = collect(t_grid),
         distances      = distances,
         rho_final      = copy(rho_t),
-        total_matvecs  = decomp.matvec_count,
-        all_converged  = decomp.converged,
+        total_matvecs  = total_matvecs,
+        all_converged  = decomp.converged && gap_res.converged >= 1,
         states         = states,
         eigenvalues    = decomp.eigenvalues,
         c              = decomp.c,
@@ -887,16 +959,31 @@ function predict_channel_trajectory(
         save_states && (states[j] = copy(rho_k))
     end
 
-    # Convert leading channel eigenvalue gap to Lindbladian units:
-    # mu_2 = exp(δ λ_2) ⇒ |1 - μ_2| ≈ δ |λ_2| at small δ.
-    spectral_gap = h >= 2 ? abs(1.0 - abs(decomp.eigenvalues[2])) / delta : NaN
+    # Spectral gap (qf-e4z.27): the gap from `decomp.eigenvalues[2]`
+    # is the leading P̂-EVEN-sub-spectrum eigenvalue whenever `rho_0`
+    # and the channel share a discrete symmetry. We patch this via a
+    # separate `krylov_spectral_gap` call on the matching
+    # `Config{Thermalize}`, which uses `_krylov_default_x0` + KrylovKit
+    # restart to capture parity-odd modes reliably at every n. The
+    # `krylov_spectral_gap` Thermalize path already converts channel
+    # eigenvalues μ to Lindbladian units via `λ = (μ − 1)/δ` and
+    # reports `spectral_gap = |Re(λ_2)|`, so the returned value is
+    # directly the Lindbladian-unit true gap.
+    gap_res = krylov_spectral_gap(
+        config, hamiltonian, jumps;
+        trotter=trotter,
+        krylovdim=max(30, Int(krylovdim)÷2), howmany=4, tol=tol,
+        allow_unpaired_nonhermitian=allow_unpaired_nonhermitian,
+    )
+    spectral_gap = gap_res.spectral_gap
+    total_matvecs = decomp.matvec_count + gap_res.matvec_count
 
     return (
         t              = t_grid,
         distances      = distances,
         rho_final      = copy(rho_k),
-        total_matvecs  = decomp.matvec_count,
-        all_converged  = decomp.converged,
+        total_matvecs  = total_matvecs,
+        all_converged  = decomp.converged && gap_res.converged >= 1,
         states         = states,
         eigenvalues    = decomp.eigenvalues,
         c              = decomp.c,
