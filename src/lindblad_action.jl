@@ -624,6 +624,12 @@ Same as `integrate_to_gibbs(::Config{Lindbladian}, ..., mode=:L)`.
   to the trace distance, where m+1 is the slowest excluded mode. For
   mixing-time fits on the slow tail this is benign; for early-time
   accuracy increase `krylovdim`.
+- `krylovdim_gap_pass::Union{Nothing, Int} = nothing`: krylovdim for the
+  qf-e4z.27 spectral-gap Pass 2 (a separate `krylov_spectral_gap` call
+  used to compute `spectral_gap` independently of the rho_0-aligned
+  Arnoldi Pass 1). Defaults to `max(30, krylovdim÷2)` — set explicitly
+  (e.g. `krylovdim_gap_pass = krylovdim`) when investigating
+  Pass-1↔Pass-2 disagreements at hard cells.
 - `tol::Real = 1e-10`: not used directly (the dense eigendecomposition of
   the small Hessenberg has no tolerance knob); kept for API symmetry with
   `lindblad_action_integrate` and to allow a future Krylov-shift-invert
@@ -660,6 +666,7 @@ function predict_lindbladian_trajectory(
     rho_0::Matrix{T},
     t_grid::AbstractVector{<:Real};
     krylovdim::Integer = 40,
+    krylovdim_gap_pass::Union{Nothing, Integer} = nothing,
     tol::Real = 1e-10,
     save_states::Bool = false,
     allow_unpaired_nonhermitian::Bool = false,
@@ -743,9 +750,10 @@ function predict_lindbladian_trajectory(
     # `spectral_gap` therefore tracks the TRUE Lindbladian gap, while
     # the trajectory itself stays accurate via the rho_0-aligned
     # decomp above.
+    kdim_gp = krylovdim_gap_pass === nothing ? max(30, Int(krylovdim)÷2) : Int(krylovdim_gap_pass)
     gap_res = krylov_spectral_gap(
         config, hamiltonian, jumps;
-        krylovdim=max(30, Int(krylovdim)÷2), howmany=4, tol=tol,
+        krylovdim=kdim_gp, howmany=4, tol=tol,
         allow_unpaired_nonhermitian=allow_unpaired_nonhermitian,
     )
     spectral_gap = gap_res.spectral_gap
@@ -809,6 +817,9 @@ the ideal-L `predict_lindbladian_trajectory` which targets `e^{tL} rho_0`.
 
 # Keywords
 - `krylovdim::Integer = 40`: Arnoldi subspace size.
+- `krylovdim_gap_pass::Union{Nothing, Integer} = nothing`: krylovdim for
+  the qf-e4z.27 spectral-gap Pass 2 (a separate `krylov_spectral_gap`
+  call). Defaults to `max(30, krylovdim÷2)`.
 - `tol::Real = 1e-10`: reserved (no-op currently — the dense small-space
   eigendecomposition has no tolerance knob).
 - `save_states::Bool = false`: also return the reconstructed rho_k.
@@ -847,6 +858,7 @@ function predict_channel_trajectory(
     rho_0::Matrix{T},
     k_grid::AbstractVector{<:Integer};
     krylovdim::Integer = 40,
+    krylovdim_gap_pass::Union{Nothing, Integer} = nothing,
     tol::Real = 1e-10,
     save_states::Bool = false,
     trotter::Union{Nothing, AbstractTrotter} = nothing,
@@ -969,10 +981,11 @@ function predict_channel_trajectory(
     # eigenvalues μ to Lindbladian units via `λ = (μ − 1)/δ` and
     # reports `spectral_gap = |Re(λ_2)|`, so the returned value is
     # directly the Lindbladian-unit true gap.
+    kdim_gp = krylovdim_gap_pass === nothing ? max(30, Int(krylovdim)÷2) : Int(krylovdim_gap_pass)
     gap_res = krylov_spectral_gap(
         config, hamiltonian, jumps;
         trotter=trotter,
-        krylovdim=max(30, Int(krylovdim)÷2), howmany=4, tol=tol,
+        krylovdim=kdim_gp, howmany=4, tol=tol,
         allow_unpaired_nonhermitian=allow_unpaired_nonhermitian,
     )
     spectral_gap = gap_res.spectral_gap
