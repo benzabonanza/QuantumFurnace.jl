@@ -73,8 +73,13 @@ times the number of steps.
   need accurate gap_arnoldi values.
 - For new fixture families: prefer X-type (or any non-Z) disorder over
   Z-type for AFM Heisenberg. [[X],[Z,Z]] structurally breaks Z^⊗N parity
-  at the Hamiltonian level, eliminating the entire parity-trap class.
-  See [[xz-disorder-fixtures-qf-e4z-27]].
+  at the Hamiltonian level. NOTE per
+  [[single-pass-xz-disorder-decorative-qf-e4z-28]]: the 0.1 X-disorder
+  in our X+ZZ fixtures is too weak to remove the algorithmic parity
+  trap from plain Arnoldi at krylovdim=40 — Pass 2 still required on
+  those fixtures. The X+ZZ family is the right physics fixture (no
+  even/odd-n parity artefact in qf-e4z.23-style sweeps), not an
+  algorithmic substitute. See [[xz-disorder-fixtures-qf-e4z-27]].
 - Cost: the qf-e4z.27 two-pass approach adds ~50–100 matvecs vs the
   pre-qf-e4z.27 single pass. For n ≥ 7 sweeps this is meaningful;
   for thesis-grade work this is the right default.

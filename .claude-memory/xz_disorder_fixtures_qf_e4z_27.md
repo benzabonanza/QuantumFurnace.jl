@@ -30,12 +30,15 @@ qf-e4z.26 and qf-e4z.27:
   reported `spectral_gap` was the P̂-EVEN sub-spectrum gap, not the
   true Lindbladian gap.
 * On the new X+ZZ fixtures the Hamiltonian has no exact Z^⊗N
-  symmetry, so the trajectory predictor's `spectral_gap` and
-  `krylov_spectral_gap`'s gap AGREE without needing any seed-
-  perturbation trick. (The qf-e4z.27 two-pass architecture
-  [[predict-trajectory-two-pass-qf-e4z-27]] is still applied because
-  it's the universal correct default, but on these fixtures it's a
-  no-op correctness-wise.)
+  symmetry. **Caveat from qf-e4z.28** (see
+  [[single-pass-xz-disorder-decorative-qf-e4z-28]]): the X-disorder
+  strength (0.1) is too WEAK to remove the trap from plain MGS
+  Arnoldi from `vec(I/d)` at krylovdim=40 — single-pass still gives
+  the same wrong gap as on Z+ZZ. The qf-e4z.27 two-pass architecture
+  [[predict-trajectory-two-pass-qf-e4z-27]] is still required for
+  the trajectory predictors; the X+ZZ fixtures fix the *physics
+  interpretation* (no even/odd-n parity artefact in qf-e4z.23-style
+  sweeps), not the algorithmic parity trap.
 
 **How to apply:**
 - New numerical work that wants to AVOID the parity-trap interpretive
