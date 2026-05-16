@@ -1,19 +1,33 @@
 ---
 name: single-pass-xz-disorder-decorative-qf-e4z-28
-description: "qf-e4z.28 finding: X+ZZ structural parity-break does NOT eliminate the qf-e4z.27 parity-trap bug. The 0.1 X-disorder is too weak to survive 40-step MGS Arnoldi from vec(I/d) — single-pass gives the SAME wrong gap as Z+ZZ. Even a 1e-10 GUE-perturbed seed fails in plain Arnoldi; KrylovKit thick-restart in Pass 2 is the actual fix. Keep the qf-e4z.27 two-pass."
+description: "qf-e4z.28 finding (SUPERSEDED by qf-e4z.29/30): X+ZZ structural parity-break + rho_0 = I/d does NOT eliminate the qf-e4z.27 parity-trap bug — the 0.1 X-disorder is too weak to survive 40-step MGS Arnoldi. Real resolution is from the INPUT side: rho_0 = |+⟩⟨+|^⊗N + single-pass at krylovdim=60 reaches rel_err < 1e-9 on BOTH Z+ZZ and X+ZZ (qf-e4z.30). See canonical-taumix-setup-qf-e4z-30."
 metadata: 
   node_type: memory
   type: feedback
   originSessionId: eb034d2e-3830-4584-91f6-0d52f53ce2fe
 ---
 
-# qf-e4z.28: X+ZZ structural fix is decorative — keep two-pass
+# qf-e4z.28: X+ZZ structural fix is decorative — keep two-pass (SUPERSEDED)
 
-**Rule:** Do NOT drop the qf-e4z.27 two-pass in `predict_lindbladian_trajectory`
-/ `predict_channel_trajectory` on the strength of "X+ZZ breaks Z^⊗N parity
-structurally". The two-pass with KrylovKit thick-restart in Pass 2 is
-the algorithmic fix; X+ZZ is a physics-level convenience, not an
-algorithmic substitute.
+> **Update (qf-e4z.29 + qf-e4z.30, 2026-05-16):** the framing below is
+> correct as far as it goes — X+ZZ disorder at strength 0.1 IS too
+> weak to remove the algorithmic trap when `rho_0 = I/d` (still true).
+> But the conclusion "keep two-pass" turned out to be the wrong
+> takeaway. The real resolution is to drop `I/d` from the input side:
+> `rho_0 = |+⟩⟨+|^⊗N` (one Hadamard layer on `|0⟩^⊗N`) naturally breaks
+> the symmetry-protected orbit and single-pass Arnoldi at krylovdim=60
+> reaches rel_err < 1e-9 on BOTH Z+ZZ and X+ZZ at n=5,7
+> ([[canonical-taumix-setup-qf-e4z-30]]). The X+ZZ fixture family
+> stays available for historical audit but is not needed for any new
+> τ_mix / gap work.
+
+**Rule (still correct as a NEGATIVE result):** Do NOT drop the
+qf-e4z.27 two-pass on the strength of "X+ZZ breaks Z^⊗N parity
+structurally" if you're still using `rho_0 = I/d`. X+ZZ is a
+physics-level convenience, not an algorithmic substitute for Pass 2
+when fed an `I/d` seed. The two-pass with KrylovKit thick-restart in
+Pass 2 remains the right safety net for any caller that does pass
+`rho_0 = I/d`.
 
 **Why:** Empirical test on the historically problematic spot cells
 (n=5 and n=7, β_phys=2.5, seed=42; qf-e4z.27 verification drivers).
@@ -42,8 +56,16 @@ each cycle. Plain MGS Arnoldi has no restart; once a small component
 falls below ~`tol` it is gone for good.
 
 A `|+⟩⟨+|^⊗N` initial state DOES break the trap at n=5 (rel_err 2.5e-7)
-but only partially at n=7 (rel_err 2.6e-5 X+ZZ / 9.2e-5 Z+ZZ — above the
-1e-6 threshold for thesis-grade work). Not a robust replacement.
+and at n=7 it gets to rel_err 2.6e-5 (X+ZZ) / 9.2e-5 (Z+ZZ) at
+krylovdim=40 — above the 1e-6 threshold for thesis-grade work, *at
+that krylovdim*. **qf-e4z.30 then closed this**: at krylovdim=60 the
+rel_err on the same n=7 cells drops to 2.4e-9 (X+ZZ) / 2.0e-9 (Z+ZZ),
+4 orders of magnitude under the threshold; at krylovdim=80 it reaches
+machine precision. The n=7 residual at krylovdim=40 was plain Krylov
+truncation (40 modes out of d²=16384), not a fundamental obstruction.
+With krylovdim=60 the `|+⟩⟨+|^⊗N` recipe is fully robust through at
+least n=9; see [[canonical-taumix-setup-qf-e4z-30]] for the
+production recipe.
 
 **How to apply:**
 - New `predict_lindbladian_trajectory` / `predict_channel_trajectory`
