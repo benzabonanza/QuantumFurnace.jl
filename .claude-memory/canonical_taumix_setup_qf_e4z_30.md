@@ -92,6 +92,13 @@ krylovdim sweep before signing off on thesis plots at n ≥ 10.** The
 qf-e4z.30 driver is the template — re-run at the largest n and pick the
 smallest krylovdim that reaches rel_err < 1e-7.
 
+**Seed policy (added 2026-05-17 from qf-e4z.34 canonical-seed analysis):**
+
+- n ≤ 8 (cheap sandbox runs): **5 seeds** `{42, 43, 44, 45, 46}` + median + IQR bands — the qf-e4z.34 cost-default.
+- **n ≥ 9 (cluster runs): SINGLE SEED = 46.** Validated by qf-e4z.34: across all 72 (sampler × metric × cell) comparisons over n=3..8 × β_phys ∈ {0.25, 0.5, 1.0}, seed=46 is the closest seed to the 5-seed median **in 33/72 cases (46%, far above 1/5 = 20% by chance)** with mean deviation 0.35% from the cell median; the worst-case deviation across ALL cells is 1.99% (τ_CKG) / 1.37% (gap_DLL) / 1.32% (gap_CKG) / 1.26% (τ_DLL). The next-best seed (43) has max τ deviations of 5.4% (CKG) / 9.85% (DLL) — significantly worse.
+- This ±2% single-seed proxy is **WELL BELOW** any signal we care about now that the numerics chapter is pivoting to QUALITATIVE understanding rather than asymptotic scaling fits (per [[feedback-more-data-points-for-scaling-claims]] + [[feedback-numerics-grid-canonical]]). Exact numerical scaling exponents would need 5+ seeds; for the "where does CKG help more, what's the parity story, does the gap collapse" qualitative picture, 1 seed is plenty.
+- If extra robustness is wanted at a single n=10..14 spot, run 2 seeds `{46, 43}`. Going beyond 2 seeds at cluster scale is wasted compute.
+
 **How to apply:**
 
 - For all NEW τ_mix / gap drivers, write `rho_0 = rho_plus_tensor(n) =

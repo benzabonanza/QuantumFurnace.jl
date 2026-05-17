@@ -42,3 +42,11 @@ Result tables in `scripts/output/sweep_qf_e4z_34_ckg_vs_dll_plot_summary{,_stats
 - For `bd note qf-e4z.34`-style follow-ups: never quote "gap ratio widens with n at β=0.5 → CKG advantage grows with N" without the `|c₂|_DLL` caveat. Initially I made that claim and had to retract it within an hour.
 
 **Cluster follow-ups parked under [[qf-e4z-32]] / [[qf-e4z-23]] cluster notes:** n ∈ {10,12,14} on the same canonical grid, both PBC and OBC, same pipeline parameters. Re-verify kdim=80 saturation at n=10+ first ([[canonical-taumix-setup-qf-e4z-30]] flagged this as still-to-confirm).
+
+**Seed-spread + canonical single-seed (added 2026-05-17):** seed-to-seed disagreement across the 5 disorder samples is small and concentrates at odd-n β=0.25 cells. **Overall spread per sampler** (18 cells each, gap_phys and τ_phys reported separately):
+- CKG: gap IQR median 0.8% (max 2.5%); τ IQR median 1.2% (max 8.8%)
+- DLL: gap IQR median 0.7% (max 2.4%); τ IQR median 1.6% (max 9.2%)
+
+Worst cells are odd-n n=3,5 at β=0.25 (DLL τ-range up to 19.2% at `odd n=5 β=0.25` — DLL has small `|c₂|` here, making τ more noise-sensitive). At n ≥ 6 every cell has gap IQR < 1.3% and τ IQR < 4.3%.
+
+**Canonical single-seed = 46** for n ≥ 9 cluster runs. Across all 72 (sampler × metric × cell) comparisons, seed 46 is the closest to the 5-seed median in **33/72 cases (46%)** with mean deviation 0.35%; worst-case deviations across all cells: 1.99% (τ_CKG), 1.37% (gap_DLL), 1.32% (gap_CKG), 1.26% (τ_DLL). Next-best (seed 43): max τ deviations 5.37% (CKG) / 9.85% (DLL). The seed-46 ±2% proxy is well below any signal we care about (numerics chapter is qualitative, no exact-scaling-exponent ambition — per [[feedback-more-data-points-for-scaling-claims]] / [[feedback-numerics-grid-canonical]]). Policy now locked at [[canonical-taumix-setup-qf-e4z-30]] "Seed policy" section. Diagnostics: `scripts/scratch_qf_e4z_34_seed_spread.jl` + `scripts/scratch_qf_e4z_34_canonical_seed.jl`.
