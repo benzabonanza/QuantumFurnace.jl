@@ -145,10 +145,21 @@ full eigvals, and return the smallest |Re(λ)| above `zero_tol` (the
 nonzero leading mode = canonical "spectral gap"). Coherent term is ON (the
 default of `construct_lindbladian`). Also returns the 5 smallest |Re(λ)|
 values for diagnostic (e.g. parity sub-spectrum structure).
+
+The LAPACK `geev` eigvals call is BLAS-bound; we bump BLAS threads to 4
+just for this call (~4× speedup at d²=4096) and restore BLAS=1 afterwards
+so the matvec-bound Krylov path runs back at the canonical setting.
 """
-function dense_gap(cfg, ham, jumps; zero_tol::Float64 = ZERO_MODE_TOL)
+function dense_gap(cfg, ham, jumps; zero_tol::Float64 = ZERO_MODE_TOL,
+                   eigvals_blas_threads::Int = 4)
     L = construct_lindbladian(jumps, cfg, ham)          # dense d²×d² complex
-    λs = eigvals(L)
+    prev_blas = BLAS.get_num_threads()
+    BLAS.set_num_threads(eigvals_blas_threads)
+    λs = try
+        eigvals(L)
+    finally
+        BLAS.set_num_threads(prev_blas)
+    end
     re_abs = abs.(real.(λs))
     # Sort ascending; smallest is zero (trace preservation); take first
     # nonzero entry above tolerance.
