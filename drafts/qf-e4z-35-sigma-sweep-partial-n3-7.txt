@@ -1,0 +1,90 @@
+│   seed = 46
+│   path = "/Users/bence/code/QuantumFurnace.jl/scripts/output/sweep_qf_e4z_35_sigma_sweep_plot/ckg/sweep_n8_betaphys0.5_sigma0.5_seed46_L_KMS_Energy.bson"
+└ @ Main /Users/bence/code/QuantumFurnace.jl/scripts/analyze_qf_e4z_35_sigma_sweep_plot.jl:79
+┌ Warning: missing sidecar
+│   n = 8
+│   β_phys = 0.5
+│   c = 0.75
+│   seed = 46
+│   path = "/Users/bence/code/QuantumFurnace.jl/scripts/output/sweep_qf_e4z_35_sigma_sweep_plot/ckg/sweep_n8_betaphys0.5_sigma0.75_seed46_L_KMS_Energy.bson"
+└ @ Main /Users/bence/code/QuantumFurnace.jl/scripts/analyze_qf_e4z_35_sigma_sweep_plot.jl:79
+┌ Warning: missing sidecar
+│   n = 8
+│   β_phys = 0.5
+│   c = 1.0
+│   seed = 46
+│   path = "/Users/bence/code/QuantumFurnace.jl/scripts/output/sweep_qf_e4z_35_sigma_sweep_plot/ckg/sweep_n8_betaphys0.5_sigma1_seed46_L_KMS_Energy.bson"
+└ @ Main /Users/bence/code/QuantumFurnace.jl/scripts/analyze_qf_e4z_35_sigma_sweep_plot.jl:79
+┌ Warning: missing sidecar
+│   n = 8
+│   β_phys = 0.5
+│   c = 1.5
+│   seed = 46
+│   path = "/Users/bence/code/QuantumFurnace.jl/scripts/output/sweep_qf_e4z_35_sigma_sweep_plot/ckg/sweep_n8_betaphys0.5_sigma1.5_seed46_L_KMS_Energy.bson"
+└ @ Main /Users/bence/code/QuantumFurnace.jl/scripts/analyze_qf_e4z_35_sigma_sweep_plot.jl:79
+┌ Warning: missing sidecar
+│   n = 8
+│   β_phys = 0.5
+│   c = 2.0
+│   seed = 46
+│   path = "/Users/bence/code/QuantumFurnace.jl/scripts/output/sweep_qf_e4z_35_sigma_sweep_plot/ckg/sweep_n8_betaphys0.5_sigma2_seed46_L_KMS_Energy.bson"
+└ @ Main /Users/bence/code/QuantumFurnace.jl/scripts/analyze_qf_e4z_35_sigma_sweep_plot.jl:79
+┌ Warning: missing sidecar
+│   n = 8
+│   β_phys = 1.0
+│   c = 0.25
+│   seed = 46
+│   path = "/Users/bence/code/QuantumFurnace.jl/scripts/output/sweep_qf_e4z_35_sigma_sweep_plot/ckg/sweep_n8_betaphys1_sigma0.25_seed46_L_KMS_Energy.bson"
+└ @ Main /Users/bence/code/QuantumFurnace.jl/scripts/analyze_qf_e4z_35_sigma_sweep_plot.jl:79
+┌ Warning: missing sidecar
+│   n = 8
+│   β_phys = 1.0
+│   c = 0.5
+│   seed = 46
+│   path = "/Users/bence/code/QuantumFurnace.jl/scripts/output/sweep_qf_e4z_35_sigma_sweep_plot/ckg/sweep_n8_betaphys1_sigma0.5_seed46_L_KMS_Energy.bson"
+└ @ Main /Users/bence/code/QuantumFurnace.jl/scripts/analyze_qf_e4z_35_sigma_sweep_plot.jl:79
+┌ Warning: missing sidecar
+│   n = 8
+│   β_phys = 1.0
+│   c = 0.75
+│   seed = 46
+│   path = "/Users/bence/code/QuantumFurnace.jl/scripts/output/sweep_qf_e4z_35_sigma_sweep_plot/ckg/sweep_n8_betaphys1_sigma0.75_seed46_L_KMS_Energy.bson"
+└ @ Main /Users/bence/code/QuantumFurnace.jl/scripts/analyze_qf_e4z_35_sigma_sweep_plot.jl:79
+┌ Warning: missing sidecar
+│   n = 8
+│   β_phys = 1.0
+│   c = 1.0
+│   seed = 46
+│   path = "/Users/bence/code/QuantumFurnace.jl/scripts/output/sweep_qf_e4z_35_sigma_sweep_plot/ckg/sweep_n8_betaphys1_sigma1_seed46_L_KMS_Energy.bson"
+└ @ Main /Users/bence/code/QuantumFurnace.jl/scripts/analyze_qf_e4z_35_sigma_sweep_plot.jl:79
+┌ Warning: missing sidecar
+│   n = 8
+│   β_phys = 1.0
+│   c = 1.5
+│   seed = 46
+│   path = "/Users/bence/code/QuantumFurnace.jl/scripts/output/sweep_qf_e4z_35_sigma_sweep_plot/ckg/sweep_n8_betaphys1_sigma1.5_seed46_L_KMS_Energy.bson"
+└ @ Main /Users/bence/code/QuantumFurnace.jl/scripts/analyze_qf_e4z_35_sigma_sweep_plot.jl:79
+┌ Warning: missing sidecar
+│   n = 8
+│   β_phys = 1.0
+│   c = 2.0
+│   seed = 46
+│   path = "/Users/bence/code/QuantumFurnace.jl/scripts/output/sweep_qf_e4z_35_sigma_sweep_plot/ckg/sweep_n8_betaphys1_sigma2_seed46_L_KMS_Energy.bson"
+└ @ Main /Users/bence/code/QuantumFurnace.jl/scripts/analyze_qf_e4z_35_sigma_sweep_plot.jl:79
+
+n   β_phys  c      | τ_mix_phys  gap_phys    | ‖L‖_HS_phys d_{1→1}_phys | τ_mix·‖L‖   τ_mix·gap   gap/‖L‖     | src     
+--------------------------------------------------------------------------------------------------------------
+3   0.25    0.25   | 0.8442      6.992       | 17.81      13.58      | 15.04       5.903       0.3926      | extrapolated
+3   0.25    0.5    | 0.9529      6.353       | 16.41      12.7       | 15.64       6.054       0.3872      | extrapolated
+3   0.25    0.75   | 1.212       4.948       | 14.93      11.73      | 18.1        5.999       0.3314      | extrapolated
+3   0.25    1      | 1.551       3.841       | 13.28      10.56      | 20.6        5.958       0.2893      | extrapolated
+3   0.25    1.5    | 2.416       2.464       | 9.76       7.879      | 23.58       5.953       0.2525      | extrapolated
+3   0.25    2      | 3.975       1.57        | 6.579      5.368      | 26.15       6.238       0.2386      | extrapolated
+--------------------------------------------------------------------------------------------------------------
+3   0.5     0.25   | 0.9873      5.959       | 17.87      13.67      | 17.65       5.883       0.3334      | extrapolated
+3   0.5     0.5    | 1.081       5.268       | 16.48      12.8       | 17.81       5.694       0.3197      | extrapolated
+3   0.5     0.75   | 1.215       4.601       | 15.13      11.94      | 18.37       5.588       0.3042      | extrapolated
+3   0.5     1      | 1.404       3.969       | 13.82      11.11      | 19.41       5.573       0.2871      | extrapolated
+3   0.5     1.5    | 2.072       2.824       | 11.11      9.242      | 23.03       5.853       0.2542      | extrapolated
+3   0.5     2      | 3.252       1.84        | 8.167      6.966      | 26.56       5.982       0.2253      | extrapolated
+--------------------------------------------------------------------------------------------------------------
