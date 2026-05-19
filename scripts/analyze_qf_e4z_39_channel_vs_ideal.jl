@@ -1,11 +1,21 @@
 #!/usr/bin/env julia
-# analyze_qf_e4z_39_channel_vs_ideal.jl  (qf-e4z.39)
+# analyze_qf_e4z_39_channel_vs_ideal.jl  (qf-e4z.39 + qf-e4z.37 fix)
 #
 # Compare the qf-e4z.39 v2 channel CKG sweep (recipe2: per-cell adaptive M_D)
 # to the qf-e4z.34 ideal CKG arm at seed=46. Mirrors
 # analyze_qf_e4z_36_channel_vs_ideal.jl but reads from the v2 directory.
 # Also reports floor_distance and tau_mix_channel_source per cell — every
 # cell MUST report :extrapolated for the thesis P5 plot (qf-e4z.38).
+#
+# qf-e4z.37 fix (2026-05-19): legacy v2 sidecars stored Pass-2 spectral gap as
+# `gap_alg_channel`, which is unreliable on this Heisenberg family (7/18 cells
+# inflated 11-47% vs ideal). The Pass-1 trajectory gap (matches ideal
+# driver's convention) is the comparable quantity. This analyzer:
+#   (1) Prefers `gap_alg_pass1_channel` from new sidecars (qf-e4z.37 patch).
+#   (2) Falls back to a separately-computed Pass-1 BSON
+#       (`qf_e4z_37_pass1_extraction.bson`) if the sidecar lacks Pass-1.
+#   (3) Else falls back to `gap_alg_channel` (Pass-2) with a warning column.
+# It also reports the dense-LAPACK ground truth gap where available (n ≤ 6).
 #
 # Usage:
 #   julia --project scripts/analyze_qf_e4z_39_channel_vs_ideal.jl
@@ -37,16 +47,39 @@ _channel_path(n, βphys, seed) = joinpath(OUT_CH,
 _ideal_path(n, βphys, seed) = joinpath(OUT_ID,
     "sweep_n$(n)_betaphys$(_bp_str(βphys))_seed$(seed)_L_KMS_Energy.bson")
 
+"""
+Load the qf-e4z.37 Pass-1 extraction BSON (if present) and index by (n, β_phys).
+Returns Dict((n, β) -> (pass1_gap_phys, dense_gap_phys)).
+"""
+function _load_pass1_extraction()
+    path = joinpath(@__DIR__, "output", "qf_e4z_37_pass1_extraction.bson")
+    isfile(path) || return Dict{Tuple{Int, Float64}, NamedTuple}()
+    d = BSON.load(path)
+    rows = d[:rows]
+    out = Dict{Tuple{Int, Float64}, NamedTuple}()
+    for r in rows
+        key = (Int(r[:n]), float(r[:β_phys]))
+        out[key] = (pass1_gap_phys = r[:pass1_gap_phys],
+                    pass2_gap_phys = r[:pass2_gap_phys],
+                    dense_gap_phys = r[:dense_gap_phys])
+    end
+    return out
+end
+
 function main()
     println("\nqf-e4z.39 v2 channel (recipe2) vs qf-e4z.34 ideal CKG arm @ seed=$SEED")
-    println("=" ^ 115)
-    @printf("%3s  %6s   %4s   %10s  %10s  %6s   %10s  %10s  %6s   %10s   %10s\n",
+    println("qf-e4z.37 fix: gap_phys reported is Pass-1 (matches ideal); Pass-2 (legacy) and dense (ground truth, n≤6) shown for audit.")
+    println("=" ^ 145)
+    @printf("%3s  %6s   %4s   %10s  %10s  %6s   %10s  %10s  %10s   %10s  %10s  %6s   %10s   %10s\n",
             "n", "β_phys",
             "M_D",
-            "ch_gap_p", "id_gap_p", "g_rat",
+            "ch_gap_p1", "id_gap_p", "g_rat",
+            "ch_gap_p2", "ch_dense ", "src_used ",
             "ch_τ_p  ", "id_τ_p  ", "τ_rat",
             "ch_floor ", "ch_src ")
-    println("=" ^ 115)
+    println("=" ^ 145)
+
+    extraction = _load_pass1_extraction()
 
     rows = NamedTuple[]
     for n in N_RANGE, βphys in BETA_ALL
@@ -61,24 +94,42 @@ function main()
         ch = BSON.load(ch_p, QuantumFurnace)[:result]
         id = BSON.load(id_p, QuantumFurnace)[:result]
 
-        ch_gap_phys = ch[:gap_phys_channel]; id_gap_phys = id[:gap_phys]
+        # qf-e4z.37 gap resolution: prefer Pass-1 from updated sidecar; fall back
+        # to extraction BSON; finally fall back to Pass-2 (legacy) with warning.
+        ext = get(extraction, (Int(n), float(βphys)), nothing)
+        ch_gap_p1, src_used = if haskey(ch, :gap_phys_pass1_channel)
+            (ch[:gap_phys_pass1_channel], :pass1_sidecar)
+        elseif ext !== nothing && isfinite(ext.pass1_gap_phys)
+            (ext.pass1_gap_phys, :pass1_extraction)
+        else
+            (ch[:gap_phys_channel], :pass2_fallback)
+        end
+        ch_gap_p2 = haskey(ch, :gap_phys_pass2_channel) ? ch[:gap_phys_pass2_channel] : ch[:gap_phys_channel]
+        ch_gap_dense = (ext === nothing || !isfinite(ext.dense_gap_phys)) ? NaN : ext.dense_gap_phys
+
+        id_gap_phys = id[:gap_phys]
         ch_tau_phys = ch[:mixing_time_phys_channel]; id_tau_phys = id[:mixing_time_phys]
-        g_ratio   = ch_gap_phys / id_gap_phys
+        g_ratio   = ch_gap_p1 / id_gap_phys
         tau_ratio = ch_tau_phys / id_tau_phys
         M_D       = ch[:M_D]
-        @printf("%3d  %6.2f   %4d   %10.4f  %10.4f  %6.3f   %10.3f  %10.3f  %6.3f   %10.3e   %10s\n",
+        @printf("%3d  %6.2f   %4d   %10.4f  %10.4f  %6.3f   %10.4f  %10s   %-10s  %10.3f  %10.3f  %6.3f   %10.3e   %10s\n",
                 n, βphys, M_D,
-                ch_gap_phys, id_gap_phys, g_ratio,
+                ch_gap_p1, id_gap_phys, g_ratio,
+                ch_gap_p2, isnan(ch_gap_dense) ? "n/a" : @sprintf("%.4f", ch_gap_dense),
+                string(src_used),
                 ch_tau_phys, id_tau_phys, tau_ratio,
                 ch[:floor_distance], string(ch[:tau_mix_channel_source]))
         push!(rows, (n = n, beta_phys = βphys, M_D = M_D,
-                     ch_gap_phys = ch_gap_phys, id_gap_phys = id_gap_phys, g_ratio = g_ratio,
+                     ch_gap_phys = ch_gap_p1, ch_gap_phys_pass2 = ch_gap_p2,
+                     ch_gap_phys_dense = ch_gap_dense,
+                     id_gap_phys = id_gap_phys, g_ratio = g_ratio,
                      ch_tau_phys = ch_tau_phys, id_tau_phys = id_tau_phys, tau_ratio = tau_ratio,
                      ch_floor = ch[:floor_distance],
-                     ch_source = ch[:tau_mix_channel_source]))
+                     ch_source = ch[:tau_mix_channel_source],
+                     gap_source_used = src_used))
     end
 
-    println("=" ^ 115)
+    println("=" ^ 145)
     n_cells = length(rows)
     if n_cells > 0
         # KEY CHECK: every cell must be :extrapolated.
