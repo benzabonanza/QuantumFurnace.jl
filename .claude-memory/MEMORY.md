@@ -2,6 +2,9 @@
 
 ## Project Defaults
 
+### 🚨 POLICY: ρ_0 = |+⟩⟨+|^⊗N for ALL simulations, NEVER I/d (2026-05-24, user-decreed)
+- See [feedback: canonical ρ_0 always plus](feedback_canonical_rho0_always_plus.md). Decreed by the user 2026-05-24 after qf-1jj was found to have used I/d (predating qf-e4z.30). For ALL Lindbladian/channel trajectory work — `predict_lindbladian_trajectory`, `predict_channel_trajectory`, every τ_mix calculation in this project — ρ_0 must be the equal-superposition state |+⟩⟨+|^⊗N. Build via `psi = ones(ComplexF64, 2^n) ./ sqrt(2.0^n); rho_0 = psi * psi'`. Before reusing any existing sweep / driver as a template, audit the `rho_0 = ...` line. Don't accept defaults silently. qf-b4i is the rerun of qf-1jj to align it to this policy.
+
 ### Threading: JULIA_NUM_THREADS = #cores, BLAS = 1 (2026-05-24)
 - See [Julia threads vs BLAS](feedback_julia_threads_vs_blas.md). For all CKG/Lindbladian/channel matvecs, Julia threads parallelise over ω-labels / t-keys (`Threads.@spawn` in `src/jump_workers.jl`, `src/coherent.jl`, `src/trajectories.jl`, `Threads.@threads` in `src/lindblad_action.jl:1675`). `apply_lindbladian` docstring (lindblad_action.jl:1227-1228) explicitly warns about BLAS-vs-Julia double-saturation. **Cluster recipe: one cell per node, give Julia ALL the cores, `BLAS.set_num_threads(1)`. Do NOT pack multiple cells per node** — they would fight for the same Julia thread pool.
 
