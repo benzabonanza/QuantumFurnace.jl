@@ -284,9 +284,11 @@ using QuantumFurnace
         traj = predict_channel_trajectory(cfg, ham_ising, jumps_ising, rho_0, k_grid;
                                            krylovdim=40, compute_true_gap=true)
         # post-qf-e4z.27 spectral_gap must report the TRUE Lindbladian
-        # gap. The Lindbladian↔channel μ=exp(δλ)≈1+δλ conversion is
-        # O(δ²) — for δ=1e-3 and λ ~ 0.16, this is ~1e-5 relative.
-        # Tighten tolerance accordingly: 1e-4 absolute / 1e-3 relative.
+        # gap. The Lindbladian↔channel `λ_L = (μ-1)/δ` conversion on
+        # the *implemented* Φ_δ has leading O(δ·|λ|) error (Taylor of
+        # (μ-1)/δ around exp(δλ)/δ gives λ + δ·λ²/2 + O(δ²)); for
+        # δ=1e-3 and λ ~ 0.16 this is ~3e-5 absolute / ~2e-4 relative.
+        # Tolerance 1e-3 relative is comfortably above the bound.
         rel_err = abs(traj.spectral_gap - gap_dense) / gap_dense
         @test rel_err < 1e-3
         @info "qf-e4z.27 classical Ising parity regression (channel)" n=n_ising β_phys=β_phys gap_predict=traj.spectral_gap gap_dense=gap_dense rel_err

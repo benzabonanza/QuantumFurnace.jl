@@ -88,6 +88,9 @@ const SANDBOX_FILES = String[
     "test_predict_sandbox.jl",
     "test_faithful_apply_delta_channel_sandbox.jl",
     "test_trajectory_validation_sandbox.jl",
+    # qf-0fv: adversarial gating test for predict_*_trajectory's
+    # compute_true_gap kwarg. n=3 only, ~12s, ~50 MB.
+    "test_qf_0fv_verifier.jl",
 ]
 
 # Whole-file NO_SANDBOX test list. Heavy files that don't fit the cumulative

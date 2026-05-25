@@ -852,9 +852,13 @@ the ideal-L `predict_lindbladian_trajectory` which targets `e^{tL} rho_0`.
   result as `spectral_gap`. **Off by default** because Pass-2 on the
   channel path is known to pick the wrong eigenmode at stiff Trotter
   cells (qf-e4z.37: 11-47% inflation, krylovdim-independent). The
-  Pass-1 default reports `-log|μ_2|/δ` from the rho_0-aligned Arnoldi,
-  which is the operationally-correct mixing-rate extraction and
-  matches the driver/sidecar convention used across the project.
+  Pass-1 default reports `|log|μ_2||/δ` from the rho_0-aligned Arnoldi
+  (`abs` clamps the numerical-non-CPTP `|μ|>1` artefact to a
+  non-negative gap); on the *implemented* `Φ_δ` this agrees with the
+  ideal Lindbladian gap to O(δ·|λ|), same leading order as Pass-2's
+  `Re((μ-1)/δ)`. This is the operationally-correct mixing-rate
+  extraction and matches the driver/sidecar convention used across the
+  project.
 - `krylovdim_gap_pass::Union{Nothing, Integer} = nothing`: krylovdim for
   the Pass-2 `krylov_spectral_gap` call (no-op when
   `compute_true_gap=false`). Defaults to `max(30, krylovdim÷2)`.
@@ -868,7 +872,7 @@ NamedTuple with `t = collect(k_grid) .* δ`, `distances` (trace distance to
 the basis-aligned Gibbs reference at each step), `rho_final`,
 `total_matvecs`, `all_converged`, `states`, plus `eigenvalues` (channel
 μ_i, sorted by |μ| descending so steady-state ~1 is first), `c`,
-`spectral_gap` (in Lindbladian units; `-log|μ_2|/δ` from Pass-1 when
+`spectral_gap` (in Lindbladian units; `|log|μ_2||/δ` from Pass-1 when
 `compute_true_gap=false`, the qf-e4z.27 Pass-2 result when `true`), `rho_inf`,
 `R_modes` (biorthogonal right-eigenvector matrices, one `d×d` per
 captured Krylov mode), `sigma_beta` (the basis-aligned Gibbs reference;
@@ -1012,13 +1016,16 @@ function predict_channel_trajectory(
     end
 
     # Spectral gap. Default `compute_true_gap = false` reports the
-    # Pass-1 gap `-log|μ_2|/δ` (Lindbladian units, exact log-rate of
-    # the slowest non-steady channel eigenvalue under Φ_δ = exp(δL) +
-    # O(δ²)). This is the operationally-correct extraction for the
-    # rho_0-coupled mixing rate and matches the qf-e4z.37 driver
-    # convention. Critically, Pass-2 on the channel path is broken
-    # at stiff Trotter cells (qf-e4z.37: 7/18 cells with 11-47%
-    # inflation, independent of krylovdim), so it must stay opt-in.
+    # Pass-1 gap `|log|μ_2||/δ` (Lindbladian units; exact log-rate of
+    # |μ| under iteration). Pass-1 and Pass-2 both agree with the
+    # ideal-L gap to O(δ·|λ|) on the implemented Φ_δ; the residual
+    # difference between the two formulas (`|log|μ||/δ` vs
+    # `|Re((μ-1)/δ)|`) is itself O(δ·|λ|²). This is the
+    # operationally-correct extraction for the rho_0-coupled mixing
+    # rate and matches the qf-e4z.37 driver convention. Critically,
+    # Pass-2 on the channel path is broken at stiff Trotter cells
+    # (qf-e4z.37: 7/18 cells with 11-47% inflation, independent of
+    # krylovdim), so it must stay opt-in.
     #
     # `compute_true_gap = true` re-enables the qf-e4z.27 Pass-2 call
     # (`krylov_spectral_gap` on the matching `Config{Thermalize}`,
@@ -1038,13 +1045,18 @@ function predict_channel_trajectory(
         total_matvecs = decomp.matvec_count + gap_res.matvec_count
         all_converged = decomp.converged && gap_res.converged >= 1
     else
-        # Pass-1 gap: -log|μ_2|/δ. The decomp sorts by |1-|μ|| ascending
+        # Pass-1 gap: |log|μ_2||/δ. The decomp sorts by |1-|μ|| ascending
         # (sort_mode=:channel), so eigenvalues[2] is the slowest
-        # non-steady channel eigenvalue by construction.
+        # non-steady channel eigenvalue by construction. abs(·) makes
+        # the gap robust to a numerical |μ| > 1 from non-CPTP drift
+        # (Kraus PSD-clamp + Krylov truncation can push |μ| just past
+        # 1 by ≪ 1e-12); `|μ| = 0` (instantaneous decay) falls back to
+        # Inf, which downstream isfinite-guards interpret as "no
+        # τ_mix needed past one step".
         spectral_gap = if length(decomp.eigenvalues) >= 2
             mu2 = decomp.eigenvalues[2]
             abs_mu2 = abs(mu2)
-            abs_mu2 > 0 ? -log(abs_mu2) / delta : 0.0
+            abs_mu2 > 0 ? abs(log(abs_mu2)) / delta : Inf
         else
             0.0
         end
@@ -1290,6 +1302,33 @@ with `Threads.nthreads()` Julia workers may saturate the CPU twice if
 BLAS is not constrained. For cluster runs, set `JULIA_NUM_THREADS=N` and
 `BLAS.set_num_threads(1)` externally. The harness does **not** alter
 BLAS threading itself.
+
+# `init_state` foot-gun (qf-0fv)
+
+The default `init_state = :maximally_mixed` constructs `ρ_0 = I/d`,
+which is invariant under every superoperator symmetry P̂. Combined
+with the qf-0fv default `compute_true_gap = false` in
+`predict_lindbladian_trajectory`, this means that on a Hamiltonian
+whose Lindbladian preserves a discrete symmetry (e.g. classical Ising
++ Z-only jumps) the reported `gap_est` is the **P̂-even sub-spectrum
+gap**, not the true L gap. For the standard CKG `{X, Y, Z}` per-site
+Pauli jump set on disordered Heisenberg this is benign (X/Y break
+Z^⊗N parity), but legacy / commuting / Z-only fixtures will silently
+get the wrong gap.
+
+Mitigation: per project policy (2026-05-24), production sweeps should
+use ρ_0 = |+⟩⟨+|^⊗N (one Hadamard layer on |0⟩^⊗N), which is not
+Z^⊗N-invariant and so cannot trigger the trap. The harness's built-in
+`init_state` options are `{:maximally_mixed, :random_pure,
+:thermal_perturbed}` — none of them is `|+⟩⟨+|^⊗N`. Production drivers
+build the canonical state explicitly (e.g.
+`psi = ones(ComplexF64, 2^n) ./ sqrt(2.0^n); rho_0 = psi * psi'`) and
+bypass the sweep harness's `_make_init_state` machinery (see
+`scripts/scratch_p1_v6_multiseed_plus.jl::rho_plus_tensor` for the
+pattern). If you need to use this harness on a possibly-symmetric
+fixture, either switch to `:random_pure` (Haar-random pure breaks
+every symmetry generically) or call `predict_lindbladian_trajectory`
+directly with `compute_true_gap = true`.
 
 # Example
 
@@ -1888,6 +1927,20 @@ grid, edit and re-run `scripts/numerics_param_table.jl`.
   channel shift); `tau_mix` is populated with the conservative
   `log(d / eps) / lambda_gap_channel` bound (finite, for plotting).
 - `:nan` — degenerate predictor (no slow modes captured); `tau_mix = NaN`.
+
+# `init_state` foot-gun (qf-0fv)
+
+The default `init_state = :maximally_mixed` (ρ_0 = I/d) combined with
+the qf-0fv default `compute_true_gap = false` in
+`predict_channel_trajectory` can report the P̂-even sub-spectrum gap
+on parity-symmetric Φ_δ. The standard CKG `{X, Y, Z}` per-site jump
+set on disordered Heisenberg breaks Z^⊗N parity so the trap doesn't
+fire in practice, but legacy / commuting / Z-only fixtures will
+silently get the wrong `lambda_gap_channel`. Project policy
+(2026-05-24): production sweeps should use ρ_0 = |+⟩⟨+|^⊗N, built
+explicitly and passed to `predict_channel_trajectory` directly (see
+the `sweep_mixing_times` docstring for the same caveat on the
+Lindbladian path).
 """
 function sweep_channel_mixing(
     n_values::AbstractVector{<:Integer},
