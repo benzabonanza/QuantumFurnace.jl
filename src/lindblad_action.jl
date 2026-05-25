@@ -358,37 +358,39 @@ end
 # Arnoldi factorisation, to be compared with `lindblad_action_integrate`'s
 # ~ length(t_grid) * krylov_exp_subspace ~ 1000-3000 matvecs.
 #
-# qf-e4z.27: separation of concerns. The trajectory predictor needs two
-# different things from the Krylov subspace:
-#   (a) accurate Galerkin reconstruction of rho_0's orbit under L  — seed
-#       with vec(rho_0); the captured subspace span{ρ_0, Lρ_0, L²ρ_0, …}
-#       contains rho_0 exactly and reconstructs the trajectory tightly.
-#   (b) the true Lindbladian spectral gap — captured reliably only when
-#       parity-odd modes have non-trivial seed overlap; pure rho_0 = I/d
-#       on a parity-symmetric L misses the parity-odd sector entirely.
+# Single-pass design (qf-0fv, after qf-e4z.30 + qf-e4z.33 + qf-e4z.37).
+# With the canonical `rho_0 = |+⟩⟨+|^⊗N` policy + recipe-adequate
+# krylovdim (qf-e4z.33 table), the rho_0-seeded Arnoldi captures the
+# true Lindbladian slow modes — `eigenvalues[2]` matches dense L gap to
+# machine precision at every cell with ground truth, and the trajectory
+# of rho_0 itself reconstructs to ~1e-7 by Galerkin exactness in the
+# captured subspace.
 #
-# These are incompatible in a single Arnoldi run (eps-perturbing the
-# rho_0 seed by GUE either fails at large n with small eps or pollutes
-# trajectory accuracy at small n with large eps — see qf-e4z.26/.27
-# audit findings). So we use TWO complementary Krylov passes:
+# History: qf-e4z.27 introduced a separate `krylov_spectral_gap` "Pass
+# 2" with `_krylov_default_x0 = vec(I/d + 1e-10·H_GUE)` + KrylovKit
+# thick restart, to recover the parity-odd sector that pure `rho_0 = I/d`
+# missed on parity-symmetric Hamiltonians. That fix solved the parity
+# trap for symmetric ρ_0, but:
+#   - On the L path: with the qf-e4z.30 `|+⟩⟨+|^⊗N` policy + adequate
+#     krylovdim, Pass-2 became redundant — Pass-1 matches it to machine
+#     precision (qf-e4z.33 dense ground truth at n ≤ 6).
+#   - On the channel path: Pass-2 is actively wrong at stiff Trotter
+#     cells (qf-e4z.37: 7/18 cells of the disordered Heisenberg sweep,
+#     11–47 % inflation, krylovdim-independent because the seed has
+#     near-zero overlap with Φ_δ's slowest mode after Trotter
+#     rearrangement).
 #
-#   1. `_krylov_spectral_decomposition` (here): single-seed Arnoldi from
-#      vec(rho_0) for the trajectory. The `eigenvalues[2]` reported is
-#      the P̂-EVEN-sub-spectrum gap whenever ρ_0 and L share a symmetry,
-#      but the trajectory of ρ_0 itself only excites P̂-even modes, so
-#      this is the CORRECT decay rate for the captured trajectory.
-#   2. `krylov_spectral_gap` (called from `predict_lindbladian_trajectory`
-#      / `predict_channel_trajectory`): seed = I/d + 1e-10·H_GUE +
-#      KrylovKit thick restart. Captures parity-odd modes reliably at
-#      every n. Reports the true Lindbladian gap.
-#
-# The two routines share matvec infrastructure (apply_lindbladian! /
-# apply_delta_channel!) and add ~50 % matvec overhead total — see the
-# `total_matvecs` field of the returned NamedTuples for the cumulative
-# cost.
+# So Pass-2 is now gated behind `compute_true_gap` (default `false`).
+# Callers needing the true L gap on a parity-symmetric `(rho_0, L)`
+# fixture (e.g. `rho_0 = I/d` on a clean Hamiltonian) opt in
+# explicitly. The default reports the Pass-1 rho_0-coupled gap, which
+# is what governs `rho_0`'s own decay and is the operationally-correct
+# extraction for τ_mix.
 #
 # Spot-check verification on the qf-e4z.23/.26 fixtures lives in
-# `drafts/qf-e4z-23-audit-findings.md`.
+# `drafts/qf-e4z-23-audit-findings.md`; qf-e4z.33 kdim convergence at
+# `drafts/qf-e4z-33-kdim-convergence.md`; qf-e4z.37 channel-Pass-2-
+# broken finding at the channel sweep diagnostic scripts.
 
 """
     _arnoldi_factorize(f, x0, m) -> (Q, H, broke)
@@ -477,9 +479,13 @@ are silently missed. Specifically:
 Callers that need the TRUE Lindbladian gap on symmetric fixtures should
 combine this routine with a separate `krylov_spectral_gap` call (which
 uses `_krylov_default_x0`'s GUE-perturbed seed + KrylovKit's thick
-restart to capture parity-odd modes reliably). `predict_lindbladian_trajectory`
-and `predict_channel_trajectory` do this automatically — see the
-`spectral_gap` field of their returned NamedTuples.
+restart to capture parity-odd modes reliably). The
+`predict_lindbladian_trajectory` and `predict_channel_trajectory`
+wrappers expose this as `compute_true_gap::Bool = false` — opt in when
+your `(rho_0, L)` pair is parity-symmetric. With the canonical
+`rho_0 = |+⟩⟨+|^⊗N` policy + recipe-adequate krylovdim, the default
+Pass-1 gap is already machine-precision-equal to the true L gap
+(qf-e4z.33).
 
 # Returns
 NamedTuple with
@@ -624,12 +630,20 @@ Same as `integrate_to_gibbs(::Config{Lindbladian}, ..., mode=:L)`.
   to the trace distance, where m+1 is the slowest excluded mode. For
   mixing-time fits on the slow tail this is benign; for early-time
   accuracy increase `krylovdim`.
+- `compute_true_gap::Bool = false`: when `true`, run a second
+  `krylov_spectral_gap` call (qf-e4z.27 "Pass 2") seeded with
+  `_krylov_default_x0 = vec(I/d + 1e-10·H_GUE)` and KrylovKit thick
+  restart, and report its result as `spectral_gap`. Use this only when
+  the caller specifically needs the true Lindbladian gap on a
+  P̂-symmetric `(rho_0, L)` fixture (e.g. `rho_0 = I/d` on a
+  parity-symmetric Hamiltonian) — for such fixtures Pass-1 reports the
+  P̂-even sub-spectrum gap, which is what the trajectory of `rho_0`
+  actually decays at, but is *not* the true L gap. With the canonical
+  `rho_0 = |+⟩⟨+|^⊗N` policy + adequate krylovdim (qf-e4z.33), Pass-1
+  matches the true gap to machine precision, so the default is `false`.
 - `krylovdim_gap_pass::Union{Nothing, Int} = nothing`: krylovdim for the
-  qf-e4z.27 spectral-gap Pass 2 (a separate `krylov_spectral_gap` call
-  used to compute `spectral_gap` independently of the rho_0-aligned
-  Arnoldi Pass 1). Defaults to `max(30, krylovdim÷2)` — set explicitly
-  (e.g. `krylovdim_gap_pass = krylovdim`) when investigating
-  Pass-1↔Pass-2 disagreements at hard cells.
+  Pass-2 `krylov_spectral_gap` call (no-op when `compute_true_gap=false`).
+  Defaults to `max(30, krylovdim÷2)`.
 - `tol::Real = 1e-10`: not used directly (the dense eigendecomposition of
   the small Hessenberg has no tolerance knob); kept for API symmetry with
   `lindblad_action_integrate` and to allow a future Krylov-shift-invert
@@ -671,6 +685,7 @@ function predict_lindbladian_trajectory(
     save_states::Bool = false,
     allow_unpaired_nonhermitian::Bool = false,
     workspace::Union{Nothing, Workspace{KrylovSpectrum}} = nothing,
+    compute_true_gap::Bool = false,
 )::NamedTuple where {T<:Complex}
     d = size(rho_0, 1)
     @assert size(rho_0, 2) == d  "rho_0 must be square"
@@ -739,32 +754,47 @@ function predict_lindbladian_trajectory(
         save_states && (states[k] = copy(rho_t))
     end
 
-    # Spectral gap (qf-e4z.27): the gap reported by the decomp's
-    # `eigenvalues[2]` is the leading P̂-EVEN-sub-spectrum eigenvalue
-    # whenever `rho_0` and the Lindbladian share a discrete symmetry
-    # (e.g. rho_0 = I/d on 1D Heisenberg + Z/ZZ disorder, P = Z^⊗N).
-    # We patch this via a separate `krylov_spectral_gap` call, which
-    # seeds Arnoldi with `_krylov_default_x0` (I/d + 1e-10·H_GUE) and
-    # uses KrylovKit's thick-restart Krylov–Schur to amplify the small
-    # parity-odd content reliably at every n. The reported
-    # `spectral_gap` therefore tracks the TRUE Lindbladian gap, while
-    # the trajectory itself stays accurate via the rho_0-aligned
-    # decomp above.
-    kdim_gp = krylovdim_gap_pass === nothing ? max(30, Int(krylovdim)÷2) : Int(krylovdim_gap_pass)
-    gap_res = krylov_spectral_gap(
-        config, hamiltonian, jumps;
-        krylovdim=kdim_gp, howmany=4, tol=tol,
-        allow_unpaired_nonhermitian=allow_unpaired_nonhermitian,
-    )
-    spectral_gap = gap_res.spectral_gap
-    total_matvecs = decomp.matvec_count + gap_res.matvec_count
+    # Spectral gap. With the canonical rho_0 = |+⟩⟨+|^⊗N policy + recipe-
+    # adequate krylovdim (qf-e4z.33 table), Pass-1's `eigenvalues[2]`
+    # already matches the true Lindbladian gap to machine precision on
+    # every cell with dense ground truth — see [[qf-e4z-33-kdim-convergence]].
+    # `compute_true_gap = false` (default) skips Pass-2 entirely; the
+    # reported `spectral_gap` is the smallest |Re(λ_i)| over non-steady
+    # modes of the rho_0-seeded Arnoldi, which is the rate that governs
+    # the trajectory of rho_0 even if it differs from the true L gap on
+    # P̂-symmetric (rho_0, L) pairs.
+    #
+    # `compute_true_gap = true` re-enables the qf-e4z.27 Pass-2 call
+    # (`krylov_spectral_gap` with `_krylov_default_x0` + KrylovKit thick
+    # restart). Use this when the caller specifically needs the true L
+    # gap on a P̂-symmetric (rho_0, L) fixture (e.g. rho_0 = I/d on a
+    # parity-symmetric H) — not the default for production sweeps.
+    if compute_true_gap
+        kdim_gp = krylovdim_gap_pass === nothing ? max(30, Int(krylovdim)÷2) : Int(krylovdim_gap_pass)
+        gap_res = krylov_spectral_gap(
+            config, hamiltonian, jumps;
+            krylovdim=kdim_gp, howmany=4, tol=tol,
+            allow_unpaired_nonhermitian=allow_unpaired_nonhermitian,
+        )
+        spectral_gap  = gap_res.spectral_gap
+        total_matvecs = decomp.matvec_count + gap_res.matvec_count
+        all_converged = decomp.converged && gap_res.converged >= 1
+    else
+        # Pass-1 gap: smallest |Re(λ_i)| over non-steady modes. The decomp
+        # sorts steady (|Re| ~ 0) to index 1, so eigenvalues[2] is the
+        # slowest non-steady mode by construction.
+        spectral_gap  = length(decomp.eigenvalues) >= 2 ?
+                        abs(real(decomp.eigenvalues[2])) : 0.0
+        total_matvecs = decomp.matvec_count
+        all_converged = decomp.converged
+    end
 
     return (
         t              = collect(t_grid),
         distances      = distances,
         rho_final      = copy(rho_t),
         total_matvecs  = total_matvecs,
-        all_converged  = decomp.converged && gap_res.converged >= 1,
+        all_converged  = all_converged,
         states         = states,
         eigenvalues    = decomp.eigenvalues,
         c              = decomp.c,
@@ -817,9 +847,17 @@ the ideal-L `predict_lindbladian_trajectory` which targets `e^{tL} rho_0`.
 
 # Keywords
 - `krylovdim::Integer = 40`: Arnoldi subspace size.
+- `compute_true_gap::Bool = false`: when `true`, run a second
+  `krylov_spectral_gap` call (qf-e4z.27 "Pass 2") and report its
+  result as `spectral_gap`. **Off by default** because Pass-2 on the
+  channel path is known to pick the wrong eigenmode at stiff Trotter
+  cells (qf-e4z.37: 11-47% inflation, krylovdim-independent). The
+  Pass-1 default reports `-log|μ_2|/δ` from the rho_0-aligned Arnoldi,
+  which is the operationally-correct mixing-rate extraction and
+  matches the driver/sidecar convention used across the project.
 - `krylovdim_gap_pass::Union{Nothing, Integer} = nothing`: krylovdim for
-  the qf-e4z.27 spectral-gap Pass 2 (a separate `krylov_spectral_gap`
-  call). Defaults to `max(30, krylovdim÷2)`.
+  the Pass-2 `krylov_spectral_gap` call (no-op when
+  `compute_true_gap=false`). Defaults to `max(30, krylovdim÷2)`.
 - `tol::Real = 1e-10`: reserved (no-op currently — the dense small-space
   eigendecomposition has no tolerance knob).
 - `save_states::Bool = false`: also return the reconstructed rho_k.
@@ -830,7 +868,8 @@ NamedTuple with `t = collect(k_grid) .* δ`, `distances` (trace distance to
 the basis-aligned Gibbs reference at each step), `rho_final`,
 `total_matvecs`, `all_converged`, `states`, plus `eigenvalues` (channel
 μ_i, sorted by |μ| descending so steady-state ~1 is first), `c`,
-`spectral_gap` (in Lindbladian units, `(1 - |μ_2|) / δ`), `rho_inf`,
+`spectral_gap` (in Lindbladian units; `-log|μ_2|/δ` from Pass-1 when
+`compute_true_gap=false`, the qf-e4z.27 Pass-2 result when `true`), `rho_inf`,
 `R_modes` (biorthogonal right-eigenvector matrices, one `d×d` per
 captured Krylov mode), `sigma_beta` (the basis-aligned Gibbs reference;
 on TrotterDomain it has been transformed into the Trotter eigenbasis),
@@ -864,6 +903,7 @@ function predict_channel_trajectory(
     trotter::Union{Nothing, AbstractTrotter} = nothing,
     allow_unpaired_nonhermitian::Bool = false,
     workspace::Union{Nothing, Workspace{KrylovSpectrum}} = nothing,
+    compute_true_gap::Bool = false,
 )::NamedTuple where {T<:Complex}
     d = size(rho_0, 1)
     @assert size(rho_0, 2) == d  "rho_0 must be square"
@@ -971,32 +1011,53 @@ function predict_channel_trajectory(
         save_states && (states[j] = copy(rho_k))
     end
 
-    # Spectral gap (qf-e4z.27): the gap from `decomp.eigenvalues[2]`
-    # is the leading P̂-EVEN-sub-spectrum eigenvalue whenever `rho_0`
-    # and the channel share a discrete symmetry. We patch this via a
-    # separate `krylov_spectral_gap` call on the matching
-    # `Config{Thermalize}`, which uses `_krylov_default_x0` + KrylovKit
-    # restart to capture parity-odd modes reliably at every n. The
-    # `krylov_spectral_gap` Thermalize path already converts channel
-    # eigenvalues μ to Lindbladian units via `λ = (μ − 1)/δ` and
-    # reports `spectral_gap = |Re(λ_2)|`, so the returned value is
-    # directly the Lindbladian-unit true gap.
-    kdim_gp = krylovdim_gap_pass === nothing ? max(30, Int(krylovdim)÷2) : Int(krylovdim_gap_pass)
-    gap_res = krylov_spectral_gap(
-        config, hamiltonian, jumps;
-        trotter=trotter,
-        krylovdim=kdim_gp, howmany=4, tol=tol,
-        allow_unpaired_nonhermitian=allow_unpaired_nonhermitian,
-    )
-    spectral_gap = gap_res.spectral_gap
-    total_matvecs = decomp.matvec_count + gap_res.matvec_count
+    # Spectral gap. Default `compute_true_gap = false` reports the
+    # Pass-1 gap `-log|μ_2|/δ` (Lindbladian units, exact log-rate of
+    # the slowest non-steady channel eigenvalue under Φ_δ = exp(δL) +
+    # O(δ²)). This is the operationally-correct extraction for the
+    # rho_0-coupled mixing rate and matches the qf-e4z.37 driver
+    # convention. Critically, Pass-2 on the channel path is broken
+    # at stiff Trotter cells (qf-e4z.37: 7/18 cells with 11-47%
+    # inflation, independent of krylovdim), so it must stay opt-in.
+    #
+    # `compute_true_gap = true` re-enables the qf-e4z.27 Pass-2 call
+    # (`krylov_spectral_gap` on the matching `Config{Thermalize}`,
+    # which internally converts channel μ to Lindbladian units via
+    # `λ = (μ-1)/δ`). Use only when the caller specifically wants
+    # the Pass-2 number — and note it can be the wrong eigenmode on
+    # disordered fixtures.
+    if compute_true_gap
+        kdim_gp = krylovdim_gap_pass === nothing ? max(30, Int(krylovdim)÷2) : Int(krylovdim_gap_pass)
+        gap_res = krylov_spectral_gap(
+            config, hamiltonian, jumps;
+            trotter=trotter,
+            krylovdim=kdim_gp, howmany=4, tol=tol,
+            allow_unpaired_nonhermitian=allow_unpaired_nonhermitian,
+        )
+        spectral_gap  = gap_res.spectral_gap
+        total_matvecs = decomp.matvec_count + gap_res.matvec_count
+        all_converged = decomp.converged && gap_res.converged >= 1
+    else
+        # Pass-1 gap: -log|μ_2|/δ. The decomp sorts by |1-|μ|| ascending
+        # (sort_mode=:channel), so eigenvalues[2] is the slowest
+        # non-steady channel eigenvalue by construction.
+        spectral_gap = if length(decomp.eigenvalues) >= 2
+            mu2 = decomp.eigenvalues[2]
+            abs_mu2 = abs(mu2)
+            abs_mu2 > 0 ? -log(abs_mu2) / delta : 0.0
+        else
+            0.0
+        end
+        total_matvecs = decomp.matvec_count
+        all_converged = decomp.converged
+    end
 
     return (
         t              = t_grid,
         distances      = distances,
         rho_final      = copy(rho_k),
         total_matvecs  = total_matvecs,
-        all_converged  = decomp.converged && gap_res.converged >= 1,
+        all_converged  = all_converged,
         states         = states,
         eigenvalues    = decomp.eigenvalues,
         c              = decomp.c,

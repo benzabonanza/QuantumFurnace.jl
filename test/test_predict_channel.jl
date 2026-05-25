@@ -274,10 +274,15 @@ using QuantumFurnace
         perm = sortperm(real.(ev_dense); by=abs)
         gap_dense = abs(real(ev_dense[perm[2]]))
 
+        # qf-0fv: this regression specifically validates the qf-e4z.27
+        # Pass-2 fix on parity-symmetric (rho_0=I/d, L) — opt in via
+        # `compute_true_gap=true`. Pass-1 default would report the
+        # parity-even sub-spectrum gap, which the original qf-e4z.27
+        # test was written to catch.
         rho_0 = Matrix{ComplexF64}(I(d_ising) / d_ising)
         k_grid = collect(0:500:20000)
         traj = predict_channel_trajectory(cfg, ham_ising, jumps_ising, rho_0, k_grid;
-                                           krylovdim=40)
+                                           krylovdim=40, compute_true_gap=true)
         # post-qf-e4z.27 spectral_gap must report the TRUE Lindbladian
         # gap. The Lindbladian↔channel μ=exp(δλ)≈1+δλ conversion is
         # O(δ²) — for δ=1e-3 and λ ~ 0.16, this is ~1e-5 relative.

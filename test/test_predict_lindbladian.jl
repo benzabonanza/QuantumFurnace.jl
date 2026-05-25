@@ -325,11 +325,14 @@ using QuantumFurnace
 
         # predict_lindbladian_trajectory from symmetric rho_0 = I/d:
         # post-qf-e4z.26 must report the TRUE gap (pre-fix returned the
-        # parity-even-sector gap, which is larger).
+        # parity-even-sector gap, which is larger). The qf-0fv gating of
+        # Pass-2 behind `compute_true_gap` means this fixture (rho_0 = I/d
+        # on parity-symmetric H) must explicitly opt in — that's exactly
+        # what this test validates.
         rho_0 = Matrix{ComplexF64}(I(d_ising) / d_ising)
         t_grid = collect(range(0.0, 100.0, length=21))
         traj = predict_lindbladian_trajectory(cfg, ham_ising, jumps_ising, rho_0, t_grid;
-                                              krylovdim=40)
+                                              krylovdim=40, compute_true_gap=true)
         # qf-e4z.27 tightens rtol from 1e-6 → 1e-8: the spectral_gap is
         # now sourced from a dedicated `krylov_spectral_gap` pass with
         # KrylovKit thick restart, which converges to KrylovKit `tol=1e-10`
