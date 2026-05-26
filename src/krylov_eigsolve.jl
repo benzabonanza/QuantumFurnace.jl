@@ -365,6 +365,12 @@ function krylov_spectral_gap(
     # Residual norms (reorder to match sorted eigenvalues)
     normres = Float64.(info.normres[perm])
 
+    # qf-6yw: operator-side spectral diagnostics. Pass-2 has no seeded ρ₀,
+    # hence no modal coefficient c — the c-side fields are NaN; the R-side
+    # (off_diag_weight, mode_spacing) is the ρ₀-INDEPENDENT characterisation.
+    R_modes_diag = [reshape(vecs_sorted[i], dim, dim) for i in eachindex(vecs_sorted)]
+    spectral_modes = spectral_mode_diagnostics(eigenvalues_sorted, R_modes_diag)
+
     return (;
         eigenvalues = Complex{Float64}.(eigenvalues_sorted),
         spectral_gap,
@@ -374,6 +380,7 @@ function krylov_spectral_gap(
         matvec_count = info.numops,
         num_restarts = info.numiter,
         normres,
+        spectral_modes,
         channel_eigenvalues = nothing,
         delta_used = nothing,
     )
@@ -482,6 +489,12 @@ function krylov_spectral_gap(
     # Residual norms (reorder to match sorted eigenvalues)
     normres = Float64.(info.normres[perm])
 
+    # qf-6yw: operator-side spectral diagnostics (no seeded ρ₀ ⇒ c-side NaN).
+    # eigenvalues_sorted are the converted Lindbladian λ; mode_spacing is in
+    # Lindbladian units, consistent with the Config{Lindbladian} method.
+    R_modes_diag = [reshape(vecs_sorted[i], dim, dim) for i in eachindex(vecs_sorted)]
+    spectral_modes = spectral_mode_diagnostics(eigenvalues_sorted, R_modes_diag)
+
     return (;
         eigenvalues = Complex{Float64}.(eigenvalues_sorted),
         spectral_gap,
@@ -491,6 +504,7 @@ function krylov_spectral_gap(
         matvec_count = info.numops,
         num_restarts = info.numiter,
         normres,
+        spectral_modes,
         channel_eigenvalues = channel_eigenvalues_sorted,
         delta_used = Float64(delta),
     )
@@ -555,6 +569,9 @@ function run_krylov_spectrum(
 
     wall_time = time() - t_start
     metadata = _capture_metadata(wall_time_seconds=wall_time)
+    # qf-6yw: operator-side spectral diagnostics (off_diag_weight, mode_spacing;
+    # c-side NaN — no seeded ρ₀) attached via the struct's metadata extension.
+    metadata[:spectral_modes] = krylov_result.spectral_modes
 
     return KrylovSpectrumResults{Float64}(
         config,

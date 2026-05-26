@@ -155,22 +155,30 @@ struct SpectralModeDiagnostics
 end
 
 """
-    spectral_mode_diagnostics(eigenvalues, R_modes, c) -> SpectralModeDiagnostics
+    spectral_mode_diagnostics(eigenvalues, R_modes, c=nothing) -> SpectralModeDiagnostics
 
 Compute per-mode population/coherence and modal-amplitude diagnostics from a
 Krylov biorthogonal decomposition (`_krylov_spectral_decomposition` output).
 See [`SpectralModeDiagnostics`](@ref) for field definitions. Eigenvalue-agnostic
 except for the generic complex `mode_spacing`, so it is valid for both the
 Lindbladian (λ) and the channel (μ) eigenvalue conventions.
+
+`c` (the biorthogonal modal coefficients of an initial state) is optional. When
+omitted / `nothing` — the operator-only spectral path, e.g. `krylov_spectral_gap`
+which seeds from a fixed vector with no `ρ₀` — the initial-state-dependent fields
+`c_abs2` and `modal_hs_weight` are filled with `NaN`; the ρ₀-independent R-side
+(`off_diag_weight`, `mode_spacing`) is still computed.
 """
 function spectral_mode_diagnostics(
     eigenvalues::AbstractVector{<:Complex},
     R_modes::AbstractVector{<:AbstractMatrix},
-    c::AbstractVector{<:Complex},
+    c::Union{Nothing, AbstractVector{<:Complex}} = nothing,
 )
     m = length(R_modes)
-    (length(eigenvalues) == m && length(c) == m) || throw(ArgumentError(
-        "eigenvalues, R_modes, c must have equal length (got $(length(eigenvalues)), $m, $(length(c)))"))
+    length(eigenvalues) == m || throw(ArgumentError(
+        "eigenvalues and R_modes must have equal length (got $(length(eigenvalues)), $m)"))
+    c === nothing || length(c) == m || throw(ArgumentError(
+        "c must match R_modes length when provided (got $(length(c)), $m)"))
     odw = Vector{Float64}(undef, m)
     ca2 = Vector{Float64}(undef, m)
     mhw = Vector{Float64}(undef, m)
@@ -183,8 +191,13 @@ function spectral_mode_diagnostics(
             diag2 += abs2(R[i, i])
         end
         odw[k] = hs2 > 0 ? clamp(1.0 - diag2 / hs2, 0.0, 1.0) : 0.0
-        ca2[k] = abs2(c[k])
-        mhw[k] = ca2[k] * hs2
+        if c === nothing
+            ca2[k] = NaN
+            mhw[k] = NaN
+        else
+            ca2[k] = abs2(c[k])
+            mhw[k] = ca2[k] * hs2
+        end
         spc[k] = k < m ? abs(eigenvalues[k] - eigenvalues[k + 1]) : Inf
     end
     return SpectralModeDiagnostics(odw, ca2, mhw, spc)

@@ -119,4 +119,21 @@ using QuantumFurnace
         @test_throws ArgumentError spectral_mode_diagnostics(
             ComplexF64[0.0, -1.0], [R, R], ComplexF64[0.0])
     end
+
+    # -----------------------------------------------------------------------
+    # (i) operator-only spectrum (c === nothing): c-side NaN, R-side computed.
+    #     The Pass-2 (krylov_spectral_gap / run_krylov_spectrum) path — no ρ₀.
+    # -----------------------------------------------------------------------
+    @testset "(i) c === nothing ⇒ c-side NaN, R-side computed" begin
+        Rd = diagm([1.0 + 0im, 2.0 + 0im])   # diagonal ⇒ off_diag ≈ 0
+        Ro = ComplexF64[0 1; 1 0]            # off-diagonal ⇒ off_diag ≈ 1
+        eig = ComplexF64[0.0, -1.0]
+        dobj = spectral_mode_diagnostics(eig, [Rd, Ro])   # 2-arg: no c
+        @test all(isnan, dobj.c_abs2)
+        @test all(isnan, dobj.modal_hs_weight)
+        @test isapprox(dobj.off_diag_weight[1], 0.0; atol = 1e-12)
+        @test isapprox(dobj.off_diag_weight[2], 1.0; atol = 1e-12)
+        @test dobj.mode_spacing[1] == abs(eig[1] - eig[2])
+        @test dobj.mode_spacing[2] == Inf
+    end
 end

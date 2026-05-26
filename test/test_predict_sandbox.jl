@@ -58,6 +58,15 @@ using QuantumFurnace
                                        krylovdim = 30, howmany = 4, tol = 1e-10)
         gap = gap_res.spectral_gap
         @test gap > 0
+
+        # qf-6yw: Pass-2 (krylov_spectral_gap) carries operator-side diagnostics
+        # (no seeded ρ₀ ⇒ c-side is NaN; R-side is the ρ₀-independent picture).
+        gsm = gap_res.spectral_modes
+        @test gsm isa SpectralModeDiagnostics
+        @test all(isnan, gsm.c_abs2)
+        @test all(0.0 .<= gsm.off_diag_weight .<= 1.0)
+        @test gsm.off_diag_weight[1] < 1e-6   # fixed_point ≈ σ_β: diagonal
+
         # 5 time points across [0, 5/gap] — shrunk from heavy test's 21 to
         # keep dense exp(t·L) workload trivial (5 exponentiations of a
         # 64-dim generator).
