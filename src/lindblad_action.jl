@@ -801,6 +801,7 @@ function predict_lindbladian_trajectory(
         spectral_gap   = spectral_gap,
         rho_inf        = decomp.rho_inf,
         R_modes        = decomp.R_modes,
+        spectral_modes = spectral_mode_diagnostics(decomp.eigenvalues, decomp.R_modes, decomp.c),
         sigma_beta     = sigma_beta,
     )
 end
@@ -1076,6 +1077,7 @@ function predict_channel_trajectory(
         spectral_gap   = spectral_gap,
         rho_inf        = decomp.rho_inf,
         R_modes        = decomp.R_modes,
+        spectral_modes = spectral_mode_diagnostics(decomp.eigenvalues, decomp.R_modes, decomp.c),
         sigma_beta     = sigma_beta,
         delta_used     = delta,
         k_grid         = collect(k_grid),

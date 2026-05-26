@@ -4,13 +4,12 @@
 # helper (`spectral_mode_diagnostics` / `SpectralModeDiagnostics`, src/diagnostics.jl),
 # the cheap always-on Pass-1 diagnostics of qf-6yw.
 #
-# The synthetic unit tests use hand-built decompositions (no fixtures) so they
-# are fast and sandbox-safe. The single integration testset reuses the existing
-# `make_dll_n3_system(10.0)` n=3 fixture + the EnergyDomain Config from
-# `test_predict_sandbox.jl::(a)` (krylovdim=30, ~12 s) to assert the diagnostics
-# field is present on `predict_lindbladian_trajectory`'s output and that the
-# steady mode (R_modes[1] = hermitised σ_β, diagonal in the energy eigenbasis)
-# has off_diag_weight ≈ 0.
+# These synthetic unit tests use hand-built decompositions (no fixtures) so they
+# are fast and sandbox-safe. The predictor wiring (every predict_lindbladian_
+# trajectory / predict_channel_trajectory result carries a `spectral_modes`
+# field) is integration-tested in `test_predict_sandbox.jl::(a)`, which asserts
+# the field is present and that the steady mode (R_modes[1] ≈ σ_β, diagonal in
+# the energy eigenbasis) has off_diag_weight ≈ 0.
 
 using LinearAlgebra: I, diagm
 using Test

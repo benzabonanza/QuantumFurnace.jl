@@ -80,6 +80,13 @@ using QuantumFurnace
         @test size(res_kr.rho_final) == (d, d)
         @test res_kr.total_matvecs <= length(t_grid) * 30
 
+        # qf-6yw: per-mode spectral diagnostics are attached to every result.
+        sm = res_kr.spectral_modes
+        @test sm isa SpectralModeDiagnostics
+        @test length(sm.off_diag_weight) == length(res_kr.eigenvalues)
+        @test all(0.0 .<= sm.off_diag_weight .<= 1.0)
+        @test sm.off_diag_weight[1] < 1e-6   # steady mode ≈ σ_β: diagonal in the energy eigenbasis
+
         max_abs_err = maximum(abs.(res_kr.distances .- distances_dense))
         @test max_abs_err < 1e-7
         @info "(a) predict_lindbladian sandbox" max_abs_err matvecs=res_kr.total_matvecs
