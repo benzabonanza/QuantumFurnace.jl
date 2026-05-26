@@ -277,6 +277,17 @@ end
 # krylov_spectral_gap: Lindbladian path (Config{Lindbladian})
 # ---------------------------------------------------------------------------
 
+# qf-6yw: shared by both krylov_spectral_gap methods. Pass-2 has no seeded ρ₀,
+# hence no modal coefficient c — the c-side fields come back NaN; the R-side
+# (off_diag_weight, mode_spacing) is the ρ₀-INDEPENDENT operator characterisation.
+# `eigenvalues_sorted` carries each method's eigenvalue convention (Lindbladian λ),
+# so mode_spacing is in those units.
+function _operator_spectral_modes(eigenvalues_sorted::AbstractVector{<:Complex},
+                                  vecs_sorted::AbstractVector, dim::Integer)
+    R_modes_diag = [reshape(vecs_sorted[i], dim, dim) for i in eachindex(vecs_sorted)]
+    return spectral_mode_diagnostics(eigenvalues_sorted, R_modes_diag)
+end
+
 """
     krylov_spectral_gap(config::Config{Lindbladian}, hamiltonian, jumps; kwargs...) -> NamedTuple
 
@@ -365,11 +376,8 @@ function krylov_spectral_gap(
     # Residual norms (reorder to match sorted eigenvalues)
     normres = Float64.(info.normres[perm])
 
-    # qf-6yw: operator-side spectral diagnostics. Pass-2 has no seeded ρ₀,
-    # hence no modal coefficient c — the c-side fields are NaN; the R-side
-    # (off_diag_weight, mode_spacing) is the ρ₀-INDEPENDENT characterisation.
-    R_modes_diag = [reshape(vecs_sorted[i], dim, dim) for i in eachindex(vecs_sorted)]
-    spectral_modes = spectral_mode_diagnostics(eigenvalues_sorted, R_modes_diag)
+    # qf-6yw: operator-side spectral diagnostics (no seeded ρ₀ ⇒ c-side NaN).
+    spectral_modes = _operator_spectral_modes(eigenvalues_sorted, vecs_sorted, dim)
 
     return (;
         eigenvalues = Complex{Float64}.(eigenvalues_sorted),
@@ -490,10 +498,9 @@ function krylov_spectral_gap(
     normres = Float64.(info.normres[perm])
 
     # qf-6yw: operator-side spectral diagnostics (no seeded ρ₀ ⇒ c-side NaN).
-    # eigenvalues_sorted are the converted Lindbladian λ; mode_spacing is in
+    # eigenvalues_sorted are the converted Lindbladian λ, so mode_spacing is in
     # Lindbladian units, consistent with the Config{Lindbladian} method.
-    R_modes_diag = [reshape(vecs_sorted[i], dim, dim) for i in eachindex(vecs_sorted)]
-    spectral_modes = spectral_mode_diagnostics(eigenvalues_sorted, R_modes_diag)
+    spectral_modes = _operator_spectral_modes(eigenvalues_sorted, vecs_sorted, dim)
 
     return (;
         eigenvalues = Complex{Float64}.(eigenvalues_sorted),
