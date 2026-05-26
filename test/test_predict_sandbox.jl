@@ -149,6 +149,16 @@ using QuantumFurnace
         @test res_kr.delta_used == delta
         @test res_kr.k_grid == k_grid
 
+        # qf-6yw: per-mode spectral diagnostics on the channel predictor too.
+        # eigenvalues here are the raw channel μ (μ-units mode_spacing — see the
+        # SpectralModeDiagnostics docstring); the steady mode (μ₁≈1) ≈ σ_β so its
+        # off_diag_weight is small.
+        sm = res_kr.spectral_modes
+        @test sm isa SpectralModeDiagnostics
+        @test length(sm.off_diag_weight) == length(res_kr.eigenvalues)
+        @test all(0.0 .<= sm.off_diag_weight .<= 1.0)
+        @test sm.off_diag_weight[1] < 1e-6   # steady mode ≈ σ_β: diagonal in the Trotter eigenbasis
+
         # CPTP fixed point at mu_1.
         @test abs(abs(res_kr.eigenvalues[1]) - 1.0) < 1e-10
 
@@ -160,5 +170,38 @@ using QuantumFurnace
         # Final density matrix agrees too (within hermitisation noise).
         rho_th_final = res_th.final_dm
         @test maximum(abs.(res_kr.rho_final .- rho_th_final)) < 1e-9
+    end
+
+    # -----------------------------------------------------------------------
+    # (c) run_krylov_spectrum stashes the qf-6yw operator-side diagnostics into
+    # KrylovSpectrumResults.metadata[:spectral_modes]. Operator-only (no seeded
+    # ρ₀ in the Pass-2 path) ⇒ the c-side fields are all NaN.
+    # -----------------------------------------------------------------------
+    @testset "(c) run_krylov_spectrum metadata carries spectral_modes" begin
+        beta = 10.0
+        sys = make_dll_n3_system(beta)
+        ham = sys.ham; jumps = sys.jumps
+
+        cfg = Config(
+            sim = Lindbladian(),
+            domain = EnergyDomain(),
+            construction = KMS(),
+            num_qubits = 3,
+            with_linear_combination = true,
+            beta = beta, sigma = 1.0 / beta,
+            a = 0.0, s = 0.25,
+            num_energy_bits = 12, w0 = 0.05,
+            t0 = 2π / (2^12 * 0.05),
+            num_trotter_steps_per_t0 = 10,
+        )
+
+        res = run_krylov_spectrum(jumps, cfg, ham; krylovdim = 30, howmany = 4, tol = 1e-10)
+        @test haskey(res.metadata, :spectral_modes)
+        sm = res.metadata[:spectral_modes]
+        @test sm isa SpectralModeDiagnostics
+        @test all(isnan, sm.c_abs2)            # operator-only: no modal coefficient
+        @test all(isnan, sm.modal_hs_weight)
+        @test all(0.0 .<= sm.off_diag_weight .<= 1.0)
+        @test sm.off_diag_weight[1] < 1e-6     # fixed_point ≈ σ_β: diagonal
     end
 end
