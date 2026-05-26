@@ -52,6 +52,7 @@ export EigenDecompositionResult, FixedPointResult, DefectResult, OverlapResult,
        extract_leading_eigendata, compute_fixed_point_distance,
        compute_anti_hermitian_defect, compute_overlap_coefficients,
        compute_sz_labels, detect_multiplets, run_exact_diagnostics
+export SpectralModeDiagnostics, spectral_mode_diagnostics
 
 # --- Discriminant ---
 export DiscriminantBuffers, gibbs_fractional_powers, apply_discriminant!

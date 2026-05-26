@@ -125,6 +125,72 @@ struct MultipletGroup
 end
 
 """
+    SpectralModeDiagnostics
+
+Per-mode spectral diagnostics of a Krylov biorthogonal decomposition. All
+vectors are indexed by captured mode (index 1 = steady state). Computed in the
+decomposition's own eigenbasis (energy eigenbasis for the EnergyDomain
+Lindbladian; Trotter eigenbasis for the TrotterDomain channel — self-consistent
+with that path's `sigma_beta`).
+
+- `off_diag_weight[k] ∈ [0,1]`: coherence (off-diagonal) fraction of R_k,
+  `(‖R_k‖²_HS − Σ_i|R_k[i,i]|²)/‖R_k‖²_HS`. 0 = population-like, 1 = coherence-like.
+  Phase/scale invariant; uses the raw R_k (NO hermitisation — correct for complex
+  modes too, since off-diagonal mass and HS norm are invariant under the dagger
+  that maps a mode to its conjugate partner).
+- `c_abs2[k]`: `|c_k|²`, the raw modal-coefficient magnitude (matches the legacy
+  `c2_sq` field for cross-checks). NOT a normalised [0,1] overlap.
+- `modal_hs_weight[k]`: `|c_k|²·‖R_k‖²_HS`, the normalisation-INVARIANT per-mode
+  amplitude (invariant under R_k→αR_k since c_k→c_k/α). Use this, not c_abs2, as
+  the "how much does mode k contribute" quantity.
+- `mode_spacing[k]`: `|eigenvalues[k] − eigenvalues[k+1]|` (complex modulus) to the
+  next captured mode; last entry `Inf`. Near-degeneracy / level-crossing flag
+  (small ⇒ the eigenvector at k is ill-conditioned / a crossing is near).
+"""
+struct SpectralModeDiagnostics
+    off_diag_weight::Vector{Float64}
+    c_abs2::Vector{Float64}
+    modal_hs_weight::Vector{Float64}
+    mode_spacing::Vector{Float64}
+end
+
+"""
+    spectral_mode_diagnostics(eigenvalues, R_modes, c) -> SpectralModeDiagnostics
+
+Compute per-mode population/coherence and modal-amplitude diagnostics from a
+Krylov biorthogonal decomposition (`_krylov_spectral_decomposition` output).
+See [`SpectralModeDiagnostics`](@ref) for field definitions. Eigenvalue-agnostic
+except for the generic complex `mode_spacing`, so it is valid for both the
+Lindbladian (λ) and the channel (μ) eigenvalue conventions.
+"""
+function spectral_mode_diagnostics(
+    eigenvalues::AbstractVector{<:Complex},
+    R_modes::AbstractVector{<:AbstractMatrix},
+    c::AbstractVector{<:Complex},
+)
+    m = length(R_modes)
+    (length(eigenvalues) == m && length(c) == m) || throw(ArgumentError(
+        "eigenvalues, R_modes, c must have equal length (got $(length(eigenvalues)), $m, $(length(c)))"))
+    odw = Vector{Float64}(undef, m)
+    ca2 = Vector{Float64}(undef, m)
+    mhw = Vector{Float64}(undef, m)
+    spc = Vector{Float64}(undef, m)
+    @inbounds for k in 1:m
+        R = R_modes[k]
+        hs2 = sum(abs2, R)
+        diag2 = 0.0
+        for i in axes(R, 1)
+            diag2 += abs2(R[i, i])
+        end
+        odw[k] = hs2 > 0 ? clamp(1.0 - diag2 / hs2, 0.0, 1.0) : 0.0
+        ca2[k] = abs2(c[k])
+        mhw[k] = ca2[k] * hs2
+        spc[k] = k < m ? abs(eigenvalues[k] - eigenvalues[k + 1]) : Inf
+    end
+    return SpectralModeDiagnostics(odw, ca2, mhw, spc)
+end
+
+"""
     ExactDiagnosticsResult
 
 Bundle result from `run_exact_diagnostics()` containing all six DIAG outputs.
