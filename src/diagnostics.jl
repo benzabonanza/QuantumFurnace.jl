@@ -145,7 +145,11 @@ with that path's `sigma_beta`).
   the "how much does mode k contribute" quantity.
 - `mode_spacing[k]`: `|eigenvalues[k] − eigenvalues[k+1]|` (complex modulus) to the
   next captured mode; last entry `Inf`. Near-degeneracy / level-crossing flag
-  (small ⇒ the eigenvector at k is ill-conditioned / a crossing is near).
+  (small ⇒ the eigenvector at k is ill-conditioned / a crossing is near). In the
+  units of the `eigenvalues` it was computed from: Lindbladian λ everywhere except
+  the **channel** path of `predict_channel_trajectory`, where `eigenvalues` are the
+  raw channel μ (so spacing is in μ-units); `krylov_spectral_gap`'s channel method
+  converts to λ first, so its spacing is in λ-units.
 """
 struct SpectralModeDiagnostics
     off_diag_weight::Vector{Float64}
@@ -187,7 +191,7 @@ function spectral_mode_diagnostics(
         R = R_modes[k]
         hs2 = sum(abs2, R)
         diag2 = 0.0
-        for i in axes(R, 1)
+        for i in 1:min(size(R, 1), size(R, 2))
             diag2 += abs2(R[i, i])
         end
         odw[k] = hs2 > 0 ? clamp(1.0 - diag2 / hs2, 0.0, 1.0) : 0.0
