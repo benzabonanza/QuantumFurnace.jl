@@ -119,6 +119,36 @@ When adding a new test:
 
 When tuning a sandbox-bound test, prefer reducing register sizes (`num_energy_bits`) over loosening tolerances. Empirically (qf-5nz), DLL TimeDomain Bohr↔Time agreement on n=3 is FINUFFT-floor-limited (~3e-9) by `Nt = 256`; `Nt = 4096` (N=12) buys nothing but uses 16× more memory. The DLL-test fixtures now run at `N = 10`.
 
+### Coverage parity between sandbox and full tiers
+
+When moving a test to `NO_SANDBOX_FILES` (or gating it inline), **a toned-down equivalent MUST remain in the sandbox tier**:
+
+- Same code path, smaller fixture: drop n (e.g. n=5 → n=3), drop `num_energy_bits` per the sweep table, narrow the β grid to a single point, shrink `M_user` / Trotter steps. Reuse the existing test helpers in `test/test_helpers.jl` (e.g. `make_dll_n3_system`) so the smaller test still touches the same dispatch as the heavy one.
+- Same invariant, weaker tolerance only if unavoidable: prefer keeping the 1e-9 cross-domain tolerance (see *Cross-domain error controllability* below) and shrinking n, over loosening the tolerance and keeping n. Loosening a tolerance hides the kind of bug we are testing for.
+- The heavy `[NO_SANDBOX]` test then exists only to extend the same invariant to a regime where n / β / r are too large to fit the sandbox — not as the sole coverage of a feature.
+
+**If no sandbox-runnable equivalent is possible** (e.g. the bug only manifests at n ≥ 6, or the cross-check needs > 1.5 GB of memory), then when you change any code that the heavy test covers, you MUST tell the user explicitly:
+
+> ⚠️ NO_SANDBOX TEST REQUIRED: I changed `<file/function>`, which is only covered by `<test_file>::<testset>` in the `NO_SANDBOX` tier. Please run the full suite outside the sandbox: `QUANTUMFURNACE_FULL_TESTS=true julia --project -e 'using Pkg; Pkg.test()'`.
+
+This is non-negotiable. Silently merging a change whose only test is gated behind `QUANTUMFURNACE_FULL_TESTS` is the same as merging without a test — it has bitten us before.
+
+### Cross-domain error controllability (1e-9 invariant)
+
+A test that compares a quantity across two domains MUST be controllable down to **1e-9 relative or absolute** (whichever is appropriate for the quantity) by tightening the relevant register / discretisation parameters. **1e-4 "good enough for a plot" is not a passing test** — historically that level of error has masked register-sizing bugs, wrong filter prefactors, and off-by-one Bohr/Energy index maps. The pattern is: a test that runs at default registers can show 1e-4, but the same test at the appropriate register size from the sweep table must reach 1e-9.
+
+Use the canonical cross-checks by topic:
+
+| Check | Cross-check pair | What controls the floor |
+|---|---|---|
+| Energy quadrature | EnergyDomain ↔ BohrDomain | `num_energy_bits_D`, `w0_D` (from sweep table) |
+| Time quadrature  | TimeDomain ↔ {EnergyDomain or BohrDomain} | `num_energy_bits_{b−, b+}`, `w0_{b−, b+}`, `t0_{b−, b+}` |
+| Coherent term    | Both domains separately (G_energy vs G_bohr, G_time vs G_bohr) | `num_energy_bits_{b−, b+}` ; for kinky Metro the t=0 L'Hôpital sample dominates — see [trap-rule t=0 L'Hôpital origin](../../.claude-memory/trap_rule_t0_lhopital_origin.md) |
+| Trotter error    | TrotterDomain ↔ TimeDomain | `M_user` per leg (shared-δt₀ TrottTrott — see [qf-d0w shared-δt₀](../../.claude-memory/qf_d0w_shared_delta_t0.md)) |
+| δ-step / GQSP / weak-measurement / generator splitting | Faithful channel (`predict_channel_trajectory` on `Config{Thermalize, TrotterDomain, with_gqsp=true}`) ↔ ideal Lindblad (`predict_lindbladian_trajectory` on `Config{Lindbladian, EnergyDomain}`) | `δ`, `gqsp_degree`, per-leg M, generator-splitting order |
+
+When writing a new cross-domain test, include a `@testset` (or a script that can be promoted to one) that **explicitly demonstrates** error decreasing toward 1e-9 as the relevant parameter is increased — not just a single tolerance assertion at the default register size. If you cannot reach 1e-9 at any register size, that is evidence of a bug, not of a "good enough" floor, and must be investigated before the test is committed.
+
 ## Atomic Commits
 
 Every code change MUST be an atomic git commit. One logical change per commit.

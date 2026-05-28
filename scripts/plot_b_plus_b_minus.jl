@@ -187,8 +187,8 @@ i_just_out = findfirst(t -> t >= η + 1e-4, t_grid_plus)
         norm_b_plus_smooth,
         2 / (5 * pi^1.5) + log(1 / η) / (sqrt(2) * pi^2) -
             log(1 + s_smooth) / (2 * sqrt(2) * pi^2))
-@printf("  ‖b_-‖_1           = %.4f   (analytic bound π/√2 · e^{β²σ²/8}           = %.4f)\n",
-        norm_b_minus, pi / sqrt(2) * exp(β^2 * σ^2 / 8))
+@printf("  ‖b_-‖_1           = %.4f   (Chen Hölder bound: ‖b_-‖_1 ≤ 1; no closed form)\n",
+        norm_b_minus)
 
 # ── Plot defaults (match plot_transition_weights.jl) ──────────────────────────
 default(
@@ -248,7 +248,7 @@ plt_p = plot(
     color  = c_gauss,
     xlabel = "\$t\$",
     ylabel = "\$|b_+(t)|\$",
-    title  = "Coherent-term kernel  \$|b_+(t)|\$  (\$\\beta=$(Int(β)),\\; \\sigma = 1/\\beta,\\; \\eta=$(η)\$)",
+    title  = "Coherent-term kernel  \$|b_+(t)|\$  (\$\\bar{\\beta}=$(Int(β)),\\; \\sigma = 1/\\bar{\\beta},\\; \\eta=$(η)\$)",
     legend                  = :topright,
     foreground_color_legend = nothing,
     background_color_legend = RGBA(1, 1, 1, 0.7),
@@ -313,7 +313,7 @@ plt_p2 = plot(
     color  = c_gauss,
     xlabel = "\$t\$",
     ylabel = "\$|b_+(t)|\$",
-    title  = "\$|b_+(t)|\$  with a-regularized variant  (\$\\beta=$(Int(β)),\\; \\sigma=1/\\beta,\\; s=$(s_smooth)\$)",
+    title  = "\$|b_+(t)|\$  with a-regularized variant  (\$\\bar{\\beta}=$(Int(β)),\\; \\sigma=1/\\bar{\\beta},\\; s=$(s_smooth)\$)",
     legend                  = :topright,
     foreground_color_legend = nothing,
     background_color_legend = RGBA(1, 1, 1, 0.7),
@@ -363,7 +363,7 @@ plt_m = plot(
     color  = c_minus,
     xlabel = "\$t\$",
     ylabel = "\$b_-(t)\$",
-    title  = "Outer kernel  \$b_-(t)\$  (\$\\beta=$(Int(β)),\\; \\sigma = 1/\\beta\$)",
+    title  = "Outer kernel  \$b_-(t)\$  (\$\\bar{\\beta}=$(Int(β)),\\; \\sigma = 1/\\bar{\\beta}\$)",
     legend                  = :topright,
     foreground_color_legend = nothing,
     background_color_legend = RGBA(1, 1, 1, 0.7),

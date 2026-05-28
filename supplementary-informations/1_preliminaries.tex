@@ -1,14 +1,19 @@
 \part{Preliminaries}
 
+\todo{this can be skipped pretty sure:}
 As with any topic, we need to first understand the basic notions and tools that build the foundation. After the foundation is set, we can see what is possible to our current knowledge. Both the title and the introduction suggest that we would like to understand how a quantum system evolves to its thermal equilibrium state, the Gibbs state. For this, it is crucial to define the quantum dynamics that are at play here. But also to introduce the properties of the Gibbs state we would like to prepare. As we will see, these properties will set the difficulty level of the equilibration process. The underlying physics is however only one side of the problem, the other is the method with which we would like to prepare this target state. The tool we would \textit{eventually} like to use is a quantum computer, and accordingly we will need a quantum algorithm that could run on such a machinery. In classical computation Markov chain sampling was the quintessential technique to prepare and sample from the Gibbs distributions, and thus it comes as no surprise that we will work with quantum Markov chains in this thesis. Understanding how the quantum side works is definitely one aim of this chapter, but we also want to make the differences between the classical and quantum pictures as clear as possible. This should complement later analysis of the parameter regimes in which we can hope for a quantum advantage.
 
-\label{ch:quantum-formalism}
-\chapter{Quantum Formalism and Notation}
+\chapter{Introduction}
+\newpage
+\chapter{Quantum Dynamics}
+
+\label{sec:quantum-formalism}
+\section{Quantum Formalism and Notation}
 In order to have a self-contained thesis, we ought to start with the necessary concepts in quantum information. The aim here is not to give a complete introduction, but rather to provide all the definitions that are used later on in the text. In case the reader needs more details and pedagogic examples, we would advise them to open up already well-established textbooks and lecture notes like \cite{bible, wolf2012lecture, breuer2002theory}.
 
 \smallskip
 \label{sec:quantum-states}
-\subsection{Quantum states.} The state of a finite-dimensional quantum system is described within a complex vector space known as the Hilbert space, $\mathcal{H}$. While pure states are represented by vectors in $\mathcal{H}$, the most general description of a quantum state is given by a density operator, $\rho$.
+\subsection{Quantum states} The state of a finite-dimensional quantum system is described within a complex vector space known as the Hilbert space, $\mathcal{H}$. While pure states are represented by vectors in $\mathcal{H}$, the most general description of a quantum state is given by a density operator, $\rho$.
 
 These bounded operators belong to the space of all linear operators on $\mathcal{H}$, which we denote by $\mathcal{B}(\mathcal{H})$. For a physical state, an operator $\rho \in \mathcal{B}(\mathcal{H})$ must satisfy the following properties:
 \begin{itemize}
@@ -34,7 +39,7 @@ The task of preparing a specific state, such as the thermal Gibbs state, on a qu
 \textbf{TODO: maybe correlation and entanglement and distances}
 
 \smallskip
-\subsection{Quantum measurements.} In order to extract valuable information about the physical system, we still need to apply measurements to the system. In classical theory, predicting the outcome of a measurement should be possible, granted that we know the initial condition of the system and have the right theory. But due to the inherently probabilistic nature of quantum mechanics, such a prediction is just not possible. What is possible, is to predict probabilities and thus also the resulting measurement statistics that we expect for our statistical experiments. It is useful to first separate two notions, one is \textit{what} we can measure, and the other is \textit{how} we can measure it. A physical observable $A \in \mathcal{B}(\mathcal{H})$ that we can measure is described by a Hermitian matrix. The expectation value of the measurement can be then only understood with respect to a state $\rho$, and we can write it as $\langle A \rangle = \tr [\rho A]$. 
+\subsection{Quantum measurements} In order to extract valuable information about the physical system, we still need to apply measurements to the system. In classical theory, predicting the outcome of a measurement should be possible, granted that we know the initial condition of the system and have the right theory. But due to the inherently probabilistic nature of quantum mechanics, such a prediction is just not possible. What is possible, is to predict probabilities and thus also the resulting measurement statistics that we expect for our statistical experiments. It is useful to first separate two notions, one is \textit{what} we can measure, and the other is \textit{how} we can measure it. A physical observable $A \in \mathcal{B}(\mathcal{H})$ that we can measure is described by a Hermitian matrix. The expectation value of the measurement can be then only understood with respect to a state $\rho$, and we can write it as $\langle A \rangle = \tr [\rho A]$. 
 We can give this expression slightly more depth if we label the possible outcomes of the measurement by $\{a_\alpha\}$ and the probability with which we measure them by $\{p_\alpha\}$. Consequently, the expectation value is $\langle A \rangle = \sum_\alpha p_\alpha a_\alpha$. 
 
 Now it is just a question of what do we really understand by the probabilities $p_\alpha$, which is also the same question of \textit{how} do we do measurements. In principle, we can always associate an outcome to a positive-valued operator $0 < E_\alpha \leq \idm$ such that,
@@ -51,7 +56,8 @@ Due to the projection operator's property, if we were to repeat this measurement
 \end{equation}
 The difference here is that $\rho_\alpha'$ is in general not an eigenstate of $A$ and if we were to measure the same operator $M_\alpha$ we would get a different post measurement state.
 
-\chapter{Quantum Dynamics}
+\todo{THIS NEEDS REWRITING FOR THE NEW STRUCTURE}
+\section{Closed systems}
 With the introduction of quantum measurements in the previous chapter, we have already stumbled upon the notion of how a quantum system $\rho$ can change from one moment in time to another. This process can be described by an \textit{open quantum system evolution}, where we, the observers or (if we take away the human part) the environment, act on a quantum system. From the point of view of the observed system, this is an irreversible process, i.e. there is no physical map that would reverse the dynamics for all possible initial states. Irreversibility arises because we only observe a subsystem and lose the information of the rest. But the dynamics of the whole \textit{closed} system we can describe by a reversible process. 
 
 Before we describe closed and open system dynamics in more detail, this is also a good place to introduce two frameworks in which one can understand evolutions. Since in quantum mechanics the only physically measurable quantities are the expectation values of some observables, $\langle A \rangle (t)$, and a physical process as we have seen is divided into a state preparation and a measurement, we have the freedom to choose which side we would like to evolve. In the \textit{Schrödinger picture} we evolve the system $\rho(t)$ and the operators $A$ are considered to be static, while in the \textit{Heisenberg picture} we keep the state $\rho$ static and evolve the operators $A(t)$. Naturally these pictures are equivalent to each other and give the same physical expectation values,
@@ -59,7 +65,7 @@ Before we describe closed and open system dynamics in more detail, this is also 
     \label{eq:schrödinger-heis}
     \langle A \rangle (t) = \tr \left[A \rho(t) \right] = \tr \left[ A(t) \rho \right].
 \end{equation}
-\section{Closed systems}
+
 A reversible evolution of a closed system is described by a unitary map $u(\rho)$
 \begin{equation}
     \label{eq:unitary-map}
@@ -777,6 +783,7 @@ A neat result, since it coincides with the classical bound \eqref{eq:spectral-bo
 Unfortunately, the problem of handling far-equilibrium initial states for this bound is also inherited from the classical result. But worry not, there has been a vast amount of research done to use the logarithmic Sobolev techniques also in the non-commuting quantum setting. \todo{CITE from rouzé}
 
 \smallskip
+\label{sec:prelim-qlsi}
 \subsection{Quantum logarithmic Sobolev bounds.} The problem with the spectral bound \eqref{eq:quantum-spectral-bound} is that the factor $1 / \sqrt{\lambda_{\min}(\rho_\beta)}$ typically scales as $e^{\beta n / 2}$ for an $n$-particle system, making the bound loose for large systems. To get a tighter bound even in these cases, we once again turn to the (quantum) relative entropy of the system, and try to find that logarithmic factor that helped us out for the classical case as well, \eqref{eq:log-sobolev-bound}.
 
 The quantum relative entropy between the states $\rho, \sigma \in \mathcal{D(H)}$ is defined as:
@@ -798,7 +805,7 @@ $$\mathcal{E_L}(X, Y) := -\langle X, \mathcal{L}(Y)\rangle_{\sigma}$$
 
 \chapter{Quantum Circuits}
 \smallskip
-\subsection{Basics.}
+\section{Basics}
 The smallest non-trivial system in $\mathcal{D(H)}$ is the \emph{qubit}, the quantum analogue of a classical bit. Its Hilbert space is $\mathcal{H} = \mathbb{C}^2$ and a pure state takes the form
 $$
 \ket{\psi} = \alpha\ket{0} + \beta\ket{1}\quad\text{with}\quad |\alpha|^2 + |\beta|^2 = 1.
@@ -908,7 +915,7 @@ For any work about quantum algorithms and their realizations we cannot forget ab
 \end{figure}
 
 \smallskip
-\subsection{Phase Estimation.} One of the key subroutines classical and quantum Gibbs sampling algorithms rest on is the phase (or energy) estimation. This allows us to label the system with an energy register on which a transition-rate $\gamma(\omega)$, satisfying the KMS condition \eqref{eq:KMS-condition}, can act in superposition. It was first introduced as \emph{Quantum phase estimation} (QPE) by Kitaev in \cite{kitaev1997quantum,cleve1998quantum}, and it was quickly applied to Hamiltonian eigenvalue problems \cite{abrams1999quantum}. It has underpinned not only recent developments in Gibbs sampling, but also the seminal quantum Metropolis algorithm of \cite{temme2011quantum}. As QPE is an already established textbook material, we only highlight the similarities and differences of it to the phase estimation we use later on: a one-parameter generalization of QPE, that can be used to compute \emph{Operator Fourier Transforms} (OFT).
+\section{Phase Estimation} One of the key subroutines classical and quantum Gibbs sampling algorithms rest on is the phase (or energy) estimation. This allows us to label the system with an energy register on which a transition-rate $\gamma(\omega)$, satisfying the KMS condition \eqref{eq:KMS-condition}, can act in superposition. It was first introduced as \emph{Quantum phase estimation} (QPE) by Kitaev in \cite{kitaev1997quantum,cleve1998quantum}, and it was quickly applied to Hamiltonian eigenvalue problems \cite{abrams1999quantum}. It has underpinned not only recent developments in Gibbs sampling, but also the seminal quantum Metropolis algorithm of \cite{temme2011quantum}. As QPE is an already established textbook material, we only highlight the similarities and differences of it to the phase estimation we use later on: a one-parameter generalization of QPE, that can be used to compute \emph{Operator Fourier Transforms} (OFT).
 
 To make this shared structure visible, see the circuit in \hyperref[circ:qpe]{Fig.~\ref*{circ:qpe}}. Let the Hamiltonian $H$ have Bohr frequencies $\nu \in B_H$, fix the time unit $t_0>0$, and an ancilla register of $r$ qubits with time grid $S_{t_0} = \{0, t_0, 2t_0, \dots, (N{-}1)t_0\}$ and a dual frequency grid $S_{\omega_0}$ of spacing $\omega_0$ satisfying $t_0\,\omega_0 = 2\pi/N$. The three stages of the circuit are
 \begin{enumerate}
@@ -966,7 +973,7 @@ Since we will work with OFT-based Lindbladian generators, the inherent obstacle 
 
 \smallskip
 \label{sec:prelim-trotter}
-\subsection{Trotterization.}
+\section{Trotterization}
 \begin{figure}[ht]
   \centering
   \resizebox{\textwidth}{!}{%
@@ -1095,7 +1102,7 @@ Here, $C_{d,p} \le \Gamma^{p+1}\,(2d)^p$ is a combinatorial constant depending o
 The 1D (periodic) Heisenberg chain \eqref{eq:H_heis} is a canonical case for $(k,d)$-local Hamiltonian. Its terms can be grouped into a couple of commuting classes: odd and even sites in case $n$ is even (or into three classes if $n$ is odd due to the boundary.) As the interaction degree on the chain is $d=2$, and the number of commuting classes $\Gamma = 2$ (or $3$), it is possible to find some estimate for the combinatorial factor in \eqref{eq:alpha-comm}. Although, with numerical heuristics \cite{childs2021theory}, we can get that constant value, for us the scaling is already sufficient, i.e. for $p=2$: $\tilde\alpha^{(2)}_{\mathrm{comm}}(H_{\mathrm{Heis}}) = \mathcal{O}(|J|^3 n)$. The same principle applies to the periodic 1D transverse-field Ising model and the 2D Heisenberg model on a square lattice, again with $\tilde\alpha^{(2)}_{\mathrm{comm}} = \mathcal{O}(n)$ scaling and constant prefactors that change only with the bond-interaction degree $d$.
 
 \smallskip
-\subsection{Linear Combination of Unitaries.}\label{sec:prelim-LCU}
+\section{Linear Combination of Unitaries}\label{sec:prelim-LCU}
 
 \begin{figure}[ht]
   \centering
@@ -1140,42 +1147,71 @@ Writing the composite circuit as $U_A := (\textsc{Prep}^\dagger \otimes \idm)\, 
 \begin{equation} \label{eq:lcu}
     \bra{0^b}\,U_A\,\ket{0^b} \;=\; \frac{A}{\|f\|_1},
 \end{equation}
-i.e. $U_A$ is a block encoding of $A$ with subnormalisation $\alpha:= \|f\|_1$ \cite{low2019hamiltonian}. The subnormalisation is the price for packing a non-unitary $A$ inside a unitary: $U_A$ acts as $A / \alpha$ on the block projector $\ket{0^b}\!\bra{0^b}$ and as an unspecified completion on its orthogonal subspace, and all complexity statements about simulation times and success probabilities scale with $\alpha$.
+i.e. $U_A$ is a block encoding of $A$ with subnormalisation $Z_A := \|f\|_1$ \cite{low2019hamiltonian}. The subnormalisation is the price for packing a non-unitary $A$ inside a unitary: $U_A$ acts as $A / Z_A$ on the block projector $\ket{0^b}\!\bra{0^b}$ and as an unspecified completion on its orthogonal subspace, and all complexity statements about simulation times and success probabilities scale with $Z_A$.
 
 This approach can be extended to cases where $f$ assumes signed or complex values. There are different solutions, but the one we end up using later is the following: split $\textsc{Prep}$ into an asymmetric left/right pair $\textsc{Prep}'$ / $\textsc{Prep}$. The prior writes the signed / phased amplitude $\sum_t \mathrm{sgn}(f(t))\sqrt{|f(t)|/\|f\|_1}\,\ket{t}$ on the left, and the latter writes the magnitude-only amplitude $\sum_t \sqrt{|f(t)|/\|f\|_1}\,\ket{t}$ on the right, so that the two amplitudes multiply to $f(t)/\|f\|_1$. \hyperref[circ:U_B_a]{Fig.~\ref*{circ:U_B_a}} adopts this with $\mathrm{sgn}(\cdot)$ is a unit-modulus phase in the complex case.
 
-Applying $U_A$ on $\ket{0^b}\otimes\ket{\psi}$ and \emph{post-selecting} the ancilla on $\ket{0^b}$ leaves, up to normalisation, the state $A \ket{\psi} / \alpha$ on the system, with success probability $\|A\ket{\psi}\|^2/\alpha^2$. When $\alpha \leq 1$, the block encoding can be taken as a deterministic implementation of $A$. In the case when $\alpha \geq 1$, however, the post-selection succeeds only with $\mathcal{O}(1 / \alpha^2)$, in which case LCU is \emph{not} deterministic. For bare applications of LCU, there are already remedies for this, e.g. a repeat-until-success procedure with $\mathcal{O}(\alpha^2)$ of repetitions, or the so-called oblivious amplitude amplifications which involves additional reflections. But in our thesis, an indeterministic LCU can only happen when we create a block encoding for a Hermitian operator $B$ and then directly transform it to a coherent evolution $\ee^{-\ii B t}$. This transformation goes hand in hand with block-encodings, which is the next subroutine we will introduce. There, it becomes clear what role the subnormalization factor $\alpha$ plays in the algorithm's complexity.
+Applying $U_A$ on $\ket{0^b}\otimes\ket{\psi}$ and \emph{post-selecting} the ancilla on $\ket{0^b}$ leaves, up to normalisation, the state $A \ket{\psi} / Z_A$ on the system, with success probability $\|A\ket{\psi}\|^2/Z_A^2$. When $Z_A \leq 1$, the block encoding can be taken as a deterministic implementation of $A$. In the case when $Z_A \geq 1$, however, the post-selection succeeds only with $\mathcal{O}(1 / Z_A^2)$, in which case LCU is \emph{not} deterministic. For bare applications of LCU, there are already remedies for this, e.g. a repeat-until-success procedure with $\mathcal{O}(Z_A^2)$ of repetitions, or the so-called oblivious amplitude amplifications which involves additional reflections. But in our thesis, an indeterministic LCU can only happen when we create a block encoding for a Hermitian operator $B$ and then directly transform it to a coherent evolution $\ee^{-\ii B t}$. This transformation goes hand in hand with block-encodings, which is the next subroutine we will introduce. There, it becomes clear what role the subnormalization factor $Z_A$ plays in the algorithm's complexity.
 
 \smallskip
-\subsection{Quantum Signal Processing.} \label{sec:prelim-QSP}
+\section{Quantum Signal Processing} \label{sec:prelim-QSP}
+
 \begin{figure}[ht]
   \centering
   \resizebox{1.1\textwidth}{!}{%
   \begin{quantikz}[row sep=0.7cm, column sep=0.5cm]
+  %
+  % ==================================================================
+  % Row 1: QSP ancilla.
+  % Time order in this figure (left to right = forward in time):
+  %   col 3:   opening rotation L_0 = R_MW(theta_0, phi_0, lambda_0)
+  %   col 4-5: representative open-controlled slot, repeated d times
+  %            (j = 1, ..., d, applied first in time after L_0)
+  %   col 6-7: representative closed-controlled slot, repeated d times
+  %            (j = d+1, ..., 2d, applied last in time)
+  % j INCREASES left-to-right in this figure (matching MW2024 Eq. 42 with
+  % the index convention "j = 1 is the first layer applied after L_0").
+  % ==================================================================
     \lstick{$\ket{0}_\mathrm{QSP}$}
       & \qw
       & \gate{R(\theta_0,\phi_0,\lambda_0)}
       & \octrl{1}
-      \gategroup[3,steps=2,style={dashed,rounded corners,fill=black!6,inner sep=5pt},background,label style={label position=below,yshift=-0.45cm,align=center}]{\scriptsize Repeat $d$ times\\\scriptsize $j = 1,\dots,d$}
+        \gategroup[3,steps=2,style={dashed,rounded corners,fill=blue!6,inner sep=5pt},
+                   background,label style={label position=above,yshift=0.25cm}]
+          {\scriptsize Repeat $d$ times}
       & \gate{R(\theta_j,\phi_j,0)}
       & \qw
-      & \octrl{1}
-      \gategroup[3,steps=2,style={dashed,rounded corners,fill=black!6,inner sep=5pt},background,label style={label position=below,yshift=-0.45cm,align=center}]{\scriptsize \quad Repeat $d$ times\\\scriptsize $j = d{+}1,\dots,2d$}
-      & \gate{R(\theta_j,\phi_j,0)}
-      & \qw
+      & \ctrl{1}
+        \gategroup[3,steps=2,style={dashed,rounded corners,fill=black!6,inner sep=5pt},
+                   background,label style={label position=above,yshift=0.25cm}]
+          {\scriptsize Repeat $d$ times}
+      & \gate{R(\theta_{d+j},\phi_{d+j},0)}
       & \rstick{$\bra{0}_\mathrm{QSP}$}\qw
       \\
+  %
+  % ==================================================================
+  % Row 2: Block-encoding ancilla (bundled).
+  % Multi-row gates: \gate[2]{W} for the open-ctrl block (col 4),
+  %                  \gate[2]{W^\dagger} for the closed-ctrl block (col 6).
+  % NO uncontrolled tail in Form B.
+  % PREP/PREP^dagger live INSIDE U_A inside each W and are not drawn here.
+  % ==================================================================
     \lstick{$\ket{0^b}$}
       & \qwbundle{}
-      & \gate{\textsc{Prep}}
+      & \qw
       & \gate[2]{W}
       & \qw
       & \qw
       & \gate[2]{W^\dagger}
       & \qw
-      & \gate{\textsc{Prep}^\dagger}
       & \rstick{$\bra{0^b}$}\qw
       \\
+  %
+  % ==================================================================
+  % Row 3: System register (bundled).
+  % Cells under the multi-row gates (col 4: W, col 6: W^dagger) are LEFT
+  % EMPTY so quantikz draws those gates spanning rows 2-3.
+  % ==================================================================
     \lstick{$\ket{\psi}$}
       & \qwbundle{}
       & \qw
@@ -1184,20 +1220,18 @@ Applying $U_A$ on $\ket{0^b}\otimes\ket{\psi}$ and \emph{post-selecting} the anc
       & \qw
       &
       & \qw
-      & \qw
       & \rstick{$\approx \ee^{-\ii\delta A}\ket{\psi}$}\qw
   \end{quantikz}
   }
-  \caption{Degree-$2d$ GQSP circuit realising $\ee^{-\ii\delta A}$
-  from the walk operator $W$ of \ref{eq:qsp-walk}.
-  The first $d$ signal calls are controlled-$W$ and the last $d$
-  are controlled-$W^\dagger$ (\cite[Thm. 6]{motlagh2024generalized}, $k = d$).
-  Post-selecting both ancillas on $\ket{0}$ yields
-  $\ee^{-\ii\delta A} + \mathcal{O}(\varepsilon_\mathrm{QSP})$.}
+  \caption{GQSP circuit approximating
+    $\ee^{-\ii\delta A}$ as a Laurent polynomial on the post-selected $\ket{0}_\mathrm{QSP}\otimes\ket{0^b}$
+    block from the walk operator $W = R_b\,U_A$. The dashed boxes are repeated $d$ times: one with $W$ the other with $W^\dagger$ (each followed by a two-parameter rotation $R(\theta_\cdot,\phi_\cdot,0)$), with indices $j = 1,\dots,d$ on the first block and $d+j$ on the second. In a gate-level implementation the
+    $\textsc{Prep}/\textsc{Prep}^\dagger$ inside $U_A$ are pulled out of
+    the controlled walks (adjacent $\textsc{Prep}^\dagger\textsc{Prep}=I$) to avoid unnecessary controlled applications.}
   \label{circ:gqsp}
 \end{figure}
 
-Without spoiling too much of the coming theoretical discussions, let us simply claim, that for a detailed balanced Lindbladian we need to apply a coherent evolution $\ee^{-\ii\delta A}$ with respect to a Hermitian operator $A$. Although the method we are about to introduce here is not the only possibility, it certainly is a good fit for our setup. 
+Without spoiling too much of the coming theoretical discussions, let us simply claim, that for a detailed balanced Lindbladian we need to apply a coherent evolution of the form $\ee^{-\ii\delta A}$ with respect to some Hermitian operator $A = A^\dagger$. There are certainly many ways to apply such a coherent part in a Lindbladian evolution, the one we have decided upon is conceptually and in circuit construction terms the simplest while operating at the same approximating error order as the other parts of \hyperref[alg:main]{Algorithm~\ref*{alg:main}}, namely as the weak measurement scheme, see the next section.
 
 The LCU circuit of the previous section \hyperref[circ:lcu]{Fig.~\ref*{circ:lcu}} delivers a block encoding $U_A$ on a $b$-qubit register of some Hermitian $A$ on an $n$-qubit register, 
 $$
@@ -1205,41 +1239,66 @@ $$
 $$
 with $A = \sum_j \alpha_j U_j$, $\alpha = \sum_j \alpha_j$, preparation unitary $\textsc{Prep}\ket{0} = \sum_j \sqrt{\alpha_j/\alpha}\,\ket{j}$, selection unitary $\textsc{Select} = \sum_j \ket{j}\!\bra{j}\otimes U_j$, and $U_A = (\textsc{Prep}^\dagger\otimes I)\,\textsc{Select}\,(\textsc{Prep}\otimes I)$. 
 
-What we want to apply to the system however is not purely $A$ but rather the coherent evolution $\ee^{-\ii\delta A}$. \emph{Generalized quantum signal processing} (GQSP) \cite{motlagh2024generalized} is the tool that transforms one into the other: interleaving controlled calls to an associated \emph{walk operator} -- consisting of $U_A$ and reflections -- with single-qubit rotations realises any polynomial transformation of $A$'s spectrum after post-selection. Choosing the polynomial $P$ as a good approximation to $\ee^{-\ii\delta\alpha\cos\theta}$ on the unit circle realises the Hamiltonian simulation unitary $\ee^{-\ii\delta A}$ up to a QSP truncation error. The circuit in \hyperref[circ:gqsp]{Fig.~\ref*{circ:gqsp}} shows a GQSP layer for an arbitrary degree $d$ polynomial approximation. 
+It is often the case however, that we do not purely want to apply $A$ to the system but rather some function of it, e.g. the coherent evolution $\ee^{-\ii\delta A}$, with $A = A^\dagger$. \emph{ Quantum signal processing} (QSP) is the technique that bridges the gap: given a block encoding like the LCU, it post-selectively realises an arbitrary polynomial transformation of the encoded operator's $A$ spectrum. There are a miriad of ways to implement QSP for a thorough review see \cite{skelton2025hitchhiker}. We have decided upon the \emph{Generalized QSP} (GQSP) variant of \cite{motlagh2024generalized}, which lifts the parity restriction of the original QSP construction and works on the unit circle by using more general $\mathrm{SU}(2)$ rotations. This makes the natural class for Hamiltonian simulation targets $\ee^{-\ii\delta\alpha\cos\theta}$, the class of all complex Laurent polynomials $P$ directly accessible, as we explain below.
 
-Following \cite[Cor. 8.]{motlagh2024generalized}, define the walk operator as a composition of \textsc{Select} and a reflection around the block-encoding ancillas,
-\begin{equation} \label{eq:qsp-walk}
-    W \;:=\; \bigl(2\,\textsc{Prep}\ket{0}\!\bra{0}\,\textsc{Prep}^\dagger \,-\, I\bigr)\,\textsc{Select}.
+Define the walk operator $W$ as the unitary block encoding $U_A$ followed by a reflection $R_b$ around the all-zero state of the block encoding ancilla \cite[Cor. 8]{motlagh2024generalized}
+\begin{equation} \label{qsp-walk}
+    W \;:=\; R_b\,U_A, \qquad R_b \;:=\; 2\,\ket{0^b}\!\bra{0^b} - I.
 \end{equation}
-For each eigenvector $\lambda$ of $A$ with $A\ket{\lambda} = \lambda\ket{\lambda}$, the two-dimensional subspace containing $\text{PREP}\ket{0}\ket{\lambda}$ (and some other orthogonal state) is invariant under $W$. In the suitable orthonormal basis $W$ acts as the $\mathrm{SU}(2)$ matrix
+The primitives $\textsc{Prep}/\textsc{Select}/\textsc{Prep}^\dagger$ will always be defined as part of the unitary block encoding $U_A$ -- both \hyperref[circ:lcu]{Fig.~\ref*{circ:lcu}} and \hyperref[circ:gqsp]{Fig.~\ref*{circ:gqsp}} adopt this convention. For each eigenvector 
+$\ket\lambda$ of $A$ with $A\ket\lambda = \lambda\ket\lambda$, the two-dimensional subspace containing $\ket{0^b}\ket\lambda$ is invariant under $W$. Hence, in a suitable orthonormal basis of that subspace, $W$ acts as the $\mathrm{SU}(2)$ matrix, 
 $$
-W_\lambda \;=\; \begin{pmatrix} \lambda/\alpha & \sqrt{1-(\lambda/\alpha)^2} \\[2pt] -\sqrt{1-(\lambda/\alpha)^2} & \lambda/\alpha \end{pmatrix},
+W_\lambda \;=\; \begin{pmatrix} \lambda/\alpha & \sqrt{1-(\lambda/\alpha)^2} \\[2pt] -\sqrt{1-(\lambda/\alpha)^2} & \lambda/\alpha \end{pmatrix}.
 $$
-Its eigenvalues form the conjugate pair $\ee^{\pm\ii\theta}$ with 
-$$
-\cos\theta \;=\; \lambda/\alpha, \qquad \lambda \in [-\alpha,\alpha], \qquad \theta \in [0,\pi].
-$$
-Any spectral transformation task on the $\lambda$-eigenspace of $A$ thus reduces to approximating the target function at $z = \ee^{\ii \theta}$ on the unit circle $\mathbb{T} = \{z\in\mathbb{C} : |z|=1\}$.
+The eigenvalues are given by $\ee^{\pm\ii\theta_\lambda}$, where $\cos\theta \;=\; \lambda/\alpha$ with $\lambda \in [-\alpha,\alpha]$ and $\theta \in [0,\pi]$. Any spectral transformation on the $\lambda$-eigenspace of $A$ thus reduces to approximating the target function at $z = \ee^{\ii\theta_\lambda}$ on the unit circle $\mathbb{T} = \{z\in\mathbb{C} : |z|=1\}$.
 
-A GQSP circuit \hyperref[circ:gqsp]{Fig.~\ref*{circ:gqsp}} alternates $\deg P$ (open-)controlled calls to $W$ or $W^\dagger$ with $\deg P + 1$ single-qubit rotations on the QSP ancilla $\ket{0}_\mathrm{QSP}$: starting with an initial rotation $R(\theta_0,\phi_0,\lambda_0)$ (with $\lambda_0\in\mathbb{R}$ the global-phase parameter), followed by $\deg P$ many rotations $R(\theta_j,\phi_j,0)$ for $j = 1, \dots, \deg P$. This procedure characterizes the top left block of the post-selected circuit on each qubitization subspace as \cite[Thm. 6]{motlagh2024generalized}
+For an ordinary polynomial $P \in \mathbb{C}[z]$ with $\|P\|_{\infty,\mathbb{T}} := \max_{z\in\mathbb{T}}|P(z)| \leq 1$, and an integer $0 \leq k \leq \deg P$, the GQSP circuit \hyperref[circ:gqsp]{Fig.~\ref*{circ:gqsp}} applies a polynomial transformation onto the qubitized subspace by interleaving walk operators and single-qubit rotations defined by 
+$$                      
+  R(\theta, \phi, \lambda) = \begin{pmatrix} \ee^{\ii(\phi+\lambda)}\cos\theta &
+  \ee^{\ii\phi}\sin\theta \\ \ee^{\ii\lambda}\sin\theta & -\cos\theta \end{pmatrix}                  
+$$
+with angles found by \cite[Alg. 1]{motlagh2024generalized}. Concretely:
+\begin{enumerate}
+    \item Start with an initial rotation $L_0 = R(\theta_0,\phi_0)\cdot\mathrm{diag}(\ee^{\ii\lambda_0}, 1)$ on the QSP ancilla, with $\lambda_0\in \mathbb{R}$ an absorbed phase parameter distinct from the spectral values $\lambda$.
+    \item This is followed by a $\deg P$ controlled walk interleaved with the QSP ancilla rotations $R(\theta_j, \phi_j, 0)$, where $j = 1, \ldots, \deg P$.
+\end{enumerate}
+Importantly, the $\deg P$ controlled walks can be split into two groups of polarity in order to realise negative powers of polynomials. The first $\deg P - k$ slots ($j = 1, \ldots, \deg P - k$) as open-controlled forward walks, 
+$$
+\Lambda(W) \;:=\; \ket{0}\!\bra{0}_{\mathrm{QSP}}\otimes W \;+\; \ket{1}\!\bra{1}_{\mathrm{QSP}}\otimes I,
+$$
+and the last $k$ slots ($j = \deg P - k + 1, \ldots, \deg P$) are closed-controlled inverse walks, 
+$$
+\Lambda'(W) \;:=\; \ket{0}\!\bra{0}_{\mathrm{QSP}}\otimes I \;+\; \ket{1}\!\bra{1}_{\mathrm{QSP}}\otimes W^\dagger.
+$$
+Post-selecting both ancillas on $\ket{0}_{\mathrm{QSP}}\ket{0^b}$  leads to the operator \cite[Thm. 6]{motlagh2024generalized}, 
 \begin{equation} \label{eq:qsp-poly}
-    P'(W_\lambda) \;=\; W_\lambda^{-k}\,P(W_\lambda), \qquad P \in \mathbb{C}[z], \quad 0 \leq k \leq \deg P, \quad \|P\|_{\infty,\mathbb{T}} := \max_{z\in\mathbb{T}}|P(z)| \leq 1,
+    P'(W_\lambda) \;=\; W_\lambda^{-k}\,P(W_\lambda),
 \end{equation}
-where $k$ is the number of controlled-$W^\dagger$ slots (and $\deg P - k$ is the number of controlled-$W$ slots), i.e. any Laurent polynomial $P' \in \mathbb{C}[z,z^{-1}]$ whose ordinary factor $P$ has unit sup-norm on $\mathbb{T}$ is accessible. The rotation angles $\{(\theta_0,\phi_0,\lambda_0)\}\cup\{(\theta_j,\phi_j)\}_{j=1}^{\deg P}$ depend on $P$ only. The slot assignment encodes the negative exponents $z^{-k}$ present in the polynomial. 
+which on the unit circle $z = \ee^{\ii\theta_\lambda} \in \mathbb{T}$  realises, for each qubitised two-dimensional subspace, the Laurent polynomial:
+$$
+P'(z) \;=\; z^{-k}\,P(z) \;=\; \sum_{m=0}^{\deg P} c_m\,z^{m - k} \;\in\; \mathbb{C}[z, z^{-1}].
+$$
+The monomials here, span the bilateral range $\{z^{-k}, z^{1-k}, \ldots, z^{\deg P - k}\}$. The two slot polarities are precisely what lifts the accessible class from ordinary into Laurent polynomials. The $k$ closed-controlled $\Lambda'(W)$ slots together contribute the negative-exponent prefactor $z^{-k}$, while the $\deg P - k$ open-controlled $\Lambda(W)$ slots, paired with the QSP-ancilla rotations $\{R(\theta_j,\phi_j,0)\}$ and the opening rotation $L_0$, build up the ordinary factor $P(z)$. The angle vector $(\theta_0, \phi_0, \lambda_0; \{(\theta_j, \phi_j)\}_{j=1}^{\deg P})$ depends only on $P$, while $k$ enters purely through the slot pattern. The two are chosen independently subject to $0 \leq k \leq \deg P$.
 
-The Hamiltonian simulation target $\ee^{-\ii\delta\alpha\cos\theta}$ is a Laurent function of $\ee^{\ii\theta}$, and it is not expressible as a non-trivial ordinary polynomial. (An ordinary $P\in\mathbb{C}[z]$ satisfying $P(\ee^{\ii\theta}) = P(\ee^{-\ii\theta})$ on $\mathbb{T}$ has $P(z) = P(1/z)$ on $\mathbb{T}$, and matching Fourier coefficients forces $P$ to be constant.) Thus, \cite[Thm. 6]{motlagh2024generalized} is exactly what is needed. The bilateral Jacobi-Anger expansion gives, 
+Letting $(P, k)$ range over the constraint set $\|P\|_{\infty,\mathbb{T}} \leq 1$, $0 \leq k \leq \deg P$, GQSP allows access to the full class
+$$
+\mathcal{P}_{\text{GQSP}} \;=\; \bigl\{P' \in \mathbb{C}[z, z^{-1}] \;:\; P'(z) = z^{-k}P(z),\; P \in \mathbb{C}[z],\; \|P\|_{\infty,\mathbb{T}} \leq 1,\; 0 \leq k \leq \deg P \bigr\}
+$$
+of Laurent polynomials whose ordinary partner is sup-norm-bounded on $\mathbb{T}$ — strictly richer than the ordinary polynomials accessible from an all-$\Lambda(W)$ circuit ($k = 0$). This Laurent class is exactly what the coherent target $\ee^{-\ii\delta A}$ requires.
+
+The Hamiltonian simulation target can be cast in the form $\ee^{-\ii\delta\alpha\cos\theta}$, which is a Laurent function of $\ee^{\ii\theta}$, \cite[Thm. 6]{motlagh2024generalized}. Using the Jacobi-Anger expansion on this form yields, 
 \begin{equation} \label{eq:jacobi-anger}
-    \ee^{-\ii\delta\alpha\cos\theta} \;=\; \sum_{k=-\infty}^{\infty} (-\ii)^k\,J_k(\delta\alpha)\,\ee^{\ii k\theta}, \qquad \theta \in \mathbb{R}.
+    \ee^{-\ii\delta\alpha\cos\theta} \;=\; \sum_{k=-\infty}^{\infty} (-\ii)^k\,J_k(\delta\alpha)\,\ee^{\ii k\theta}, \qquad \theta \in \mathbb{R},
 \end{equation}
-Followed up by a truncation at $|k|\leq d < \infty$ yields the Laurent polynomial
+with the $k$-th Bessel functions $J_k$. As it turns out, truncating this series at $|k|\leq d < \infty$ can still give a good approximation to the target exponential function. We find the Laurent polynomials $L_d$ of degree $d$ in the expression:
 $$
 L_d(\ee^{\ii\theta}) \;:=\; \sum_{k=-d}^{d} (-\ii)^k\,J_k(\delta\alpha)\,\ee^{\ii k\theta} \;\in\; \mathbb{C}[z,z^{-1}],
 $$
-of bilateral degree $d$, where the $k$-th Bessel functions $J_k$ have a tail bound 
+that have a tail bound 
 $$
 \bigl\|\ee^{-\ii\delta\alpha\cos\theta} - L_d\bigr\|_{\infty,\mathbb{T}} \;\leq\; 2\!\!\sum_{|k|>d}\!|J_k(\delta\alpha)| \;\leq\; \mathcal{O}\!\left(\!\left(\frac{\ee\delta\alpha}{2(d+1)}\right)^{d+1}\right),
 $$
-justifying the use of a truncation. To realise $L_d$, introduce the underlying polynomial, 
+justifying the use of a truncation. The trick to efficiently realise $L_d$, is to first introduce an underlying polynomial $P$ as, 
 $$
 P(z) \;:=\; z^{d}\,L_{d}(z) \;=\; \sum_{m=0}^{2d} c_m\,z^m, \qquad c_m \;=\; (-\ii)^{m-d}\,J_{m-d}(\delta\alpha),
 $$
@@ -1253,11 +1312,11 @@ The truncation index $d$ that suffices for $\varepsilon_\mathrm{QSP}$-accuracy o
 \begin{equation} \label{eq:qsp-degree}
     d \;=\; \mathcal{O}\!\left(\delta\alpha \;+\; \frac{\log(1/\varepsilon_\text{QSP})}{\log\log(1/\varepsilon_\text{QSP})}\right).
 \end{equation}
-One GQSP layer then makes $d$ controlled-$W$ calls, $d$ controlled-$W^\dagger$ calls, and $2d + 1$ single-qubit rotations on the QSP ancilla. In the regime $\delta\alpha \lesssim 1$, even $d=1$ suffices:
+Consequently, one GQSP layer applies $d$ controlled-$W$ calls, $d$ controlled-$W^\dagger$ calls, together with $2d + 1$ single-qubit rotations on the QSP ancilla. In the regime $\delta\alpha \lesssim 1$, relevant for our coherent step, already $d=1$ suffices:
 $$
-L_1(\ee^{\ii\theta}) \;=\; J_0(\delta\alpha) \,-\, 2\ii\,J_1(\delta\alpha)\,\cos\theta,
+L_1(\ee^{\ii\theta}) \;=\; J_0(\delta\alpha) \,-\, 2\ii\,J_1(\delta\alpha)\,\cos\theta.
 $$
-realised by one controlled-$W$, one controlled-$W^\dagger$, and three rotations $(R_0, R_1, R_2)$. Inserting $J_0(z) = 1 + \mathcal{O}(z^2)$ and $2J_1(z) = z + \mathcal{O}(z^3)$ yields
+This can be realised by one controlled-$W$, one controlled-$W^\dagger$, and three rotations $(R_0, R_1, R_2)$. Inserting $J_0(z) = 1 + \mathcal{O}(z^2)$ and $2J_1(z) = z + \mathcal{O}(z^3)$ yields
 $$
 L_1(\ee^{\ii\theta}) \;=\; 1 \,-\, \ii\,\delta\alpha\,\cos\theta \,+\, \mathcal{O}((\delta\alpha)^2) \;=\; \ee^{-\ii\delta\alpha\cos\theta} \,+\, \mathcal{O}((\delta\alpha)^2).
 $$
@@ -1267,10 +1326,10 @@ Given the polynomial coefficients $\{c_m\}_{m=0}^{2d}$, the angles $\{(\theta_0,
 $$
 |P(z)|^2 + |Q(z)|^2 \;=\; 1.
 $$
-The existence of such a polynomial is proven by \cite[Thm. 4]{motlagh2024generalized}. But we deviate from their proposed way, and use the contour-integral / FFT construction of \cite{berntson2025complementary}. Since they do not use optimization to solve the problem, they can evaluate $Q$ with explicit error bounds up front, in classical time $\tilde{O}(d)$. Once we have $Q$, using the recursive extraction of \cite[Alg. 1]{motlagh2024generalized} results in the $2d + 1$ rotation triplets from $(P, Q)$ in $\mathcal{O}(d^2)$ arithmetic operations. Both stages are performed once, before any quantum computation, for each value $\delta \alpha$. The same angles are then reused at every quantum call of the layer. 
+The existence of $Q$ for a given $P$ is proven by \cite[Thm. 4]{motlagh2024generalized}. But we deviate from their proposed way, and use the contour-integral / Fast Fourier Transform construction of \cite{berntson2025complementary}. They do not use optimization to solve the problem, moreover, they can evaluate $Q$ with explicit error bounds up front, and work in classical time $\tilde{O}(d)$. Once we have $Q$, using the recursive extraction of \cite[Alg. 1]{motlagh2024generalized} results in the $2d + 1$ rotation triplets from $(P, Q)$ in $\mathcal{O}(d^2)$ arithmetic operations. Both stages are performed once, before any quantum computation, for each value $\delta \alpha$. The same angles are then reused at every quantum call of the layer. 
 
 \smallskip
-\subsection{Weak measurement.} \label{sec:prelim-weak-meas}
+\section{Weak measurement} \label{sec:prelim-weak-meas}
 
 \begin{figure}[H]
   \centering
@@ -1297,25 +1356,25 @@ The existence of such a polynomial is proven by \cite[Thm. 4]{motlagh2024general
       & \qw
       & \qw
       &
-      & \rstick{$\approx\ \rho + \tfrac{\delta}{\alpha^{2}}\,\mathcal{D}_L(\rho) + \mathcal{O}(\delta^{2})$} \qw
+      & \rstick{$\approx\ \rho + \tfrac{\delta}{Z_L^{2}}\,\mathcal{D}_L(\rho) + \mathcal{O}(\delta^{2})$} \qw
   \end{quantikz}
   \caption{Weak measurement as a Lindblad dissipator, with
-  $\bra{0^b} U_L \ket{0^b} = L/\alpha$ a block encoding of the jump
+  $\bra{0^b} U_L \ket{0^b} = L/Z_L$ a block encoding of the jump
   $L$. The $Y_\delta$ rotation is controlled on the block register
   $\ket{0^b}$, so that it fires only on the post-selectable branch of
   $U_L$. Post-selecting $b$ on $\ket{0^b}$ and measuring $q_{\delta}$
   realises one Euler step of $\mathcal{D}_L(\rho) = L\rho L^{\dagger}
   - \tfrac{1}{2}\{L^{\dagger}L,\rho\}$ at rate
-  $\gamma = \delta/(\alpha^{2}\,\dd t)$.}
+  $\gamma = \delta/(Z_L^{2}\,\dd t)$.}
   \label{circ:weak-measurement}
 \end{figure}
 
 There is no one-size-fits-all quantum simulation of Lindbladian evolutions. Based on the Lindbladian's specifics, one method could work while another one not. The \emph{weak measurement} scheme we introduce here, established by \cite[Thm. III.1]{chen2023quantum}, fits indeed best to the quantum algorithm in the centre of this thesis, \hyperref[alg:main]{Alg.\ref*{alg:main}}.
-A Lindbladian dissipator for a jump operator $L$ is given by $\mathcal{D}_L(\rho) := L\rho L^\dagger - \tfrac{1}{2}\{L^\dagger L,\rho\}$. It is a combination of a transition term and a reflection term, that together leads to a trace-preserving map $\rho \mapsto \ee^{t\mathcal{D}_L}\rho$. A unitary block-encoding $U_L$ like the LCU \hyperref[circ:lcu]{Fig.~\ref*{circ:lcu}} could already act as the transition term $L\rho L^\dagger$: post-select on the block-encoding ancillas as $|0^b\rangle$ to have $U_L$ imprint $L\ket{\psi} / \alpha$ on the system (with $\|L/\alpha\|\leq 1$). Clearly, the same technique could not deliver the remaining reflection part of the Lindbladian. Chen et al. solves this in \cite{chen2023quantum} by weaving a weak measurement ancilla $\ket{0}_\delta$ between $U_L$ and a conditional $U_L^\dagger$ in such a way that post-selecting on all ancillas to be zero implements an Euler step of $\ee^{\delta\mathcal{D}_L/\alpha^2}$ on $\rho$ up to $\mathcal{O}(\delta^2)$ (\hyperref[circ:weak-measurement]{Fig.~\ref*{circ:weak-measurement}}).
+A Lindbladian dissipator for a jump operator $L$ is given by $\mathcal{D}_L(\rho) := L\rho L^\dagger - \tfrac{1}{2}\{L^\dagger L,\rho\}$. It is a combination of a transition term and a reflection term, that together leads to a trace-preserving map $\rho \mapsto \ee^{t\mathcal{D}_L}\rho$. A unitary block-encoding $U_L$ like the LCU \hyperref[circ:lcu]{Fig.~\ref*{circ:lcu}} could already act as the transition term $L\rho L^\dagger$: post-select on the block-encoding ancillas as $|0^b\rangle$ to have $U_L$ imprint $L\ket{\psi} / Z_L$ on the system (with $\|L/Z_L\|\leq 1$). Clearly, the same technique could not deliver the remaining reflection part of the Lindbladian. Chen et al. solves this in \cite{chen2023quantum} by weaving a weak measurement ancilla $\ket{0}_\delta$ between $U_L$ and a conditional $U_L^\dagger$ in such a way that post-selecting on all ancillas to be zero implements an Euler step of $\ee^{\delta\mathcal{D}_L/Z_L^2}$ on $\rho$ up to $\mathcal{O}(\delta^2)$ (\hyperref[circ:weak-measurement]{Fig.~\ref*{circ:weak-measurement}}).
 
 The circuit walkthrough after initialising the three registers in $\ket{0}_\delta \otimes \ket{0^b} \otimes \rho$ is the following:
 \begin{enumerate}[(i)]
-    \item \emph{Block encoding.} $U_L$ acts on $(b, S)$ s.t. on the $\ket{0^b}$ block of the state imprints the amplitude $L/\alpha$ on $S$, leaving an orthogonal artefact on $(b, S)$:
+    \item \emph{Block encoding.} $U_L$ acts on $(b, S)$ s.t. on the $\ket{0^b}$ block of the state imprints the amplitude $L/Z_L$ on $S$, leaving an orthogonal artefact on $(b, S)$:
     $$
     |\phi^\perp\rangle := \left(\idm - |0^b\rangle\!\langle0^b|\!\otimes\idm\right)\,U_L\,|0^b\rangle\!\ket\psi.
     $$
@@ -1327,19 +1386,19 @@ The circuit walkthrough after initialising the three registers in $\ket{0}_\delt
         \end{split}
     \end{equation}
     In other words, the weak measurement ancilla acquires amplitude $\sqrt{\delta}$ on $\ket{1}_\delta$ precisely where $U_L$ succeeded, and carries $\ket{0}_\delta$ unchanged on the leaked $\ket{\phi^\perp}$ branch.
-    \item \emph{Controlled undo.} The open-controlled $U_L^\dagger$ fires only on the $\ket{0}_\delta$ branch. On the $\ket{0^b}$-block of $U_L\ket{0^b}\ket\psi$ this uncomputes to $\ket{0^b}\ket\psi$. The artefact part $\ket{\phi^\perp}$ survives without any change to it. On the $\ket{1}_\delta$ branch $U_L^\dagger$ is absent, thus $\ket{0^b}\otimes(L/\alpha)\ket\psi$ stands.
+    \item \emph{Controlled undo.} The open-controlled $U_L^\dagger$ fires only on the $\ket{0}_\delta$ branch. On the $\ket{0^b}$-block of $U_L\ket{0^b}\ket\psi$ this uncomputes to $\ket{0^b}\ket\psi$. The artefact part $\ket{\phi^\perp}$ survives without any change to it. On the $\ket{1}_\delta$ branch $U_L^\dagger$ is absent, thus $\ket{0^b}\otimes(L/Z_L)\ket\psi$ stands.
     \item \emph{Measure and post-select.} Finally, measure all ancillas, and post-select only on the block encoding ones as $\ket{0^b}$.
 \end{enumerate}
 
-We can understand what is happening in this construction by Kraus operators \eqref{eq:kraus}: in the \emph{no-jump} branch  ($\ket{0}_\delta$ outcome, $\ket{0^b}$ post-selected), the uncomputation $U_L^\dagger U_L = \idm$ acts on the block, while the $\ket{\phi^\perp}$ artefact has $\ket{0^b}$ post-selection failure probability $\|L\ket\psi\|^2/\alpha^2$. In the \emph{jump} branch ($\ket{1}_\delta$ outcome, $\ket{0^b}$ post-selected) the full amplitude $L\ket\psi/\alpha$ survives, weighted by the $\sqrt{\delta}$ of the weak rotation. The results for a given Lindblad operator $L$ derived by \cite{chen2023quantum} can be summarized as the Kraus jumps
+We can understand what is happening in this construction by Kraus operators \eqref{eq:kraus}: in the \emph{no-jump} branch  ($\ket{0}_\delta$ outcome, $\ket{0^b}$ post-selected), the uncomputation $U_L^\dagger U_L = \idm$ acts on the block, while the $\ket{\phi^\perp}$ artefact has $\ket{0^b}$ post-selection failure probability $\|L\ket\psi\|^2/Z_L^2$. In the \emph{jump} branch ($\ket{1}_\delta$ outcome, $\ket{0^b}$ post-selected) the full amplitude $L\ket\psi/Z_L$ survives, weighted by the $\sqrt{\delta}$ of the weak rotation. The results for a given Lindblad operator $L$ derived by \cite{chen2023quantum} can be summarized as the Kraus jumps
 \begin{equation}
-    M_0 \;=\; \sqrt{1-\delta}\,\idm \;-\; \tfrac{1}{2}\,\tfrac{\delta}{\alpha^2}\,L^\dagger L \;+\; \mathcal{O}(\delta^2), \qquad M_1 \;=\; \sqrt{\delta}\;\frac{L}{\alpha}.
+    M_0 \;=\; \sqrt{1-\delta}\,\idm \;-\; \tfrac{1}{2}\,\tfrac{\delta}{Z_L^2}\,L^\dagger L \;+\; \mathcal{O}(\delta^2), \qquad M_1 \;=\; \sqrt{\delta}\;\frac{L}{Z_L}.
 \end{equation}
 By tracing out the ancillas (summing over the branches) and expanding in $\delta$,
 \begin{equation} \label{eq:weak-meas-euler}
-    \rho \;\mapsto\; M_0\,\rho\,M_0^\dagger + M_1\,\rho\,M_1^\dagger \;=\; \rho \;+\; \frac{\delta}{\alpha^{2}}\Bigl(L\rho L^\dagger - \tfrac{1}{2}\{L^\dagger L,\rho\}\Bigr) \;+\; \mathcal{O}(\delta^{2}).
+    \rho \;\mapsto\; M_0\,\rho\,M_0^\dagger + M_1\,\rho\,M_1^\dagger \;=\; \rho \;+\; \frac{\delta}{Z_L^{2}}\Bigl(L\rho L^\dagger - \tfrac{1}{2}\{L^\dagger L,\rho\}\Bigr) \;+\; \mathcal{O}(\delta^{2}).
 \end{equation}
-which is precisely one Euler step of $\dot\rho = (1/\alpha^2)\,\mathcal{D}_L(\rho)$ up to $\mathcal{O}(\delta^2)$ errors. The post-selection on $b$ succeeds with probability $1 - \delta\,\|L\ket\psi\|^2/\alpha^2 + \mathcal{O}(\delta^2) = 1 - \mathcal{O}(\delta)$, i.e. unlike the post-selection loss ($1/\alpha^2$) of LCU \eqref{eq:lcu}, here there is no need for oblivious amplitude amplificiation or any other trick to boost the success probability. The smallness of $\delta$ is enough to make this into a deterministic mechanism. Or put differently, even the artefact blocks contribute to the Lindbladian correctly -- as the reflection part -- up to $\mathcal{O}(\delta^2)$ errors. The extension to multiple jumps is straight-forward, which is precisely what we can see in \cite{chen2023quantum,chen2023efficient}, and also in our slightly modified variant \hyperref[alg:diss]{Alg.~\ref*{alg:diss}}.
+which is precisely one Euler step of $\dot\rho = (1/Z_L^2)\,\mathcal{D}_L(\rho)$ up to $\mathcal{O}(\delta^2)$ errors. The post-selection on $b$ succeeds with probability $1 - \delta\,\|L\ket\psi\|^2/Z_L^2 + \mathcal{O}(\delta^2) = 1 - \mathcal{O}(\delta)$, i.e. unlike the post-selection loss ($1/Z_L^2$) of LCU \eqref{eq:lcu}, here there is no need for oblivious amplitude amplificiation or any other trick to boost the success probability. The smallness of $\delta$ is enough to make this into a deterministic mechanism. Or put differently, even the artefact blocks contribute to the Lindbladian correctly -- as the reflection part -- up to $\mathcal{O}(\delta^2)$ errors. The extension to multiple jumps is straight-forward, which is precisely what we can see in \cite{chen2023quantum,chen2023efficient}, and also in our slightly modified variant \hyperref[alg:diss]{Alg.~\ref*{alg:diss}}.
 
 The Euler-step accuracy of \eqref{eq:weak-meas-euler} is only first order in $\delta$ so reaching a diamond-norm error $\varepsilon$ over the total time $T$ costs $T/\delta = \mathcal{O}(T^2 / \varepsilon)$ calls to $U_L$, i.e. polynomial in $1 / \varepsilon$. One might therefore ask why we do not instead pick a higher-order Lindblad simulator, such as the one proposed by \cite{li2022simulating} that uses Duhamel's principle. This could simulate a generator $\mathcal{L}(\rho) = -\ii[H,\rho] + \sum_{j=1}^m \mathcal{D}_{L_j}(\rho)$ with $\mathcal{O}(\tau\,\mathrm{polylog}(t/\varepsilon))$ block-encoding queries to $U_H$ and to $U_{L_j}$ and $\mathcal{O}(m\tau \mathrm{polylog}(t / \varepsilon))$ additional 1- and 2-qubit gates, where $\tau := t (\alpha_0 + \tfrac{1}{2}\sum_{j=1}^m \alpha_j^2)$. Accordingly, that higher-order simulators are meant to take in a \emph{finite} list $\{L_j\}_{j=1}^m$ of jump operators, each separately block encoded by $U_{L_j}$, leading to a cost linear in $m$. This breaks down in case the generator is of the form \eqref{eq:ckg-L}
 $$

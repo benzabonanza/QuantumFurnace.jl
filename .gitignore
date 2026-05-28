@@ -57,7 +57,6 @@ htmlcov/
 
 .claude-memory/
 .planning/
-scripts/scratch_*.jl
 scripts/output/*.bson
 scripts/output/sweep_*/
 drafts/error-analysis/*.bson

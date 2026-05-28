@@ -1,17 +1,24 @@
 #!/usr/bin/env julia
 #
 # DLL Gaussian vs DLL Metropolis Kossakowski matrix α_{ν1,ν2} heat maps,
-# at β ∈ {5, 10, 20}. Companion to scripts/plot_kossakowski_heatmaps.jl
+# at β_phys ∈ {0.25, 0.5, 1.0}. Companion to scripts/plot_kossakowski_heatmaps.jl
 # (which does the CKG/Davies side); same colour map, axes, and layout
 # style for direct visual comparison in the thesis.
 #
 # Strategy: 2×3 panel grid + shared colorbar.
-#   row 1: DLL Gaussian (Eq. 3.21–3.22) — narrow lobe centred at -1/β,
-#          width 2/β. Lobe shrinks ∝ 1/β as β grows.
+#   row 1: DLL Gaussian (Eq. 3.21–3.22) — narrow lobe centred at -1/β_alg,
+#          width 2/β_alg. Lobe shrinks ∝ 1/β_alg as β grows.
 #   row 2: DLL Metropolis (Eq. 3.19–3.20, S=2) — fully-saturated (-,-)
 #          quadrant, exponential decay into (+,+). Lobe SUPPORT stays
-#          O(1) as β grows; the (+,+) corner shrinks (mandatory KMS-DB).
-#   columns: β ∈ {5, 10, 20}.
+#          O(1) as β_alg grows; the (+,+) corner shrinks (mandatory KMS-DB).
+#   columns: β_phys ∈ {0.25, 0.5, 1.0}.
+#
+# qf-6vr (β_phys / β_alg split): the user-facing temperature is β_phys; the
+# DLL filters take β = β_alg = β_phys · ham.rescaling_factor, since they act
+# on the rescaled Bohr grid stored in `ham.bohr_dict`. The canonical β_phys
+# grid {0.25, 0.5, 1.0} replaces the legacy β_alg grid {5, 10, 20} (see
+# CLAUDE.md). For the n=3 typical-Heisenberg fixture rescaling_factor ≈ 21.86,
+# so β_alg ≈ {5.5, 10.9, 21.9} — very close to the legacy values.
 #
 # Both DLL Kossakowskis are rank-1 outer products α = v·vᵀ with
 # v_k = freq_kernel(filter, ν_k); both non-negative (freq_kernel real).
@@ -41,15 +48,24 @@ using QuantumFurnace
 include(joinpath(@__DIR__, "..", "test", "test_helpers.jl"))
 
 # ── Parameters ────────────────────────────────────────────────────────────────
-const β_values = (5.0, 10.0, 20.0)
-const S_meta   = 2.0
+# qf-6vr canonical β_phys grid (legacy β_alg {5, 10, 20} -> β_phys {0.25, 0.5, 1.0}).
+const β_phys_values = (0.25, 0.5, 1.0)
+const S_meta        = 2.0
 
 # ── Build n=3 fixture ────────────────────────────────────────────────────────
 ham_path = joinpath(@__DIR__, "..", "hamiltonians", "heis_xxx_zzdisordered_periodic_n3.bson")
-ham = _load_test_hamiltonian(ham_path, first(β_values))
+# β passed here only initialises the (unused) Gibbs state; we derive β_alg per cell below.
+ham = _load_test_hamiltonian(ham_path, 1.0)
+const rescale = ham.rescaling_factor
+# β_alg = β_phys · rescaling_factor on the rescaled Bohr grid.
+const β_alg_values = Tuple(β_phys * rescale for β_phys in β_phys_values)
 unique_freqs = sort(collect(keys(ham.bohr_dict)))
 Nfreq = length(unique_freqs)
-@printf("Unique Bohr frequencies: %d   ν range: [%.4f, %.4f]\n",
+@printf("Fixture: %s\n", relpath(ham_path, joinpath(@__DIR__, "..")))
+@printf("rescaling_factor = %.4f\n", rescale)
+@printf("β_phys grid: %s\n", string(β_phys_values))
+@printf("β_alg  grid: %s\n", string(round.(β_alg_values; digits=3)))
+@printf("Unique Bohr frequencies: %d   ν range (rescaled): [%.4f, %.4f]\n",
         Nfreq, first(unique_freqs), last(unique_freqs))
 
 # ── Compute Kossakowski matrices (rank-1 outer products) ─────────────────────
@@ -60,19 +76,22 @@ end
 
 println("\nComputing α matrices…")
 α_panels = Dict{Tuple{Symbol,Float64},Matrix{Float64}}()
-for β in β_values
-    α_panels[(:gauss, β)] = compute_alpha(DLLGaussianFilter(β), unique_freqs)
-    α_panels[(:meta,  β)] = compute_alpha(DLLMetropolisFilter(β; S=S_meta), unique_freqs)
+for β_phys in β_phys_values
+    β_alg = β_phys * rescale
+    α_panels[(:gauss, β_phys)] = compute_alpha(DLLGaussianFilter(β_alg), unique_freqs)
+    α_panels[(:meta,  β_phys)] = compute_alpha(DLLMetropolisFilter(β_alg; S=S_meta), unique_freqs)
 end
 
 # Diagnostic summary.
-@printf("\n%-6s %-10s %-12s %-12s %-12s\n", "β", "filter", "max(α)", "‖α‖_F", "Σ|α|")
-println("-"^60)
-for β in β_values
+@printf("\n%-8s %-8s %-10s %-12s %-12s %-12s\n",
+        "β_phys", "β_alg", "filter", "max(α)", "‖α‖_F", "Σ|α|")
+println("-"^72)
+for β_phys in β_phys_values
+    β_alg = β_phys * rescale
     for (sym, name) in ((:gauss, "Gaussian"), (:meta, "Metropolis"))
-        α = α_panels[(sym, β)]
-        @printf("%-6.1f %-10s %-12.4e %-12.4e %-12.4e\n",
-                β, name, maximum(α), norm(α), sum(abs.(α)))
+        α = α_panels[(sym, β_phys)]
+        @printf("%-8.3f %-8.3f %-10s %-12.4e %-12.4e %-12.4e\n",
+                β_phys, β_alg, name, maximum(α), norm(α), sum(abs.(α)))
     end
 end
 
@@ -130,19 +149,19 @@ end
 # Build the 6 heatmaps. Top row: Gaussian. Bottom row: Metropolis.
 # Y labels on column 1 only; x labels on bottom-row middle column.
 panels = Plots.Plot[]
-for (i, β) in enumerate(β_values)
+for (i, β_phys) in enumerate(β_phys_values)
     push!(panels, make_heatmap(
-        α_panels[(:gauss, β)],
-        "DLL Gaussian, \$\\beta=$(Int(β))\$";
+        α_panels[(:gauss, β_phys)],
+        "DLL Gaussian, \$\\beta=$(β_phys)\$";
         show_y      = (i == 1),
         show_xlabel = false,
         left_margin = i == 1 ? 10Plots.mm : 3Plots.mm,
     ))
 end
-for (i, β) in enumerate(β_values)
+for (i, β_phys) in enumerate(β_phys_values)
     push!(panels, make_heatmap(
-        α_panels[(:meta, β)],
-        "DLL Metropolis (\$S=$(Int(S_meta))\$), \$\\beta=$(Int(β))\$";
+        α_panels[(:meta, β_phys)],
+        "DLL Metropolis, \$\\beta=$(β_phys)\$";
         show_y      = (i == 1),
         show_xlabel = (i == 2),  # middle column carries the shared x-label
         left_margin = i == 1 ? 10Plots.mm : 3Plots.mm,

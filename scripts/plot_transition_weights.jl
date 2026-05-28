@@ -16,10 +16,19 @@
 #   eq:smooth-metro       (line 296)
 #   Glauber as the s = 2 limit of γ_M^{(s)} per Chen et al. \cite{chen2023quantum}
 #
-# PHYSICS CHECK: σ = ω_γ = σ_γ = 1/β follows Chen et al. With σ = 1/β the
-# Gaussian Kossakowski matrix is skew-symmetric (Eq. line 160). The Gaussian
-# transition centre at ω = -1/β and the Metropolis kink at -1/(2β) sit in the
-# same energy scale.
+# PHYSICS CHECK: σ = ω_γ = σ_γ = 1/β̄ follows Chen et al., where β̄ = β_alg is
+# the algorithm-space inverse temperature on the rescaled Bohr grid. With
+# σ = 1/β̄ the Gaussian Kossakowski matrix is skew-symmetric (Eq. line 160).
+# The Gaussian transition centre at ω = -1/β̄ and the Metropolis kink at
+# -1/(2 β̄) sit in the same energy scale.
+#
+# This plot illustrates the *shapes* of γ(ω) on the rescaled-ω axis the
+# algorithm sees natively. The physical β_phys is fixture-dependent
+# (β_phys = β̄ / rescaling_factor); for these qualitative shape comparisons
+# it is more distracting than helpful, so we just pick β̄ = 10 — the legacy
+# value — and label the plot accordingly. Kossakowski heatmaps still
+# parametrise by β_phys, where the physical temperature is the natural
+# axis.
 #
 # PHYSICS CHECK: s = 0.25 is the chosen smoothing parameter for γ_M^{(s)}.
 #   - s > 0 puts γ_M^{(s)} in the Gevrey-1/2 class (Prop. smooth-metro-gevrey),
@@ -35,17 +44,21 @@
 
 using Printf
 using SpecialFunctions: erfc, erfcx
+
 using Plots
 
 # ── Parameters ────────────────────────────────────────────────────────────────
-const β = 10.0                # inverse temperature (default working temperature)
-const σ = 1 / β               # filter width (CKG canonical, Chen et al.)
-const s = 0.25                # smoothing parameter for γ_M^{(s)}
+# β̄ = β_alg is the algorithm-space inverse temperature on the rescaled Bohr
+# grid; we use the legacy value 10 here because the curves' qualitative shape
+# is what matters for this plot (Kossakowski heatmaps stay on β_phys).
+const β      = 10.0
+const σ      = 1 / β                      # filter width on the rescaled Bohr grid
+const ω_γ    = 1 / β                      # Gaussian transition centre  (Chen et al.)
+const σ_γ    = 1 / β                      # Gaussian transition width   (Chen et al.)
+const s      = 0.25                       # smoothing parameter for γ_M^{(s)}
+const ω_kink = -β * σ^2 / 2               # kink position of γ_M (and γ_Gl inflection)
 
-const ω_γ = 1 / β             # Gaussian transition centre (Chen et al.)
-const σ_γ = 1 / β             # Gaussian transition width  (Chen et al.)
-
-const ω_kink = -β * σ^2 / 2   # kink position of γ_M (and inflection of γ_Gl)
+@printf("β̄ (= β_alg) = %.3f   σ = 1/β̄ = %.4f   ω_kink = %.4f\n", β, σ, ω_kink)
 
 # ── Transition weights ────────────────────────────────────────────────────────
 γ_gauss(ω) = exp(-(ω + ω_γ)^2 / (2 * σ_γ^2))
@@ -75,7 +88,9 @@ function γ_smooth(ω; β=β, σ=σ, s=s)
 end
 
 # ── Grid ──────────────────────────────────────────────────────────────────────
-ω_grid = range(-1.0, 1.0; length=1601)
+# Rescaled-ω grid covering the n=5 Bohr range [-0.9, 0.9]; curves decay to ≈ 0
+# by |ω| ≈ 0.3 at β_alg ≈ 22, so [-0.5, 0.5] is a tight visualisation window.
+ω_grid = range(-0.5, 0.5; length=1601)
 
 g_gauss   = γ_gauss.(ω_grid)
 g_kinky   = γ_kinky.(ω_grid)
@@ -110,7 +125,6 @@ default(
     grid             = true,
     gridalpha        = 0.25,
     linewidth        = 2.0,
-    size             = (700, 460),
     dpi              = 200,
     margin           = 4Plots.mm,
 )
@@ -124,40 +138,63 @@ c_smooth  = "#735874"   # deepplum
 c_gauss   = "#7FA4CC"   # slateblue, brighter variant of #5C7794
 c_glauber = "#B2CCA1"   # sage, brighter variant of #8B9F7E
 
-plt = plot(
+# Left panel — Gaussian only.
+plt_gauss = plot(
     ω_grid, g_gauss;
     label  = "\$\\gamma_G\$ (Gaussian)",
     color  = c_gauss,
     xlabel = "\$\\omega\$",
     ylabel = "\$\\gamma(\\omega)\$",
-    title  = "Transition weights  (\$\\beta=$(Int(β)),\\; \\sigma = 1/\\beta\$)",
+    title  = "Gaussian  (\$\\bar{\\beta}=$(Int(β))\$)",
     legend                 = :topright,
     legendfontsize         = 8,
     foreground_color_legend = nothing,
     background_color_legend = RGBA(1, 1, 1, 0.7),
-    xlims  = (-1.0, 1.0),
+    xlims  = (-0.5, 0.5),
     ylims  = (-0.02, 1.08),
 )
-
-plot!(plt, ω_grid, g_kinky;
-    label = "\$\\gamma_M\$ (kinky Metropolis)",
-    color = c_kinky)
-
-plot!(plt, ω_grid, g_smooth;
-    label = "\$\\gamma_M^{(s)}\$ (smooth, \$s=$(s)\$)",
-    color = c_smooth)
-
-plot!(plt, ω_grid, g_glauber;
-    label = "\$\\gamma_{\\mathrm{Gl}}\$ (Glauber)",
-    color = c_glauber)
-
-# Mark the kink position
-vline!(plt, [ω_kink];
+vline!(plt_gauss, [ω_kink];
     color     = :grey40,
     linestyle = :dash,
     linewidth = 1.2,
     label     = "")
-annotate!(plt, ω_kink + 0.025, 1.04, text("\$\\omega = -\\beta\\sigma^{2}/2\$", :grey40, 8, :left, rotation=0))
+annotate!(plt_gauss, ω_kink + 0.012, 1.04,
+          text("\$\\omega = -\\beta\\sigma^{2}/2\$", :grey40, 8, :left, rotation=0))
+
+# Right panel — Metropolis (kinky + smooth) and Glauber.
+plt_metro = plot(
+    ω_grid, g_kinky;
+    label  = "\$\\gamma_M\$ (kinky Metropolis)",
+    color  = c_kinky,
+    xlabel = "\$\\omega\$",
+    ylabel = "\$\\gamma(\\omega)\$",
+    title  = "Metropolis & Glauber  (\$\\bar{\\beta}=$(Int(β))\$)",
+    legend                 = :topright,
+    legendfontsize         = 8,
+    foreground_color_legend = nothing,
+    background_color_legend = RGBA(1, 1, 1, 0.7),
+    xlims  = (-0.5, 0.5),
+    ylims  = (-0.02, 1.08),
+)
+plot!(plt_metro, ω_grid, g_smooth;
+    label = "\$\\gamma_M^{(s)}\$ (smooth, \$s=$(s)\$)",
+    color = c_smooth)
+plot!(plt_metro, ω_grid, g_glauber;
+    label = "\$\\gamma_{\\mathrm{Gl}}\$ (Glauber)",
+    color = c_glauber)
+vline!(plt_metro, [ω_kink];
+    color     = :grey40,
+    linestyle = :dash,
+    linewidth = 1.2,
+    label     = "")
+annotate!(plt_metro, ω_kink + 0.012, 1.04,
+          text("\$\\omega = -\\beta\\sigma^{2}/2\$", :grey40, 8, :left, rotation=0))
+
+# Combined 1×2 figure.
+plt = plot(plt_gauss, plt_metro;
+           layout = (1, 2),
+           size   = (1300, 460),
+           link   = :all)
 
 # ── Save ──────────────────────────────────────────────────────────────────────
 out_pdf = joinpath(@__DIR__, "..", "drafts", "plots", "transition_weights.pdf")

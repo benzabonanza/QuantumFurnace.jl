@@ -1,7 +1,10 @@
 ---
-name: β_phys vs β_alg convention (qf-6vr)
-description: Hamiltonian fixtures store a rescaled spectrum, so any inverse temperature `β` has two meanings — physical (against `H_phys`) and algorithm-side (against the rescaled `H` stored in the HamHam). qf-6vr / Phase qf-bphys splits them explicitly.
-type: project
+name: phys-vs-alg-convention-qf-6vr
+description: "Hamiltonian fixtures store a rescaled spectrum, so any inverse temperature `β` has two meanings — physical (against `H_phys`) and algorithm-side (against the rescaled `H` stored in the HamHam). qf-6vr / Phase qf-bphys splits them explicitly."
+metadata: 
+  node_type: memory
+  type: project
+  originSessionId: fec30fa9-fa0b-43f6-a682-ac3941559840
 ---
 
 ## Why this convention exists
@@ -143,3 +146,16 @@ where the operational confusion was.
 Originals are preserved unchanged. The default scan covers
 `scripts/output/` and `drafts/figures/numerics/sweep_cache/`; pass `--dir`
 to target a specific tree.
+
+## Companion convention: gap_phys vs gap_alg
+
+This convention is the **input-side** half of the rescaling story. There
+is a paired **output-side** convention for the spectral gap: every gap
+reported by `krylov_spectral_gap` is in algorithm-time units, and the
+physical gap (matching $\Omega(1)$-gap theorems) is
+$\lambda_{\rm gap}^{\rm phys} = R \cdot \lambda_{\rm gap}^{\rm alg}$. The
+two are *not* inverses — $\beta_{\rm alg}$ fixes the Gibbs state inside
+$\mathcal{L}$, while $R\cdot\lambda$ relabels the rate's units at readout
+without touching the operator. See [[gap_phys_alg_relation_qf_8fr]] and
+the consolidated four-variable reference at
+`drafts/phys-vs-alg-conventions.md`.

@@ -119,6 +119,68 @@ The qf-1jj draft already claimed correctly that λ_L^phys closes faster than ΔE
 
 Add the qf-biz draft to the cross-references list at the bottom of qf-1jj.
 
+## Follow-up C — canonical $\rho_0 = |+\rangle\langle+|^{\otimes N}$ rerun (qf-b4i / qf-65e, 2026-05-24)
+
+The qf-1jj sweep ran the trajectory predictor from $\rho_0 = I/d$, which was the default at the time. The project-wide canonical choice (qf-e4z.30, decreed 2026-05-24) is $\rho_0 = (|+\rangle\langle+|)^{\otimes N}$. qf-b4i re-runs the six cells with the canonical $\rho_0$ keeping every other knob fixed; gap_phys is $\rho_0$-independent and unchanged (verified to rel-diff $\le 1.1\,\text{e}{-10}$ vs qf-1jj at all six cells), but the trajectory τ_mix moves substantially in the ordered phase.
+
+| $n$ | $\tau_{\rm mix}^{\rm ORD}\ (|+\rangle)$ | $\tau_{\rm mix}^{\rm ORD}\ (I/d)$ | $|c_2|^{\rm ORD}\ (|+\rangle)$ | mechanism |
+|---|---|---|---|---|
+| 4 | $1349$ | $47.0$ | $4.88\,\text{e}{-2}$ | $|+\rangle$ couples to tunnelling mode — $\tau \sim 1/\lambda_2$ |
+| 6 | $6.23\,\text{e}{4}$ | $104.7$ | $6.23\,\text{e}{-2}$ | same — $\tau$ tracks the Z₂-tunnelling collapse |
+| 8 | $251.8$ | $190.1$ | $1.34\,\text{e}{-3}$ | $|+\rangle$ symmetry-decouples from L's slow mode — $\tau \sim 1/\lambda_3$ |
+
+**Mechanism.** Under $P = X^{\otimes N}$, both $\rho_0$'s are parity-EVEN ($P|+\rangle\langle+|^{\otimes N} P^\dagger = |+\rangle\langle+|^{\otimes N}$ since $X|+\rangle = |+\rangle$; $P \cdot I/d \cdot P^\dagger = I/d$). The slow Z₂-odd eigenmode lives 89 % in the $|\psi_{1,2}\rangle\langle\psi_8|$-type off-diagonal block (Follow-up A above) — that block has substantial overlap with the X-only Pauli content of $|+\rangle\langle+|^{\otimes N}$ at small $n$ where the doublet states have spatial breadth, but at $n = 8$ the doublet states are essentially Hamming-weight-pure on the $|0...0\rangle$ / $|1...1\rangle$ classical ground states (up to the exponentially small tunnelling). The off-diagonal block becomes nearly Y/Z-string-orthogonal to the broad X-string content, $|c_2|$ collapses $46\times$ between $n = 6$ and $n = 8$, and $\tau_{\rm mix}(|+\rangle)$ joins $\tau_{\rm mix}(I/d)$ at the bulk-mode timescale.
+
+**Reading**: τ_mix($|+\rangle$) is the canonical mixing time for the canonical initial state. The qf-1jj numbers (τ_mix($I/d$) modest at all $n$) reflected $I/d$'s exact decoupling from the parity-odd slow mode by symmetry, not the "true" Lindbladian mixing rate. Neither symmetric $\rho_0$ tracks $1/\lambda_2$ at large $n$; in a hardware run one needs a parity-asymmetric initial state (e.g. one of the doublet states $|\psi_1\rangle\langle\psi_1|$, or a thermal-perturbed seed) for $\tau$ to track the full gap collapse.
+
+**qf-65e Krylov-size correction.** The initial qf-b4i rerun used krylovdim $= 40$ (matching qf-1jj) and exposed the ORD $n = 8$ trajectory to a Pass-1 truncation artefact: at kdim = 40 the trajectory predictor reported a "slowest captured mode" at $\lambda^{\rm phys} = 4.77\,\text{e}{-3}$, $30\times$ larger than L's true slowest mode ($\lambda_2^{\rm phys} = 1.57\,\text{e}{-4}$), with floor $= 9.3\,\text{e}{-4}$ (uncomfortably close to $\varepsilon = 10^{-3}$). The qf-65e rerun bumped Pass-1 to the Heisenberg-recipe krylovdim$_{p1} = 80$ (Pass-2 fixed at $30$ per qf-e4z.33); ORD $n = 8$ floor dropped $170\times$ to $5.5\,\text{e}{-6}$, the Pass-1↔Pass-2 gap ratio is now $1.0$ exactly, and τ_mix corrected from $9228$ (spurious) to $251.8$ (the bulk-relaxation regime above). A saturation check at krylovdim$_{p1} = 100$ reproduces the krylovdim$_{p1} = 80$ result bit-identically (Pass-2 gap, traj-eff gap, floor, τ_mix, $|c_2|$ all match to 7 figures). **Verdict: undersizing, not parity-trap** — Pass-1 at kdim = 80 does capture L's slowest mode in its Krylov subspace; the $|c_2| = 1.3\,\text{e}{-3}$ coupling is real and tiny, but non-zero. The kdim sensitivity sidecar is at `scripts/output/sweep_2d_tfim_ordered_vs_disordered/qf_b4i_n8_kdim_diagnostic.bson`.
+
+**Direct $d(t)$ verification of the n=6 ↔ n=8 crossover.** Script `scripts/scratch_qf_65e_verify_ord_n8.jl` directly evaluates $d(t) = \tfrac{1}{2}\|\rho_{\rm eigen}(t) - \sigma_\beta\|_1$ at many $t$ on ORD n=8 (krylovdim$_{p1} = 80$). $d(t)$ is monotone-decreasing: $d(0) = 0.997 \to d(30) = 0.405 \to d(200) = 1.29\,\text{e}{-3} \to \mathbf{d(252) = 1.00\,\text{e}{-3} = \varepsilon} \to$ "plateau" $d(300 \le t \le 10^4) \approx 9.5\,\text{e}{-4} \to d(5 \times 10^5) = 3.4\,\text{e}{-4}$ (tunnelling decay onset, $1/\lambda_2 \approx 4.8 \times 10^5$) $\to d(5 \times 10^6) = 5.5\,\text{e}{-6}$ (floor). The plateau value is $|c_2| \cdot \|R_2\|_1 / 2 = 1.34\,\text{e}{-3} \cdot \sqrt{2} / 2 = 9.51\,\text{e}{-4}$, **just below $\varepsilon$** — narrow-escape regime. At n=6 the plateau is $\sim 4\,\text{e}{-2}$ (well above $\varepsilon$) → tunnelling-limited, τ_mix $\approx 6 \times 10^4$. At n=8 it just clears $\varepsilon$ → bulk-limited, τ_mix = 252. The sharp non-monotonicity is a **genuine physical crossover** at the $|c_2| \cdot \|R_2\|_1 / 2 \approx \varepsilon$ threshold, not a numerical artefact.
+
+## Follow-up D — $\rho_0 = |0\rangle\langle 0|^{\otimes N}$ rerun (qf-b4i.1, 2026-05-25)
+
+Hypothesis (issue-description): on 2D TFIM the Z₂ generator is $P = X^{\otimes N}$, so $X|+\rangle = |+\rangle$ ⇒ $|+\rangle\langle+|^{\otimes N}$ is X-parity-EVEN under conjugation by $P$ (same parity character as $I/d$). $X|0\rangle = |1\rangle \ne |0\rangle$ ⇒ $|0\rangle\langle 0|^{\otimes N}$ is X-parity-MIXED *as a density operator* ($P \rho_0 P^\dagger = |1\rangle\langle 1|^{\otimes N} \ne \rho_0$). The doublet states approach $|\psi_{1,2}\rangle \approx (|0...0\rangle \pm |1...1\rangle)/\sqrt{2}$ in the deep ordered phase, giving $\langle\psi_{1,2}|0...0\rangle \to 1/\sqrt{2}$ — a macroscopic overlap with both doublet states at every $N$. So *if* the slow Lindbladian mode were the within-doublet coherence $|\psi_1\rangle\langle\psi_2|$, $|0\rangle\langle 0|^{\otimes N}$ would couple to it with $|c_2| \sim 1/2$ at every $N$ — no orthogonality catastrophe — and $\tau_{\rm mix}$ would track $1/\lambda_2$ at the bottom of the gap collapse (e.g. $\sim 4 \times 10^5$ phys at ORD $n = 8$).
+
+Method: `scripts/scratch_qf_b4i_1_2d_tfim_taumix_zero.jl` reruns the six cells via `_krylov_spectral_decomposition` (Pass-1 only; krylovdim$_{p1} = 80$). Pass-2 is skipped — we cross-check the Pass-1 traj-effective gap_phys directly against the qf-65e Pass-2 gap_phys ($\rho_0$-independent). Audit threshold: $\le 1\%$. Result:
+
+| phase | $n$ | gap_phys(qf-b4i.1, traj-eff) | gap_phys(qf-65e, Pass-2) | rel-diff | $\tau_{\rm mix}(|0\rangle)$ alg | $\tau_{\rm mix}(|+\rangle)$ alg | $\tau_{\rm mix}(I/d)$ alg | $|c_2|(|0\rangle)$ | floor |
+|---|---|---|---|---|---|---|---|---|---|
+| DISORDERED | 4 | 1.910031 | 1.910031 | $7.0 \times 10^{-15}$ | 33.3 | 86.6 | 33.9 | $9.3 \times 10^{-15}$ | $2.5 \times 10^{-16}$ |
+| DISORDERED | 6 | 1.574719 | 1.574719 | $2.0 \times 10^{-14}$ | 63.8 | 143.2 | 59.7 | $5.5 \times 10^{-13}$ | $3.6 \times 10^{-16}$ |
+| DISORDERED | 8 | 1.740497 | 1.740497 | $2.4 \times 10^{-14}$ | 102.3 | 89.7 | 88.9 | $1.5 \times 10^{-11}$ | $1.2 \times 10^{-15}$ |
+| ORDERED | 4 | $9.9645 \times 10^{-2}$ | $9.9645 \times 10^{-2}$ | $1.9 \times 10^{-13}$ | 17.1 | 1349 | 47.0 | $2.9 \times 10^{-15}$ | $3.1 \times 10^{-7}$ |
+| ORDERED | 6 | $3.0648 \times 10^{-3}$ | $3.0648 \times 10^{-3}$ | $1.5 \times 10^{-11}$ | 17.3 | $6.23 \times 10^4$ | 104.7 | $8.9 \times 10^{-13}$ | $1.2 \times 10^{-6}$ |
+| ORDERED | 8 | $1.5736 \times 10^{-4}$ | $1.5736 \times 10^{-4}$ | $3.6 \times 10^{-10}$ | 17.4 | 251.8 | 190.1 | $2.9 \times 10^{-11}$ | $5.5 \times 10^{-6}$ |
+
+All six audits pass at $\sim 10^{-14}$ to $10^{-10}$ — Pass-1 from $|0\rangle$ captures L's slowest eigenvalue. **But the hypothesis is refuted: $|c_2|(|0\rangle) \le 10^{-11}$ at every cell**, vastly smaller than $|c_2|(|+\rangle)$ ($\sim 10^{-1}$ at small-$n$ ORD), and $\tau_{\rm mix}(|0\rangle)^{\rm ORD}$ is *constant at $\sim 17$ alg time units* across $n \in \{4, 6, 8\}$ — orders of magnitude shorter than any other column.
+
+### Why the hypothesis fails (mechanism)
+
+The hypothesis assumed L's slow mode is the within-doublet coherence $R_2 \propto |\psi_1\rangle\langle\psi_2|$. Follow-up A above already refuted this: at ORD $n=4$, $R_2$ lives **89% in the doublet × bulk off-diagonal block** (top entries $|\psi_{1,2}\rangle\langle\psi_8|$-type), only 2.8% in the doublet × doublet block.
+
+The deep-ordered-phase decomposition of $|0\rangle\langle 0|^{\otimes N}$ in the energy eigenbasis is
+
+$$|0...0\rangle\langle 0...0| \approx \tfrac{1}{2}\bigl(|\psi_1\rangle\langle\psi_1| + |\psi_1\rangle\langle\psi_2| + |\psi_2\rangle\langle\psi_1| + |\psi_2\rangle\langle\psi_2|\bigr) + \mathcal{O}(\text{tunnelling tails}),$$
+
+i.e. *entirely* on the doublet × doublet block plus exponentially small bulk tails. R_2 lives in the doublet × bulk block — orthogonal to where $|0\rangle\langle 0|^{\otimes N}$ has weight. Hence $|c_2| \to 0$ even faster than for $|+\rangle\langle+|^{\otimes N}$ (which has *some* doublet × bulk content via its broad X-string Pauli mass).
+
+Mechanically the picture for $|0\rangle\langle 0|^{\otimes N}$ at ORDERED is:
+
+1. $\rho_0$ starts as a rank-1 projector concentrated on the doublet × doublet block.
+2. The "fast" relaxation modes ($R_k$ for $k \ge 3$ with $|c_k|$ noticeable) **flatten the doublet diagonal** from $\{p_{|\psi_1\rangle} = 1, p_{|\psi_2\rangle} = 0\}$ to $\{1/2, 1/2\}$ and **zero out the within-doublet coherence** $\langle\psi_1|\rho|\psi_2\rangle$. Both happen at the bulk-mode rate $\lambda_3 \sim 10^{-2}$ phys (or faster — for $|0\rangle$ specifically, $|c_3|$ is itself tiny, and the actual relaxation is driven by $R_k$ for $k$ in the bulk).
+3. Once the doublet content has thermalised, $\rho \approx \sigma_\beta$ (since $\sigma_\beta \approx \text{diag}(1/2, 1/2)$ on the doublet at $\beta = 2$, eff_rank = 2.00 from Check 1), and $d(t) < \varepsilon$ is reached. R_2 (the doublet × bulk coherence) was never excited; it neither needs to decay nor matters for τ_mix.
+
+Quantitatively at ORD $n = 8$: $\tau_{\rm mix}(|0\rangle)^{\rm alg} = 17.4$, and the dominant decay mode in the eigenvalue-amplitude product is some $R_k$ with $|c_k| \sim |c_3|^{|0\rangle}$ at amplitude $\mathcal{O}(10^{-5})$ and eigenvalue $\lambda_k \sim 10^{-2}$ alg, giving $\tau \sim \log(|c_k| / \varepsilon) / \lambda_k = \log(10^{-5} / 10^{-3}) / 10^{-2} \approx 5 / 10^{-2}$ — order-of-magnitude $\sim 500$, *but in the limit where the doublet × doublet block content is most of $\rho_0$*, the trace distance is dominated by the doublet projection itself which thermalises faster*. The constant-with-$n$ value $\sim 17$ alg suggests a single $n$-independent local bulk-relaxation rate dominates — consistent with the doublet-block content being independent of $n$ (always a rank-1 projector on the doublet × doublet $2 \times 2$ block).
+
+### Implication for the canonical-$\rho_0$ choice on 2D TFIM
+
+The issue's hypothesis — "choose a single-qubit factor that is not a $P$-eigenstate" — captures the *necessary* condition for X-parity breaking at the operator level but NOT the *sufficient* condition for coupling to L's slow mode. The relevant criterion is whether $\rho_0$ has weight on the same operator-space block as $R_2$, which on this 2D TFIM model is the **doublet × bulk off-diagonal block**.
+
+- *None of the three audit columns satisfies that.* $|+\rangle\langle+|^{\otimes N}$ has only-X-Pauli-string content (orthogonal to Y/Z-string mass of R_2 at large $n$); $|0\rangle\langle 0|^{\otimes N}$ has only-diagonal-Z content (lives entirely in the doublet × doublet block); $I/d$ has weight only on the identity Pauli (decoupled from every $R_k$). All three τ_mix's revert to bulk-mode timescales at large $n$.
+- The natural initial states that *would* track $1/\lambda_2$ are (a) one of the doublet states $|\psi_1\rangle\langle\psi_1|$ (broken X-parity *and* doublet × bulk content via the small bulk tails), (b) a thermal-perturbed Gibbs seed $\sigma_\beta + \alpha \cdot R_2$, or (c) any random Gaussian-perturbed state with O(1) projection on R_2.
+
+For the project-canonical-$\rho_0$ memory entry ($\rho_0 = |+\rangle\langle+|^{\otimes N}$, decreed 2026-05-24): the **2D TFIM result does not motivate a model-specific switch to $|0\rangle\langle 0|^{\otimes N}$**. The 2D TFIM mixing-time anomaly is fundamentally a property of how concentrated $R_2$'s support is in operator space (doublet × bulk, low-rank, hard to reach from any natural product state), not a parity-protection artefact removable by choosing a different $\rho_0$ in the same product-state family. The canonical $|+\rangle\langle+|^{\otimes N}$ rule stays — with the documented understanding that on 2D TFIM (and any other model where $R_2$ lives in a low-rank off-diagonal block far from the product-state manifold), $\tau_{\rm mix}$ from the canonical $\rho_0$ is the bulk-mode timescale, not $1/\lambda_2$.
+
 ## Acceptance (qf-biz)
 
 1. ✓ β-sweep at n=6 confirms ORDERED at β ≥ 1 with eff_rank = 2.00; crossover at β ≈ 0.5 (T_c per HW 2016).
@@ -127,10 +189,16 @@ Add the qf-biz draft to the cross-references list at the bottom of qf-1jj.
 4. ✓ Follow-up A: slow mode identified — Z₂-mixed coherence in the doublet × bulk block (89 % of |R_2|²), magnetisation-orthogonal.
 5. ✓ Follow-up B: β-non-monotonicity in λ_L(β) is **physical** (kinky-Metro reproduces shape to 4 %), not a filter artefact.
 6. ✓ Driver + BSON sidecars written; `drafts/qf-biz-code-verifier-report.md` PASS bit-exact against qf-1jj; physics-checker validated claims 1–4 algebraically and amended claim 5 (single-classical-path Glauber → "Davies-rate-eigenvalue with doublet-to-bulk dominance" — captured in Follow-up A).
+7. ✓ Follow-up D (qf-b4i.1): $\rho_0 = |0\rangle\langle 0|^{\otimes N}$ rerun confirms the qf-biz Follow-up A picture independently. The X-parity-breaking-density-operator hypothesis (issue qf-b4i.1) predicted $|c_2| \sim 1/2$ at ORD; observed $|c_2| \le 10^{-11}$ at every cell. The mechanism is that $R_2$ lives in the doublet × bulk block, while $|0\rangle\langle 0|^{\otimes N}$ at deep-ORDERED is supported on the doublet × doublet block — orthogonal. **Confirms Follow-up A independently** (the slow mode is NOT within-doublet) and **closes the symmetry-protection investigation** for this 2D TFIM model: no symmetric product-state ρ_0 in $\{I/d, |+\rangle, |0\rangle\}$ couples to $R_2$, regardless of operator-level parity character.
 
 ## Cross-references
 
 - qf-1jj — parent draft `drafts/2d-tfim-ordered-vs-disordered.md`.
 - qf-8fr — Krylov x_0 GUE seed (`.claude-memory/krylov_x0_symmetric_bug_qf_8fr.md`).
+- qf-b4i — canonical $\rho_0 = |+\rangle\langle+|^{\otimes N}$ trajectory rerun. `scripts/scratch_qf_b4i_rerun_2d_tfim_taumix_plus.jl`.
+- qf-65e — Krylov-size correction at $n = 8$ ORDERED: krylovdim$_{p1} = 80$, krylovdim$_{p2} = 30$. `scripts/scratch_qf_b4i_n8_kdim_diagnostic.jl`.
+- qf-b4i.1 — $\rho_0 = |0\rangle\langle 0|^{\otimes N}$ X-parity-breaking trial (Follow-up D). `scripts/scratch_qf_b4i_1_2d_tfim_taumix_zero.jl`.
+- `.claude-memory/canonical_taumix_setup_qf_e4z_30.md` — canonical $\rho_0$ policy (project-wide).
+- `.claude-memory/qf_e4z_33_kdim_convergence.md` — Heisenberg-recipe krylovdim$_{p1} \ge 80$ for $n = 7$ low-$\beta$ cells.
 - `.claude-memory/heisenberg_1d_even_odd_mechanism.md` — the 1D Heisenberg even-n p_0 ≈ 99% artefact (distinct mechanism, not at play here).
 - `.claude-memory/feedback_check_gibbs_when_simulation_off.md` — why Subtask B' Gibbs check is the right first move before invoking algorithmic explanations.

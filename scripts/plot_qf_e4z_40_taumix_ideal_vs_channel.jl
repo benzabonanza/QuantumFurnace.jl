@@ -120,11 +120,6 @@ function main()
         )
     end
 
-    # Annotate the n=7 β=1.0 outlier (qf-e4z.40) — small ★ near the channel point
-    annotate!(plt, [(7.1, 2.35, text("gap-ratio 1.27 (qf-e4z.40)", 7, :gray30, :left))])
-    scatter!(plt, [7], [τ_ch_per[1.0][end]];
-        marker = (:star5, 9), mc = :gold, msc = :black, msw = 0.8, label = "")
-
     out_png = joinpath(OUT_DIR, "qf_e4z_40_taumix_ideal_vs_channel.png")
     out_pdf = joinpath(OUT_DIR, "qf_e4z_40_taumix_ideal_vs_channel.pdf")
     savefig(plt, out_png)
