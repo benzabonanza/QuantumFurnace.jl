@@ -1,0 +1,100 @@
+# ══════════════════════════════════════════════════════════════════
+#  PUBLIC-REPO SCOPE
+#
+#  This repository is published (linked from the thesis) so ONLY the
+#  Julia software package is visible:
+#
+#      src/  test/  Project.toml  Manifest.toml  README.md  LICENSE
+#      (+ this .gitignore and .gitattributes)
+#
+#  Everything listed in this first block is intentionally kept out of
+#  the public repo — AI-assistant tooling, planning notes, thesis
+#  material, scratch/cluster scripts, and generated results.
+#
+#  NOTE: these paths were previously committed. They have been removed
+#  from tracking with `git rm --cached` so that a push actually drops
+#  them from the published tree. The files REMAIN on your local disk —
+#  they are only hidden from git/GitHub.
+# ══════════════════════════════════════════════════════════════════
+
+# --- AI-assistant workflow & issue tracking ---
+/.claude/
+/.claude-memory/
+/.claude-mishaps/
+/.beads/
+/CLAUDE.md
+/AGENTS.md
+/config.yaml
+.beads-credential-key
+
+# --- Editor / CI / planning (dot-folders) ---
+/.vscode/
+/.github/
+/.planning/
+
+# --- Dolt / beads local databases ---
+/.dolt/
+/.doltcfg/
+*.db
+
+# --- Thesis material & research notes (not part of the package) ---
+/drafts/
+/proofs/
+/supplementary-informations/
+
+# --- Scratch, cluster & support scripts + fixture generators ---
+/scripts/
+/simulations/
+/experiments/
+/hamiltonians/
+
+# --- Package documentation (Documenter.jl): published.
+#     Only the generated build output is kept out. ---
+/docs/build/
+
+# --- Local-only scratch, backups & recovery artefacts ---
+/.qfumr_backup/
+/thesis_proxy/
+/playground/
+/papers/
+/results/
+/build/
+/RECOVERY-*.bundle
+
+# ══════════════════════════════════════════════════════════════════
+#  Standard build artefacts, caches, and OS/editor cruft
+# ══════════════════════════════════════════════════════════════════
+
+# Julia
+*.log
+*.jl.cov
+*.jl.mem
+
+# OS-specific files
+.DS_Store
+
+# Python environments
+.venv/
+.venv-uv/
+.venv-linux/
+venv/
+env/
+.env
+.python-version
+pyvenv.cfg
+
+# Python caches and build artefacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.tox/
+.coverage
+htmlcov/
+
+# SLURM job logs pulled back from the cluster
+/slurm_out/
