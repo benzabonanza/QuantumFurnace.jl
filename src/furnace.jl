@@ -36,8 +36,8 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::Config{Lindbladian
         nothing, nothing, nothing, nothing,  # domain precomputed (transition, gnf, energy_labels, oft_domain_prefactor)
         nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # domain-specific (oft_nufft_prefactors, bohr_alpha, bohr_keys, bohr_is, bohr_js, b_minus, b_plus)
         nothing,  # U_coherents
-        nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # trajectory fields
-        nothing,  # jump_selection (Lindbladian path: not a Trajectory simulator)
+        nothing, nothing, nothing, nothing,  # per-jump channel state
+        nothing,  # jump_selection (Lindbladian path)
         Id,       # Id
         sc,       # scratch
         config,   # cached_cfg (qf-qmi.2; only used by Krylov predict_*_trajectory but kept here for ctor uniformity)

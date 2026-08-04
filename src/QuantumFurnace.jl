@@ -37,15 +37,6 @@ export ThermalizeResults
 export run_krylov_spectrum
 export KrylovSpectrumResults
 
-# --- Trajectory ---
-export run_trajectory
-export run_trajectories, run_observable_trajectories
-export TrajectoryResults
-export TrajectoryResult, ObservableTrajectoryResult
-export step_along_trajectory!
-export ConvergenceData, run_trajectories_convergence, run_trajectories_adaptive
-export build_preset_trajectory_observables
-
 # --- Diagnostics ---
 export EigenDecompositionResult, FixedPointResult, DefectResult, OverlapResult,
        SzSectorLabel, MultipletGroup, ExactDiagnosticsResult,
@@ -71,9 +62,9 @@ export dissipator_one_to_one_norm_bound, dissipator_trace_alpha, hs_operator_nor
 export hs_operator_norm_krylov
 
 # --- Common ---
-export Config, AbstractSimulation, Lindbladian, Thermalize, KrylovSpectrum, Trajectory
+export Config, AbstractSimulation, Lindbladian, Thermalize, KrylovSpectrum
 export AbstractConstruction, KMS, GNS, DLL, with_coherent
-export Workspace, LiouvillianScratch, ThermalizeScratch, KrylovScratch, TrajectoryScratch
+export Workspace, LiouvillianScratch, ThermalizeScratch, KrylovScratch
 export AbstractResults, save_result, load_result
 export BohrDomain, EnergyDomain, TimeDomain, TrotterDomain
 export HamHam, AbstractTrotter, TrottTrott, TrotterTriple, JumpOp
@@ -142,7 +133,9 @@ export discriminant_antiherm_norm, channel_discriminant_antiherm_norm,
 export sweep_channel_mixing
 
 # STAGING: estimate_spectral_gap, OverlapAnalysisResult, eigenbasis_overlap_analysis
-# STAGING (qf-6z9.4): compute_oft_trotter_error, compute_oft_trotter_error_all_jumps moved to src/staging/errors.jl
+# Archived staging APIs: estimate_spectral_gap, OverlapAnalysisResult,
+# eigenbasis_overlap_analysis, compute_oft_trotter_error, and
+# compute_oft_trotter_error_all_jumps are preserved under archive/inactive_staging/.
 export fit_exponential_decay, FitResult
 export fit_biexponential_decay, BiexpFitResult
 export estimate_mixing_time, MixingTimeEstimate
@@ -172,14 +165,13 @@ include("bohr_domain.jl")
 include("coherent.jl")
 include("dll.jl")
 include("jump_workers.jl")
-include("trajectories.jl")
+include("channel_construction.jl")
 include("furnace_utensils.jl")
 include("dll_multichannel.jl")
 include("furnace.jl")
 include("krylov_workspace.jl")
 include("krylov_matvec.jl")
 include("krylov_eigsolve.jl")
-include("convergence.jl")
 include("diagnostics.jl")
 include("discriminant.jl")
 include("kms_geometry.jl")
@@ -189,7 +181,6 @@ include("results.jl")
 include("fitting.jl")
 include("mixing.jl")
 include("scaling_fit.jl")
-# `errors.jl` retired in qf-6z9.4 — moved to `src/staging/errors.jl` (commented out)
 include("simulation_time.jl")
 
 # Classical Gibbs-sampling baseline (sign-free SSE QMC) — the directly-comparable classical

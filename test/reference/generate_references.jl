@@ -9,9 +9,8 @@ Generates 2 reference files:
 
 Each BSON file stores a plain Matrix{ComplexF64} density matrix plus metadata.
 
-Note: Trajectory regression tests no longer use frozen BSON data. They compare
-trajectory averages against DM evolution computed fresh at test time, making them
-platform-portable (no dependency on BLAS internals or RNG stream behavior).
+The archived stochastic-trajectory regressions are intentionally not generated
+here; this script maintains only the retained dense-DM references.
 """
 
 using QuantumFurnace, LinearAlgebra, BSON

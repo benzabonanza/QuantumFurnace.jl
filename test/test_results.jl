@@ -145,65 +145,6 @@ using BSON
     end
 
     # -----------------------------------------------------------------------
-    # TrajectoryResults round-trip (plain mode)
-    # -----------------------------------------------------------------------
-    @testset "TrajectoryResults plain round-trip" begin
-        mktempdir() do tmpdir
-            config = make_config(Thermalize(), EnergyDomain(); num_qubits=3, construction=GNS())
-            dim = N3_DIM
-            rho_mean = Matrix(random_density_matrix(Int(log2(dim))))
-            metadata = Dict{Symbol, Any}(:wall_time_seconds => 3.0, :n_threads => 1,
-                :timestamp => "2026-02-27", :git_hash => "jkl012")
-
-            result = TrajectoryResults{Float64}(config, rho_mean, 100, 42,
-                nothing, nothing, nothing, metadata)
-            path = joinpath(tmpdir, "test_traj_plain.bson")
-            save_result(result, path)
-
-            loaded = load_result(path)
-            @test loaded isa TrajectoryResults
-            @test isapprox(loaded.rho_mean, rho_mean; atol=0)
-            @test loaded.n_trajectories == 100
-            @test loaded.seed == 42
-            @test loaded.times === nothing
-            @test loaded.measurements_mean === nothing
-            @test loaded.convergence === nothing
-            @test loaded.metadata[:wall_time_seconds] == 3.0
-
-            txt_path = replace(path, ".bson" => ".txt")
-            @test isfile(txt_path)
-        end
-    end
-
-    # -----------------------------------------------------------------------
-    # TrajectoryResults with convergence data round-trip
-    # -----------------------------------------------------------------------
-    @testset "TrajectoryResults convergence round-trip" begin
-        mktempdir() do tmpdir
-            config = make_config(Thermalize(), EnergyDomain(); num_qubits=3, construction=GNS())
-            dim = N3_DIM
-            rho_mean = Matrix(random_density_matrix(Int(log2(dim))))
-            conv = ConvergenceData(
-                [100, 100], [100, 200], [0.3, 0.1],
-                ["Z1", "Z2"], [0.5 0.4; 0.6 0.3], [0.55, 0.45],
-            )
-            metadata = Dict{Symbol, Any}()
-
-            result = TrajectoryResults{Float64}(config, rho_mean, 200, 99,
-                nothing, nothing, conv, metadata)
-            path = joinpath(tmpdir, "test_traj_conv.bson")
-            save_result(result, path)
-
-            loaded = load_result(path)
-            @test loaded isa TrajectoryResults
-            @test loaded.convergence !== nothing
-            @test loaded.convergence isa ConvergenceData
-            @test loaded.convergence.trace_distances == [0.3, 0.1]
-            @test loaded.convergence.observable_names == ["Z1", "Z2"]
-        end
-    end
-
-    # -----------------------------------------------------------------------
     # Metadata auto-capture excludes Julia version
     # -----------------------------------------------------------------------
     @testset "Metadata excludes Julia version" begin

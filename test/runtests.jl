@@ -15,10 +15,7 @@ include("test_helpers.jl")
 # `NO_SANDBOX_FILES` are heavier tests intentionally kept out of the default
 # run because their physics-meaningful assertions cannot be tightened
 # without compromising correctness within the sandbox's resource envelope.
-# Trajectory-validation tests live in `trajectory_validation/` and are
-# gated by the same env switch.
-#
-# To run the full suite (NO_SANDBOX + trajectory_validation), set:
+# To run the full suite, set:
 #   QUANTUMFURNACE_FULL_TESTS=true julia --project -e 'using Pkg; Pkg.test()'
 #
 # Some individual subtests inside SANDBOX files are also gated by
@@ -35,7 +32,6 @@ const SANDBOX_FILES = String[
     "test_boundary_conditions.jl",
     "test_compilation.jl",
     "test_trotter_caches.jl",
-    "test_trajectory_fixes.jl",
     "test_cptp.jl",
     "test_dm_detailed_balance.jl",
     "test_dm_scaling.jl",
@@ -44,11 +40,9 @@ const SANDBOX_FILES = String[
     "test_workspace_independence.jl",
     "test_threading.jl",
     "test_qf_6af_construction_threading.jl",
-    "test_gns_trajectory.jl",
+    "test_gns.jl",
     "test_results.jl",
-    "test_convergence.jl",
     "test_save_every.jl",
-    "test_observable_trajectories.jl",
     "test_diagnostics.jl",
     "test_spectral_mode_diagnostics.jl",
     "test_spectral_mode_diagnostics_extra.jl",
@@ -83,7 +77,6 @@ const SANDBOX_FILES = String[
     "test_gamma_norm_invariance.jl",
     "test_non_hermitian_jumps.jl",
     "test_validate_jump_pairing.jl",
-    "test_qf_bm1_kwarg_threading.jl",
     "test_qf_sta_b_bohr_cache.jl",
     "test_beta_phys_conversion.jl",
     "test_beta_phys_sweep.jl",
@@ -93,7 +86,6 @@ const SANDBOX_FILES = String[
     "test_lindblad_action_sandbox.jl",
     "test_predict_sandbox.jl",
     "test_faithful_apply_delta_channel_sandbox.jl",
-    "test_trajectory_validation_sandbox.jl",
     # qf-0fv: adversarial gating test for predict_*_trajectory's
     # compute_true_gap kwarg. n=3 only, ~12s, ~50 MB.
     "test_qf_0fv_verifier.jl",
@@ -141,12 +133,9 @@ const RUN_FULL = get(ENV, "QUANTUMFURNACE_FULL_TESTS", "false") == "true"
             include(f)
             GC.gc(true)
         end
-        include("trajectory_validation/run_trajectory_validation.jl")
-        include("trajectory_validation/run_convergence_tests.jl")
     else
         if !isempty(NO_SANDBOX_FILES)
             @info "Skipping NO_SANDBOX tests (set QUANTUMFURNACE_FULL_TESTS=true to run)" n=length(NO_SANDBOX_FILES) files=NO_SANDBOX_FILES
         end
-        @info "Skipping trajectory validation tests (set QUANTUMFURNACE_FULL_TESTS=true to run)"
     end
 end

@@ -1,126 +1,86 @@
 using Test
 using LinearAlgebra
 
-# CPTP Per-Operator Completeness verification (TVAL-01)
-# Verifies per-operator channel: K0_a'*K0_a + delta*R_a + U_res_a'*U_res_a = I
-#
-# Derivation (Chen 2023, Theorem III.1, adapted for per-operator Lie-Trotter splitting):
-#   R_a scaled by 1/p_jump = n_jumps; CPTP channel uses bare delta
-#   alpha = 1 - sqrt(1 - delta)
-#   K0_a = I - alpha*R_a
-#   S_a = (2*alpha - delta)*R_a - alpha^2*R_a^2
-#   U_res_a'*U_res_a = S_a (by construction)
-#   K0_a'*K0_a + delta*R_a + S_a = I (same algebraic identity, per operator)
-#
-# Tolerance: 1e-10 (algebraic identity; error scales as DIM^2 * eps ~ 16^2 * 1e-16 ~ 3e-13,
-#   so 1e-10 gives ~300x margin for FP accumulation across DIM^2 matrix entries)
-
-@testset "CPTP Per-Operator Completeness (TVAL-01)" begin
-
-    @testset "EnergyDomain" begin
-        config = make_config(Thermalize(),EnergyDomain(); delta=TEST_DELTA)
-        ws = QuantumFurnace._build_trajectory_workspace(config, TEST_HAM, TEST_JUMPS; delta=TEST_DELTA)
-
-        @test ws.n_jumps == length(TEST_JUMPS)
-        identity = Matrix{ComplexF64}(I, DIM, DIM)
-        max_err = 0.0
-        for a in 1:ws.n_jumps
-            completeness = ws.K0s[a]' * ws.K0s[a] + ws.delta * ws.Rs[a] + ws.U_residuals[a]' * ws.U_residuals[a]
-            err = norm(completeness - identity)
-            max_err = max(max_err, err)
-            @test isapprox(completeness, identity; atol=1e-10)  # CPTP: K0'K0 + delta*R + U'U = I (algebraic identity)
-        end
-        @info "CPTP completeness (EnergyDomain)" n_jumps=ws.n_jumps max_error=max_err threshold_atol=1e-10
-    end
-
-    @testset "TimeDomain" begin
-        config = make_config(Thermalize(),TimeDomain(); delta=TEST_DELTA)
-        ws = QuantumFurnace._build_trajectory_workspace(config, TEST_HAM, TEST_JUMPS; delta=TEST_DELTA)
-
-        @test ws.n_jumps == length(TEST_JUMPS)
-        identity = Matrix{ComplexF64}(I, DIM, DIM)
-        max_err = 0.0
-        for a in 1:ws.n_jumps
-            completeness = ws.K0s[a]' * ws.K0s[a] + ws.delta * ws.Rs[a] + ws.U_residuals[a]' * ws.U_residuals[a]
-            err = norm(completeness - identity)
-            max_err = max(max_err, err)
-            @test isapprox(completeness, identity; atol=1e-10)  # CPTP: K0'K0 + delta*R + U'U = I (algebraic identity)
-        end
-        @info "CPTP completeness (TimeDomain)" n_jumps=ws.n_jumps max_error=max_err threshold_atol=1e-10
-    end
-
-    @testset "TrotterDomain" begin
-        config = make_config(Thermalize(),TrotterDomain(); delta=TEST_DELTA)
-        ws = QuantumFurnace._build_trajectory_workspace(config, TEST_HAM, TEST_TROTTER_JUMPS;
-            trotter=TEST_TROTTER, delta=TEST_DELTA)
-
-        @test ws.n_jumps == length(TEST_JUMPS)
-        identity = Matrix{ComplexF64}(I, DIM, DIM)
-        max_err = 0.0
-        for a in 1:ws.n_jumps
-            completeness = ws.K0s[a]' * ws.K0s[a] + ws.delta * ws.Rs[a] + ws.U_residuals[a]' * ws.U_residuals[a]
-            err = norm(completeness - identity)
-            max_err = max(max_err, err)
-            @test isapprox(completeness, identity; atol=1e-10)  # CPTP: K0'K0 + delta*R + U'U = I (algebraic identity)
-        end
-        @info "CPTP completeness (TrotterDomain)" n_jumps=ws.n_jumps max_error=max_err threshold_atol=1e-10
-    end
-
-    @testset "BohrDomain (via _precompute_per_jump_channels)" begin
-        config = make_config(Thermalize(), BohrDomain(); delta=TEST_DELTA)
-        precomputed_data = QuantumFurnace._precompute_data(config, TEST_HAM)
-        (; K0s, U_residuals) = QuantumFurnace._precompute_per_jump_channels(
-            TEST_JUMPS, TEST_HAM, config, precomputed_data;
-            rescale_by_inv_prob=true,
-        )
-
-        n_jumps = length(TEST_JUMPS)
-        identity = Matrix{ComplexF64}(I, DIM, DIM)
-        # Need Rs to verify CPTP completeness -- recompute them
-        builder_scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, DIM)
+# The retained density-matrix and Krylov channel paths share these construction
+# helpers. Check every supported domain and both rate-scaling conventions
+# directly, without depending on the archived stochastic workspace.
+@testset "Retained per-jump CPTP construction" begin
+    for (domain, label, trotter) in [
+        (BohrDomain(), "Bohr", nothing),
+        (EnergyDomain(), "Energy", nothing),
+        (TimeDomain(), "Time", nothing),
+        (TrotterDomain(), "Trotter", TEST_TROTTER),
+    ]
+        config = make_config(Thermalize(), domain; delta=TEST_DELTA)
+        jumps = domain isa TrotterDomain ? TEST_TROTTER_JUMPS : TEST_JUMPS
+        ham_or_trott = trotter === nothing ? TEST_HAM : trotter
+        precomputed_data = QuantumFurnace._precompute_data(config, ham_or_trott)
+        n_jumps = length(jumps)
         p_jump = 1.0 / n_jumps
-        max_err = 0.0
-        for a in 1:n_jumps
-            QuantumFurnace._precompute_R([TEST_JUMPS[a]], TEST_HAM, config, precomputed_data, builder_scratch)
-            R_a = copy(builder_scratch.R)
-            R_a .*= (1.0 / p_jump)
-            completeness = K0s[a]' * K0s[a] + TEST_DELTA * R_a + U_residuals[a]' * U_residuals[a]
-            err = norm(completeness - identity)
-            max_err = max(max_err, err)
-            @test isapprox(completeness, identity; atol=1e-10)
-        end
-        @info "CPTP completeness (BohrDomain)" n_jumps max_error=max_err threshold_atol=1e-10
-    end
+        identity = Matrix{ComplexF64}(I, DIM, DIM)
 
-    @testset "DM precomputation matches trajectory workspace" begin
-        for (domain, label, extra_kw) in [
-            (EnergyDomain(), "Energy", (;)),
-            (TimeDomain(), "Time", (;)),
-            (TrotterDomain(), "Trotter", (; trotter=TEST_TROTTER)),
-        ]
-            config = make_config(Thermalize(), domain; delta=TEST_DELTA)
-            jumps = domain isa TrotterDomain ? TEST_TROTTER_JUMPS : TEST_JUMPS
-            ham = TEST_HAM
-
-            # DM precomputation path
-            ham_or_trott = domain isa TrotterDomain ? TEST_TROTTER : ham
-            precomputed_data = QuantumFurnace._precompute_data(config, ham_or_trott)
+        for (selection, rescale) in ((:sweep, false), (:random, true))
             (; K0s, U_residuals) = QuantumFurnace._precompute_per_jump_channels(
-                jumps, ham_or_trott, config, precomputed_data; rescale_by_inv_prob=true,
+                jumps, ham_or_trott, config, precomputed_data;
+                rescale_by_inv_prob=rescale,
+            )
+            U_coherents = QuantumFurnace._precompute_coherent_unitary(
+                jumps, TEST_HAM, config, precomputed_data;
+                trotter=trotter,
+                delta_scale=rescale ? 1.0 / p_jump : 1.0,
             )
 
-            # Trajectory workspace path (reference). Pin rescale_by_inv_prob=true to match
-            # the DM precomp path's `rescale_by_inv_prob=true` above; the default now follows
-            # `config.jump_selection` (= :sweep ⇒ bare-rate channels) per qf-2vo.
-            ws = QuantumFurnace._build_trajectory_workspace(config, ham, jumps; extra_kw...,
-                delta=TEST_DELTA, rescale_by_inv_prob=true)
+            @test length(K0s) == n_jumps
+            @test length(U_residuals) == n_jumps
+            @test length(U_coherents) == n_jumps
 
-            for a in 1:length(jumps)
-                @test isapprox(K0s[a], ws.K0s[a]; atol=1e-15)
-                @test isapprox(U_residuals[a], ws.U_residuals[a]; atol=1e-15)
+            builder_scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, DIM)
+            max_completeness_err = 0.0
+            for a in eachindex(jumps)
+                R_bare = copy(@inferred QuantumFurnace._precompute_R(
+                    [jumps[a]], ham_or_trott, config, precomputed_data,
+                    builder_scratch,
+                ))
+                @test R_bare isa Matrix{ComplexF64}
+                @test isapprox(R_bare, R_bare'; atol=1e-12)
+
+                R = rescale ? R_bare ./ p_jump : R_bare
+                built = @inferred QuantumFurnace._build_cptp_channel(R, TEST_DELTA)
+                @test isapprox(K0s[a], built.K0; atol=1e-15)
+                # The eigendecomposition may choose different signs/phases for
+                # degenerate eigenvectors. The channel depends only on U†U.
+                @test isapprox(
+                    U_residuals[a]' * U_residuals[a],
+                    built.U_residual' * built.U_residual;
+                    atol=1e-14,
+                )
+                @test U_coherents[a] !== nothing
+
+                completeness = K0s[a]' * K0s[a] + TEST_DELTA * R +
+                    U_residuals[a]' * U_residuals[a]
+                err = norm(completeness - identity)
+                max_completeness_err = max(max_completeness_err, err)
+                @test isapprox(completeness, identity; atol=1e-10)
             end
-            @info "DM precomp matches trajectory ($label)" n_jumps=length(jumps)
+
+            # The retained density-matrix substep must stay concretely inferred.
+            step_return = Core.Compiler.return_type(
+                QuantumFurnace._apply_one_dm_substep!,
+                Tuple{
+                    Matrix{ComplexF64},
+                    QuantumFurnace.ThermalizeScratch{ComplexF64},
+                    typeof(jumps[1]),
+                    Matrix{ComplexF64},
+                    Matrix{ComplexF64},
+                    Matrix{ComplexF64},
+                    typeof(ham_or_trott),
+                    typeof(config),
+                    typeof(precomputed_data),
+                    Float64,
+                },
+            )
+            @test step_return === Nothing
+            @info "Retained CPTP construction ($label, $selection)" n_jumps max_completeness_err threshold_atol=1e-10
         end
     end
-
 end

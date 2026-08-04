@@ -87,7 +87,7 @@ function Workspace(
         pd_transition, pd_gnf, pd_el, pd_odp, pd_nufft,
         pd_alpha, pd_bkeys, pd_bis, pd_bjs, pd_bminus, pd_bplus,
         nothing,  # U_coherents (Lindbladian path: no per-jump coherent unitaries)
-        nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # trajectory fields
+        nothing, nothing, nothing, nothing,  # per-jump channel state
         nothing,  # jump_selection (KrylovSpectrum path: no per-step jump selection)
         nothing,  # Id
         sc,
@@ -700,7 +700,7 @@ function Workspace(
         nothing, nothing, nothing, nothing, nothing,  # transition/gnf/energy_labels/odp/nufft
         nothing, nothing, nothing, nothing, nothing, nothing,  # bohr_alpha/bohr_keys/bohr_is/bohr_js/b_minus/b_plus
         nothing,  # U_coherents (DLL Lindbladian path)
-        nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # trajectory fields
+        nothing, nothing, nothing, nothing,  # per-jump channel state
         nothing,  # jump_selection
         nothing,  # Id
         sc,
@@ -767,7 +767,7 @@ function Workspace(
         jumps, hamiltonian, config, precomputed_data;
         trotter=trotter, delta_scale=1.0)
     # Broaden element type to `Vector{Union{Nothing, Matrix{CT}}}` so the field
-    # type matches the struct declaration (mirrors trajectory `U_Bs`).
+    # type matches the struct declaration.
     U_coherents = if coh_raw === nothing
         nothing
     else
@@ -815,8 +815,7 @@ function Workspace(
         pd_transition, pd_gnf, pd_el, pd_odp, pd_nufft,
         pd_alpha, pd_bkeys, pd_bis, pd_bjs, pd_bminus, pd_bplus,
         U_coherents,  # qf-po5: per-jump coherent unitaries (replaces the dropped summed `U_coherent`)
-        ham_or_trott, n_jumps, nothing, nothing,  # trajectory: ham_or_trott + n_jumps populated; scaled_prefactor/sigma=nothing for KrylovSpectrum
-        nothing, K0s, U_residuals, U_coherents,   # trajectory: Rs=nothing; per-jump K0s/U_residuals; U_Bs reuses U_coherents (same matrices)
+        ham_or_trott, n_jumps, K0s, U_residuals,
         :sweep,  # jump_selection (constructor enforced :sweep above)
         nothing,  # Id
         sc,

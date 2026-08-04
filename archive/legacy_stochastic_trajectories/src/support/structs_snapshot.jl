@@ -11,6 +11,7 @@ abstract type AbstractSimulation end
 struct Lindbladian    <: AbstractSimulation end
 struct Thermalize     <: AbstractSimulation end
 struct KrylovSpectrum <: AbstractSimulation end
+struct Trajectory     <: AbstractSimulation end
 
 # Construction types (detailed balance)
 abstract type AbstractConstruction end
@@ -29,7 +30,7 @@ with_coherent(::DLL) = true  # placeholder for Ding et al.
 A unified configuration object holding all parameters for quantum Gibbs sampler simulations.
 
 Type parameters encode the three dispatch axes:
-- `S <: AbstractSimulation`: simulation kind (`Lindbladian`, `Thermalize`, `KrylovSpectrum`)
+- `S <: AbstractSimulation`: simulation kind (`Lindbladian`, `Thermalize`, `KrylovSpectrum`, `Trajectory`)
 - `D <: AbstractDomain`: domain level (`BohrDomain`, `EnergyDomain`, `TimeDomain`, `TrotterDomain`)
 - `C <: AbstractConstruction`: detailed-balance construction (`KMS`, `GNS`, `DLL`)
 - `T <: AbstractFloat`: numeric precision
@@ -78,14 +79,14 @@ Mixing legacy and new on the same field is rejected at validation.
 - `mixing_time`: Total duration of time evolution (only for `Thermalize` simulations).
 - `delta`: Time step size for weak-measurement emulation (only for `Thermalize` simulations).
 
-## GQSP-specific (Thermalize coherent step)
+## GQSP-specific (Thermalize/Trajectory coherent step)
 - `with_gqsp`: If `true`, use the GQSP polynomial approximation of `exp(-iδ B_a)` for the
   coherent step instead of the exact matrix exponential. Requires
   `with_coherent(construction)=true` and `domain isa Union{TimeDomain, TrotterDomain}`.
 - `gqsp_degree`: Truncation degree `d ≥ 1` of the Jacobi-Anger polynomial. Default `1`
   is faithful to `O((δα)²)` and matches the splitting error.
 
-## Generator splitting (Thermalize dissipative step)
+## Generator splitting (Thermalize/Trajectory dissipative step)
 - `jump_selection`: `:sweep` (default, thesis-preferred) deterministically cycles through
   the jump set per outer δ-step `Φ_𝓐 = e^{δ𝓛_S} ∘ ⋯ ∘ e^{δ𝓛_1} ≈ e^{δ𝓛}` with bare-δ
   rates per substep; `:random` picks one jump uniformly per outer step with rates
@@ -174,11 +175,11 @@ Mixing legacy and new on the same field is rejected at validation.
     mixing_time::Union{T, Nothing} = nothing
     delta::Union{T, Nothing} = nothing
 
-    # GQSP-specific (Thermalize coherent step)
+    # GQSP-specific (Thermalize/Trajectory coherent step)
     with_gqsp::Bool = false
     gqsp_degree::Int = 1
 
-    # Dissipative jump-selection rule (Thermalize): :sweep | :random.
+    # Dissipative jump-selection rule (Thermalize/Trajectory): :sweep | :random.
     # :sweep is the thesis-preferred deterministic Lie-Trotter sweep over {A^a};
     # :random keeps the legacy uniform-random sampling with 1/p_a rate rescaling.
     jump_selection::Symbol = :sweep
@@ -292,6 +293,54 @@ struct JumpOp{T <: AbstractMatrix{<:Complex}}
     hermitian::Bool
 end
 
+"""
+    ConvergenceData
+
+Stores convergence metrics at batch checkpoints during trajectory sampling.
+Scalars only (no density matrix snapshots) to keep memory O(n_batches).
+
+# Fields (Phase 16 -- core convergence tracking)
+- `batch_sizes`: Number of trajectories in each batch.
+- `cumulative_n_traj`: Running total of trajectories after each batch.
+- `trace_distances`: Trace distance to Gibbs state at each checkpoint.
+- `observable_names`: Names of the tracked observables (e.g. "ZZ_12", "H").
+- `observable_values`: Observable expectation values, n_obs x n_checkpoints.
+- `observable_gibbs_values`: Reference Gibbs expectation values for each observable.
+
+# Fields (Phase 17 -- adaptive diagnostics)
+- `converged`: Did adaptive stopping trigger? (false for fixed-count runs)
+- `final_relative_change`: Windowed relative change at termination (NaN for fixed-count runs).
+- `consecutive_stable_batches`: How many consecutive stable checks achieved at termination.
+- `total_batches`: Number of batches actually run.
+"""
+struct ConvergenceData
+    # Phase 16: core convergence tracking
+    batch_sizes::Vector{Int}
+    cumulative_n_traj::Vector{Int}
+    trace_distances::Vector{Float64}
+    observable_names::Vector{String}
+    observable_values::Matrix{Float64}      # n_obs x n_checkpoints
+    observable_gibbs_values::Vector{Float64} # <O_i>_gibbs reference values
+    # Phase 17: adaptive diagnostics
+    converged::Bool
+    final_relative_change::Float64
+    consecutive_stable_batches::Int
+    total_batches::Int
+end
+
+# Backward-compatible 6-argument outer constructor (Phase 16 callers pass 6 args).
+# Uses broad types to accept BSON-deserialized data (e.g. Vector{Any} for strings).
+function ConvergenceData(
+    batch_sizes, cumulative_n_traj, trace_distances,
+    observable_names, observable_values, observable_gibbs_values,
+)
+    ConvergenceData(
+        batch_sizes, cumulative_n_traj, trace_distances,
+        observable_names, observable_values, observable_gibbs_values,
+        false, NaN, 0, length(batch_sizes),
+    )
+end
+
 # ---------------------------------------------------------------------------
 # New typed Result structs (Phase 36)
 # ---------------------------------------------------------------------------
@@ -346,6 +395,24 @@ struct KrylovSpectrumResults{T<:AbstractFloat} <: AbstractResults
     normres::Vector{T}
     channel_eigenvalues::Union{Nothing, Vector{Complex{T}}}
     delta_used::Union{Nothing, T}
+    metadata::Dict{Symbol, Any}
+end
+
+"""
+    TrajectoryResults{T<:AbstractFloat} <: AbstractResults
+
+Results from trajectory-based quantum simulation (`run_trajectory`).
+Observable and convergence data are `Union{Nothing, ...}` -- only populated
+when those features were used.
+"""
+struct TrajectoryResults{T<:AbstractFloat} <: AbstractResults
+    config::Config
+    rho_mean::Matrix{Complex{T}}
+    n_trajectories::Int
+    seed::Int
+    times::Union{Nothing, Vector{Float64}}
+    measurements_mean::Union{Nothing, Matrix{Float64}}
+    convergence::Union{Nothing, ConvergenceData}
     metadata::Dict{Symbol, Any}
 end
 
@@ -471,19 +538,42 @@ function KrylovScratch(::Type{CT}, dim::Int;
 end
 
 """
+    TrajectoryScratch{T<:Complex}
+
+Scratch buffers for trajectory simulation hot paths (`step_along_trajectory!`).
+All fields are mutable per-trajectory working memory. Each thread needs its own
+TrajectoryScratch to avoid shared mutable state.
+"""
+struct TrajectoryScratch{T<:Complex}
+    jump_oft::Matrix{T}
+    psi_tmp::Vector{T}
+    Rpsi::Vector{T}
+    rho_acc::Matrix{T}
+end
+
+function TrajectoryScratch(::Type{CT}, dim::Int) where {CT<:Complex}
+    TrajectoryScratch{CT}(
+        zeros(CT, dim, dim),  # jump_oft
+        zeros(CT, dim),       # psi_tmp
+        zeros(CT, dim),       # Rpsi
+        zeros(CT, dim, dim),  # rho_acc
+    )
+end
+
+"""
     Workspace{S, D, C, T}
 
 Unified parametric workspace for all simulation paths (KrylovSpectrum, Lindbladian,
-Thermalize).
+Thermalize, Trajectory).
 
 Type parameters:
-- `S <: AbstractSimulation`: simulation kind (KrylovSpectrum, Lindbladian, Thermalize)
+- `S <: AbstractSimulation`: simulation kind (KrylovSpectrum, Lindbladian, Thermalize, Trajectory)
 - `D <: AbstractDomain`: domain (BohrDomain, EnergyDomain, TimeDomain, TrotterDomain)
 - `C <: AbstractConstruction`: detailed-balance construction (KMS, GNS, DLL)
 - `T <: AbstractFloat`: numeric precision
 
 Dispatch signatures use partial parameterization:
-`ws::Workspace{KrylovSpectrum}`, `ws::Workspace{Lindbladian}`, etc.
+`ws::Workspace{KrylovSpectrum}`, `ws::Workspace{Lindbladian}`, `ws::Workspace{Trajectory}`, etc.
 
 Scratch sub-structs are accessed via type assertions at function entry points
 (e.g. `sc = ws.scratch::KrylovScratch{T}`) for type-stable hot-path access.
@@ -504,10 +594,10 @@ struct Workspace{S<:AbstractSimulation, D<:AbstractDomain, C<:AbstractConstructi
     G_left_adj::Union{Nothing, Matrix{Complex{T}}}
     G_right_adj::Union{Nothing, Matrix{Complex{T}}}
 
-    # CPTP channel scalars (Krylov Thermalize mode and Thermalize DM).
+    # CPTP channel scalars (Krylov Thermalize mode, and Thermalize DM; also per-operator alpha/delta for Trajectory).
     # The summed `K0 / U_residual / U_coherent` fields were removed in qf-po5 Commit 2 — the
     # faithful Φ_δ matvec is per-jump, so per-jump `K0s / U_residuals / U_coherents` are
-    # consulted instead.
+    # consulted instead (declared in the Trajectory block below; reused by Thermalize+Krylov).
     alpha::Union{Nothing, Float64}
     delta::Union{Nothing, Float64}
 
@@ -526,15 +616,20 @@ struct Workspace{S<:AbstractSimulation, D<:AbstractDomain, C<:AbstractConstructi
 
     # Thermalize-DM / Krylov-channel coherent unitaries (per-jump, length = n_jumps).
     # Element type allows `nothing` per jump so a no-coherent jump can be skipped
-    # without consulting `with_coherent(config.construction)` in the matvec.
+    # without consulting `with_coherent(config.construction)` in the matvec — mirrors
+    # the trajectory-branch `U_Bs::Vector{Union{Nothing, Matrix}}` shape exactly.
     U_coherents::Union{Nothing, Vector{Union{Nothing, Matrix{Complex{T}}}}}
 
-    # Per-jump channel state used by the retained full-DM and Krylov paths.
-    ham_or_trott::Any          # HamHam or AbstractTrotter for dissipator dispatch
+    # Trajectory-specific fields (per-operator Lie-Trotter splitting)
+    ham_or_trott::Any          # HamHam or TrottTrott (needed for EnergyDomain oft!())
     n_jumps::Union{Nothing, Int}
+    scaled_prefactor::Union{Nothing, Float64}
+    sigma::Union{Nothing, Float64}
+    Rs::Union{Nothing, Vector{Matrix{Complex{T}}}}         # per-jump R^a
     K0s::Union{Nothing, Vector{Matrix{Complex{T}}}}        # per-jump K0^a
     U_residuals::Union{Nothing, Vector{Matrix{Complex{T}}}}  # per-jump U_residual^a
-    jump_selection::Union{Nothing, Symbol}  # :sweep | :random | nothing
+    U_Bs::Union{Nothing, Vector{Union{Nothing, Matrix{Complex{T}}}}}  # per-jump coherent unitary
+    jump_selection::Union{Nothing, Symbol}  # :sweep | :random | nothing (non-Trajectory)
 
     # Identity matrix (Lindbladian construction path)
     Id::Union{Nothing, Matrix{Complex{T}}}

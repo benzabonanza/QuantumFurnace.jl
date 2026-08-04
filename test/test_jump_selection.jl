@@ -2,11 +2,9 @@
 #
 # Covers:
 #   1. Default Config.jump_selection == :sweep and validate_config! reject other symbols.
-#   2. Sweep round-robin: in trajectories the per-outer-step substeps land on every jump
-#      index exactly once, in order 1..S.
-#   3. Both modes reproduce e^{T𝓛} in expectation: ‖rho_sim - exp(L)·rho0‖ small.
+#   2. Both modes reproduce e^{T𝓛} in expectation: ‖rho_sim - exp(L)·rho0‖ small.
 #      Random uses the legacy ×S rescaling; sweep uses bare-δ S substeps per outer step.
-#   4. Both modes converge to the Gibbs state under repeated δ-steps.
+#   3. Both modes converge to the Gibbs state under repeated δ-steps.
 
 using QuantumFurnace
 using QuantumFurnace: trace_distance_h
@@ -41,27 +39,70 @@ using Test
         @test_throws ArgumentError validate_config!(cfg_bad)
     end
 
-    @testset "Sweep round-robin index order in trajectories" begin
-        # Build a trajectory workspace and capture the sequence of (a,) indices that
-        # `step_along_trajectory!` would receive when called via `_do_outer_step!`.
-        cfg = make_config(Thermalize(), TimeDomain();
-            num_qubits=3, construction=KMS(), delta=0.05, mixing_time=0.5)
-        ws = QuantumFurnace._build_trajectory_workspace(cfg, N3_HAM, N3_JUMPS)
-        @test ws.jump_selection == :sweep
+    @testset "One outer DM step uses the retained channel route" begin
+        delta = 0.05
+        base = make_config(Thermalize(), EnergyDomain();
+            num_qubits=3, construction=KMS(), delta=delta, mixing_time=delta)
+        psi = normalize(ComplexF64.(1:N3_DIM) .+ im .* ComplexF64.(N3_DIM:-1:1))
+        rho0 = psi * psi'
+        seed = 29
 
-        # Sweep mode: run 3 outer steps; expected substep indices are
-        # [1..S, 1..S, 1..S].
-        captured = Int[]
-        # Patch only locally: just iterate the sweep by hand to verify ordering.
-        for _ in 1:3
-            for a in 1:ws.n_jumps
-                push!(captured, a)
+        for selection in (:sweep, :random)
+            cfg = Config(; sim=base.sim, domain=base.domain,
+                construction=base.construction, num_qubits=base.num_qubits,
+                with_linear_combination=base.with_linear_combination,
+                beta=base.beta, sigma=base.sigma,
+                gaussian_parameters=base.gaussian_parameters,
+                a=base.a, s=base.s, num_energy_bits=base.num_energy_bits,
+                w0=base.w0, t0=base.t0,
+                num_trotter_steps_per_t0=base.num_trotter_steps_per_t0,
+                mixing_time=delta, delta=delta, jump_selection=selection)
+
+            reference = run_thermalize(
+                N3_JUMPS, cfg, N3_HAM;
+                initial_dm=rho0, rng=Xoshiro(seed), save_every=1,
+            )
+
+            # Reassemble exactly one outer step from the canonical retained
+            # construction/application helpers. This guards both selection
+            # semantics without relying on an independent simulator.
+            precomputed_data = QuantumFurnace._precompute_data(cfg, N3_HAM)
+            n_jumps = length(N3_JUMPS)
+            p_jump = 1.0 / n_jumps
+            rescale = selection === :random
+            coherent_unitaries = QuantumFurnace._precompute_coherent_unitary(
+                N3_JUMPS, N3_HAM, cfg, precomputed_data;
+                delta_scale=rescale ? 1.0 / p_jump : 1.0,
+            )
+            (; K0s, U_residuals) = QuantumFurnace._precompute_per_jump_channels(
+                N3_JUMPS, N3_HAM, cfg, precomputed_data;
+                rescale_by_inv_prob=rescale,
+            )
+            jump_weight_scaling = rescale ?
+                precomputed_data.gamma_norm_factor / p_jump :
+                precomputed_data.gamma_norm_factor
+            scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, N3_DIM)
+            assembled = copy(rho0)
+
+            if selection === :sweep
+                for a in 1:n_jumps
+                    QuantumFurnace._apply_one_dm_substep!(
+                        assembled, scratch, N3_JUMPS[a], coherent_unitaries[a],
+                        K0s[a], U_residuals[a], N3_HAM, cfg,
+                        precomputed_data, jump_weight_scaling,
+                    )
+                end
+            else
+                a = rand(Xoshiro(seed), 1:n_jumps)
+                QuantumFurnace._apply_one_dm_substep!(
+                    assembled, scratch, N3_JUMPS[a], coherent_unitaries[a],
+                    K0s[a], U_residuals[a], N3_HAM, cfg,
+                    precomputed_data, jump_weight_scaling,
+                )
             end
+
+            @test isapprox(assembled, reference.final_dm; atol=1e-13, rtol=0)
         end
-        S = ws.n_jumps
-        @test length(captured) == 3 * S
-        @test captured[1:S] == collect(1:S)
-        @test captured[(S+1):(2S)] == collect(1:S)
     end
 
     @testset "Both modes reach the Gibbs state (DM)" begin

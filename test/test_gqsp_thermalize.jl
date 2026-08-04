@@ -1,6 +1,5 @@
 """
-Integration tests for the GQSP coherent step inside `run_thermalize` and
-`run_trajectory` (qf-63j.3).
+Integration tests for the GQSP coherent step inside `run_thermalize` (qf-63j.3).
 
 The GQSP polynomial `f_d(B/α)` matches `exp(-iδ B)` to `O((δα)^{d+1})`. With small
 δ, the simulator's final density matrix should agree with the matrix-exponential
@@ -11,16 +10,14 @@ Test plan:
    (n=3 disordered Heisenberg). Returns a valid `ThermalizeResults`.
 2. Regression vs matrix-exp baseline at small δ: same setup, only `with_gqsp` flips.
    Final density matrices should match to within the polynomial truncation tolerance.
-3. `run_trajectory` regression: single trajectory, fixed seed, same final density
-   matrix as the matrix-exp path within tolerance.
-4. Bumping `gqsp_degree` from 1 to 2 strictly improves agreement with the matrix-exp
+3. Bumping `gqsp_degree` from 1 to 2 strictly improves agreement with the matrix-exp
    baseline (Bessel-tail bound shrinks by another factor of δα).
 """
 
 using LinearAlgebra: opnorm, tr, Hermitian, eigvals
 using Random: Xoshiro
 
-@testset "GQSP integration in run_thermalize / run_trajectory (qf-63j.3)" begin
+@testset "GQSP integration in run_thermalize (qf-63j.3)" begin
 
     # Use the small N3 Heisenberg fixtures and a small δ where polynomial trunc
     # error is below the unraveling step error. Short mixing_time keeps the test fast.
@@ -123,19 +120,6 @@ using Random: Xoshiro
         err_d1 = opnorm(r_exp.final_dm .- r_d1.final_dm)
         err_d2 = opnorm(r_exp.final_dm .- r_d2.final_dm)
         @test err_d2 < err_d1                                # strictly better
-    end
-
-    @testset "Trajectory regression: GQSP d=1 ≈ matrix-exp baseline (single traj)" begin
-        cfg_exp  = _therm_cfg(TimeDomain(); with_gqsp=false)
-        cfg_gqsp = _therm_cfg(TimeDomain(); with_gqsp=true, gqsp_degree=1)
-        psi0 = zeros(ComplexF64, N3_DIM)
-        psi0[1] = 1.0
-        seed = 42
-        r_exp  = run_trajectory(N3_JUMPS, cfg_exp,  N3_HAM; psi0=psi0, ntraj=1, seed=seed)
-        r_gqsp = run_trajectory(N3_JUMPS, cfg_gqsp, N3_HAM; psi0=psi0, ntraj=1, seed=seed)
-        @test r_exp.rho_mean !== nothing
-        @test r_gqsp.rho_mean !== nothing
-        @test opnorm(r_exp.rho_mean .- r_gqsp.rho_mean) < 5e-3
     end
 
 end

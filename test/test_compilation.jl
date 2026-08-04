@@ -3,23 +3,6 @@
         @test true  # If we got here, `using QuantumFurnace` succeeded
     end
 
-    @testset "_build_trajectory_workspace with coherent (KMS)" begin
-        config = make_config(Thermalize(), EnergyDomain(); construction=KMS())
-        ws = QuantumFurnace._build_trajectory_workspace(config, TEST_HAM, TEST_JUMPS; delta=TEST_DELTA)
-        @test ws isa Workspace{Trajectory}
-        @test ws.delta == TEST_DELTA
-        # Per-operator: each operator should have a coherent unitary
-        @test all(u -> u !== nothing, ws.U_Bs)
-    end
-
-    @testset "_build_trajectory_workspace without coherent (GNS)" begin
-        config = make_config(Thermalize(), EnergyDomain(); construction=GNS())
-        ws = QuantumFurnace._build_trajectory_workspace(config, TEST_HAM, TEST_JUMPS; delta=TEST_DELTA)
-        @test ws isa Workspace{Trajectory}
-        # Per-operator: no coherent unitaries
-        @test all(u -> u === nothing, ws.U_Bs)
-    end
-
     @testset "Fixtures available" begin
         @test size(TEST_HAM.data) == (DIM, DIM)
         @test length(TEST_JUMPS) == 3 * NUM_QUBITS  # 12 jumps

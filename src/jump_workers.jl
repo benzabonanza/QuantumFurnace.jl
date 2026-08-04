@@ -843,7 +843,7 @@ function _accumulate_rho_jump_threaded_energy!(
 
     # Per-task scratch: each needs rho_jump, jump_oft, sandwich_tmp.
     # If a pool is supplied (qf-po5), reuse it; otherwise allocate fresh
-    # (backward-compat path used by run_thermalize / run_trajectory today).
+    # (backward-compat path used by run_thermalize today).
     local_pool = if task_scratches === nothing
         [ThermalizeScratch(CT, dim) for _ in 1:length(chunks)]
     else

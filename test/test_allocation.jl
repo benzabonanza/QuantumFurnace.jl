@@ -15,9 +15,7 @@ Eliminated patterns that these tests guard against:
 
 using QuantumFurnace: B_bohr, B_time, B_trotter,
                       _precompute_data, _jump_contribution!,
-                      ThermalizeScratch,
-                      _build_trajectory_workspace
-using Random
+                      ThermalizeScratch
 
 @testset "Allocation Regression" begin
 
@@ -133,41 +131,6 @@ using Random
         max_expected = 50 * d^2 * sizeof(CT)  # generous for eigen decomposition + scratch
         @test allocs < max_expected  # _jump_contribution! in-place: allow eigen, catch filter vector reintroduction
         @info "_jump_contribution! allocations (TimeDomain)" allocs_bytes=allocs threshold=max_expected
-    end
-
-    @testset "step_along_trajectory! allocations" begin
-        # Guards against GC pressure that would destroy parallel scaling.
-        # Uses the 3-qubit SMALL system for fast execution.
-        config = make_config(Thermalize(), TimeDomain();
-            num_qubits=3, delta=0.01, mixing_time=1.0, construction=GNS())
-        CT = ComplexF64
-        dim = N3_DIM  # 8
-        ws = QuantumFurnace._build_trajectory_workspace(config, N3_HAM, N3_JUMPS; delta=0.01)
-
-        psi0 = zeros(CT, dim)
-        psi0[1] = 1.0
-
-        # Wrap in a function to avoid top-level scope allocation artifacts.
-        # Julia's @allocated in global/testset scope can show spurious allocations
-        # from boxing local variables; a function barrier ensures proper optimization.
-        function _measure_step_allocs(ws, psi0)
-            psi = copy(psi0)
-            rng = Xoshiro(999)
-
-            # Warmup: JIT compile all code paths (no-jump, residual, dissipative-jump)
-            for _ in 1:100
-                step_along_trajectory!(psi, ws, rng)
-            end
-
-            # Reset and measure
-            copyto!(psi, psi0)
-            rng2 = Xoshiro(999)
-            return @allocated step_along_trajectory!(psi, ws, rng2)
-        end
-
-        allocs = _measure_step_allocs(ws, psi0)
-        @test allocs == 0  # Hot path must be allocation-free for parallel scaling (Union{Nothing,Function} boxing handled by MATVEC_ALLOC_BUDGET elsewhere)
-        @info "step_along_trajectory! allocations" allocs_bytes=allocs threshold=0
     end
 
 end

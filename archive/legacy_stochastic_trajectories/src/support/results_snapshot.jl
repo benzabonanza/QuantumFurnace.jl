@@ -25,7 +25,8 @@ function _config_to_dict(config::Config)
 
     # Type tags
     d[:config_type] = config.construction isa GNS ? "GNS" : config.construction isa KMS ? "KMS" : "DLL"
-    d[:config_kind] = config.sim isa Thermalize ? "thermalize" : "lindbladian"
+    d[:config_kind] = config.sim isa Thermalize ? "thermalize" :
+                      config.sim isa Trajectory ? "trajectory" : "lindbladian"
     d[:domain] = string(typeof(config.domain))
 
     # Shared fields (all config types have these)
@@ -56,8 +57,8 @@ function _config_to_dict(config::Config)
     d[:eta]                     = config.eta
     d[:num_trotter_steps_per_t0] = config.num_trotter_steps_per_t0
 
-    # Thermalize-specific fields
-    if config.sim isa Thermalize
+    # Thermalize/Trajectory-specific fields
+    if config.sim isa Thermalize || config.sim isa Trajectory
         d[:mixing_time] = config.mixing_time
         d[:delta]       = config.delta
     end
@@ -85,6 +86,8 @@ function _reconstruct_config(d::Dict)
     construction = config_type == "GNS" ? GNS() : config_type == "DLL" ? DLL() : KMS()
     sim = if config_kind == "thermalize"
         Thermalize()
+    elseif config_kind == "trajectory"
+        Trajectory()
     elseif config_kind !== nothing
         Lindbladian()
     else
@@ -146,6 +149,53 @@ function _dict_to_config_kwargs(d::Dict, domain)
     end
 
     return kwargs
+end
+
+# ---------------------------------------------------------------------------
+# ConvergenceData <-> Dict conversion (for safe BSON serialization)
+# ---------------------------------------------------------------------------
+
+"""
+    _convergence_to_dict(conv::ConvergenceData) -> Dict{Symbol, Any}
+
+Convert a ConvergenceData to a plain Dict for BSON serialization.
+"""
+function _convergence_to_dict(conv::ConvergenceData)
+    return Dict{Symbol, Any}(
+        :batch_sizes              => conv.batch_sizes,
+        :cumulative_n_traj        => conv.cumulative_n_traj,
+        :trace_distances          => conv.trace_distances,
+        :observable_names         => conv.observable_names,
+        :observable_values        => conv.observable_values,
+        :observable_gibbs_values  => conv.observable_gibbs_values,
+        # Phase 17: adaptive diagnostics
+        :converged                => conv.converged,
+        :final_relative_change    => conv.final_relative_change,
+        :consecutive_stable_batches => conv.consecutive_stable_batches,
+        :total_batches            => conv.total_batches,
+    )
+end
+
+"""
+    _dict_to_convergence(d::Dict) -> ConvergenceData
+
+Reconstruct a ConvergenceData from a Dict loaded from BSON.
+Uses `get` with default for forward compatibility.
+"""
+function _dict_to_convergence(d::Dict)
+    return ConvergenceData(
+        d[:batch_sizes],
+        d[:cumulative_n_traj],
+        d[:trace_distances],
+        d[:observable_names],
+        d[:observable_values],
+        get(d, :observable_gibbs_values, Float64[]),
+        # Phase 17: adaptive diagnostics (backward-compatible defaults for pre-Phase 17 data)
+        get(d, :converged, false),
+        get(d, :final_relative_change, NaN),
+        get(d, :consecutive_stable_batches, 0),
+        get(d, :total_batches, length(d[:batch_sizes])),
+    )
 end
 
 # ============================================================================
@@ -225,6 +275,7 @@ end
 _result_type_tag(::LindbladResults) = "lindblad"
 _result_type_tag(::ThermalizeResults) = "thermalize"
 _result_type_tag(::KrylovSpectrumResults) = "krylov_spectrum"
+_result_type_tag(::TrajectoryResults) = "trajectory"
 
 # ---------------------------------------------------------------------------
 # Result -> Dict conversion (for BSON serialization)
@@ -271,6 +322,23 @@ function _krylov_spectrum_to_dict(r::KrylovSpectrumResults)
     )
 end
 
+function _trajectory_to_dict_new(r::TrajectoryResults)
+    d = Dict{Symbol, Any}(
+        :result_type        => "trajectory",
+        :config             => _config_to_dict(r.config),
+        :rho_mean           => Matrix(r.rho_mean),
+        :n_trajectories     => r.n_trajectories,
+        :seed               => r.seed,
+        :times              => r.times,
+        :measurements_mean  => r.measurements_mean,
+        :metadata           => r.metadata,
+    )
+    if r.convergence !== nothing
+        d[:convergence] = _convergence_to_dict(r.convergence)
+    end
+    return d
+end
+
 """
     _result_to_dict(r::AbstractResults) -> Dict{Symbol, Any}
 
@@ -286,6 +354,10 @@ end
 function _result_to_dict(r::KrylovSpectrumResults)
     return _krylov_spectrum_to_dict(r)
 end
+function _result_to_dict(r::TrajectoryResults)
+    return _trajectory_to_dict_new(r)
+end
+
 # ---------------------------------------------------------------------------
 # Dict -> Result reconstruction
 # ---------------------------------------------------------------------------
@@ -334,6 +406,26 @@ function _dict_to_krylov_spectrum_results(d::Dict)
     )
 end
 
+function _dict_to_trajectory_results(d::Dict)
+    config = _reconstruct_config(d[:config])
+    conv = if haskey(d, :convergence) && d[:convergence] !== nothing
+        _dict_to_convergence(d[:convergence])
+    else
+        nothing
+    end
+    T = real(eltype(d[:rho_mean]))
+    return TrajectoryResults{T}(
+        config,
+        d[:rho_mean],
+        d[:n_trajectories],
+        d[:seed],
+        get(d, :times, nothing),
+        get(d, :measurements_mean, nothing),
+        conv,
+        d[:metadata],
+    )
+end
+
 # ---------------------------------------------------------------------------
 # save_result / load_result
 # ---------------------------------------------------------------------------
@@ -367,6 +459,8 @@ function load_result(path::String)
         return _dict_to_thermalize_results(d)
     elseif tag == "krylov_spectrum"
         return _dict_to_krylov_spectrum_results(d)
+    elseif tag == "trajectory"
+        return _dict_to_trajectory_results(d)
     else
         error("Unknown result type: $tag")
     end
@@ -428,6 +522,14 @@ function _write_result_companion_txt(result::AbstractResults, path::String)
                 println(io, "Channel eigenvalues: ", length(result.channel_eigenvalues))
             end
 
+        elseif result isa TrajectoryResults
+            println(io, "N trajectories:      ", result.n_trajectories)
+            println(io, "Seed:                ", result.seed)
+            println(io, "rho_mean dim:        ", size(result.rho_mean, 1), "x", size(result.rho_mean, 2))
+            if result.convergence !== nothing
+                println(io, "Converged:           ", result.convergence.converged)
+                println(io, "Total batches:       ", result.convergence.total_batches)
+            end
         end
     end
 end
