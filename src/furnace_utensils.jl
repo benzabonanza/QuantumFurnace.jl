@@ -3,26 +3,23 @@
     oft_domain_prefactor(::TimeDomain, w0, sigma, t0)
     oft_domain_prefactor(::TrotterDomain, w0, sigma, t0)
 
-Compute the domain-dependent scalar prefactor for OFT-based rate calculations.
+Return the domain-dependent scalar prefactor for OFT rates.
 
-EnergyDomain:  w0 / (sigma * sqrt(2*pi))
-Time/Trotter:  w0 * t0^2 * sigma * sqrt(2/pi) / (2*pi)
-
-No method for BohrDomain -- callers use `gamma_norm_factor` directly.
+`BohrDomain` uses `gamma_norm_factor` directly and has no method here.
 """
 oft_domain_prefactor(::EnergyDomain, w0::Real, sigma::Real) = w0 / (sigma * sqrt(2 * pi))
 oft_domain_prefactor(::TimeDomain, w0::Real, sigma::Real, t0::Real) = w0 * t0^2 * (sigma * sqrt(2 / pi)) / (2 * pi)
 oft_domain_prefactor(::TrotterDomain, w0::Real, sigma::Real, t0::Real) = w0 * t0^2 * (sigma * sqrt(2 / pi)) / (2 * pi)
 
 function _precompute_labels(config::Config{<:Any, D}) where {D<:Union{BohrDomain, EnergyDomain}}
-    # Dissipative register only (qf-9z0): EnergyDomain has no t-grid.
+    # Energy-domain dissipation has no time grid.
     energy_labels = _create_energy_labels(register_r_D(config), register_w0_D(config))
     truncated_energy_labels = _truncate_energy_labels(energy_labels, config)
     return (truncated_energy_labels,)  # Energy labels
 end
 
 function _precompute_labels(config::Config{<:Any, D}) where {D<:Union{TimeDomain, TrotterDomain}}
-    # Dissipative register only (qf-9z0). Coherent labels are built per-term
+    # Coherent labels are built per term from their own registers.
     # in `_precompute_data` from the `b_minus / b_plus` registers.
     r_D = register_r_D(config)
     w0_D = register_w0_D(config)
@@ -56,7 +53,7 @@ function _precompute_data(
 )
     alpha = _pick_alpha(config)
 
-    # Grid-independent normalisation (qf-etx); see Config{Lindbladian, BohrDomain} branch above.
+    # Use the continuum rate supremum, independent of the sampled grid.
     gamma_norm_factor = 1.0 / pick_gamma_sup(config)
 
     # Cache the Bohr buckets as plain Int index pairs to avoid CartesianIndex overhead
@@ -92,7 +89,7 @@ function _precompute_data(
 )
     energy_labels, = _precompute_labels(config)
     transition = pick_transition(config)
-    # Grid-independent normalisation (qf-etx); see Config{Lindbladian, BohrDomain} branch.
+    # Use the continuum rate supremum, independent of the sampled grid.
     gamma_norm_factor = 1.0 / pick_gamma_sup(config)
     # EnergyDomain dissipator only consults `w0_D` (no time grid).
     dp = oft_domain_prefactor(config.domain, register_w0_D(config), config.sigma)
@@ -108,9 +105,7 @@ end
 """
     _precompute_data(config::Config{Lindbladian, BohrDomain, DLL}, hamiltonian::HamHam)
 
-DLL Bohr-domain precompute (Ding–Li–Lin 2024, Eq. 3.4 first form). DLL has no
-γ(ω) transition rates and no γ-norm factor — the filter `f̂(ν)` already encodes
-the KMS weight. Returns just the resolved filter.
+Resolve the DLL filter for an exact Bohr-domain construction.
 """
 function _precompute_data(
     config::Config{Lindbladian, BohrDomain, DLL},
@@ -122,31 +117,18 @@ end
 """
     _precompute_data(config::Config{Lindbladian, TimeDomain, DLL}, hamiltonian::HamHam)
 
-DLL Time-domain precompute (Ding–Li–Lin 2024, Eq. 3.4 third form). Builds the
-trapezoidal time grid `t_m = m · t0` for `m ∈ [-N/2, N/2 − 1]`, `N =
-2^num_energy_bits`, then truncates by `filter_time_cutoff`. Stores the uniform
-spacing `t0` as the integration weight together with a single-slice NUFFT
-prefactor evaluated at `ω = 0`:
+Precompute the DLL time grid and its zero-frequency NUFFT slice.
 
-    pf[i, j] = Σ_m time_kernel(filter, t_m) · cis((λ_i − λ_j) · t_m)
-
-This is exactly the DFT in `dll_lindblad_op_time`'s explicit triple loop;
-computing it via FINUFFT amortises the per-jump cost from `O(Nt · n²)` to
-`O(Nt log Nt + n² log(1/ε))` (FINUFFT precision `ε = 1e-12`). The Riemann sum
-itself — and hence the Eq. 3.15 quadrature error structure — is unchanged.
-
-No `gamma_norm_factor`, `transition`, or `w0` — the DLL Lindblad operator is
-the OFT at `ω = 0` of the coupling, with the filter providing the only
-weighting.
+The filter supplies the KMS weighting, so this path has no transition rate or
+gamma normalization. FINUFFT uses deterministic single-threaded precision
+`1e-12`; the underlying trapezoidal quadrature is unchanged.
 """
 function _precompute_data(
     config::Config{Lindbladian, TimeDomain, DLL},
     hamiltonian::HamHam{T},
 ) where {T<:AbstractFloat}
     filter = _resolve_filter(config)
-    # Build the time grid directly from `(r_D, t0_D)` — the DLL construction
-    # has no ω-grid, so `w0_D` plays no role here. DLL has no `b_-/b_+` split
-    # either; G shares the same dissipative grid (qf-9z0).
+    # DLL uses one time grid for dissipative and coherent terms; `w0_D` is unused.
     r_D = register_r_D(config)
     t0_D = register_t0_D(config)
     N = 2^r_D
@@ -184,17 +166,14 @@ function _precompute_data(
     config::Config{<:Any, D},
     ham_or_trott::Union{HamHam, AbstractTrotter}
 ) where {D<:Union{TimeDomain, TrotterDomain}}
-    energy_labels, time_labels = _precompute_labels(config)  # dissipative grid (qf-9z0)
+    energy_labels, time_labels = _precompute_labels(config)
     oft_time_labels = _truncate_time_labels_for_oft(time_labels, config.sigma; filter=_resolve_filter(config))
 
     transition = pick_transition(config)
-    # Grid-independent normalisation (qf-etx); see Config{Lindbladian, BohrDomain} branch.
+    # Use the continuum rate supremum, independent of the sampled grid.
     gamma_norm_factor = 1.0 / pick_gamma_sup(config)
 
-    # Coherent term B (KMS-only). Each leg is built on its own register —
-    # `b_-(t)` on the outer triple, `b_+(τ)` on the inner triple. qf-9z0.3
-    # plumbs these grids through `B_time / B_trotter`; here we only need the
-    # truncated per-leg dictionaries.
+    # The two coherent kernels use independent outer and inner registers.
     b_minus, b_plus = if with_coherent(config.construction)
         time_labels_b_minus = _create_energy_labels(register_r_b_minus(config),
             register_w0_b_minus(config)) .* (register_t0_b_minus(config) / register_w0_b_minus(config))
@@ -208,14 +187,7 @@ function _precompute_data(
         (nothing, nothing)
     end
 
-    # OFT NUFFT prefactors (dissipative path; same call for TimeDomain/TrotterDomain).
-    # `nthreads=1` preserves byte-deterministic FINUFFT output across runs
-    # (load-bearing for the byte-identity tests in `test_dll_filter.jl` and
-    # the regression checks in `test_regression.jl`). FINUFFT is not the
-    # construction-time hot spot per the qf-6af motivation; enabling its
-    # OpenMP threading gives a single-digit-percent improvement at most while
-    # introducing ULP-level non-determinism that breaks the byte-identity
-    # contract above.
+    # Single-threaded FINUFFT preserves byte-deterministic construction.
     oft_nufft_prefactors = _prepare_oft_nufft_prefactors(
         ham_or_trott.bohr_freqs,
         oft_time_labels,
@@ -254,39 +226,27 @@ function _select_b_plus_calculator(config::Config{<:Any, <:Any, KMS})
     end
 end
 
-# ---------------------------------------------------------------------------
-# CPTP weak-measurement channel construction (Chen et al. Eq. 3.2)
-# ---------------------------------------------------------------------------
-
 """
     _build_cptp_channel(R, delta) -> (; K0, U_residual, alpha)
 
-Construct the CPTP weak-measurement channel matrices from the accumulated R matrix
-(Chen et al. Eq. 3.2).
-
-Returns a NamedTuple with:
-- `K0 = I - alpha * R` (no-event Kraus operator)
-- `U_residual = sqrt_psd(S)` where `S = (2*alpha - delta)*R - alpha^2 * R^2`
-- `alpha = 1 - sqrt(1 - delta)` (the step-size parameter)
-
-The PSD guard clamps negative eigenvalues of S to zero before taking the square root,
-handling numerical noise robustly.
+Construct the no-event and residual Kraus matrices from a rate operator.
 
 # Arguments
-- `R::Matrix{<:Complex}`: accumulated R matrix (Hermitianized), either per-operator R^a or summed R_total
-- `delta::Real`: step size parameter
+- `R`: Hermitian rate operator.
+- `delta`: Channel step size.
 
 # Returns
-NamedTuple `(; K0, U_residual, alpha)` with `K0::Matrix` and `U_residual::Matrix`.
+`(; K0, U_residual, alpha)`. Negative eigenvalues of the residual PSD matrix
+are clamped to zero before taking its square root.
 """
 function _build_cptp_channel(R::Matrix{T}, delta::Real) where {T<:Complex}
     dim = size(R, 1)
     alpha = 1 - sqrt(1 - delta)
 
-    # K0 = I - alpha * R
+    # Math: $K_0 = I - alpha R$, where $alpha = 1 - sqrt(1-delta)$.
     K0 = Matrix{T}(I, dim, dim) .- alpha .* R
 
-    # S = (2*alpha - delta)*R - alpha^2 * R^2
+    # Math: $S = (2 alpha-delta)R - alpha^2 R^2$.
     R2 = R * R
     S = (2 * alpha - delta) .* R .- (alpha^2) .* R2
     hermitianize!(S)
@@ -302,18 +262,10 @@ end
 """
     _apply_precomputed_channel!(evolving_dm, K0, U_residual, scratch)
 
-Apply precomputed CPTP channel to evolving density matrix. Uses pre-stored K0
-and U_residual (no eigendecomposition). `scratch.rho_jump` must be pre-filled
-by `_accumulate_rho_jump!`.
+Apply a precomputed weak-measurement channel using `scratch.rho_jump`.
 
-Computes: rho_next = K0 * rho * K0' + rho_jump + U_residual * rho * U_residual'
-
-`hermitize=true` (default) projects `rho_next` onto Hermitian matrices each substep —
-correct for the physical channel acting on density matrices (an exact-arithmetic
-no-op on Hermitian inputs, removes ≪1e-12 assembly drift). It makes the matvec
-**ℝ-linear** (`Φ_h = Φ∘P_herm` on a general operator), so set `hermitize=false` to
-get the genuine **ℂ-linear** channel `Φ` needed when probing non-Hermitian operators
-(e.g. the anti-Hermitian part of the quantum discriminant, qf-e4z.50).
+Set `hermitize=false` for the genuine complex-linear map on arbitrary operators;
+the default projection is appropriate for physical density matrices.
 """
 function _apply_precomputed_channel!(
     evolving_dm::Matrix{<:Complex},
@@ -322,7 +274,7 @@ function _apply_precomputed_channel!(
     scratch::ThermalizeScratch{<:Complex};
     hermitize::Bool = true,
 )
-    # rho_next = K0 * rho * K0'
+    # Math: $rho' = K_0 rho K_0^dagger + rho_jump + U_r rho U_r^dagger$.
     mul!(scratch.sandwich_tmp, K0, evolving_dm)
     mul!(scratch.rho_next, scratch.sandwich_tmp, K0')
 
@@ -342,13 +294,13 @@ end
 """
     _precompute_per_jump_channels(jumps, ham_or_trott, config, precomputed_data; rescale_by_inv_prob=true)
 
-Precompute per-jump CPTP channel matrices (K0, U_residual) for all jumps.
-Eliminates per-step eigendecomposition in the `run_thermalize` hot loop.
+Precompute `K0` and residual Kraus matrices for every jump.
 
-For each jump operator, computes R^a via `_precompute_R`, optionally scales by `1/p_jump`
-(when `rescale_by_inv_prob=true`), and builds the CPTP channel via `_build_cptp_channel`.
+When `rescale_by_inv_prob=true`, each rate operator is divided by its jump
+selection probability before channel construction.
 
-Returns a NamedTuple `(; K0s, U_residuals)` where each is a `Vector{Matrix{CT}}` of length `n_jumps`.
+# Returns
+`(; K0s, U_residuals)` with one matrix pair per jump.
 """
 function _precompute_per_jump_channels(
     jumps::AbstractVector{<:JumpOp},
@@ -390,10 +342,7 @@ end
     _apply_one_dm_substep!(evolving_dm, scratch, jump, U_coherent, K0, U_residual,
                            ham_or_trott, config, precomputed_data, jump_weight_scaling)
 
-Apply one per-jump substep `e^{δ𝓛_a}` to the evolving density matrix:
-coherent unitary, accumulate ρ_jump, then the precomputed CPTP channel.
-Used by `run_thermalize` for both `:sweep` (called S times in order) and
-`:random` (called once with a random jump index per outer δ-step).
+Apply one coherent-plus-dissipative per-jump channel substep.
 """
 @inline function _apply_one_dm_substep!(
     evolving_dm::Matrix{<:Complex},
@@ -421,19 +370,11 @@ end
     _apply_one_adjoint_dm_substep!(evolving_dm, scratch, jump, U_coherent, K0, U_residual,
                                    ham_or_trott, config, precomputed_data_adj, jump_weight_scaling; hermitize)
 
-The HS-adjoint of [`_apply_one_dm_substep!`](@ref).  The forward substep is
-`Sₐ = WMₐ ∘ Cohₐ` with `Cohₐ(ρ) = U ρ U†` and
-`WMₐ(ρ') = K0 ρ' K0† + δ·Dₐ(ρ') + U_res ρ' U_res†`, so the adjoint is
-`Sₐ† = Cohₐ† ∘ WMₐ†` with
+Apply the Hilbert--Schmidt adjoint of one channel substep.
 
-    WMₐ†(X) = K0† X K0 + δ·Dₐ†(X) + U_res† X U_res,   Cohₐ†(Y) = U† Y U.
-
-`Dₐ†` (the adjoint dissipator `Σ_ν γ(ν) Aᵥ† X Aᵥ`) is obtained for **Hermitian
-jumps** by calling the forward `_accumulate_rho_jump!` with a RATE-FLIPPED
-`precomputed_data` (`transition(ν) → transition(−ν)`), since `A₋ᵥ = Aᵥ†` makes the
-forward sum with flipped rates identical to the adjoint sum — this reuses the full
-(threaded) forward dissipator path.  `precomputed_data_adj` must therefore already
-carry the flipped `transition`; `apply_adjoint_delta_channel!` builds it once.
+The caller supplies a frequency-negated transition function, allowing Hermitian
+jumps to reuse the forward dissipator kernel before applying the adjoint
+coherent unitary.
 """
 @inline function _apply_one_adjoint_dm_substep!(
     evolving_dm::Matrix{<:Complex},

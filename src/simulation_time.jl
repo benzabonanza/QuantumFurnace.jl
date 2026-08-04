@@ -1,62 +1,21 @@
-# ============================================================================
-# Hamiltonian Simulation Time Counting (Phases 44-47)
-# ============================================================================
-#
-# Resource estimation for Chen's quantum Gibbs sampling algorithm.
-# Computes total Hamiltonian simulation time broken down by component:
-#   - OFT (Operator Fourier Transform): dominant per-step cost
-#   - B (coherent correction): KMS-only correction term
-#   - Per-step: 2×OFT + B (OFT appears twice: forward + backward)
-#   - Total: n_steps × per_step
-
-# ---------------------------------------------------------------------------
-# Phase 44: SimulationTimeBudget struct and QPE grid utilities
-# ---------------------------------------------------------------------------
+# Resource estimates for the OFT and coherent parts of the sampling channel.
+# Math: $t_total = ceil(T / delta) (2 t_OFT + t_B)$.
 
 """
     SimulationTimeBudget
 
-Immutable result container for Hamiltonian simulation time resource estimation.
-Stores per-component time costs, **per-term** QPE grid parameters (qf-9z0),
-GQSP cost-model flags, physical parameters, and filter configuration — enough
-to reproduce a paper table row from a saved BSON.
+Hamiltonian-simulation time budget for a thermalisation run.
 
-# Cost fields
-- `oft_time`: OFT Hamiltonian simulation time per step
-- `b_per_be`: B Hamiltonian-simulation time **per block-encoding query** (legacy
-  formula, GQSP-blind). Useful as the audit-side scalar from which the
-  GQSP-aware `b_time` derives.
-- `b_time`: B coherent correction time per step. Equal to `b_per_be` when
-  `with_gqsp = false` (direct `exp(-iδB)`) and to `2 · gqsp_degree · b_per_be`
-  when `with_gqsp = true` — Motlagh & Wiebe 2024 Thm. 6 / **Eq. 46** (Form B,
-  mixed slot pattern) with the Jacobi-Anger truncation `d = gqsp_degree`:
-  `d` controlled-`W` slots + `d` closed-controlled-`W†` slots (the `A'` of MW
-  Eq. 45, fires on `|1⟩`) = `2d` block-encoding queries to the walk operator
-  `W = R_T · U_{B_a}`. Each `W` invokes one block encoding of `B_a`. The
-  earlier Form C realisation (`2d` controlled-`W` + uncontrolled `W^{-d}` tail
-  = `3d` queries) is mathematically equivalent (MW Eq. 49→53) but uses 1.5×
-  more block-encoding queries; it is being phased out (qf-e4z.19). `0.0` for
-  GNS (no coherent term).
-- `per_step_time`: `2 × oft_time + b_time`
-- `n_steps`: `ceil(T / delta)`
-- `total_time`: `n_steps × per_step_time`
-
-# Per-term register info (qf-9z0)
-- Dissipative: `r_D`, `N_D`, `w0_D`, `t0_D`, `energy_range`
-- Outer coherent (`b_-`): `r_bm`, `N_bm`, `w0_bm`, `t0_bm`
-- Inner coherent (`b_+`): `r_bp`, `N_bp`, `w0_bp`, `t0_bp`
-
-# GQSP info
-- `with_gqsp`: cost-model flag (matches `config.with_gqsp`)
-- `gqsp_degree`: bilateral Jacobi-Anger truncation index `d`. Default `1`.
-
-# Physical parameters
-- `beta`, `sigma`, `delta`, `construction`, `n_qubits`, `rescaling_factor`
-- `T`: target simulation time (e.g. mixing time)
-
-# Filter info
-- `filter_type`: `:gaussian`, `:metropolis`, `:smooth_metropolis`, or `:kinky_metropolis`
-- `filter_params`: Dict with filter-specific parameters
+# Fields
+- `oft_time`, `b_per_be`, `b_time`: per-step OFT and coherent costs. GQSP
+  uses `2 * gqsp_degree` coherent block-encoding queries (Motlagh--Wiebe,
+  Theorem 6, Form B).
+- `per_step_time`, `n_steps`, `total_time`: combined cost, step count, and total.
+- `r_D`/`r_bm`/`r_bp` groups: independent dissipative and coherent registers.
+- `with_gqsp`, `gqsp_degree`: coherent implementation metadata.
+- `beta`, `sigma`, `delta`, `construction`, `n_qubits`, `rescaling_factor`,
+  `T`: physical and algorithmic metadata.
+- `filter_type`, `filter_params`: transition-filter metadata.
 """
 struct SimulationTimeBudget
     # Cost fields
@@ -101,11 +60,7 @@ end
 """
     _qpe_grid_info(r, w0) -> (; N, t0, energy_range)
 
-Compute QPE grid parameters from resolution `r` and energy spacing `w0`.
-
-- `N = 2^r`
-- `t0 = 2π / (N × w0)` (Fourier relation)
-- `energy_range = (-N/2 × w0, (N/2 - 1) × w0)`
+Return QPE grid size, Fourier time step, and represented energy range.
 """
 function _qpe_grid_info(r::Int, w0::Real)
     N = 2^r
@@ -140,17 +95,10 @@ function Base.show(io::IO, ::MIME"text/plain", b::SimulationTimeBudget)
     print(io,   "  Total:         $(b.total_time)")
 end
 
-# ---------------------------------------------------------------------------
-# Phase 45: OFT Hamiltonian simulation time
-# ---------------------------------------------------------------------------
-
 """
     _oft_hamiltonian_time(r, w0, transition_weights) -> Float64
 
-Compute the OFT Hamiltonian simulation time: sum of `|t_k| × γ(w_k)`
-over the full 2^r QPE grid.
-
-When all weights are 1.0, equals `t0 × N² / 4` (closed-form validation).
+Sum weighted absolute evolution times over the full QPE grid.
 """
 function _oft_hamiltonian_time(r::Int, w0::Real, transition_weights::AbstractVector{<:Real})
     N = 2^r
@@ -164,24 +112,11 @@ function _oft_hamiltonian_time(r::Int, w0::Real, transition_weights::AbstractVec
     return total
 end
 
-# ---------------------------------------------------------------------------
-# Phase 46: B coherent term Hamiltonian simulation time
-# ---------------------------------------------------------------------------
-
 """
     _b_hamiltonian_time(b_minus, b_plus, beta, sigma, t0_outer, t0_inner) -> Float64
 
-Compute the B coherent correction Hamiltonian simulation time as a nested
-Riemann sum over truncated b-dict entries with **independent outer/inner**
-grid spacings (qf-9z0).
-
-Returns `0.0` when either dictionary is `nothing` or empty (GNS case).
-
-For KMS, each (t,s) pair in the B operator involves:
-- Inner: 3 time evolutions of total duration 4|sβ|
-- Outer: 2 time evolutions of total duration 2|t/σ|
-
-Total: `t0_outer × t0_inner × Σ_t Σ_s |b_minus[t]| × |b_plus[s]| × (4|sβ| + 2|t/σ|)`
+Compute the coherent-correction evolution time using independent outer and
+inner grids. Returns zero when either kernel is absent.
 """
 function _b_hamiltonian_time(
     b_minus::Union{Nothing, Dict},
@@ -194,28 +129,21 @@ function _b_hamiltonian_time(
     (b_minus === nothing || b_plus === nothing) && return 0.0
     (isempty(b_minus) || isempty(b_plus)) && return 0.0
 
-    # Inner contribution (b_plus): Σ_s |b_plus[s]| × |s × β|
+    # Inner contribution: $sum_s abs(b_+(s)) abs(s beta)$.
     inner_weighted = sum(abs(v) * abs(s * beta) for (s, v) in b_plus)
     inner_norm = sum(abs(v) for (_, v) in b_plus)
 
-    # Outer contribution (b_minus): Σ_t |b_minus[t]| × |t / σ|
+    # Outer contribution: $sum_t abs(b_-(t)) abs(t / sigma)$.
     outer_weighted = sum(abs(v) * abs(t / sigma) for (t, v) in b_minus)
     outer_norm = sum(abs(v) for (_, v) in b_minus)
 
-    # Factored double sum: t0_outer · t0_inner ×
-    #   [4 × ‖b_minus‖₁ × inner_weighted + 2 × outer_weighted × ‖b_plus‖₁]
+    # Math: $t_- t_+ (4 norm(b_-, 1) I_+ + 2 I_- norm(b_+, 1))$.
     return t0_outer * t0_inner * (4.0 * outer_norm * inner_weighted + 2.0 * outer_weighted * inner_norm)
 end
 
-# Legacy 5-argument form used by call sites that haven't migrated yet
-# (and by historical tests). Forwards to the explicit-outer-inner form with
-# `t0_outer = t0_inner = t0`.
+# Compatibility overload for a shared outer/inner grid spacing.
 _b_hamiltonian_time(b_minus, b_plus, beta::Real, sigma::Real, t0::Real) =
     _b_hamiltonian_time(b_minus, b_plus, beta, sigma, t0, t0)
-
-# ---------------------------------------------------------------------------
-# Phase 47: Public API
-# ---------------------------------------------------------------------------
 
 function _determine_filter_info(config::Config)
     if !config.with_linear_combination
@@ -226,9 +154,7 @@ function _determine_filter_info(config::Config)
     end
     a_val = something(config.a, 0.0)
     s_val = something(config.s, 0.0)
-    # (a, s) taxonomy (qf-nq5): kinky Metropolis is exactly (s = 0, a = 0);
-    # smooth Metropolis is (s > 0, any a ≥ 0). The (s = 0, a > 0) case is
-    # rejected by validate_config!, so we don't need a third branch here.
+    # `validate_config!` rejects the unsupported `s == 0 && a > 0` case.
     if s_val > 0
         return :smooth_metropolis, Dict{Symbol, Float64}(:a => a_val, :s => s_val)
     else
@@ -239,25 +165,17 @@ end
 """
     compute_simulation_time(config, ham, T) -> SimulationTimeBudget
 
-Compute a complete Hamiltonian simulation time budget for the CKG quantum
-Gibbs sampling algorithm.
+Compute the Hamiltonian-simulation time budget up to target time `T`.
 
 # Arguments
-- `config::Config{Thermalize, <:Union{TimeDomain, TrotterDomain}}`: algorithm configuration
-- `ham::HamHam`: Hamiltonian (extracts `rescaling_factor`)
-- `T::Real`: target simulation time (e.g. mixing time)
+- `config`: thermalisation configuration with independent register triples.
+- `ham`: Hamiltonian supplying the physical rescaling factor.
+- `T`: positive target evolution time.
 
 # Returns
-[`SimulationTimeBudget`](@ref) with `per_step = 2 · oft_time + b_time` and
-`total = n_steps · per_step`. The B-time honours `config.with_gqsp`:
-GQSP-on multiplies the per-block-encoding cost by `3 · gqsp_degree`
-(MW2024 Thm. 6 / Eq. 52, see the struct docstring).
-
-The B-time integrand reads its outer/inner registers separately
-(`register_*_b_minus` / `register_*_b_plus` — qf-9z0); the OFT integrand
-reads the dissipative `D` register (`register_*_D`). All three triples are
-recorded in the returned budget so that downstream sweep BSONs can be
-re-priced without re-running anything.
+A [`SimulationTimeBudget`](@ref). OFT uses the dissipative register; the
+coherent term uses its outer and inner registers. With GQSP, the coherent
+cost is `2 * gqsp_degree * b_per_be`.
 """
 function compute_simulation_time(
     config::Config{Thermalize, D},
@@ -265,10 +183,7 @@ function compute_simulation_time(
     T::Real,
 ) where {D <: Union{TimeDomain, TrotterDomain}}
     delta = config.delta
-    # Per-register triple plumbing (qf-9z0): the dissipative OFT grid is built
-    # from the `D` triple; the B coherent budget below pulls in the `b_minus`
-    # and `b_plus` triples separately so the per-term register design is
-    # honoured end-to-end (and surfaced in the returned budget).
+    # OFT and the two coherent kernels use independent register triples.
     r_D  = register_r_D(config)
     w0_D = register_w0_D(config)
 
@@ -291,9 +206,7 @@ function compute_simulation_time(
     # OFT time
     oft_time = _oft_hamiltonian_time(r_D, w0_D, transition_weights)
 
-    # Per-term coherent grids (recorded regardless of construction; with
-    # `with_coherent(construction) = false` the cost is zero but the registers
-    # are still part of the config, so we keep them in the budget for audit).
+    # Record coherent registers even when the construction disables their cost.
     r_bm  = register_r_b_minus(config)
     w0_bm = register_w0_b_minus(config)
     t0_bm = register_t0_b_minus(config)
@@ -305,11 +218,7 @@ function compute_simulation_time(
     N_bm = grid_bm.N
     N_bp = grid_bp.N
 
-    # B coherent correction — per-block-encoding cost. Outer integration uses
-    # the `b_minus` register, inner uses the `b_plus` register — each with its
-    # own grid (qf-9z0). This is the GQSP-blind formula (one direct
-    # `exp(-iδB)` call) and equals one application of the block encoding `U_B`
-    # in Hamiltonian-simulation time.
+    # Coherent cost for one block-encoding query, before the GQSP multiplier.
     construction = config.construction
     b_per_be = if with_coherent(construction)
         time_labels_bm = _create_energy_labels(r_bm, w0_bm) .* (t0_bm / w0_bm)
@@ -322,28 +231,8 @@ function compute_simulation_time(
         0.0
     end
 
-    # GQSP cost-model branch — MW2024 Thm. 6 / Eq. 46 (Form B, mixed slots).
-    # `with_gqsp = true`: with `d = gqsp_degree`, the symmetric Laurent target
-    # `L_d(z) = z^{-d} P(z)` (P of ordinary degree 2d) is realised by
-    # `d` controlled-`W` slots + `d` closed-controlled-`W†` slots
-    # (the `A' = |0⟩⟨0|⊗I + |1⟩⟨1|⊗U†` of MW Eq. 45; fires on `|1⟩`,
-    # *not* the open-controlled `A† = |0⟩⟨0|⊗U† + |1⟩⟨1|⊗I` — the
-    # distinction matters because `A' = X_anc · A† · X_anc`) — for a total of
-    # `2 · gqsp_degree` block-encoding queries to `W = R_T · U_{B_a}`. Same
-    # angles from BS+MW Algorithm 1 transfer directly. Each `W` invokes one
-    # block encoding of `B_a` (the joint reflection `R_T` is a Clifford and
-    # costs nothing in Ham-sim time). The `2d+1` rotation triples on the QSP
-    # ancilla are constant-cost single-qubit gates and contribute nothing to
-    # Hamiltonian-simulation time either.
-    #
-    # NOTE (qf-e4z.19): the Python POC and the v9 thesis figure currently
-    # implement the equivalent Form C (Eq. 52: all controlled-`W` + an
-    # uncontrolled `W^{-d}` tail), which costs `3d` block-encoding queries —
-    # 1.5× more than Form B. This cost model anticipates the Form-B refactor
-    # tracked in `qf-e4z.19`; flip the multiplier back to `3.0` if the
-    # refactor stalls.
-    #
-    # `with_gqsp = false`: direct `exp(-iδB)` matrix exponential — one BE.
+    # Motlagh--Wiebe Form B uses `d` controlled-W and `d` controlled-W† slots.
+    # Math: $N_BE = 2 d$ with GQSP, and $N_BE = 1$ for direct exponentiation.
     with_gqsp = config.with_gqsp
     gqsp_degree = config.gqsp_degree
     b_time = (with_gqsp && with_coherent(construction)) ? 2.0 * gqsp_degree * b_per_be : b_per_be
@@ -370,83 +259,23 @@ function compute_simulation_time(
     )
 end
 
-# ---------------------------------------------------------------------------
-# qf-5hg.2: Trotter-step (gate-level) accounting
-# ---------------------------------------------------------------------------
-
 """
     TrotterStepBudget
 
-Immutable result container for the **gate-level Strang-substep count** of the
-CKG channel circuit (qf-5hg.2) — the integer sibling of
-[`SimulationTimeBudget`](@ref). Where `compute_simulation_time` sums weighted
-Hamiltonian-simulation *time*, [`count_trotter_steps`](@ref) counts the
-2nd-order Strang substeps `S_2(δt₀_X)` the circuit physically executes; the
-total RXX gate count is then `total_substeps × RXX-per-substep` (qf-5hg.4).
+Gate-level second-order Strang-substep budget for a channel run.
 
-# Accounting model (THE qf-5hg.2 decision, documented here)
-
-The γ(w_k)-weighted OFT time `Σ_k |k·t0_D|·γ(w_k)` in
-`compute_simulation_time` is an **expected-time** model: it amortises the
-controlled evolutions over the transition-weight amplitudes of the
-superposition. Hardware gate counts cannot amortise — every controlled
-evolution in the QPE ladder is physically implemented regardless of its
-amplitude. One OFT pass is the binary ladder of `r_D` controlled
-`e^{iH·2^j·t0_D}` blocks (two's-complement signed grid: the MSB rung carries
-weight `−N_D/2`, the others `+2^j`; total evolution duration
-`(N_D/2 − 1 + N_D/2)·t0_D = (N_D − 1)·t0_D` either way), i.e.
-`(N_D − 1)·M_D` Strang substeps per pass — **not** `Σ_k |k|·M_D` and **not**
-γ-weighted. The same ladder rule prices the coherent `B_a` block encoding:
-per query, the outer leg runs 2 evolutions `e^{∓iH·t/σ}` (duration weights
-1+1 = 2 ladder passes on the `b_-` register) and the inner leg 3 evolutions
-`e^{iHτβ}·…·e^{−2iHτβ}·…·e^{iHτβ}` (duration weights 1+2+1 = 4 ladder passes
-on the `b_+` register), matching the integrand structure of
-`_b_hamiltonian_time` with the amplitude weights `|b_±|` replaced by 1.
-Truncation of the `b_±` dicts (`_compute_truncated_func`) is deliberately
-**ignored**: the registers are sized at `r_bm`/`r_bp`, so the full ladders
-are built; capping at the largest retained label would under-count.
-
-# Strang substep / layer convention
-
-One Strang substep is `S_2(δt₀_X) = A/2·B·A/2` at `δt₀_X = t0_X/M_X`
-(per-leg `TrotterTriple` convention, `src/trotter_domain.jl`). `M` composed
-substeps telescope, `S_2(t0/M)^M = A/2·(B·A)^{M−1}·B·A/2`, so interior
-half-layers merge; the same merge continues across the `2^j` repetitions
-inside one ladder rung. Counting therefore works per substep: the
-RXX-per-substep constant measured in qf-5hg.3 (asymptotic slope of the
-L = 1, 2, 4, 8 linearity fit) already reflects the interior merge, and the
-residual boundary correction is O(1) per **contiguous controlled block** =
-per ladder rung (the control qubit changes between rungs, blocking further
-merging). The rung counts are exposed as `blocks_per_step`/`total_blocks`
-so qf-5hg.4 can apply the intercept correction `N_RXX = slope·total_substeps
-+ intercept·total_blocks` if desired.
-
-# Controlled-vs-plain caveat
-
-Ancilla-**controlled** `e^{iHt}` costs more than the plain Trotter step on
-`{RX, RY, RXX}` (each RXX inside a controlled block decomposes further).
-This counter prices **plain** Strang substeps; combined with a plain-step
-RXX constant the result is an explicit **lower bound** on the controlled
-circuit. qf-5hg.3 may measure the controlled overhead factor separately.
+Unlike [`SimulationTimeBudget`](@ref), this counts every controlled QPE
+ladder operation without transition-amplitude weighting. Full coherent
+register ladders are counted even when truncated kernels have smaller support.
+Plain substep counts are a lower bound until control overheads are applied.
 
 # Fields
-- `oft_substeps_per_pass = (N_D − 1)·M_D`; `oft_substeps_per_step = 2×` that
-  (forward + backward OFT per δ-step, matching `per_step = 2·oft + b`).
-- `b_outer_substeps_per_be = 2·(N_bm − 1)·M_bm`,
-  `b_inner_substeps_per_be = 4·(N_bp − 1)·M_bp`, summed in `b_substeps_per_be`.
-- `n_be_queries`: `2·gqsp_degree` when `with_gqsp` (MW2024 Thm. 6 / Eq. 46
-  Form B — same multiplier as `SimulationTimeBudget.b_time`), `1` for the
-  direct `exp(-iδB)`, `0` when `with_coherent(construction) = false`.
-- `substeps_per_step = oft_substeps_per_step + n_be_queries·b_substeps_per_be`
-- `n_steps = ceil(T/δ)`, `total_substeps = n_steps·substeps_per_step`.
-- `blocks_per_step = 2·r_D + n_be_queries·(2·r_bm + 3·r_bp)`, `total_blocks`.
-- Register triples `(r_X, N_X, t0_X, M_X)` for X ∈ {D, b_minus, b_plus};
-  cross-check identity: `oft_substeps_per_pass·(t0_D/M_D) = (N_D−1)·t0_D`,
-  `b_outer_substeps_per_be·(t0_bm/σ)/M_bm = 2·(N_bm−1)·t0_bm/σ`,
-  `b_inner_substeps_per_be·(β·t0_bp)/M_bp = 4·(N_bp−1)·β·t0_bp` — the
-  unweighted ladder durations of the corresponding budget components.
-- GQSP flags, physics (`beta`, `sigma`, `delta`), `construction`, `n_qubits`,
-  `rescaling_factor`, `T` — as in `SimulationTimeBudget`.
+- `oft_*`, `b_*`, `n_be_queries`: per-pass and per-step substep counts.
+- `substeps_per_step`, `n_steps`, `total_substeps`: aggregate counts.
+- `blocks_per_step`, `total_blocks`: contiguous ladder blocks used for
+  transpiler-intercept corrections.
+- `r_*`, `N_*`, `t0_*`, `M_*`: independent register and Strang parameters.
+- Remaining fields record GQSP, construction, temperature, and system metadata.
 """
 struct TrotterStepBudget
     # Substep counts
@@ -517,21 +346,11 @@ end
 """
     count_trotter_steps(config, ham, T) -> TrotterStepBudget
 
-Count the 2nd-order Strang substeps the CKG channel circuit executes to
-simulate up to time `T` (e.g. a mixing time) at δ-step `config.delta` —
-the gate-level sibling of [`compute_simulation_time`](@ref) (qf-5hg.2).
-See the [`TrotterStepBudget`](@ref) docstring for the full accounting model
-(QPE-ladder counting, no γ-amortisation, no `b_±` truncation, Strang merge
-and controlled-vs-plain conventions).
+Count second-order Strang substeps and contiguous ladder blocks up to time `T`.
 
-Requires the per-leg Strang substep counts (`register_M_D`, and for coherent
-constructions `register_M_b_minus`/`register_M_b_plus` — `TrotterTriple`
-convention) to be set on the config, alongside the usual register triples.
-
-Cross-check contract (qf-5hg.5 sanity gate): each substep count × its leg's
-substep duration `t0_X/M_X` reproduces the **unweighted ladder duration** of
-the corresponding `SimulationTimeBudget` component — by construction here,
-and asserted against an independently-built budget in the tests.
+The configuration must provide each active leg's register and `M` value. The
+count uses full QPE ladders without transition-amplitude weighting or kernel
+truncation and returns a [`TrotterStepBudget`](@ref).
 """
 function count_trotter_steps(
     config::Config{Thermalize, D},
@@ -550,7 +369,7 @@ function count_trotter_steps(
     N_D = 2^r_D
     t0_D = register_t0_D(config)
 
-    # OFT: one QPE-ladder pass = (N_D − 1)·M_D substeps; ×2 per δ-step.
+    # Math: $S_OFT = 2 (N_D - 1) M_D$ per channel step.
     oft_substeps_per_pass = (N_D - 1) * M_D
     oft_substeps_per_step = 2 * oft_substeps_per_pass
 
@@ -576,13 +395,12 @@ function count_trotter_steps(
     N_bm = coherent ? 2^r_bm : 0
     N_bp = coherent ? 2^r_bp : 0
 
-    # B block encoding: outer 2 ladder passes (e^{∓iH t/σ}), inner 4
-    # ladder-pass equivalents (duration weights 1 + 2 + 1 in |τβ|).
+    # Coherent block encoding uses two outer and four inner ladder passes.
     b_outer_substeps_per_be = coherent ? 2 * (N_bm - 1) * M_bm : 0
     b_inner_substeps_per_be = coherent ? 4 * (N_bp - 1) * M_bp : 0
     b_substeps_per_be = b_outer_substeps_per_be + b_inner_substeps_per_be
 
-    # BE queries per δ-step: GQSP Form B (2d) | direct exponential (1) | none.
+    # Math: $N_BE = 2 d$ for GQSP, one for a direct exponential, or zero.
     n_be_queries = !coherent ? 0 : (config.with_gqsp ? 2 * config.gqsp_degree : 1)
     b_substeps_per_step = n_be_queries * b_substeps_per_be
 
@@ -612,77 +430,22 @@ function count_trotter_steps(
     )
 end
 
-# ---------------------------------------------------------------------------
-# qf-5hg.4: RXX gate-count estimator (QVLS-Q1 native two-qubit gates)
-# ---------------------------------------------------------------------------
-
 """
     RxxBudget
 
-Immutable result of [`estimate_rxx_count`](@ref) — the total native RXX
-two-qubit gate count of the CKG channel circuit on the QVLS-Q1 ion-trap gate
-set `{RX, RY, RXX}` (Schmale et al., IEEE QSW 2022, arXiv:2206.00544), with
-the full defendable chain of factors.
+Native RXX gate-count estimate from an affine transpiler model.
 
-# Composition (qf-5hg.4)
+# Fields
+- `rxx_total`: plain-evolution lower bound.
+- `rxx_total_controlled`: estimate with measured one- and two-control factors.
+- `rxx_substep_part`, `rxx_boundary_part`: slope and block-intercept parts.
+- `rxx_per_substep`, `rxx_intercept`, `f_ctrl1`, `f_ctrl2`: fitted costs.
+- `hamiltonian`, `qiskit_version`: measurement provenance.
+- `steps`: underlying [`TrotterStepBudget`](@ref).
 
-The qf-5hg.3 Qiskit measurement (transpile at `optimization_level = 3` to
-`basis_gates = [rx, ry, rxx]`, exact affine fits over L = 1, 2, 4, 8 Strang
-substeps) gives, per Hamiltonian and `n`,
-
-    RXX(L contiguous substeps) = slope · L + intercept.
-
-Every contiguous controlled-evolution block of the channel circuit (one QPE
-ladder rung — interior substeps consolidate under the transpiler, block
-boundaries don't, because the control qubit changes) therefore costs
-`slope · L_block + intercept`, and summing over the circuit:
-
-    rxx_total = slope · total_substeps + intercept · total_blocks,
-
-with `total_substeps`/`total_blocks` from [`count_trotter_steps`](@ref)
-(embedded as `steps` for the full per-component breakdown: `n_steps` δ-steps,
-OFT substeps ×2/step, B block-encoding substeps × `2·gqsp_degree` GQSP
-Form-B queries, per-leg `M_D`/`M_bm`/`M_bp` Strang substep counts).
-
-# Two reported numbers (qf-5hg.4 + the control-layer refinement)
-
-`rxx_total` — **plain-evolution lower bound**: every Strang substep priced as
-an uncontrolled `exp(-iH·δt)`. Unphysical (the OFT is intrinsically
-clock-controlled) but a clean, assumption-free floor.
-
-`rxx_total_controlled` — the **defendable Hamiltonian-simulation count** that
-prices the control structure of the algorithm's block-encoding applications,
-applying a measured per-control-layer overhead `f_ctrl1`/`f_ctrl2` (one/two
-outer controls; from the qf-5hg.3 measurement) per pass:
-
-- **OFT forward** block `U` — the QPE binary ladder of clock-register
-  -controlled `e^{iH·2^j t0}`: **one** control ⇒ `f_ctrl1` on
-  `oft_substeps_per_pass` substeps (+ `r_D` block intercepts).
-- **OFT backward** `controlled-U†` — the weak-measurement uncompute,
-  controlled by the weak ancilla *on top of* the clock control: **two**
-  controls ⇒ `f_ctrl2` on the second `oft_substeps_per_pass`.
-- **GQSP coherent** `2d · controlled-W`, `W = R_T·U_{B_a}` — the `b_±`
-  register control *and* the QSP-ancilla control on the whole block:
-  **two** controls ⇒ `f_ctrl2` on `b_substeps_per_step`.
-
-Hence
-`rxx_total_controlled = n_steps · [ slope·(f1·S_fwd + f2·S_bwd + f2·S_coh)
-                                  + intercept·(f1·B_fwd + f2·B_bwd + f2·B_coh) ]`
-with `S_fwd = S_bwd = oft_substeps_per_pass`, `S_coh = b_substeps_per_step`,
-`B_fwd = B_bwd = r_D`, `B_coh = blocks_per_step − 2·r_D` (all per-δ-step
-quantities; the whole bracket is then scaled by `n_steps`).
-
-This deliberately **excludes** (user scope 2026-06-08): initial state
-preparation and the Boltzmann / `γ(ω)`-weight ancilla rotation (the
-single-qubit "weak rotation" — sub-dominant, scheme-dependent), and the
-LCU PREP/SELECT machinery beyond the counted block-encoding queries
-(`R_T` is Clifford → free). It captures the *majority* of the GQSP +
-weak-measurement Hamiltonian-simulation complexity in RXX. `NaN` when the
-control factors were not measured for this `n`.
-
-# Caveats carried from qf-5hg.3
-- `slope`/`intercept` are structural generic-angle counts (DT* protocol;
-  angle-coincidental Weyl-tolerance savings not credited).
+The estimate excludes state preparation, transition-weight rotations, and LCU
+PREP/SELECT beyond the counted block encodings. Generic-angle transpiler fits
+do not credit accidental angle simplifications.
 """
 struct RxxBudget
     rxx_total::Float64               # plain lower bound
@@ -714,20 +477,12 @@ function Base.show(io::IO, ::MIME"text/plain", b::RxxBudget)
 end
 
 """
-    load_rxx_table(path = scripts/output/qf_5hg/rxx_per_step.tsv)
-        -> Dict{Tuple{String, Int}, NamedTuple}
+    load_rxx_table(path=default) -> Dict{Tuple{String, Int}, NamedTuple}
 
-Load the qf-5hg.3 Qiskit measurement table, keyed by `(hamiltonian_name, n)`.
-Each entry carries `rxx_slope_per_substep`, `rxx_intercept`, `rxx_L1`,
-`rxx_fit_max_abs_dev`, the control-layer overheads `f_ctrl1` (one outer
-control) and `f_ctrl2` (two outer controls — both `NaN` where not measured),
-`geometry`, and `qiskit_version`. The default path is the committed
-measurement produced by `scripts/qf_5hg_rxx_per_step.py`; pass an explicit
-path to re-price against a different measurement run.
-
-Accepts both the current 10-column schema (`…, f_ctrl1, f_ctrl2,
-qiskit_version`) and the legacy 9-column schema (`…, f_ctrl, qiskit_version`),
-mapping the legacy single `f_ctrl` to `f_ctrl1` and setting `f_ctrl2 = NaN`.
+Load a tab-separated RXX transpiler measurement table keyed by Hamiltonian and
+qubit count. Entries contain the affine fit, control overheads, geometry, and
+Qiskit version. Nine-column tables map their single control factor to
+`f_ctrl1` and leave `f_ctrl2=NaN`.
 """
 function load_rxx_table(path::AbstractString = joinpath(
         dirname(@__DIR__), "scripts", "output", "qf_5hg", "rxx_per_step.tsv"))
@@ -750,7 +505,7 @@ function load_rxx_table(path::AbstractString = joinpath(
                 f_ctrl1 = parse(Float64, f[8]),
                 f_ctrl2 = parse(Float64, f[9]),
                 qiskit_version = String(f[10]))
-        elseif length(f) == 9     # legacy: single f_ctrl, qiskit_version
+        elseif length(f) == 9     # compatibility schema with one control factor
             table[key] = (; base...,
                 f_ctrl1 = parse(Float64, f[8]),
                 f_ctrl2 = NaN,
@@ -765,23 +520,11 @@ end
 """
     estimate_rxx_count(config, ham, T; rxx_table, hamiltonian) -> RxxBudget
 
-Estimate the total native RXX two-qubit gate count for running the CKG
-channel up to time `T` (e.g. a mixing time) at the δ-step / register /
-Strang parameters of `config` — the qf-5hg epic deliverable. Same signature
-family as [`compute_simulation_time`](@ref); like it, this prices saved sweep
-configurations without re-running anything.
+Estimate native RXX two-qubit gates up to time `T` from a measured cost table.
 
-`rxx_table` is the [`load_rxx_table`](@ref) Dict; `hamiltonian` is the table
-key name (`"heis1d_xxx_disordered_periodic_seed46"`). The lookup is
-`(hamiltonian, config.num_qubits)`.
-
-Returns both the plain lower bound `rxx_total = slope · total_substeps +
-intercept · total_blocks` and the defendable `rxx_total_controlled` that
-applies the measured per-control-layer overheads — `f_ctrl1` on the OFT
-forward block, `f_ctrl2` on the weak-measurement backward controlled-U† and
-the GQSP controlled-W coherent block. See [`RxxBudget`](@ref) for the full
-per-pass formula, the documented exclusions (state prep, Boltzmann rotation,
-LCU PREP/SELECT), and the carried caveats.
+`rxx_table` comes from [`load_rxx_table`](@ref); `hamiltonian` selects its
+family key. Returns an [`RxxBudget`](@ref) containing both the plain lower
+bound and the control-adjusted estimate.
 """
 function estimate_rxx_count(
     config::Config{Thermalize, D},
@@ -800,15 +543,12 @@ function estimate_rxx_count(
     f1 = e.f_ctrl1
     f2 = e.f_ctrl2
 
-    # Plain lower bound.
+    # Math: $N_RXX = slope S_total + intercept B_total$.
     substep_part = slope * steps.total_substeps
     boundary_part = intercept * steps.total_blocks
     rxx_total = substep_part + boundary_part
 
-    # Per-pass controlled count. The OFT appears twice per δ-step
-    # (forward U + backward controlled-U†); split the lumped
-    # oft_substeps_per_step back into the two equal passes. The coherent leg
-    # (GQSP controlled-W) is f2 throughout.
+    # Forward OFT has one outer control; backward OFT and GQSP have two.
     s_fwd = steps.oft_substeps_per_pass               # forward U  (1 control)
     s_bwd = steps.oft_substeps_per_pass               # backward U† (2 controls)
     s_coh = steps.b_substeps_per_step                 # GQSP        (2 controls)

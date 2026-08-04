@@ -1,34 +1,15 @@
-# ============================================================================
-# Exact Diagnostics: ground-truth spectral data and structural analysis
-# ============================================================================
-#
-# Provides six diagnostic functions (DIAG-01 through DIAG-06) plus a
-# `run_exact_diagnostics()` bundle for validating trajectory-based gap
-# estimates at n=4,6.  All computations use dense eigen() which is
-# feasible for dim^2 <= 4096 (n <= 6 qubits).
-#
-# DIAG-01: extract_leading_eigendata      -- leading eigenvalues + left/right eigenvectors
-# DIAG-02: compute_fixed_point_distance   -- fixed point vs Gibbs trace distance
-# DIAG-03/04: compute_anti_hermitian_defect -- KMS similarity transform defect ratio
-# DIAG-05: compute_overlap_coefficients   -- observable overlap with eigenmodes
-# DIAG-06: compute_sz_labels              -- Delta_Sz symmetry sector labeling
-#          detect_multiplets              -- near-degenerate eigenvalue grouping
-
-# ---------------------------------------------------------------------------
-# Result structs
-# ---------------------------------------------------------------------------
+# Dense exact diagnostics for small systems.
 
 """
     EigenDecompositionResult
 
-Result of DIAG-01: leading eigenvalue extraction with left and right eigenvectors.
+Leading eigenvalues and biorthogonal left/right eigenvectors.
 
 # Fields
-- `eigenvalues`: Leading n_modes eigenvalues sorted by |Re(lambda)|.
-- `right_eigenvectors`: dim^2 x n_modes matrix (columns = right eigenvectors).
-- `left_eigenvectors`: dim^2 x n_modes matrix (columns = left eigenvectors from inv(V)').
-- `spectral_gap`: abs(real(eigenvalues[2])).
-- `im_re_ratios`: |Im(lambda_k)/Re(lambda_k)| for each leading mode.
+- `eigenvalues`: Modes sorted by `abs(real(lambda))`.
+- `right_eigenvectors`, `left_eigenvectors`: Biorthogonal mode columns.
+- `spectral_gap`: `abs(real(eigenvalues[2]))`.
+- `im_re_ratios`: Oscillation-to-decay ratio per mode.
 """
 struct EigenDecompositionResult
     eigenvalues::Vector{ComplexF64}
@@ -41,7 +22,7 @@ end
 """
     FixedPointResult
 
-Result of DIAG-02: Lindbladian fixed point compared to Gibbs state.
+Normalised Lindbladian fixed point and its Gibbs-state trace distance.
 
 # Fields
 - `fixed_point`: Normalized density matrix from lambda_1 eigenvector.
@@ -55,7 +36,7 @@ end
 """
     DefectResult
 
-Result of DIAG-03/04: anti-Hermitian defect of the KMS-similarity-transformed Lindbladian.
+Anti-Hermitian defect of the KMS quantum discriminant.
 
 # Fields
 - `A_norm`: Operator 2-norm of anti-Hermitian part.
@@ -75,7 +56,7 @@ end
 """
     OverlapResult
 
-Result of DIAG-05: observable overlap coefficients with Lindbladian eigenmodes.
+Observable overlaps with Lindbladian eigenmodes.
 
 # Fields
 - `coefficients`: n_obs x n_modes overlap coefficients.
@@ -93,7 +74,7 @@ end
 """
     SzSectorLabel
 
-Result of DIAG-06: Delta_Sz symmetry sector label for a single Lindbladian eigenvector.
+Dominant `Delta_Sz` sector and its weight for one eigenmode.
 
 # Fields
 - `delta_sz`: Dominant Delta_Sz quantum number.
@@ -111,7 +92,7 @@ end
 """
     MultipletGroup
 
-A group of near-degenerate Lindbladian eigenvalues forming a multiplet.
+Group of near-degenerate Lindbladian eigenvalues.
 
 # Fields
 - `eigenvalue_indices`: Indices into eigenvalue array.
@@ -127,29 +108,16 @@ end
 """
     SpectralModeDiagnostics
 
-Per-mode spectral diagnostics of a Krylov biorthogonal decomposition. All
-vectors are indexed by captured mode (index 1 = steady state). Computed in the
-decomposition's own eigenbasis (energy eigenbasis for the EnergyDomain
-Lindbladian; Trotter eigenbasis for the TrotterDomain channel — self-consistent
-with that path's `sigma_beta`).
+Per-mode properties of a biorthogonal Krylov decomposition.
 
-- `off_diag_weight[k] ∈ [0,1]`: coherence (off-diagonal) fraction of R_k,
-  `(‖R_k‖²_HS − Σ_i|R_k[i,i]|²)/‖R_k‖²_HS`. 0 = population-like, 1 = coherence-like.
-  Phase/scale invariant; uses the raw R_k (NO hermitisation — correct for complex
-  modes too, since off-diagonal mass and HS norm are invariant under the dagger
-  that maps a mode to its conjugate partner).
-- `c_abs2[k]`: `|c_k|²`, the raw modal-coefficient magnitude (matches the legacy
-  `c2_sq` field for cross-checks). NOT a normalised [0,1] overlap.
-- `modal_hs_weight[k]`: `|c_k|²·‖R_k‖²_HS`, the normalisation-INVARIANT per-mode
-  amplitude (invariant under R_k→αR_k since c_k→c_k/α). Use this, not c_abs2, as
-  the "how much does mode k contribute" quantity.
-- `mode_spacing[k]`: `|eigenvalues[k] − eigenvalues[k+1]|` (complex modulus) to the
-  next captured mode; last entry `Inf`. Near-degeneracy / level-crossing flag
-  (small ⇒ the eigenvector at k is ill-conditioned / a crossing is near). In the
-  units of the `eigenvalues` it was computed from: Lindbladian λ everywhere except
-  the **channel** path of `predict_channel_trajectory`, where `eigenvalues` are the
-  raw channel μ (so spacing is in μ-units); `krylov_spectral_gap`'s channel method
-  converts to λ first, so its spacing is in λ-units.
+# Fields
+- `off_diag_weight`: Hilbert–Schmidt fraction outside the diagonal.
+- `c_abs2`: Squared initial-state modal coefficient, or `NaN`.
+- `modal_hs_weight`: Scale-invariant value `abs2(c[k]) * norm(R[k])^2`, or `NaN`.
+- `mode_spacing`: Complex-plane distance to the next captured eigenvalue.
+
+Channel predictors report spacing in channel-eigenvalue units; gap solvers
+first convert channel eigenvalues to generator rates.
 """
 struct SpectralModeDiagnostics
     off_diag_weight::Vector{Float64}
@@ -159,19 +127,18 @@ struct SpectralModeDiagnostics
 end
 
 """
-    spectral_mode_diagnostics(eigenvalues, R_modes, c=nothing) -> SpectralModeDiagnostics
+    spectral_mode_diagnostics(eigenvalues, R_modes, c=nothing)
 
-Compute per-mode population/coherence and modal-amplitude diagnostics from a
-Krylov biorthogonal decomposition (`_krylov_spectral_decomposition` output).
-See [`SpectralModeDiagnostics`](@ref) for field definitions. Eigenvalue-agnostic
-except for the generic complex `mode_spacing`, so it is valid for both the
-Lindbladian (λ) and the channel (μ) eigenvalue conventions.
+Compute coherence, amplitude, and spacing diagnostics for captured modes.
 
-`c` (the biorthogonal modal coefficients of an initial state) is optional. When
-omitted / `nothing` — the operator-only spectral path, e.g. `krylov_spectral_gap`
-which seeds from a fixed vector with no `ρ₀` — the initial-state-dependent fields
-`c_abs2` and `modal_hs_weight` are filled with `NaN`; the ρ₀-independent R-side
-(`off_diag_weight`, `mode_spacing`) is still computed.
+# Arguments
+- `eigenvalues`: Captured generator or channel eigenvalues.
+- `R_modes`: Corresponding right modes as matrices.
+- `c`: Optional initial-state coefficients.
+
+# Returns
+A `SpectralModeDiagnostics`; coefficient-dependent fields are `NaN` when
+`c === nothing`.
 """
 function spectral_mode_diagnostics(
     eigenvalues::AbstractVector{<:Complex},
@@ -210,14 +177,14 @@ end
 """
     ExactDiagnosticsResult
 
-Bundle result from `run_exact_diagnostics()` containing all six DIAG outputs.
+Combined result from `run_exact_diagnostics`.
 
 # Fields
-- `eigen`: EigenDecompositionResult from DIAG-01.
-- `fixed_point`: FixedPointResult from DIAG-02.
-- `defect`: DefectResult from DIAG-03/04.
-- `overlaps`: Vector{OverlapResult}, one per initial state, from DIAG-05.
-- `sz_labels`: Vector{SzSectorLabel}, one per mode, from DIAG-06.
+- `eigen`: Dense eigendecomposition.
+- `fixed_point`: Fixed-point comparison.
+- `defect`: Detailed-balance defect.
+- `overlaps`: One observable-overlap result per initial state.
+- `sz_labels`: One symmetry label per mode.
 - `multiplets`: Vector{MultipletGroup}, grouped near-degenerate modes.
 """
 struct ExactDiagnosticsResult
@@ -229,46 +196,37 @@ struct ExactDiagnosticsResult
     multiplets::Vector{MultipletGroup}
 end
 
-# ---------------------------------------------------------------------------
-# DIAG-01: Leading eigenvalue extraction
-# ---------------------------------------------------------------------------
-
 """
     extract_leading_eigendata(L::Matrix{ComplexF64}; n_modes::Int=20) -> EigenDecompositionResult
 
-Extract leading eigenvalues and both left and right eigenvectors from a dense
-Lindbladian matrix via full eigendecomposition.
+Extract leading left and right modes from a dense Lindbladian.
 
-Uses dense `eigen(L)` (feasible for n<=6, i.e. 4096x4096) and extracts left
-eigenvectors via `inv(V)` to ensure biorthonormality: `V_left' * V_right = I`.
+# Keywords
+- `n_modes`: Maximum number of modes to retain.
 
-Eigenvalues are sorted by |Re(lambda)| (proximity to zero), with the steady
-state (lambda ~ 0) at index 1.
+# Returns
+An `EigenDecompositionResult` sorted by `abs(real(lambda))`, with left modes
+constructed so `\$V_L^dagger V_R = I\$`.
 """
 function extract_leading_eigendata(L::Matrix{ComplexF64}; n_modes::Int=20)
     d2 = size(L, 1)
     n_modes = min(n_modes, d2)
 
-    # Dense eigendecomposition (feasible for n<=6: 4096x4096)
     F = eigen(L)
 
-    # Sort by proximity to zero: |Re(lambda)|
+    # Sort modes by decay rate, placing the stationary mode first.
     perm = sortperm(abs.(real.(F.values)))
     eigenvalues = F.values[perm[1:n_modes]]
 
-    # Right eigenvectors (columns) for selected modes
     V_full = F.vectors[:, perm]
     V_right = V_full[:, 1:n_modes]
 
-    # Left eigenvectors via inv(V_full): rows of V^{-1} are left eigenvectors.
-    # Transpose to get them as columns: V_left = V_inv[1:n_modes, :]'
-    # Then V_left' * V_right = I (biorthonormality).
+    # Rows of `inv(V_full)` are the biorthogonal left eigenvectors.
     V_inv = inv(V_full)
     V_left = V_inv[1:n_modes, :]'
 
     spectral_gap = abs(real(eigenvalues[2]))
 
-    # Im/Re ratios: for mode 1 (steady state) set to 0.0
     im_re_ratios = Vector{Float64}(undef, n_modes)
     im_re_ratios[1] = 0.0
     for k in 2:n_modes
@@ -278,22 +236,20 @@ function extract_leading_eigendata(L::Matrix{ComplexF64}; n_modes::Int=20)
     return EigenDecompositionResult(eigenvalues, V_right, V_left, spectral_gap, im_re_ratios)
 end
 
-# ---------------------------------------------------------------------------
-# DIAG-02: Fixed point distance
-# ---------------------------------------------------------------------------
-
 """
     compute_fixed_point_distance(eigen_result::EigenDecompositionResult, gibbs::Hermitian) -> FixedPointResult
 
-Compute trace distance between the Lindbladian fixed point (lambda_1 eigenvector)
-and the Gibbs state. Near-zero for well-constructed Lindbladians (BohrDomain).
+Normalise the stationary right mode and compare it with the Gibbs state.
+
+# Returns
+A `FixedPointResult` containing the density matrix and trace distance.
 """
 function compute_fixed_point_distance(eigen_result::EigenDecompositionResult, gibbs::Hermitian)
     fp_vec = eigen_result.right_eigenvectors[:, 1]
     dim = isqrt(length(fp_vec))
     fp_dm = reshape(copy(fp_vec), dim, dim)
 
-    # Normalize: make Hermitian, trace = 1
+    # Math: $rho_infinity <- herm(R_1) / tr(herm(R_1))$.
     hermitianize!(fp_dm)
     fp_dm ./= tr(fp_dm)
 
@@ -301,31 +257,25 @@ function compute_fixed_point_distance(eigen_result::EigenDecompositionResult, gi
     return FixedPointResult(fp_dm, dist)
 end
 
-# ---------------------------------------------------------------------------
-# DIAG-03/04: Anti-Hermitian defect via KMS similarity transform
-# ---------------------------------------------------------------------------
-
 """
     compute_anti_hermitian_defect(L::Matrix{ComplexF64}, gibbs::Hermitian; eps_trunc::Float64=1e-12) -> DefectResult
 
-Compute the anti-Hermitian defect ratio of the KMS-similarity-transformed Lindbladian.
+Compute the anti-Hermitian defect of the KMS quantum discriminant.
 
-The KMS transform uses the diagonal Gibbs state in the eigenbasis:
-`D = diag(rho^{-1/4} kron rho^{-1/4}) * L * diag(rho^{1/4} kron rho^{1/4})`
+# Keywords
+- `eps_trunc`: Eigenvalue floor in Gibbs fractional powers.
 
-Returns the defect ratio `||A|| / lambda_gap(H_D)` where H_D is the Hermitian
-part of D. An advisory warning is emitted when the ratio exceeds 0.1.
+# Returns
+A `DefectResult` with ratio `norm(A) / gap(H)` and an advisory warning flag.
 """
 function compute_anti_hermitian_defect(L::Matrix{ComplexF64}, gibbs::Hermitian;
                                         eps_trunc::Float64=1e-12)
-    # Materialise the discriminant and split into Hermitian / anti-Hermitian
-    # parts.  See src/discriminant.jl for the column-stacking convention.
+    # Math: $D = H + A$, where $H = (D + D^dagger)/2$ and $A = (D-D^dagger)/2$.
     D_matrix = materialize_discriminant(L, gibbs; eps_trunc=eps_trunc)
     H_part, A_part = hermitian_antihermitian_split(D_matrix)
 
-    A_norm = opnorm(A_part)  # Operator 2-norm (largest singular value)
+    A_norm = opnorm(A_part)
 
-    # Gap of Hermitian part: second smallest absolute eigenvalue
     H_eigenvalues = eigvals(Hermitian(H_part))
     sorted_H_abs = sort(abs.(H_eigenvalues))
     H_gap = sorted_H_abs[2]
@@ -342,21 +292,14 @@ function compute_anti_hermitian_defect(L::Matrix{ComplexF64}, gibbs::Hermitian;
     return DefectResult(A_norm, H_gap, defect_ratio, warning, threshold)
 end
 
-# ---------------------------------------------------------------------------
-# DIAG-05: Observable overlap coefficients
-# ---------------------------------------------------------------------------
-
 """
     compute_overlap_coefficients(eigen_result, observables, observable_names, rho0, rho_beta;
                                   n_modes=20, initial_state_name="custom") -> OverlapResult
 
-Compute overlap coefficients between observables and Lindbladian eigenmodes.
+Compute observable coefficients in a biorthogonal Lindbladian expansion.
 
-Uses the formula: `c_k = Tr[O R_k] * Tr[L_k^dagger (rho_0 - rho_beta)]`
-where R_k are right eigenvectors and L_k are left eigenvectors (biorthonormal).
-
-The coefficient c_1 (steady-state mode) should be near zero due to the
-explicit subtraction of rho_beta.
+# Returns
+An `OverlapResult` with one row per observable and one column per retained mode.
 """
 function compute_overlap_coefficients(
     eigen_result::EigenDecompositionResult,
@@ -378,8 +321,7 @@ function compute_overlap_coefficients(
         R_k = reshape(eigen_result.right_eigenvectors[:, k], dim, dim)
         L_k = reshape(eigen_result.left_eigenvectors[:, k], dim, dim)
 
-        # Tr[L_k^dagger (rho_0 - rho_beta)] = dot(vec(L_k), vec(rho_diff))
-        # Julia's dot conjugates the first argument: dot(a,b) = sum(conj(a).*b)
+        # Math: $c_k = tr(O R_k) tr(L_k^dagger (rho_0-rho_beta))$.
         lk_factor = dot(vec(L_k), vec(rho_diff))
 
         for (i, O) in enumerate(observables)
@@ -393,40 +335,32 @@ function compute_overlap_coefficients(
     return OverlapResult(coeffs, observable_names, initial_state_name, gap_mode_overlap)
 end
 
-# ---------------------------------------------------------------------------
-# DIAG-06: Delta_Sz symmetry sector labeling
-# ---------------------------------------------------------------------------
-
 """
     compute_sz_labels(eigen_result, eigvecs, n_qubits; n_modes=20) -> Vector{SzSectorLabel}
 
-Assign Delta_Sz quantum numbers to each Lindbladian eigenvector based on the
-density matrix support structure.
-
-For each eigenvector R_k (reshaped as a dim x dim matrix), computes the weight
-in each (i,j) element and groups by Delta_Sz = Sz(E_i) - Sz(E_j). Reports the
-dominant sector and purity fraction.
+Assign a dominant `Delta_Sz` sector to each Lindbladian right mode.
 
 # Arguments
-- `eigen_result`: EigenDecompositionResult from DIAG-01.
-- `eigvecs`: Unitary matrix whose columns define the working basis (e.g.
-  `hamiltonian.eigvecs` for BohrDomain, `trotter.eigvecs` for TrotterDomain).
-- `n_qubits`: Number of qubits in the system.
-- `n_modes`: Number of leading modes to label (default: 20).
+- `eigen_result`: Captured right modes.
+- `eigvecs`: Columns defining the working basis.
+- `n_qubits`: System size.
+- `n_modes`: Maximum number of modes to label.
+
+# Returns
+A vector of `SzSectorLabel` values.
 """
 function compute_sz_labels(eigen_result::EigenDecompositionResult, eigvecs::Matrix{<:Complex},
                             n_qubits::Int; n_modes::Int=20)
     dim = size(eigvecs, 1)
     n_modes_actual = min(n_modes, length(eigen_result.eigenvalues))
 
-    # Build total Sz operator in computational basis: sum(Z_i)/2
+    # Math: $S_z = 1/2 sum_i Z_i$.
     Sz_comp = zeros(ComplexF64, dim, dim)
     for site in 1:n_qubits
         Sz_comp .+= Matrix{ComplexF64}(pad_term([Z], n_qubits, site))
     end
     Sz_comp ./= 2
 
-    # Transform to working eigenbasis
     V = eigvecs
     Sz_eigen = V' * Sz_comp * V
     sz_vals = real.(diag(Sz_eigen))
@@ -437,7 +371,6 @@ function compute_sz_labels(eigen_result::EigenDecompositionResult, eigvecs::Matr
         M_k = reshape(eigen_result.right_eigenvectors[:, k], dim, dim)
         weights = abs2.(M_k)
 
-        # Compute Delta_Sz weight map
         delta_sz_map = Dict{Float64, Float64}()
         for j in 1:dim, i in 1:dim
             w = weights[i, j]
@@ -448,7 +381,6 @@ function compute_sz_labels(eigen_result::EigenDecompositionResult, eigvecs::Matr
 
         total_weight = sum(values(delta_sz_map))
 
-        # Find dominant sector
         dominant_dsz = 0.0
         dominant_weight = 0.0
         for (dsz, wt) in delta_sz_map
@@ -470,7 +402,7 @@ end
 """
     compute_sz_labels(eigen_result, hamiltonian::HamHam; n_modes=20) -> Vector{SzSectorLabel}
 
-Convenience method: delegates to the eigvecs-based method using `hamiltonian.eigvecs`.
+Label modes in `hamiltonian.eigvecs`.
 """
 function compute_sz_labels(eigen_result::EigenDecompositionResult, hamiltonian::HamHam;
                             n_modes::Int=20)
@@ -478,25 +410,21 @@ function compute_sz_labels(eigen_result::EigenDecompositionResult, hamiltonian::
     return compute_sz_labels(eigen_result, hamiltonian.eigvecs, n_qubits; n_modes=n_modes)
 end
 
-# ---------------------------------------------------------------------------
-# Multiplet detection: near-degenerate eigenvalue grouping
-# ---------------------------------------------------------------------------
-
 """
     detect_multiplets(eigenvalues::Vector{ComplexF64}; rel_tol=0.01) -> Vector{MultipletGroup}
 
-Group near-degenerate eigenvalues into multiplets.
+Group adjacent eigenvalues by relative complex-plane spacing.
 
-Two eigenvalues are in the same multiplet if
-`|lambda_i - lambda_j| / max(|lambda_i|, |lambda_j|, 1e-10) < rel_tol`.
+# Keywords
+- `rel_tol`: Maximum relative spacing within a group.
 
-Uses sequential grouping on eigenvalues sorted by absolute value.
+# Returns
+Multiplets ordered by eigenvalue magnitude.
 """
 function detect_multiplets(eigenvalues::Vector{ComplexF64}; rel_tol::Float64=0.01)
     n = length(eigenvalues)
     n == 0 && return MultipletGroup[]
 
-    # Sort by absolute value for sequential grouping
     sorted_perm = sortperm(abs.(eigenvalues))
     sorted_vals = eigenvalues[sorted_perm]
 
@@ -514,7 +442,6 @@ function detect_multiplets(eigenvalues::Vector{ComplexF64}; rel_tol::Float64=0.0
             push!(current_indices, idx)
             current_sum += val
         else
-            # Finalize current group
             mean_val = current_sum / length(current_indices)
             push!(groups, MultipletGroup(copy(current_indices), mean_val, SzSectorLabel[]))
             current_indices = [idx]
@@ -522,39 +449,31 @@ function detect_multiplets(eigenvalues::Vector{ComplexF64}; rel_tol::Float64=0.0
         end
     end
 
-    # Finalize last group
     mean_val = current_sum / length(current_indices)
     push!(groups, MultipletGroup(copy(current_indices), mean_val, SzSectorLabel[]))
 
     return groups
 end
 
-# ---------------------------------------------------------------------------
-# Bundle: run_exact_diagnostics
-# ---------------------------------------------------------------------------
-
 """
     run_exact_diagnostics(L, hamiltonian, gibbs; kwargs...) -> ExactDiagnosticsResult
 
-Run all six DIAG diagnostics in a single call, returning a bundled result.
+Run the complete dense diagnostic bundle.
 
 # Arguments
-- `L::Matrix{ComplexF64}`: Full dense Lindbladian superoperator.
-- `hamiltonian::HamHam`: Hamiltonian with eigenbasis data.
-- `gibbs::Hermitian`: Gibbs state (in the working basis -- Hamiltonian eigenbasis
-  for BohrDomain, Trotter eigenbasis for TrotterDomain).
+- `L`: Dense Lindbladian superoperator.
+- `hamiltonian`: Hamiltonian and basis data.
+- `gibbs`: Gibbs state in the selected working basis.
 
-# Keyword Arguments
-- `basis_eigvecs`: Unitary matrix defining the working basis. When `nothing` (default),
-  uses `hamiltonian.eigvecs` (backward compatible with BohrDomain). For TrotterDomain,
-  pass `trotter.eigvecs` so that default observables, initial states, and Sz labels
-  are all constructed in the Trotter eigenbasis.
-- `observables`: Observable matrices (in working basis). Default: [Z1, H].
-- `observable_names`: Observable names. Default: ["Z1", "H"].
-- `initial_states`: Initial density matrices. Default: [|0>^n, |+>^n, I/dim].
-- `initial_state_names`: Names for initial states. Default: ["all_up", "all_plus", "maximally_mixed"].
-- `n_modes`: Number of leading modes to extract (default: 20).
-- `eps_trunc`: Truncation threshold for KMS transform (default: 1e-12).
+# Keywords
+- `basis_eigvecs`: Working basis; defaults to the Hamiltonian eigenbasis.
+- `observables`, `observable_names`: Optional observable set and labels.
+- `initial_states`, `initial_state_names`: Optional initial states and labels.
+- `n_modes`: Maximum number of modes.
+- `eps_trunc`: Gibbs fractional-power floor.
+
+# Returns
+An `ExactDiagnosticsResult`.
 """
 function run_exact_diagnostics(
     L::Matrix{ComplexF64},
@@ -571,16 +490,12 @@ function run_exact_diagnostics(
     dim = size(hamiltonian.data, 1)
     n = Int(log2(dim))
 
-    # Working basis: trotter.eigvecs for TrotterDomain, hamiltonian.eigvecs otherwise
     V = basis_eigvecs === nothing ? hamiltonian.eigvecs : Matrix{ComplexF64}(basis_eigvecs)
 
-    # DIAG-01: eigendata extraction
     eigen_result = extract_leading_eigendata(L; n_modes=n_modes)
 
-    # DIAG-02: fixed point distance
     fp_result = compute_fixed_point_distance(eigen_result, gibbs)
 
-    # DIAG-03/04: anti-Hermitian defect
     defect_result = compute_anti_hermitian_defect(L, gibbs; eps_trunc=eps_trunc)
 
     # Build default observables if not provided
@@ -614,7 +529,6 @@ function run_exact_diagnostics(
         initial_state_names = String["all_up", "all_plus", "maximally_mixed"]
     end
 
-    # DIAG-05: overlap coefficients for each initial state
     overlaps_vec = OverlapResult[]
     for (rho0, name) in zip(initial_states, initial_state_names)
         overlap = compute_overlap_coefficients(
@@ -624,7 +538,6 @@ function run_exact_diagnostics(
         push!(overlaps_vec, overlap)
     end
 
-    # DIAG-06: symmetry sector labels (use working basis eigvecs)
     sz_labels = compute_sz_labels(eigen_result, V, n; n_modes=n_modes)
 
     # Multiplet detection

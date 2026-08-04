@@ -4,7 +4,7 @@ struct NUFFTPrefactors{T<:AbstractFloat, A<:AbstractArray{Complex{T}, 3}}
     energy_to_index::Dict{T, Int}
 end
 
-"""Exact deduplication (no approximation) plus inverse map to reconstruct the full array."""
+"""Return exact unique values and an inverse map to the original array."""
 function _unique_with_invmap(v::AbstractVector{<:AbstractFloat})
     uniq = unique(v)
     T = eltype(v)
@@ -28,31 +28,29 @@ function _prepare_oft_nufft_prefactors(
     @assert dim1 == dim2
     dim = dim1
 
-    # Determine the element type T from energy_labels (the stored output type).
+    # Store prefactors using the energy-grid precision.
     T = eltype(energy_labels)
 
-    # Promote inputs to Float64 for FINUFFT computation (FINUFFT requires Float64).
+    # FINUFFT requires Float64 coordinates.
     bohr_freqs_f64 = Float64.(bohr_freqs)
     time_labels_f64 = Float64.(time_labels)
     energy_labels_f64 = Float64.(energy_labels)
 
-    # Flatten Bohr frequencies but only retain unique ones.
+    # Transform each distinct Bohr frequency once.
     bohr_flat = vec(bohr_freqs_f64)
     unique_bohr_flat, invmap = _unique_with_invmap(bohr_flat)
 
-    # Filter time-domain weights. Gaussian: real exp(-σ² t²); DLL: complex
-    # closed form. Both promote to ComplexF64 for FINUFFT.
+    # Kernels may be real or complex; FINUFFT consumes ComplexF64 weights.
     base_weights = ComplexF64.(time_kernel.(Ref(filter), time_labels_f64))
     input_weights = Matrix{ComplexF64}(undef, length(time_labels_f64), 1)
     out_nufft = Matrix{ComplexF64}(undef, length(unique_bohr_flat), 1)
 
-    # Allocate prefactor stack in Complex{T}.
     CT = Complex{T}
     prefactors = Array{CT}(undef, dim, dim, length(energy_labels))
 
-    # FINUFFT plan - type 3, 1D, + sign: exp(+i s x)
+    # Math: type-3 NUFFT uses $sum_j c_j exp(i s_k x_j)$.
     plan = FINUFFT.finufft_makeplan(3, 1, +1, 1, eps; dtype=Float64, nthreads=nthreads)
-    # For dim=1: xj are sources; s are targets; yj,zj,t,u unused.
+    # In one dimension, `xj` are sources and `s` are targets.
     empty = Float64[]
     FINUFFT.finufft_setpts!(plan,
         time_labels_f64,    # xj
@@ -63,15 +61,13 @@ function _prepare_oft_nufft_prefactors(
         empty               # u (unused)
     )
 
-    # Fill prefactors[:,:,k] for each w=energy_labels[k].
     @inbounds for (k, omega) in enumerate(energy_labels_f64)
-        # input_weights[j] = exp(-sigma^2 t_j^2) * exp(-i w t_j)
+        # Math: $c_j = f(t_j) exp(-i omega t_j)$.
         @fastmath @. input_weights[:, 1] = base_weights * cis(-omega * time_labels_f64)
 
-        # out_nufft[u] = sum_j input_weights[j] * exp(+i unique_targets[u] * time_labels[j])
         FINUFFT.finufft_exec!(plan, input_weights, out_nufft)
 
-        # Scatter back to the full (dim x dim) ordering, converting to Complex{T}.
+        # Restore the full matrix ordering.
         @views full_bohr_prefac_omega = prefactors[:, :, k]
         @inbounds for p in eachindex(invmap)
             full_bohr_prefac_omega[p] = CT(out_nufft[Int(invmap[p]), 1])
@@ -84,7 +80,7 @@ function _prepare_oft_nufft_prefactors(
     return NUFFTPrefactors(prefactors, energy_labels, energy_to_index)
 end
 
-"""Convenience view: returns prefactor matrix for energy w without allocating."""
+"""Return a non-allocating view of the prefactor matrix at `omega`."""
 @inline function _prefactor_view(nufft_prefactors::NUFFTPrefactors, omega)
     k = nufft_prefactors.energy_to_index[omega]
     return @view nufft_prefactors.data[:, :, k]

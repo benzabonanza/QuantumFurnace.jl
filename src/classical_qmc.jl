@@ -1,36 +1,16 @@
 """
     ClassicalQMC
 
-Sign-free Stochastic Series Expansion (SSE) quantum Monte Carlo thermal sampler for the
-two QuantumFurnace thesis fixtures (1D disordered AFM Heisenberg, 2D disordered TFIM). This
-is the *classical* Gibbs-sampling baseline that competes with the KMS Lindbladian quantum
-sampler (beads qf-h23; design note `drafts/classical-gibbs-sampling/method.md`).
+Self-contained Stochastic Series Expansion sampler for the package's 1D
+Heisenberg and 2D TFIM models.
 
-Algorithm (Sandvik, arXiv:1909.10591): diagonal update Eq. 19; deterministic operator-loop
-[Sandvik 1999] for the Heisenberg model; Swendsen–Wang cluster [Sandvik 2003] for the TFIM.
+Sampling uses physical-frame parameters and reports energy, magnetisation,
+correlations, signs, and autocorrelation diagnostics. The implementation uses
+diagonal updates with an operator loop for Heisenberg and cluster or local
+updates for TFIM.
 
-Strategy:
-- Sample in the **physical frame** (bare `J=1`, physical `h`, `β_phys`); `ρ_β` is
-  frame-independent, so observables cross-check against the fixture's exact dense `ρ_β`.
-- A model is reconstructed in physical units by replaying the `build_heis_1d` /
-  `build_tfim_2d` RNG recipe; [`sse_reconstruction_error`](@ref) checks the dense `H_phys`
-  matches the fixture's un-rescaled Hamiltonian to ~1e-10 (exercised in the test suite — it
-  certifies the *exact reference* targets the right model; the SSE weights are certified
-  separately by the MC-vs-exact agreement).
-- Energy estimator `⟨H⟩ = C_shift − ⟨n⟩/β` with `C_shift` the sum of the SSE operator
-  constants (worked out per model below).
-
-This module is self-contained (it rebuilds the fixture Hamiltonians from scratch rather than
-importing the dense builders), wrapped as a sub-module so its many generic internal names
-(`Op`, `EXCH`, `FIELD`, …) stay isolated from the main `QuantumFurnace` namespace.
-
-Public API: [`build_sse_heis_model`](@ref), [`build_sse_tfim_model`](@ref), [`run_sse`](@ref),
-[`sse_exact_reference`](@ref), [`sse_reconstruction_error`](@ref), [`SSEResult`](@ref).
-
-Honest scope: the frustrated odd-`n` *periodic* Heisenberg sign sector is NOT solved — the
-deterministic operator-loop is non-ergodic there (true `⟨s⟩<1` not captured); use OBC
-(always bipartite ⇒ sign-free) or a worm/directed-loop update (beads qf-h23.3.8). Even-`n`
-PBC, all OBC, and the TFIM are fully sign-free and validated.
+Odd-size periodic Heisenberg systems are outside the validated sign-free
+regime; use open boundaries or a directed-loop implementation there.
 """
 module ClassicalQMC
 
@@ -42,11 +22,8 @@ export SSEResult, run_sse,
     build_sse_heis_model, build_sse_tfim_model,
     sse_exact_reference, sse_reconstruction_error
 
-# ----------------------------------------------------------------------------------------------
-# Pauli matrices and dense operator builders (computational basis; site 1 = leftmost kron factor,
-# matching pad_term / _pad_two_site_op in src/hamiltonian.jl). Spin convention: +1 = up (Z=+1),
-# -1 = down (Z=-1).
-# ----------------------------------------------------------------------------------------------
+# Computational basis: site 1 is the leftmost Kronecker factor and spins are
+# `+1` for up and `-1` for down.
 const PX = ComplexF64[0 1; 1 0]
 const PY = ComplexF64[0 -im; im 0]
 const PZ = ComplexF64[1 0; 0 -1]
@@ -65,10 +42,7 @@ function two_site(O::Matrix{ComplexF64}, a::Int, b::Int, n::Int)
     return foldl(kron, ops)
 end
 
-# ----------------------------------------------------------------------------------------------
-# Model representation (physical units). Operator constants follow the worked-out algebra in the
-# plan. Spins are ±1 integers.
-# ----------------------------------------------------------------------------------------------
+# Model data are stored in physical units; spins are integer signs.
 
 # Operator kind codes
 const ID      = Int8(0)
@@ -146,9 +120,16 @@ end
 """
     build_sse_heis_model(n; seed, periodic, disorder_strength, J=1.0) -> HeisModel
 
-Reconstruct the 1D Heisenberg fixture in physical units by replaying the `build_heis_1d`
-RNG recipe (MersenneTwister(seed); [Z] per-site draw THEN [Z,Z] per-bond draw, each `rand!`
-then `.*= disorder_strength`). Builds the dense `H_phys` for the reconstruction cross-check.
+Reconstruct the 1D Heisenberg SSE model in physical units.
+
+# Keywords
+- `seed`: Seed for the fixture-compatible disorder draws.
+- `periodic`: Whether to include the wraparound bond.
+- `disorder_strength`: Scale of the longitudinal and bond disorder.
+- `J`: Exchange coupling.
+
+# Returns
+An `HeisModel` containing the SSE data and dense physical Hamiltonian.
 """
 function build_sse_heis_model(n::Int; seed::Int, periodic::Bool, disorder_strength::Float64, J::Float64=1.0)
     # Exchange bonds: pad_term places [O,O] at (q,q+1), wrap (n,1) when periodic.
@@ -164,7 +145,8 @@ function build_sse_heis_model(n::Int; seed::Int, periodic::Bool, disorder_streng
     # zz coeff for bond enumerated at position q is Kzz_site[q]
     zz = Float64[Kzz_site[q < n ? q : n] for q in 1:(periodic ? n : n - 1)]
 
-    # Dense H_phys = J sum (XX+YY+ZZ) + sum hz Z + sum Kzz ZZ
+    # Math: $H = J sum_(ij)(X_i X_j + Y_i Y_j + Z_i Z_j)
+    # + sum_i h_i Z_i + sum_(ij) K_(ij) Z_i Z_j$.
     d = 2^n
     H = zeros(ComplexF64, d, d)
     for (i, j) in bonds
@@ -185,8 +167,17 @@ end
 """
     build_sse_tfim_model(Lx, Ly; seed, h, disorder_strength, J=1.0, periodic=true) -> TfimModel
 
-Reconstruct the 2D TFIM fixture in physical units (build_tfim_2d recipe). Bonds: right + up
-neighbour with periodic wrap (doubled on L=2); field -h X per site; disorder [Z] then [Z,Z].
+Reconstruct the 2D TFIM SSE model in physical units.
+
+# Keywords
+- `seed`: Seed for the fixture-compatible disorder draws.
+- `h`: Transverse-field strength.
+- `disorder_strength`: Scale of the longitudinal and bond disorder.
+- `J`: Ising coupling.
+- `periodic`: Whether to include boundary-crossing bonds.
+
+# Returns
+A `TfimModel` containing the SSE data and dense physical Hamiltonian.
 """
 function build_sse_tfim_model(Lx::Int, Ly::Int; seed::Int, h::Float64, disorder_strength::Float64,
                           J::Float64=1.0, periodic::Bool=true)
@@ -233,9 +224,7 @@ function build_sse_tfim_model(Lx::Int, Ly::Int; seed::Int, h::Float64, disorder_
     return TfimModel(n, Lx, Ly, bonds, J, h, ez, zz, C_shift, H, periodic)
 end
 
-# ----------------------------------------------------------------------------------------------
-# Reconstruction cross-check vs fixture: H_phys ?= (raw.matrix - raw.shift*I)*raw.rescaling_factor
-# ----------------------------------------------------------------------------------------------
+# Convert a package Hamiltonian back to the physical frame.
 function fixture_H_phys(raw)
     d = size(raw.matrix, 1)
     return (raw.matrix .- raw.shift .* Matrix{ComplexF64}(I, d, d)) .* raw.rescaling_factor
@@ -244,19 +233,13 @@ end
 """
     sse_reconstruction_error(model, raw) -> Float64
 
-Maximum absolute entrywise difference between the SSE model's reconstructed physical
-Hamiltonian `model.H_phys` and the fixture's un-rescaled Hamiltonian
-`(raw.matrix - raw.shift*I) * raw.rescaling_factor`, where `raw` is the NamedTuple returned
-by `build_heis_1d` / `build_tfim_2d`. A value `≤ 1e-10` certifies that the
-exact reference targets exactly the fixture model. Not called by `run_sse` (the model is
-self-contained and carries no fixture handle); it is exercised in `test/test_classical_qmc.jl`.
+Return the maximum entrywise mismatch between an SSE model and a package
+Hamiltonian after undoing the algorithm-frame shift and rescaling.
 """
 sse_reconstruction_error(model::HeisModel, raw) = maximum(abs.(model.H_phys .- fixture_H_phys(raw)))
 sse_reconstruction_error(model::TfimModel, raw) = maximum(abs.(model.H_phys .- fixture_H_phys(raw)))
 
-# ----------------------------------------------------------------------------------------------
-# Exact thermal reference from dense H_phys (physical frame).
-# ----------------------------------------------------------------------------------------------
+# Exact small-system reference in the physical frame.
 struct ExactRef
     energy::Float64
     mz2::Float64
@@ -266,9 +249,14 @@ end
 """
     sse_exact_reference(model, beta_phys; pairs) -> ExactRef
 
-Exact dense thermal reference (`⟨H⟩`, `⟨m_z²⟩`, `⟨Z_iZ_j⟩` for the requested `pairs`) from
-`ρ_β = e^{-β_phys H_phys}/Z` of the model's reconstructed physical Hamiltonian. The
-ground-truth the QMC estimates are cross-checked against at small `n`.
+Compute exact thermal energy, magnetisation, and requested correlations.
+
+# Arguments
+- `beta_phys`: Physical inverse temperature.
+- `pairs`: Site pairs for which to return `Z_i Z_j` correlations.
+
+# Returns
+An `ExactRef` containing dense Gibbs-state observables.
 """
 sse_exact_reference(model::HeisModel, beta_phys::Float64; pairs::Vector{Tuple{Int,Int}}) =
     _exact_reference(model.H_phys, model.n, beta_phys; pairs=pairs)
@@ -294,9 +282,7 @@ function _exact_reference(H::Matrix{ComplexF64}, n::Int, beta_phys::Float64; pai
     return ExactRef(energy, mz2, zzd)
 end
 
-# ----------------------------------------------------------------------------------------------
-# Statistics: block jackknife (with optional sign reweighting) + Sokal integrated autocorr time.
-# ----------------------------------------------------------------------------------------------
+# Statistical estimators.
 "Block-jackknife mean and error of the ratio mean(X)/mean(Y). For Y≡1, plain jackknife of mean(X)."
 function jackknife_ratio(X::Vector{Float64}, Y::Vector{Float64}; nblocks::Int=40)
     N = length(X)
@@ -341,9 +327,7 @@ function tau_int(series::Vector{Float64}; c::Float64=6.0)
     return tau, err, W
 end
 
-# ----------------------------------------------------------------------------------------------
-# SSE configuration + generic diagonal update.
-# ----------------------------------------------------------------------------------------------
+# SSE state and diagonal updates.
 mutable struct SSEState
     n::Int
     spins::Vector{Int}        # |alpha(0)>, ±1
@@ -422,13 +406,8 @@ function diagonal_update!(st::SSEState, m::HeisModel, menu::Vector{Tuple{Int8,In
     return nothing
 end
 
-# ----------------------------------------------------------------------------------------------
-# Heisenberg deterministic operator-loop (Sandvik 1991) with sequential heat-bath disorder
-# correction (full-recompute of the disorder weight per loop — exact, cheap at tiny n).
-# Leg layout per exchange vertex v (legs 4(v-1)+1..+4): 1=bot-i, 2=bot-j, 3=top-i, 4=top-j.
-# Vertex pairing for the SU(2) deterministic loop: 1<->2, 3<->4 (flip a bottom/top pair toggles
-# the operator diag<->offdiag, keeping the antiparallel-only vertex valid).
-# ----------------------------------------------------------------------------------------------
+# Heisenberg operator-loop update. Each exchange vertex stores bottom-site
+# legs 1--2 and top-site legs 3--4; deterministic pairing is 1<->2, 3<->4.
 @inline function vertex_partner(leg::Int)
     l = ((leg - 1) % 4) + 1
     base = leg - l
@@ -621,9 +600,12 @@ function free_site_flips!(st::SSEState, m::HeisModel, has_disorder::Bool, rng::A
     return nothing
 end
 
-# ----------------------------------------------------------------------------------------------
-# Driver + measurement (Heisenberg).
-# ----------------------------------------------------------------------------------------------
+"""
+    SSEResult
+
+Thermal observables, jackknife errors, autocorrelation estimates, and update
+diagnostics returned by [`run_sse`](@ref).
+"""
 struct SSEResult
     energy::Float64
     energy_err::Float64
@@ -668,19 +650,19 @@ end
 """
     run_sse(model, beta_phys; pairs, nsweeps=200_000, nwarm=40_000, seed=12345) -> SSEResult
 
-Run the SSE sampler on a Heisenberg or TFIM `model` (from [`build_sse_heis_model`] /
-[`build_sse_tfim_model`]) at physical inverse temperature `beta_phys`, returning an immutable
-[`SSEResult`] with thermal observables (`⟨H⟩`, `⟨m_z²⟩`, `⟨Z_iZ_j⟩` for `pairs`), the
-average sign, integrated autocorrelation times for the energy, `|m_z|`, and the signed `m_z`
-(the order-parameter / sector-tunneling slow mode in an ordered phase), and update
-diagnostics. `nwarm` equilibration sweeps (with `M` adaptation) precede `nsweeps` measured
-sweeps; `seed` seeds the QMC RNG (independent of the fixture disorder seed). β is `β_phys`.
+Run the SSE sampler at physical inverse temperature `beta_phys`.
 
-Heisenberg uses the deterministic operator-loop; TFIM uses the Swendsen–Wang cluster by
-default (`update=:cluster`), or a local single-segment Metropolis baseline (`update=:local`,
-TFIM only) that exhibits critical slowing down in the ordered phase — the classical-vs-quantum
-mixing-time contrast. For the frustrated odd-`n` periodic Heisenberg the loop is non-ergodic in
-the sign sector (`avg_sign` stays 1; true `⟨s⟩<1` not captured) — see the module docstring.
+# Keywords
+- `pairs`: Site pairs for reported `Z_i Z_j` correlations.
+- `nsweeps`: Number of measured sweeps.
+- `nwarm`: Number of equilibration sweeps.
+- `seed`: Sampling seed, independent of the model's disorder seed.
+
+# Returns
+An `SSEResult` with observables and sampling diagnostics.
+
+The Heisenberg method is not valid for the frustrated odd-size periodic sign
+sector described in the module documentation.
 """
 function run_sse(m::HeisModel, beta_phys::Float64; pairs::Vector{Tuple{Int,Int}},
                         nsweeps::Int=200_000, nwarm::Int=40_000, seed::Int=12345)
@@ -743,13 +725,8 @@ function run_sse(m::HeisModel, beta_phys::Float64; pairs::Vector{Tuple{Int,Int}}
                      sum(mz_arr) / length(mz_arr), count_signflips(mz_arr), loop_accept, mean_r)
 end
 
-# ----------------------------------------------------------------------------------------------
-# TFIM: SSE with Swendsen–Wang cluster update (Sandvik 2003). Operators: ISING bond (diag,
-# element 2J on parallel), FIELDC (diag site, element h), FIELDX (off-diag site, element h,
-# flips the spin), ZDIS / ZZDIS_T diagonal disorder ride-alongs. Stoquastic ⇒ sign-free (s≡1).
-# Cluster: segments (cut by field ops) unioned across Ising bonds; flip each cluster (heat-bath
-# on the tiny Z/ZZ disorder), toggling FIELDC↔FIELDX at segment boundaries (weight-neutral).
-# ----------------------------------------------------------------------------------------------
+# TFIM cluster update. Field operators cut worldline segments; Ising vertices
+# join segments into clusters, and diagonal disorder supplies heat-bath weights.
 
 @inline function tfim_diag_element(kind::Int8, idx::Int32, spins::Vector{Int}, m::TfimModel)
     if kind == ISING
@@ -840,11 +817,10 @@ end
 """
     tfim_offdiag_logweight(spins, opstring, m) -> Float64
 
-Log-weight of the terms that change under a worldline-segment flip: the Ising-bond operators
-(`log(2J)` when the bonded spins are parallel, `-Inf` when a flip would force them antiparallel
-— the constraint that *locks* segments together) plus the diagonal disorder. Field operators
-(`FIELDC`/`FIELDX`, both element `h`) are weight-neutral under a flip and omitted, but `FIELDX`
-still propagates the running spin. Used by the local single-segment Metropolis update.
+Return the log-weight affected by a TFIM worldline-segment flip.
+
+Ising bonds contribute `log(2J)` for parallel spins and `-Inf` otherwise;
+field operators are weight-neutral but still propagate spins.
 """
 function tfim_offdiag_logweight(spins::Vector{Int}, opstring::Vector{Op}, m::TfimModel)
     work = copy(spins)
@@ -998,14 +974,10 @@ end
 """
     tfim_local_update!(st, m, rng) -> (n_segments, n_flipped)
 
-LOCAL off-diagonal update: the no-cluster baseline that exhibits **critical slowing down** in
-the ordered phase. Uses the identical worldline-segment decomposition as the cluster update but
-flips each segment *alone* (not grouped into Swendsen–Wang clusters), accepting via Metropolis
-on the full off-diagonal weight [`tfim_offdiag_logweight`]. An Ising bond that a lone flip would
-turn antiparallel vetoes the move (`-Inf`), so in the ordered phase segments are locked together
-and single-segment flips are mostly rejected — the magnetization barrier the cluster jumps in
-one move. Correct (Metropolis detailed balance) but slow; for the classical-vs-quantum
-mixing-time contrast only (`run_sse(...; update=:local)`).
+Apply one local single-segment Metropolis update to the TFIM worldlines.
+
+This correct but slow baseline exposes critical slowing down; the cluster
+update is the production default.
 """
 function tfim_local_update!(st::SSEState, m::TfimModel, rng::AbstractRNG)
     n = st.n; M = st.M; ops = st.opstring

@@ -1,5 +1,15 @@
-#* TOOLS --------------------------------------------------------------------------------------------------------------------
+"""
+    pick_transition(config[, w]) -> Function or Real
 
+Return the configured KMS or GNS transition rate, or evaluate it at `w`.
+
+# Arguments
+- `config`: Construction and rate parameters.
+- `w`: Optional Bohr frequency at which to evaluate the rate.
+
+# Returns
+A scalar callable when `w` is omitted, otherwise the scalar transition rate.
+"""
 pick_transition(config::Config{<:Any, <:Any, KMS}) = _pick_transition_kms(config)
 pick_transition(config::Config{<:Any, <:Any, GNS}) = _pick_transition_gns(config)
 
@@ -13,10 +23,8 @@ function pick_transition(config::Config{<:Any, <:Any, KMS}, w::Real)
     if config.s == 0 && config.a == 0
         return exp(-config.beta * max(w + config.beta * config.sigma^2 / 2, 0.0))
     else
-        # Smooth Metropolis (thesis eq:smooth-metro). Handles any a, including a == 0
-        # (the thesis-main case). At a == 0 reduces to γ_M^{(0)} × (1/2)[erfc(z_-) + e^{β|ω̃|}erfc(z_+)].
-        # The (s=0, a>0) "a-regularized, no smoothing" case is rejected by
-        # validate_config! and therefore unreachable here.
+        # Math: at $a = 0$, smooth Metro is
+        # $gamma_M^0 (erfc(z_-) + exp(beta abs(tilde(omega))) erfc(z_+)) / 2$.
         u_min = sqrt(config.beta * config.sigma^2 * config.s / 2)
         transition_b0 = exp(-2 * sqrtA * sqrtB - config.beta * w / 2 - config.beta^2 * config.sigma^2 / 4)
         return transition_b0 * (erfc(sqrtA * u_min - sqrtB / u_min) + exp(4 * sqrtA * sqrtB) * erfc(sqrtA * u_min + sqrtB / u_min)) / 2
@@ -34,9 +42,7 @@ function pick_transition(config::Config{<:Any, <:Any, GNS}, w::Real)
     if config.s == 0 && config.a == 0
         return exp(-config.beta * max(w, 0.0))
     else
-        # Smooth Metropolis (un-shifted GNS form). Handles any a, including a == 0.
-        # The (s=0, a>0) "a-regularized, no smoothing" case is rejected by
-        # validate_config! and therefore unreachable here.
+        # The GNS form uses the unshifted frequency `w`.
         u_min = sqrt(config.beta * config.sigma^2 * config.s / 2)
         transition_b0 = exp(-2 * sqrtA * sqrtB - config.beta * w / 2)
         return transition_b0 * (erfc(sqrtA * u_min - sqrtB / u_min) + exp(4 * sqrtA * sqrtB) * erfc(sqrtA * u_min + sqrtB / u_min)) / 2
@@ -46,20 +52,16 @@ end
 
 function _pick_transition_kms(config::Config{<:Any, <:Any, KMS})
 
-    if !(config.with_linear_combination)  # Gaussian case
-        # @printf("Gaussian\n")
+    if !(config.with_linear_combination)
         return w -> begin
             return exp(-(w + config.gaussian_parameters[1])^2 /(2 * config.gaussian_parameters[2]^2))
         end
     end
 
-    # sqrtA = sqrt((4 * a + 1) / 8)
     sqrtA = sqrt(config.beta / 4) * sqrt(4 * config.a + 1)
-    # The (s=0, a>0) "a-regularized, no smoothing" case is rejected by
-    # validate_config! and therefore unreachable here.
-    if (config.s == 0 && config.a == 0)  # Kinky Metropolis (γ_M^{(0)})
+    if (config.s == 0 && config.a == 0)
         return w -> exp(-config.beta * max(w + config.beta * config.sigma^2 / 2, 0.0))
-    else  # config.s != 0 — smooth Metropolis (thesis eq:smooth-metro), any a (incl. a == 0)
+    else
         return w -> begin
             sqrtB = sqrt(config.beta / 4) * abs(w + config.beta * config.sigma^2 / 2)
             u_min = sqrt(config.beta * config.sigma^2 * config.s / 2)
@@ -71,29 +73,21 @@ function _pick_transition_kms(config::Config{<:Any, <:Any, KMS})
 end
 
 """
-    _pick_transition_gns(config) -> (ω::Real -> Real)
+    _pick_transition_gns(config) -> Function
 
-    Return the (approx.) GNS-detailed-balance transition weight (\tilde{γ}(ω)).
+Return the unshifted GNS detailed-balance transition function.
 
-    KMS-conditioned rates (CKBG23, Eq. (1.12)):
+# Arguments
+- `config`: GNS construction parameters.
 
-        \tilde{γ}(ω) = \tilde{γ}(-ω) e^{- β ω).
-
-    In contrast, in the exact KMS-DB (CKG) construction the weight used in the ω-integral is a
-    βσ_E²/2-shifted version of such a (\tilde{ω}) (Ramkumar–Soleimanifar Lemma 7.1):
-
-        γ(ω) = \tilde{γ}(ω + βσ_E^2/2).
-
-    This helper returns the unshifted (\tilde{γ}) (i.e., the version that itself satisfies KMS condition).
+# Returns
+A scalar function satisfying
+`\$tilde(gamma)(omega) = tilde(gamma)(-omega) exp(-beta omega)\$`.
 """
 function _pick_transition_gns(config::Config{<:Any, <:Any, GNS})
 
-    # Gaussian case
-    # KMS condition satisfied at inverse temperature β requires β = 2\omega_\gamma/\sigma_\gamma^2.
     if !(config.with_linear_combination)
-        # @printf("Gaussian approx GNS gamma\n")
         return w -> begin
-            # gaussian_parameters = [ωγ, σγ]
             w_gamma = config.gaussian_parameters[1]
             sigma_gamma = config.gaussian_parameters[2]
             return exp(-(w + w_gamma)^2 / (2 * sigma_gamma^2))
@@ -101,12 +95,9 @@ function _pick_transition_gns(config::Config{<:Any, <:Any, GNS})
     end
 
     sqrtA = sqrt(config.beta / 4) * sqrt(4 * config.a + 1)
-    # The (s=0, a>0) "a-regularized, no smoothing" case is rejected by
-    # validate_config! and therefore unreachable here.
     if (config.s == 0 && config.a == 0)
-        # Kinky Metropolis — UN-SHIFTED.
         return w -> exp(-config.beta * max(w, 0.0))
-    else  # config.s != 0 — smooth Metropolis (un-shifted GNS form), any a (incl. a == 0)
+    else
         return w -> begin
             sqrtB = sqrt(config.beta / 4) * abs(w)
             u_min = sqrt(config.beta * config.sigma^2 * config.s / 2)
@@ -121,26 +112,10 @@ end
 """
     pick_gamma_sup(config::Config) -> Real
 
-Closed-form continuum supremum `‖γ‖_∞` for the rate function `γ(ω)` selected by
-`config`. Returns the analytical sup independent of any energy grid — this is
-the grid-independent replacement for the prior `1.0 / maximum(transition.(energy_labels))`
-used to populate `gamma_norm_factor`.
+Return the continuum supremum of the configured transition rate.
 
-For every standard rate family currently supported (KMS / GNS Gaussian, kinky
-Metropolis at `s = a = 0`, smooth Metropolis at any `s > 0, a ≥ 0`), the
-continuum supremum is exactly `1.0`:
-- Gaussian: `γ(ω) = exp(-(ω+ω_γ)²/(2σ_γ²))`, sup = 1 at `ω = -ω_γ`.
-- Kinky Metropolis (KMS): `γ(ω) = exp(-β·max(ω + βσ²/2, 0))`, sup = 1 on `ω ≤ -βσ²/2`.
-- Kinky Metropolis (GNS, un-shifted): `γ(ω) = exp(-β·max(ω, 0))`, sup = 1 on `ω ≤ 0`.
-- Smooth Metropolis (any `a ≥ 0`, `s > 0`): sup = 1, attained as `ω → -∞`.
-
-The `(s = 0, a > 0)` "a-regularized, no smoothing" case is rejected by
-`validate_config!` (it is outside the thesis's `(a, s)` taxonomy: smoothing
-requires `s > 0`; kinky requires `s = a = 0`).
-
-The reciprocal of this value is what populates `gamma_norm_factor` in
-`_precompute_data` (so `gamma_norm_factor = 1 / pick_gamma_sup(config) = 1.0`
-for all current families).
+All supported Gaussian and Metropolis families are normalised so
+`\$norm(gamma)_infinity = 1\$`; the result does not depend on a sampled grid.
 """
 pick_gamma_sup(config::Config{<:Any, <:Any, KMS}) = 1.0
 pick_gamma_sup(config::Config{<:Any, <:Any, GNS}) = 1.0
@@ -148,10 +123,8 @@ pick_gamma_sup(config::Config{<:Any, <:Any, GNS}) = 1.0
 
 function _create_energy_labels(num_energy_bits::Integer, w0::Real)
     N = 2^(num_energy_bits)
-    # N_labels = [0:1:Int(N/2)-1; -Int(N/2):1:-1]  twos complement order
     N_labels = [-Int(N/2):1:Int(N/2)-1;]
     energy_labels = w0 * N_labels
-    # @assert maximum(energy_labels) >= 2.0  # For good results
     return energy_labels
 end
 
@@ -161,7 +134,7 @@ function _truncate_energy_labels(
     cutoff::Real=1e-12
     )
 
-    transition = pick_transition(config) # we normalize with max(gamma) later
+    transition = pick_transition(config)
     gaussfilter(w, nu) = exp(- (w - nu)^2 / (4 * config.sigma^2)) * sqrt(1 / (config.sigma * sqrt(2 * pi)))
     integrand_lb(w, nu1, nu2) = transition(w) * gaussfilter(w, nu1) * gaussfilter(w, nu2)
     integrand_ub(w, nu1, nu2) = transition(w) * gaussfilter(w, nu1) * gaussfilter(w, nu2)
@@ -199,8 +172,7 @@ function _truncate_energy_labels(
         @warn "No truncation was done, might want more estimating energy range."
     end
 
-    # Symmetrize energy labels around 0.
+    # Keep the retained grid symmetric about zero.
     sym_limit = max(abs(energy_labels[start_index]), abs(energy_labels[end_index]))
     return energy_labels[abs.(energy_labels) .<= sym_limit]
 end
-#* --------------------------------------------------------------------------------------------------------------------------

@@ -1,45 +1,22 @@
-# ============================================================================
-# Exponential Decay Fitting: extract spectral gap from time-series data
-# ============================================================================
-#
-# Model: y(t) = A * exp(-gap * t) + C
-#
-# Parameter ordering convention:
-#   p[1] = A       (amplitude)
-#   p[2] = gap     (decay rate / spectral gap)
-#   p[3] = C       (offset / asymptotic value)
+# Exponential decay fits.
+# Math: $y(t) = A exp(-Delta t) + C$, with parameters `[A, Delta, C]`.
 
 const _IDX_A   = 1
 const _IDX_GAP = 2
 const _IDX_C   = 3
 
-# Exponential decay model for LsqFit (module-level, not inside any function)
 _exp_decay_model(t, p) = @. p[_IDX_A] * exp(-p[_IDX_GAP] * t) + p[_IDX_C]
-
-# ---------------------------------------------------------------------------
-# FitResult struct
-# ---------------------------------------------------------------------------
 
 """
     FitResult
 
-Result of single-exponential decay fitting: `A * exp(-gap * t) + C`.
-
-Returned by [`fit_exponential_decay`](@ref). All fitted parameters and
-quality metrics are stored; the downstream consumer does not need access to
-the raw `LsqFit.LsqFitResult`.
+Result of a single-exponential decay fit.
 
 # Fields
-- `gap::Float64`: Fitted decay rate (spectral gap estimate), constrained > 0.
-- `amplitude::Float64`: Fitted amplitude A.
-- `offset::Float64`: Fitted offset C (asymptotic value).
-- `gap_ci::Tuple{Float64, Float64}`: Confidence interval on gap (lower, upper).
-- `gap_se::Float64`: Standard error on gap.
-- `r_squared::Float64`: Goodness of fit (1 - RSS/TSS). NOT clamped; can be negative for bad fits.
-- `converged::Bool`: Whether Levenberg-Marquardt optimization converged.
-- `residuals::Vector{Float64}`: Fit residuals (observed - model).
-- `times_used::Vector{Float64}`: Time points used in fit (after `skip_initial`).
-- `values_used::Vector{Float64}`: Data values used in fit (after `skip_initial`).
+- `gap`, `amplitude`, `offset`: Fitted model parameters.
+- `gap_ci`, `gap_se`: Confidence interval and standard error for `gap`.
+- `r_squared`, `converged`: Fit-quality diagnostics.
+- `residuals`, `times_used`, `values_used`: Data retained after preprocessing.
 """
 struct FitResult
     gap::Float64
@@ -54,35 +31,22 @@ struct FitResult
     values_used::Vector{Float64}
 end
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
 """
     _log_linear_initial_guess(times, values) -> Vector{Float64}
 
-Estimate initial parameters `[A, gap, C]` from data using log-linear regression.
-
-Algorithm:
-1. Estimate plateau C from the last 20% of data.
-2. Subtract C, filter for positive shifted values.
-3. Linear regression on log(shifted) vs time to extract A and gap.
-
-Falls back to heuristic guess if fewer than 3 valid points remain after filtering.
+Estimate `[A, gap, C]` from a log-linear fit after subtracting a tail plateau.
 """
 function _log_linear_initial_guess(times::AbstractVector{<:Real}, values::AbstractVector{<:Real})
     n = length(times)
 
-    # Step 1: Estimate plateau C from last 20% of data
+    # Estimate the plateau from the final 20% of samples.
     tail_start = max(1, n - div(n, 5))
     C_guess = sum(values[tail_start:n]) / (n - tail_start + 1)
 
-    # Step 2: Shift data and filter for positive values
     y_shifted = values .- C_guess
     mask = y_shifted .> 1e-10
 
     if sum(mask) < 3
-        # Fallback: heuristic initial guess
         A_guess = values[1] - values[end]
         gap_guess = 1.0 / max(times[end] - times[1], eps(Float64))
         return [A_guess, gap_guess, C_guess]
@@ -91,7 +55,7 @@ function _log_linear_initial_guess(times::AbstractVector{<:Real}, values::Abstra
     t_valid = times[mask]
     log_y = log.(y_shifted[mask])
 
-    # Step 3: Linear regression: log(y - C) = log(A) - gap * t
+    # Math: $log(y-C) = log(A) - Delta t$.
     X = hcat(ones(length(t_valid)), t_valid)
     coeffs = X \ log_y
 
@@ -104,8 +68,7 @@ end
 """
     _compute_r_squared(values, residuals) -> Float64
 
-Compute R-squared = 1 - RSS/TSS.  NOT clamped to [0,1]; negative values
-indicate the model fits worse than a horizontal line at the mean.
+Return `1 - RSS/TSS`; negative values indicate a fit worse than the mean.
 """
 function _compute_r_squared(values::AbstractVector{<:Real}, residuals::AbstractVector{<:Real})
     ss_res = sum(residuals .^ 2)
@@ -114,41 +77,22 @@ function _compute_r_squared(values::AbstractVector{<:Real}, residuals::AbstractV
     return 1.0 - ss_res / ss_tot
 end
 
-# ---------------------------------------------------------------------------
-# Main fitting function
-# ---------------------------------------------------------------------------
-
 """
     fit_exponential_decay(times, values; skip_initial=0.0, p0=nothing, level=0.95) -> FitResult
 
-Fit a single-exponential decay model `A * exp(-gap * t) + C` to time-series
-data using Levenberg-Marquardt optimization (via LsqFit.jl).
-
-The spectral gap `gap` is constrained to be non-negative via parameter bounds.
-An automatic log-linear initial guess is generated unless `p0` is provided.
+Fit a non-negative single-exponential decay rate by nonlinear least squares.
 
 # Arguments
-- `times::AbstractVector{<:Real}`: Time points (must match length of `values`).
-- `values::AbstractVector{<:Real}`: Observed values at each time point.
+- `times`: Sample times.
+- `values`: Observations at the corresponding times.
 
-# Keyword Arguments
-- `skip_initial::Float64=0.0`: Fraction of initial data to skip (in [0, 1)).
-  Use this to exclude early-time transients from the fit.
-- `p0::Union{Nothing, Vector{Float64}}=nothing`: Initial parameter guess `[A, gap, C]`.
-  If `nothing`, an automatic log-linear estimate is computed.
-- `level::Float64=0.95`: Confidence level for the gap confidence interval.
+# Keywords
+- `skip_initial`: Fraction of leading samples to discard.
+- `p0`: Optional initial `[A, gap, C]`; otherwise estimated automatically.
+- `level`: Confidence level for the gap interval.
 
 # Returns
-A [`FitResult`](@ref) containing the fitted gap, amplitude, offset, confidence
-interval, standard error, R-squared, convergence status, and residuals.
-
-# Example
-```julia
-times = collect(0.0:0.1:10.0)
-values = 2.0 .* exp.(-0.5 .* times) .+ 0.3
-result = fit_exponential_decay(times, values)
-println("gap = \$(result.gap), R2 = \$(result.r_squared)")
-```
+A [`FitResult`](@ref) with parameters, uncertainties, and residuals.
 """
 function fit_exponential_decay(
     times::AbstractVector{<:Real},
@@ -157,7 +101,6 @@ function fit_exponential_decay(
     p0::Union{Nothing, Vector{Float64}} = nothing,
     level::Float64 = 0.95,
 )
-    # --- Input validation ---
     length(times) == length(values) ||
         throw(ArgumentError("times and values must have the same length (got $(length(times)) and $(length(values)))"))
     length(times) >= 4 ||
@@ -165,7 +108,6 @@ function fit_exponential_decay(
     0.0 <= skip_initial < 1.0 ||
         throw(ArgumentError("skip_initial must be in [0, 1) (got $skip_initial)"))
 
-    # --- Apply skip_initial BEFORE fitting (critical -- see RESEARCH pitfall 4) ---
     start_idx = max(1, floor(Int, skip_initial * length(times)) + 1)
     times_fit = Float64.(times[start_idx:end])
     values_fit = Float64.(values[start_idx:end])
@@ -173,24 +115,21 @@ function fit_exponential_decay(
     length(times_fit) >= 4 ||
         throw(ArgumentError("fewer than 4 data points remain after skip_initial=$skip_initial (got $(length(times_fit)))"))
 
-    # --- Generate initial guess ---
     p0_used = if p0 === nothing
         _log_linear_initial_guess(times_fit, values_fit)
     else
         Float64.(p0)
     end
 
-    # --- Set bounds: gap > 0 (FIT-05) ---
+    # Constrain the fitted decay rate to be non-negative.
     lower = [-Inf, 0.0, -Inf]
     upper = [Inf, Inf, Inf]
 
-    # --- Fit using LsqFit.jl ---
-    # CRITICAL: do NOT pass a weight vector (see RESEARCH pitfall 6 about corrupted covariance)
+    # Unweighted fitting preserves LsqFit's covariance interpretation.
     fit = curve_fit(_exp_decay_model, times_fit, values_fit, p0_used;
                     lower=lower, upper=upper)
 
-    # --- Extract results using StatsAPI names ---
-    params = coef(fit)                            # [A, gap, C]
+    params = coef(fit)
     gap     = params[_IDX_GAP]
     A       = params[_IDX_A]
     C       = params[_IDX_C]
@@ -207,27 +146,16 @@ function fit_exponential_decay(
         Inf, (-Inf, Inf)
     end
 
-    resid   = residuals(fit)                       # Vector{Float64}
-    conv    = fit.converged                        # Bool
+    resid   = residuals(fit)
+    conv    = fit.converged
 
-    # --- Compute R-squared (NOT provided by LsqFit) ---
     r2 = _compute_r_squared(values_fit, resid)
 
     return FitResult(gap, A, C, gap_ci, gap_se, r2, conv, resid, times_fit, values_fit)
 end
 
-# ============================================================================
-# Bi-Exponential Decay Fitting: captures multi-timescale Liouvillian dynamics
-# ============================================================================
-#
-# Model: y(t) = A1 * exp(-g1 * t) + A2 * exp(-g2 * t) + C
-#
-# Parameter ordering convention:
-#   p[1] = A1       (fast amplitude)
-#   p[2] = g1       (fast decay rate)
-#   p[3] = A2       (slow amplitude)
-#   p[4] = g2       (slow decay rate / spectral gap estimate)
-#   p[5] = C        (offset / asymptotic value)
+# Bi-exponential model parameters are `[A1, g1, A2, g2, C]`.
+# Math: $y(t) = A_1 exp(-g_1 t) + A_2 exp(-g_2 t) + C$.
 
 const _BIEXP_IDX_A1   = 1
 const _BIEXP_IDX_G1   = 2
@@ -235,36 +163,21 @@ const _BIEXP_IDX_A2   = 3
 const _BIEXP_IDX_G2   = 4
 const _BIEXP_IDX_C    = 5
 
-# Bi-exponential decay model for LsqFit (module-level)
 _biexp_decay_model(t, p) = @. p[_BIEXP_IDX_A1] * exp(-p[_BIEXP_IDX_G1] * t) +
                                p[_BIEXP_IDX_A2] * exp(-p[_BIEXP_IDX_G2] * t) +
                                p[_BIEXP_IDX_C]
 
-# ---------------------------------------------------------------------------
-# BiexpFitResult struct
-# ---------------------------------------------------------------------------
-
 """
     BiexpFitResult
 
-Result of bi-exponential decay fitting: `A1 * exp(-g1 * t) + A2 * exp(-g2 * t) + C`.
-
-After fitting, modes are sorted so that `gap_fast >= gap` (g1 >= g2).
-The slow mode (`gap`) is the spectral gap estimate used for extrapolation.
+Result of a bi-exponential fit, sorted so `gap_fast >= gap`.
 
 # Fields
-- `gap::Float64`: Slow decay rate (spectral gap estimate), used for extrapolation.
-- `gap_fast::Float64`: Fast decay rate.
-- `amplitude::Float64`: Slow-mode amplitude A2.
-- `amplitude_fast::Float64`: Fast-mode amplitude A1.
-- `offset::Float64`: Fitted offset C (asymptotic value).
-- `gap_ci::Tuple{Float64, Float64}`: Confidence interval on slow gap (lower, upper).
-- `gap_se::Float64`: Standard error on slow gap.
-- `r_squared::Float64`: Goodness of fit (1 - RSS/TSS).
-- `converged::Bool`: Whether Levenberg-Marquardt optimization converged.
-- `residuals::Vector{Float64}`: Fit residuals (observed - model).
-- `times_used::Vector{Float64}`: Time points used in fit (after `skip_initial`).
-- `values_used::Vector{Float64}`: Data values used in fit (after `skip_initial`).
+- `gap`, `amplitude`: Slow-mode rate and amplitude.
+- `gap_fast`, `amplitude_fast`: Fast-mode rate and amplitude.
+- `offset`: Long-time plateau.
+- `gap_ci`, `gap_se`, `r_squared`, `converged`: Fit diagnostics.
+- `residuals`, `times_used`, `values_used`: Retained fit data.
 """
 struct BiexpFitResult
     gap::Float64
@@ -281,19 +194,10 @@ struct BiexpFitResult
     values_used::Vector{Float64}
 end
 
-# ---------------------------------------------------------------------------
-# Internal helpers for bi-exponential fitting
-# ---------------------------------------------------------------------------
-
 """
     _biexp_initial_guess(times, values, single_fit::FitResult) -> Vector{Float64}
 
-Generate initial parameters `[A1, g1, A2, g2, C]` for bi-exponential fit
-by analyzing residuals of the single-exponential fit.
-
-Strategy:
-1. Use the single-exp fit as the slow mode (A2, g2, C).
-2. Fit the residuals to estimate the fast mode (A1, g1).
+Seed `[A1, g1, A2, g2, C]` from a single-exponential fit and its residuals.
 """
 function _biexp_initial_guess(
     times::AbstractVector{<:Real},
@@ -328,25 +232,19 @@ end
 """
     fit_biexponential_decay(times, values; skip_initial=0.0, p0=nothing, level=0.95) -> BiexpFitResult
 
-Fit a bi-exponential decay model `A1 * exp(-g1 * t) + A2 * exp(-g2 * t) + C`
-to time-series data using Levenberg-Marquardt optimization (via LsqFit.jl).
-
-The model captures multi-timescale dynamics in Liouvillian evolution.
-After fitting, modes are sorted so `g1 >= g2` (fast >= slow).
-The slow mode `g2` is the spectral gap estimate.
+Fit a two-rate exponential decay by nonlinear least squares.
 
 # Arguments
-- `times::AbstractVector{<:Real}`: Time points.
-- `values::AbstractVector{<:Real}`: Observed values.
+- `times`: Sample times.
+- `values`: Observations at the corresponding times.
 
-# Keyword Arguments
-- `skip_initial::Float64=0.0`: Fraction of initial data to skip (in [0, 1)).
-- `p0::Union{Nothing, Vector{Float64}}=nothing`: Initial guess `[A1, g1, A2, g2, C]`.
-  If `nothing`, automatic initial guess via single-exp fit + residual analysis.
-- `level::Float64=0.95`: Confidence level for the gap confidence interval.
+# Keywords
+- `skip_initial`: Fraction of leading samples to discard.
+- `p0`: Optional initial `[A1, g1, A2, g2, C]`.
+- `level`: Confidence level for the slow-gap interval.
 
 # Returns
-A [`BiexpFitResult`](@ref) with sorted modes (fast/slow).
+A [`BiexpFitResult`](@ref) with rates sorted into fast and slow modes.
 """
 function fit_biexponential_decay(
     times::AbstractVector{<:Real},

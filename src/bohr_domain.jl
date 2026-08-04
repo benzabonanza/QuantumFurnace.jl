@@ -1,16 +1,16 @@
-# Single-jump B_bohr variant removed in Phase 35; callers use [jump] wrapper.
-#
-# qf-sta: outer-ν₂ / inner-jump restructure with sparse row-aware f-eval.
-# The previous loop computed `f(bohr_freqs, ν₂) * in_eb` over the full
-# d×d matrix for every (jump, ν₂), wasting work on rows that never appear
-# in `bohr_dict[ν₂]`. The new loop walks `bohr_dict[ν₂]` directly and
-# evaluates `f(bohr_freqs[i, :], ν₂)` once per (ν₂, i), reusing across
-# all jumps. For non-degenerate spectra |bohr_dict[ν]|≈1, so this matches
-# the optimal `O(d³)` f-evaluation count (vs. `O(n_jumps · n_freqs · d²)`
-# in the old loop). Measured 720× speedup at n=7 (48.6s → 67ms) with
-# zero precomputed sparsity (per-call allocation stays at 16·nt·d²
-# bytes — 540 MB at n=11, vs ~64 GB if a full per-ν CSR layout were
-# precomputed).
+"""
+    B_bohr(hamiltonian, jumps, config) -> Matrix
+
+Construct the KMS coherent correction in the Hamiltonian eigenbasis.
+
+# Arguments
+- `hamiltonian`: Spectral data and grouped Bohr-frequency indices.
+- `jumps`: Jump operators in the Hamiltonian eigenbasis.
+- `config`: KMS rate parameters.
+
+# Returns
+The coherent-correction matrix `B`.
+"""
 function B_bohr(hamiltonian::HamHam{T}, jumps::AbstractVector{<:JumpOp}, config::Config{<:Any, <:Any, KMS}) where {T<:AbstractFloat}
 
     dim = size(hamiltonian.data, 1)
@@ -22,7 +22,7 @@ function B_bohr(hamiltonian::HamHam{T}, jumps::AbstractVector{<:JumpOp}, config:
     n_jumps = length(jumps)
     n_freqs = length(unique_freqs)
     bohr_freqs = hamiltonian.bohr_freqs
-    # qf-qmi.1: hoist concrete-typed views once so the hot loop is type-stable.
+    # Concrete views keep the inner loop type-stable.
     in_ebs = [(jump.in_eigenbasis::Matrix{CT}) for jump in jumps]
 
     if Threads.nthreads() > 1 && n_freqs >= OMEGA_THREAD_THRESHOLD
@@ -46,6 +46,7 @@ function B_bohr(hamiltonian::HamHam{T}, jumps::AbstractVector{<:JumpOp}, config:
             for jump_idx in 1:n_jumps
                 in_eb = in_ebs[jump_idx]
                 val = conj(in_eb[i, j])
+                # Math: $B_(j k) += conj(A_(i j)) f(Delta_(i k), nu_2) A_(i k)$.
                 @inbounds for col in 1:dim
                     B[j, col] += val * f_row[col] * in_eb[i, col]
                 end
@@ -55,10 +56,8 @@ function B_bohr(hamiltonian::HamHam{T}, jumps::AbstractVector{<:JumpOp}, config:
     return B
 end
 
-# qf-6af.5 / qf-sta: thread the outer ν₂ loop. Each task accumulates a
-# private dim×dim B partial and uses its own f_row scratch; reduce after
-# `@sync`. Used by Workspace setups that hit B_bohr from
-# `_precompute_coherent_B` (BohrDomain + EnergyDomain Lindbladian KMS).
+# Each task owns its partial matrix and row scratch; reduction occurs after
+# all frequency chunks complete.
 function _B_bohr_threaded(
     hamiltonian::HamHam{T},
     in_ebs::Vector{Matrix{CT}},
@@ -146,14 +145,31 @@ function _pick_f(config::Config{<:Any, <:Any, KMS})
     end
 end
 
+"""
+    create_f(nu_1, nu_2, beta, sigma, a, s) -> Complex
+
+Return the smooth-Metropolis KMS coherent kernel for two Bohr frequencies.
+
+# Arguments
+- `nu_1`, `nu_2`: Bohr frequencies.
+- `beta`, `sigma`, `a`, `s`: Algorithm-side rate parameters.
+
+# Returns
+The complex coherent-kernel coefficient.
+"""
 function create_f(nu_1::Real, nu_2::Real, beta::Real, sigma::Real, a::Real, s::Real)
     alpha = create_alpha(nu_1, nu_2, beta, sigma, a, s)
+    # Math: $f(nu_1, nu_2) = tanh(-beta (nu_1 - nu_2) / 4) alpha(nu_1, nu_2) / (2 i)$.
     return tanh(-beta * (nu_1 - nu_2) / 4) * alpha / (2im)
 end
 
+"""
+    create_f_gauss(nu_1, nu_2, beta, sigma, gaussian_parameters) -> Number
+
+Return the Gaussian KMS coherent kernel at two Bohr frequencies.
+"""
 function create_f_gauss(nu_1::Real, nu_2::Real, beta::Real, sigma::Real,
     gaussian_parameters::Union{Tuple{<:Real, <:Real}, Tuple{Nothing, Nothing}})
-    """Tanh * alpha."""
     alpha_nu1_nu2 = create_alpha_gauss(nu_1, nu_2, sigma, gaussian_parameters)
     return tanh(-beta * (nu_1 - nu_2) / 4) * alpha_nu1_nu2 / (2im)
 end
@@ -192,6 +208,18 @@ function _pick_alpha_kms(config::Config{<:Any, <:Any, KMS})
     end
 end
 
+"""
+    create_alpha(nu_1, nu_2, beta, sigma, a, s) -> Real
+
+Return the smooth-Metropolis KMS Kossakowski coefficient.
+
+# Arguments
+- `nu_1`, `nu_2`: Bohr frequencies.
+- `beta`, `sigma`, `a`, `s`: Algorithm-side rate parameters.
+
+# Returns
+The real coefficient coupling the two Bohr components.
+"""
 function create_alpha(nu_1::Real, nu_2::Real, beta::Real, sigma::Real, a::Real, s::Real)
 
     sqrtA = sqrt(beta * (4 * a + 1) / 4)
@@ -199,6 +227,8 @@ function create_alpha(nu_1::Real, nu_2::Real, beta::Real, sigma::Real, a::Real, 
     C = beta * (nu_1 + nu_2) / 4
     prefactor = exp(a * beta^2 * sigma^2 / 2) / 2
     u_min = sqrt(beta * sigma^2 * (1 + s) / 2)
+    # Math: $z_+ = sqrt(A) u_min + sqrt(B) / u_min$ and
+    # $z_- = sqrt(A) u_min - sqrt(B) / u_min$.
     z_plus = sqrtA * u_min + sqrtB / u_min
     z_minus = sqrtA * u_min - sqrtB / u_min
 
@@ -211,42 +241,17 @@ end
 """
     default_smooth_s(beta, sigma) -> Real
 
-Default smooth-Metropolis regularisation `s` that preserves a *constant
-absolute smoothing width* `σ·√s = SMOOTH_S_REF_WIDTH = 0.05` across
-β-sweeps along the σ = c/β line (c = O(1)) — i.e. the kinky-Metropolis
-γ(ω) is mollified by the same Δω in absolute units, independent of β.
+Return the diagnostic smoothing parameter with fixed width `sigma sqrt(s) = 0.05`.
 
-Domain assumption: callers use σ in 1/β units (σ = c/β with c ∈ {0.25, …, 3}
-typical). The formula uses σ directly, so it remains well-defined off this
-line, but the kink-depth-relative interpretation only holds on it. β is in
-the signature both for the dispatch contract and to flag the domain to
-readers (and to enable a sanity assertion later if needed).
+# Arguments
+- `beta`: Algorithm-side inverse temperature; retained for call-site clarity.
+- `sigma`: Gaussian energy width.
 
-Calibration: at β = 10, σ = 1/β = 0.1, thesis-numerics default `s = 0.25`,
-giving σ·√s = 0.05. Holding that absolute width fixed,
-
-    s_default(σ) = (SMOOTH_S_REF_WIDTH / σ)²    = β²/400   at σ = 1/β
-
-| β  |  σ = 1/β  |  s_default |
-|----|-----------|------------|
-|  5 | 0.20      |  0.0625    |
-| 10 | 0.10      |  0.25      |  ← calibration point (qf-3il)
-| 20 | 0.05      |  1.0       |
-| 50 | 0.02      |  6.25      |
-
-Rationale: the σ-Gaussian filter f_σ narrows linearly with σ along σ = c/β,
-so the same fractional smoothing of the kinky-Metro kink at ω = −βσ²/2
-requires σ·√s ∝ const. Larger β (narrower σ) needs *more* `s` to keep the
-energy-kernel quadrature error — and hence the energy-register size r_D —
-uniform across the β-sweep. The smoothing parameter affects only γ in the
-dissipator; the leading b_+ quadrature error is independent of s.
-
-This is opt-in: callers pass `s = default_smooth_s(β, σ)` to Config
-explicitly. Existing fixtures locked at `s = 0.25` (β = 10 regression tests)
-stay numerically identical because the formula evaluates to 0.25 at the
-calibration point.
+# Returns
+`(0.05 / sigma)^2`. Production sweeps use fixed `s = 0.25` unless explicitly
+testing constant-absolute-width smoothing.
 """
-const SMOOTH_S_REF_WIDTH = 0.05  # σ·√s calibration: (β=10, σ=0.1, s=0.25)
+const SMOOTH_S_REF_WIDTH = 0.05
 default_smooth_s(beta::Real, sigma::Real) = (SMOOTH_S_REF_WIDTH / sigma)^2
 
 function _pick_alpha_gns(config::Config{<:Any, <:Any, GNS})
@@ -264,9 +269,12 @@ function _pick_alpha_gns(config::Config{<:Any, <:Any, GNS})
 end
 
 """
-Coming from unshifted γ(ω) in the energy domain, leads to a partially shifted Kossakowski matrix α.
-Difference vs the KMS DB case: |ν1 + ν2| → |ν1 + ν2 + β σ^2 / 2| (and thus not skew symmetric due to the Gaussian filters)
-Also: No f and no b-funcs will be constructed because in this setup there is no fine-tuned B in the Lindbladian.
+    create_alpha_gns(nu_1, nu_2, beta, sigma, a, s) -> Real
+
+Return the GNS Kossakowski coefficient for two Bohr frequencies.
+
+The GNS construction shifts the sum to
+`\$abs(nu_1 + nu_2 + beta sigma^2 / 2)\$` and has no coherent correction.
 """
 function create_alpha_gns(nu_1::Real, nu_2::Real, beta::Real, sigma::Real, a::Real, s::Real)
     sqrtA = sqrt(beta * (4 * a + 1) / 4)
@@ -283,6 +291,19 @@ function create_alpha_gns(nu_1::Real, nu_2::Real, beta::Real, sigma::Real, a::Re
     return alpha_nu_1
 end
 
+"""
+    create_alpha_gauss(nu_1, nu_2, sigma, gaussian_parameters) -> Real
+
+Return the Gaussian Kossakowski coefficient for two Bohr frequencies.
+
+# Arguments
+- `nu_1`, `nu_2`: Bohr frequencies.
+- `sigma`: Energy-filter width.
+- `gaussian_parameters`: Transition centre and width `(w_gamma, sigma_gamma)`.
+
+# Returns
+The real coefficient coupling the two Bohr components.
+"""
 function create_alpha_gauss(
     nu_1::Real,
     nu_2::Real,
@@ -297,14 +318,16 @@ function create_alpha_gauss(
     return alpha_fn(nu_1)
 end
 
-#* TOOLS --------------------------------------------------------------------------------------------------------------------
-function create_bohr_dict(bohr_freqs::Matrix{T}) where {T<:AbstractFloat}
-    """Creates a dictionary, where the keys are the Bohr frequencies, and the values are a list of their sparse indices
-    in the Bohr matrix. (With special care on the diagonal elements, that are identically 0.)"""
+"""
+    create_bohr_dict(bohr_freqs) -> Dict
 
+Group matrix indices by exact Bohr frequency, including all zero-frequency
+diagonal indices.
+"""
+function create_bohr_dict(bohr_freqs::Matrix{T}) where {T<:AbstractFloat}
     bohr_dict = DefaultDict{T, Vector{CartesianIndex{2}}}(() -> CartesianIndex{2}[])
     dim = size(bohr_freqs, 1)
-    bohr_dict[zero(T)] = CartesianIndex{2}.(1:dim, 1:dim) # nu = 0.0 is the diagonal and might be other offdiags
+    bohr_dict[zero(T)] = CartesianIndex{2}.(1:dim, 1:dim)
     for j in 1:dim
         for i in 1:(j - 1)
             push!(bohr_dict[bohr_freqs[i, j]], CartesianIndex{2}(i, j))
@@ -314,6 +337,11 @@ function create_bohr_dict(bohr_freqs::Matrix{T}) where {T<:AbstractFloat}
     return bohr_dict
 end
 
+"""
+    check_alpha_skew_symmetry(alpha, nu_1, nu_2, beta) -> nothing
+
+Assert the KMS skew-symmetry relation for a Kossakowski kernel.
+"""
 function check_alpha_skew_symmetry(alpha::Function, nu_1::Real, nu_2::Real, beta::Real)
     @assert norm(alpha(nu_1, nu_2) - alpha(-nu_2, -nu_1) * exp(-beta * (nu_1 + nu_2) / 2)) < 1e-14
 end

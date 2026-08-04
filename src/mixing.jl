@@ -1,58 +1,16 @@
-# ============================================================================
-# Mixing Time Estimation: post-processing of trace distance convergence curves
-# ============================================================================
-#
-# Given a ThermalizeResults (from run_thermalize), fits a decay model to the
-# trace distance data and extracts the effective spectral gap, mixing time,
-# and quality metrics.
-#
-# Supports two models:
-#   :single  — d(t) = A * exp(-gap * t) + C  (default, backward compatible)
-#   :biexp   — d(t) = A1 * exp(-g1 * t) + A2 * exp(-g2 * t) + C
-#
-# This is strictly post-processing -- it does NOT control or modify
-# run_thermalize execution.
-
-# ---------------------------------------------------------------------------
-# MixingTimeEstimate struct
-# ---------------------------------------------------------------------------
+# Mixing-time post-processing for sampled curves and Krylov spectral data.
 
 """
     MixingTimeEstimate
 
-Result of mixing time estimation from a `ThermalizeResults` trace distance curve.
-
-Returned by [`estimate_mixing_time`](@ref). Contains the fitted spectral gap,
-mixing time (actual and/or extrapolated), quality metrics, and the full
-[`FitResult`](@ref) for advanced inspection.
+Result of fitting a sampled distance-to-equilibrium curve.
 
 # Fields
-## Fit parameters (from FitResult slow mode)
-- `fitted_gap::Float64`: Fitted decay rate (spectral gap estimate).
-- `amplitude::Float64`: Fitted amplitude A (slow mode for biexp).
-- `offset::Float64`: Fitted offset C (asymptotic value).
-- `gap_ci::Tuple{Float64, Float64}`: Confidence interval on gap (lower, upper).
-- `gap_se::Float64`: Standard error on gap.
-- `r_squared::Float64`: Goodness of fit (1 - RSS/TSS).
-- `converged::Bool`: Whether Levenberg-Marquardt optimization converged.
-
-## Mixing time results
-- `mixing_time::Float64`: Primary mixing time answer. If `extrapolate=true`, this is the
-  extrapolated time (or `NaN` if extrapolation failed). If `target_epsilon` is provided
-  without extrapolation, this is the actual time the data first crossed the target
-  (or `NaN` if not reached). If neither, this is the total simulation time.
-- `mixing_time_extrapolated::Union{Nothing, Float64}`: Extrapolated mixing time from
-  the fitted model, or `nothing` if `extrapolate=false`.
-- `mixing_time_actual::Union{Nothing, Float64}`: First time the trace distance
-  crossed `target_epsilon` in the data, or `nothing` if not reached or not requested.
-- `target_epsilon::Union{Nothing, Float64}`: The target trace distance used.
-
-## Full fit result
-- `fit_result::FitResult`: Complete single-exp fit result (or synthetic from biexp slow mode).
-
-## Model info
-- `model_used::Symbol`: `:single` or `:biexp`.
-- `biexp_fit_result::Union{Nothing, BiexpFitResult}`: Full biexp fit, or `nothing` for single.
+- `fitted_gap`, `amplitude`, `offset`: Slow fitted mode.
+- `gap_ci`, `gap_se`, `r_squared`, `converged`: Fit diagnostics.
+- `mixing_time`: Selected actual or extrapolated answer.
+- `mixing_time_extrapolated`, `mixing_time_actual`, `target_epsilon`: Crossing details.
+- `fit_result`, `biexp_fit_result`, `model_used`: Underlying model results.
 """
 struct MixingTimeEstimate
     # Fit parameters (from FitResult)
@@ -70,14 +28,10 @@ struct MixingTimeEstimate
     target_epsilon::Union{Nothing, Float64}
     # Full fit for advanced users
     fit_result::FitResult
-    # Model info (new in Phase 43)
+    # Fitted model and optional two-rate details.
     model_used::Symbol
     biexp_fit_result::Union{Nothing, BiexpFitResult}
 end
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
 
 """
     _check_fit_quality(fit::FitResult, target_epsilon)
@@ -103,9 +57,7 @@ end
 """
     _find_actual_mixing_time(times, dists, target_epsilon)
 
-Find the first time in `times` where the trace distance `dists` drops to or
-below `target_epsilon`. Returns `nothing` if `target_epsilon` is `nothing` or
-if the target was never reached.
+Return the first sampled threshold crossing, or `nothing` if none exists.
 """
 function _find_actual_mixing_time(
     times::AbstractVector{<:Real},
@@ -124,20 +76,16 @@ end
 """
     _extrapolate_mixing_time(fit::FitResult, target_epsilon)
 
-Compute the extrapolated mixing time from the fitted model
-`d(t) = A * exp(-gap * t) + C` by solving for `t` when `d(t) = epsilon`.
+Solve the single-exponential fit for a target crossing.
 
-Returns `nothing` if extrapolation is not possible (missing target, non-positive
-gap or amplitude, or offset exceeding target).
+Return `nothing` when the parameters do not define a future crossing.
 """
 function _extrapolate_mixing_time(fit::FitResult, target_epsilon::Union{Nothing, Float64})
     target_epsilon === nothing && return nothing
     fit.gap <= 0.0 && return nothing
     fit.amplitude <= 0.0 && return nothing
 
-    # d(t) = A * exp(-gap * t) + C = epsilon
-    # => A * exp(-gap * t) = epsilon - C
-    # => t = -ln((epsilon - C) / A) / gap
+    # Math: $t = -log((epsilon-C)/A) / Delta$.
     effective_target = target_epsilon - fit.offset
     effective_target <= 0.0 && return nothing   # offset exceeds target
     effective_target >= fit.amplitude && return nothing  # already below target at t=0
@@ -148,11 +96,7 @@ end
 """
     _extrapolate_mixing_time_biexp(bifit::BiexpFitResult, target_epsilon)
 
-Compute the extrapolated mixing time from the bi-exponential fitted model
-`d(t) = A1*exp(-g1*t) + A2*exp(-g2*t) + C` by numerically solving
-`d(t) = epsilon` using bisection via Roots.jl.
-
-Returns `nothing` if extrapolation is not possible.
+Solve the bi-exponential fit for a target crossing by bisection.
 """
 function _extrapolate_mixing_time_biexp(bifit::BiexpFitResult, target_epsilon::Union{Nothing, Float64})
     target_epsilon === nothing && return nothing
@@ -206,8 +150,7 @@ end
 """
     _biexp_to_single_fit_result(bifit::BiexpFitResult) -> FitResult
 
-Construct a synthetic `FitResult` from the slow-mode parameters of a
-`BiexpFitResult` for backward compatibility with the `fit_result` field.
+Project a `BiexpFitResult` onto its slow-mode `FitResult` fields.
 """
 function _biexp_to_single_fit_result(bifit::BiexpFitResult)
     return FitResult(
@@ -224,57 +167,24 @@ function _biexp_to_single_fit_result(bifit::BiexpFitResult)
     )
 end
 
-# ---------------------------------------------------------------------------
-# Main API
-# ---------------------------------------------------------------------------
-
 """
     estimate_mixing_time(times, distances; kwargs...) -> MixingTimeEstimate
 
-Estimate the mixing time from raw `(times, distances)` vectors by fitting a
-decay model and (optionally) extrapolating to a target epsilon.
-
-This is the primary entry point for integrator-based pipelines (qf-lkb.2):
-the output of [`lindblad_action_integrate`](@ref) and
-[`discriminant_action_integrate`](@ref) provides `(t, distances)` directly,
-and a NamedTuple forwarder method dispatches onto this one. The
-[`ThermalizeResults`](@ref) overload also delegates here.
-
-The extrapolator is metric-agnostic — `distances` may be trace distance
-(L-mode), Frobenius distance / `χ` (K-mode), or any non-negative monotonically
-decaying observable. The returned `mixing_time` is in the native metric of
-the supplied data.
+Fit a decay curve and optionally extrapolate its target crossing.
 
 # Arguments
-- `times::AbstractVector{<:Real}`: Time points (must match length of `distances`).
-- `distances::AbstractVector{<:Real}`: Distance-to-equilibrium values at each time.
+- `times`: Sample times.
+- `distances`: Non-negative distance or observable values.
 
-# Keyword Arguments
-- `skip_initial::Real=0.2`: Fraction of initial data to skip (in [0, 1)).
-  Early-time transients often deviate from single-exponential behavior.
-- `target_epsilon::Union{Nothing, Real}=nothing`: Target distance for mixing
-  time. Required when `extrapolate=true`.
-- `extrapolate::Bool=false`: If `true`, compute the extrapolated mixing time
-  from the fitted model. Requires `target_epsilon`.
-- `level::Real=0.95`: Confidence level for the gap confidence interval.
-- `model::Symbol=:biexp`: Fitting model to use. Defaults to `:biexp` here
-  (vs `:single` on the `ThermalizeResults` overload, which preserves
-  pre-Phase-43 behaviour). Bi-exp matches multi-timescale Liouvillian
-  dynamics and gives 26%->0.001% error vs single-exp on real data.
-  - `:single` — Single-exponential `A * exp(-gap * t) + C`.
-  - `:biexp` — Bi-exponential `A1 * exp(-g1 * t) + A2 * exp(-g2 * t) + C`.
+# Keywords
+- `skip_initial`: Fraction of leading samples to discard.
+- `target_epsilon`: Target value; required for extrapolation.
+- `extrapolate`: Solve the fitted model rather than use a sampled crossing.
+- `level`: Confidence level for the gap interval.
+- `model`: `:single` or `:biexp`.
 
 # Returns
-A [`MixingTimeEstimate`](@ref) containing the fitted gap, mixing time(s),
-quality metrics, and the full [`FitResult`](@ref).
-
-# Example
-```julia
-res = lindblad_action_integrate(L_apply!, rho_0, sigma_beta, t_grid)
-est = estimate_mixing_time(res.t, res.distances;
-                            target_epsilon = 1e-3, extrapolate = true)
-println("τ_mix = \$(est.mixing_time) (model=\$(est.model_used))")
-```
+A [`MixingTimeEstimate`](@ref) with crossing and fit diagnostics.
 """
 function estimate_mixing_time(
     times::AbstractVector{<:Real},
@@ -285,7 +195,6 @@ function estimate_mixing_time(
     level::Real = 0.95,
     model::Symbol = :biexp,
 )::MixingTimeEstimate
-    # --- Input validation ---
     length(times) == length(distances) || throw(ArgumentError(
         "times and distances must have the same length (got $(length(times)) and $(length(distances)))"))
     length(times) >= 10 || throw(ArgumentError(
@@ -298,16 +207,13 @@ function estimate_mixing_time(
     model in (:single, :biexp) || throw(ArgumentError(
         "model must be :single or :biexp (got :$model)"))
 
-    # --- Coerce kwargs to the internal helpers' Float64 contract ---
     skip_initial_f = Float64(skip_initial)
     level_f        = Float64(level)
     target_eps_f   = target_epsilon === nothing ? nothing : Float64(target_epsilon)
 
-    # --- Compute actual mixing time (model-independent) ---
     t_mix_actual = _find_actual_mixing_time(times, distances, target_eps_f)
 
     if model == :single
-        # --- Single-exponential path (original behavior) ---
         fit = fit_exponential_decay(Float64.(times), Float64.(distances);
             skip_initial=skip_initial_f, level=level_f)
 
@@ -331,11 +237,9 @@ function estimate_mixing_time(
         )
 
     else  # model == :biexp
-        # --- Bi-exponential path ---
         bifit = fit_biexponential_decay(Float64.(times), Float64.(distances);
             skip_initial=skip_initial_f, level=level_f)
 
-        # Use bi-exponential extrapolation
         t_mix_extrap = extrapolate ? _extrapolate_mixing_time_biexp(bifit, target_eps_f) : nothing
 
         mixing_time = if extrapolate
@@ -346,7 +250,6 @@ function estimate_mixing_time(
             Float64(last(times))
         end
 
-        # Construct synthetic FitResult for backward compat
         synthetic_fit = _biexp_to_single_fit_result(bifit)
 
         return MixingTimeEstimate(
@@ -361,56 +264,17 @@ end
 """
     estimate_mixing_time(result::ThermalizeResults; kwargs...) -> MixingTimeEstimate
 
-Estimate the mixing time from a `ThermalizeResults` trace distance curve by
-fitting a decay model to the data.
-
-This is a post-processing function: it operates on a completed simulation
-result and does NOT control `run_thermalize` execution. Internally delegates
-to the `(times, distances)` vector method on
-`(result.time_steps, result.trace_distances)`.
+Estimate mixing from a completed full-density-matrix simulation.
 
 # Arguments
-- `result::ThermalizeResults`: Completed thermalization simulation with
-  `time_steps` and `trace_distances` fields.
+- `result`: Simulation result containing sample times and trace distances.
 
-# Keyword Arguments
-- `skip_initial::Real=0.2`: Fraction of initial data to skip (in [0, 1)).
-  Early-time transients often deviate from single-exponential behavior.
-- `target_epsilon::Union{Nothing, Real}=nothing`: Target trace distance
-  for mixing time. Required when `extrapolate=true`.
-- `extrapolate::Bool=false`: If `true`, compute the extrapolated mixing time
-  from the fitted model. Requires `target_epsilon`.
-- `level::Real=0.95`: Confidence level for the gap confidence interval.
-- `model::Symbol=:single`: Fitting model to use. Default `:single` here
-  preserves pre-Phase-43 behaviour for existing callers; pass `:biexp`
-  explicitly for the multi-timescale model recommended for thesis-quality
-  τ_mix near the floor (matches the new vector-method default).
-  - `:single` — Single-exponential `A * exp(-gap * t) + C`.
-  - `:biexp` — Bi-exponential `A1 * exp(-g1 * t) + A2 * exp(-g2 * t) + C`.
+# Keywords
+- `skip_initial`, `target_epsilon`, `extrapolate`, `level`: As in the vector method.
+- `model`: Fit model; defaults to `:single` for this overload.
 
 # Returns
-A [`MixingTimeEstimate`](@ref) containing the fitted gap, mixing time(s),
-quality metrics, and the full [`FitResult`](@ref).
-
-# Quality Gates
-Issues `@warn` when (for `:single` model):
-- R-squared < 0.95 (poor fit)
-- Offset C > 0.1 * target_epsilon (unreliable extrapolation)
-- Levenberg-Marquardt did not converge
-- Gap standard error > 50% of fitted gap
-
-# Example
-```julia
-result = run_thermalize(config, hamiltonian, jumps, rho0)
-est = estimate_mixing_time(result; skip_initial=0.2, target_epsilon=0.01, extrapolate=true)
-println("Spectral gap: \$(est.fitted_gap)")
-println("Mixing time (extrapolated): \$(est.mixing_time)")
-println("R-squared: \$(est.r_squared)")
-
-# Bi-exponential model for improved extrapolation near floor:
-est_bi = estimate_mixing_time(result; model=:biexp, target_epsilon=1e-4, extrapolate=true)
-println("Biexp offset: \$(est_bi.offset)")
-```
+A [`MixingTimeEstimate`](@ref). This is post-processing and does not rerun the simulation.
 """
 function estimate_mixing_time(
     result::ThermalizeResults;
@@ -433,41 +297,13 @@ end
 """
     estimate_mixing_time(integrator_result::NamedTuple; kwargs...) -> MixingTimeEstimate
 
-Convenience forwarder for the output of the matrix-free Lindbladian-action
-integrators [`lindblad_action_integrate`](@ref) and
-[`discriminant_action_integrate`](@ref) (qf-lkb.1). Dispatches onto the
-`(times, distances)` vector method using `integrator_result.t` and
-`integrator_result.distances`.
+Estimate mixing from an integrator result containing `t` and `distances`.
 
-The integrator NamedTuple contract guarantees the field names `.t` and
-`.distances`; any NamedTuple lacking those fields raises a `KeyError` at
-field access. Default `model=:biexp` flows through from the vector method.
-
-!!! warning "Not for the Krylov trajectory predictors"
-    This (bi)exponential curve fit is for SAMPLED trajectory curves —
-    integrator outputs and [`ThermalizeResults`](@ref). It must **not** be used
-    on [`predict_lindbladian_trajectory`](@ref) /
-    [`predict_channel_trajectory`](@ref) output: those return an exact
-    bi-orthogonal eigendecomposition, and their τ_mix(ε) comes from the
-    closed-form bisection [`eigenmode_mixing_time`](@ref), which is exact on the
-    captured subspace and robust on flat tails where the LM fit degenerates
-    (qf-3uj). A predictor NamedTuple (carrying `:R_modes` / `:eigenvalues`) is
-    rejected here with an `ArgumentError` pointing to `eigenmode_mixing_time`.
-
-# Example
-```julia
-res = lindblad_action_integrate(L_apply!, rho_0, sigma_beta, t_grid)
-est = estimate_mixing_time(res; target_epsilon = 1e-3, extrapolate = true)
-println("τ_mix = \$(est.mixing_time) (matvecs = \$(res.total_matvecs))")
-```
+Krylov predictor results are rejected because their spectral data should be
+passed to [`eigenmode_mixing_time`](@ref) instead of curve fitting.
 """
 function estimate_mixing_time(integrator_result::NamedTuple; kwargs...)::MixingTimeEstimate
-    # qf-3uj: refuse a Krylov trajectory-predictor result. predict_*_trajectory
-    # return the spectral data (`:R_modes` / `:eigenvalues` / `:rho_inf` /
-    # `:sigma_beta`); the matrix-free integrators return only
-    # (t, distances, *_final, total_matvecs, all_converged, states). Keying on
-    # `:R_modes` / `:eigenvalues` separates them cleanly, so the curve fit can
-    # never silently stand in for the exact bisection on the predictor path.
+    # Predictor spectral data require exact subspace bisection, not a curve fit.
     if haskey(integrator_result, :R_modes) || haskey(integrator_result, :eigenvalues)
         throw(ArgumentError(
             "estimate_mixing_time received a Krylov trajectory-predictor result " *
@@ -486,14 +322,7 @@ function estimate_mixing_time(integrator_result::NamedTuple; kwargs...)::MixingT
     )
 end
 
-# ---------------------------------------------------------------------------
-# Eigenmode τ_mix (qf-e4y.2): closed-form bisection on the Krylov spectral
-# decomposition. Drops the bi-exp curve fit on the :krylov route — the
-# eigendecomposition built by `predict_*_trajectory` already encodes the
-# slow-mode amplitudes exactly, so the trace distance d(t) = ε equation
-# reduces to a 1D bracketed bisection. Robust to LM degenerate-basin
-# failures that haunt bi-exp on flat-tail cells.
-# ---------------------------------------------------------------------------
+# Exact mixing-time bisection on a captured Krylov spectral expansion.
 
 const _EIGENMODE_ZERO_TOL = 1e-10  # |λ| below this counts as the steady mode
 
@@ -503,64 +332,26 @@ const _EIGENMODE_ZERO_TOL = 1e-10  # |λ| below this counts as the steady mode
                           eigenvalue_zero_tol)
         -> NamedTuple
 
-Closed-form τ_mix(ε) from a Krylov bi-orthogonal eigendecomposition of `L`.
-
-Bisects ``d(t) = \\| (\\rho_\\infty - \\sigma_\\beta) + \\sum_i c_i e^{\\lambda_i t} R_i \\|_1 / 2 = \\varepsilon``
-on the continuous-time axis. The smallest ``|\\Re(\\lambda_i)|`` over the
-non-steady eigenvalues (the steady mode `λ_1 ≈ 0` has `c_1 ≈ 0` by trace
-preservation) is the spectral gap, which sets the bisection bracket.
-
-Inputs are exactly the spectral data exposed by `predict_lindbladian_trajectory`
-(and the channel analogue after `λ_eff = log(μ) / δ` conversion at the call
-site).
+Bisect the trace-distance crossing of a biorthogonal Krylov expansion.
 
 # Arguments
-- `eigenvalues::AbstractVector{<:Complex}`: Lindbladian eigenvalues. Steady
-  mode (`|λ_1| < eigenvalue_zero_tol`) is automatically excluded from the
-  gap and kept in the residual sum (with `c_1 ≈ 0` from the engine).
-- `c::AbstractVector{<:Complex}`: biorthogonal coefficients
-  ``c_i = \\langle L_i, \\rho_0 - \\rho_\\infty \\rangle_{HS}``.
-- `R_modes::AbstractVector{<:AbstractMatrix}`: right-eigenvector matrices
-  (one `d × d` complex matrix per captured Krylov mode).
-- `rho_inf::AbstractMatrix`: captured steady state of `L` (the leading
-  `R_modes[1]`, normalised to trace 1 by the engine).
-- `sigma_beta::AbstractMatrix`: trace-distance reference (Gibbs state for
-  the Lindbladian path; basis-aligned Gibbs for the channel path).
-- `target_epsilon::Real`: the trace distance threshold ``\\varepsilon``.
+- `eigenvalues`: Lindbladian rates, including the steady mode.
+- `c`: Biorthogonal expansion coefficients.
+- `R_modes`: Right eigenmodes as matrices.
+- `rho_inf`: Captured stationary state.
+- `sigma_beta`: Reference Gibbs state in the same basis.
+- `target_epsilon`: Trace-distance threshold.
 
 # Keywords
-- `t_upper::Real = 0.0`: bisection upper bracket. `0` triggers the heuristic
-  `t_upper = max(10/gap, 50)` followed by one 3× expansion if needed.
-- `atol::Real = 1e-3`: bisection tolerance (in `t` units). The bracket
-  shrinks until `|t_high - t_low| < atol`.
-- `max_iters::Int = 64`: hard cap on bisection steps (passed through to
-  `Roots.find_zero`).
-- `eigenvalue_zero_tol::Real = 1e-10`: threshold below which an eigenvalue
-  is treated as the steady mode (excluded from the gap, included in the
-  residual sum since the engine sets `c_1 = 0`).
+- `t_upper`: Upper bracket; zero selects `max(10/gap, 50)`.
+- `atol`: Absolute time-axis tolerance.
+- `max_iters`: Maximum bisection iterations.
+- `eigenvalue_zero_tol`: Magnitude below which a rate is stationary.
 
 # Returns
-NamedTuple with:
-- `mixing_time::Float64`: ``\\tau_{\\text{mix}}(\\varepsilon)``, or `Inf` if
-  ``\\varepsilon`` is below the asymptotic floor
-  ``\\| \\rho_\\infty - \\sigma_\\beta \\|_1 / 2`` (no crossing exists).
-- `gap::Float64`: smallest ``|\\Re(\\lambda_i)|`` over non-steady modes.
-- `floor_distance::Float64`: ``d(\\infty) = \\| \\rho_\\infty - \\sigma_\\beta \\|_1 / 2``.
-- `source::Symbol`: `:extrapolated` (bisection found a crossing),
-  `:floor` (target below floor; `mixing_time = Inf`), `:nan` (degenerate
-  input — fewer than 2 eigenvalues, or the bracket failed even after one
-  3× expansion).
-- `n_evals::Int`: number of `d(t)` evaluations performed.
-
-# Notes
-- Defensive Hermitisation is applied to the residual matrix before
-  `svdvals`, mirroring the existing predictor loop's convention.
-- Complex eigenvalues come in conjugate pairs `(λ, λ̄)` with paired
-  `(c, c̄)` and `(R, R̄)`, so the residual matrix is Hermitian to
-  machine precision; the Hermitisation only suppresses round-off.
-- The closed-form formula is exact on the Krylov-captured subspace.
-  Truncation error mirrors that of the predictor itself — `all_converged`
-  on the predictor flags it.
+A named tuple with `mixing_time`, `gap`, `floor_distance`, `source`, and
+`n_evals`. `mixing_time` is `Inf` when the target is below the asymptotic
+floor and `NaN` for degenerate input or a failed bracket.
 """
 function eigenmode_mixing_time(
     eigenvalues::AbstractVector{<:Complex},
@@ -580,11 +371,10 @@ function eigenmode_mixing_time(
     target_epsilon > 0.0 || throw(ArgumentError(
         "target_epsilon must be positive (got $target_epsilon)"))
 
-    # Floor: d(∞) = ‖rho_inf - sigma_beta‖_1 / 2 (in the Hermitian residual,
-    # half the sum of singular values is the trace distance).
+    # Math: $d(infinity) = norm(rho_infinity-sigma_beta)_1 / 2$.
     floor_distance = sum(svdvals(rho_inf .- sigma_beta)) / 2
 
-    # Spectral gap: smallest |Re(λ_i)| over non-steady modes.
+    # Math: $Delta = min_(lambda_i != 0) abs(Re(lambda_i))$.
     gap = Inf
     for i in 1:h
         abs(eigenvalues[i]) < eigenvalue_zero_tol && continue
@@ -703,37 +493,11 @@ end
 """
     eigenmode_mixing_time(traj::NamedTuple, target_epsilon; kwargs...) -> NamedTuple
 
-Closed-form τ_mix(ε) directly from a Krylov trajectory-predictor result.
+Compute mixing time directly from a Krylov predictor result.
 
-This is the **canonical** τ_mix extraction for
-[`predict_lindbladian_trajectory`](@ref) and
-[`predict_channel_trajectory`](@ref): it reads the bi-orthogonal
-eigendecomposition the predictor already returned (`eigenvalues`, `c`,
-`R_modes`, `rho_inf`, `sigma_beta`) and bisects `d(t) = ε` on it. Always prefer
-this over a (bi)exponential curve fit of the sampled `(t, distances)` curve
-(`estimate_mixing_time`) — the bisection is exact on the captured Krylov
-subspace and robust on flat tails where the Levenberg–Marquardt fit degenerates
-(qf-3uj). `estimate_mixing_time` actively refuses a predictor NamedTuple for
-this reason.
-
-For a **channel** trajectory (detected by the `delta_used` field) the channel
-eigenvalues `μ` are converted to Lindbladian rates `λ_eff = log(μ) / δ`, so the
-`exp(λ t)` machinery runs in physical time `t = k·δ` and matches the trajectory
-curve (steady `μ ≈ 1 → λ ≈ 0`). For a **Lindbladian** trajectory the
-eigenvalues are already rates and are used as-is.
-
-`kwargs` (`t_upper`, `atol`, `max_iters`, `eigenvalue_zero_tol`) forward
-unchanged to the spectral-data method.
-
-# Example
-```julia
-traj = predict_lindbladian_trajectory(cfg, ham, jumps, rho_0, t_grid; krylovdim=40)
-res  = eigenmode_mixing_time(traj, 1e-3)            # bisection, not a curve fit
-println("τ_mix = \$(res.mixing_time)  (source=\$(res.source))")
-
-ch   = predict_channel_trajectory(cfg_C, ham, jumps_C, rho_0, k_grid; trotter=trot)
-resC = eigenmode_mixing_time(ch, 1e-3)              # μ → λ_eff conversion is automatic
-```
+Channel eigenvalues are converted to rates as `log(mu)/delta`; Lindbladian
+eigenvalues are already rates. Remaining keywords forward to the spectral-data
+method.
 """
 function eigenmode_mixing_time(traj::NamedTuple, target_epsilon::Real; kwargs...)::NamedTuple
     for f in (:eigenvalues, :c, :R_modes, :rho_inf, :sigma_beta)
@@ -744,8 +508,7 @@ function eigenmode_mixing_time(traj::NamedTuple, target_epsilon::Real; kwargs...
             "predict_lindbladian_trajectory / predict_channel_trajectory."))
     end
     eigenvalues = if haskey(traj, :delta_used)
-        # Channel: μ → λ_eff = log(μ)/δ (mirrors the predict_channel_trajectory
-        # convention; at t = k·δ, exp(λ_eff·t) = μ^k exactly).
+        # Math: $lambda_eff = log(mu)/delta$, so $exp(lambda_eff k delta) = mu^k$.
         δ = traj.delta_used
         ComplexF64[log(complex(μ)) / δ for μ in traj.eigenvalues]
     else

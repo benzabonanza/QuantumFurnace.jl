@@ -1,4 +1,3 @@
-#* COHERENT TERMS -----------------------------------------------------------------------------------------------------------
 """
     _precompute_coherent_B(
         jumps,
@@ -8,8 +7,7 @@
         trotter=nothing,
     ) -> Union{Nothing, Matrix{<:Complex}}
 
-    Returns the total coherent operator B = sum_k B_k, already scaled by gamma_norm_factor.
-    Returns nothing if with_coherent(config.construction) == false.
+Return the scaled coherent operator, or `nothing` for a construction without one.
 """
 function _precompute_coherent_B(
     jumps::AbstractVector{<:JumpOp},
@@ -22,8 +20,7 @@ function _precompute_coherent_B(
 
     if config.domain isa TimeDomain
         (; b_minus, b_plus, gamma_norm_factor) = precomputed_data
-        # qf-9z0.3: outer integration over `b_-(t)` runs on the `b_minus`
-        # register; inner over `b_+(τ)` on the `b_plus` register.
+        # Outer and inner kernels use independent register spacings.
         B = B_time(jumps, ham_or_trott, b_minus, b_plus,
             register_t0_b_minus(config), register_t0_b_plus(config),
             config.beta, config.sigma)
@@ -49,11 +46,9 @@ end
     _precompute_coherent_B(jumps, ham_or_trott, config::Config{<:Any, BohrDomain, DLL}, precomputed_data)
     _precompute_coherent_B(jumps, ham_or_trott, config::Config{<:Any, TimeDomain, DLL}, precomputed_data)
 
-DLL coherent operator `G` (Ding–Li–Lin 2024, Eqs. 3.5–3.7) computed via the
-`dll_coherent_op_bohr` / `dll_coherent_op_time` helpers in `src/dll.jl`. DLL
-has no `gamma_norm_factor` — the filter `f̂(ν)` already encodes the KMS
-weight — so the result is returned without rescaling (cf. the CKG branch
-above which applies `rmul!(B, gamma_norm_factor)`).
+Return the DLL coherent operator without additional rate normalisation.
+
+The DLL frequency filter already contains the KMS factor.
 """
 function _precompute_coherent_B(
     jumps::AbstractVector{<:JumpOp},
@@ -84,12 +79,11 @@ end
         trotter::Union{Nothing, AbstractTrotter}=nothing,
     ) -> Union{Nothing, Vector{Matrix{<:Complex}}}
 
-    Precompute per-jump coherent unitaries for Kraus thermalization:
-        U_k = exp(-1im * config.delta * B_k)
+Precompute the per-jump coherent channel unitaries.
 
-    Each B_k is constructed exactly as in the coherent-term definitions (domain-dependent),
-    scaled by `gamma_norm_factor` (same convention as Liouvillian construction).
-    Returns `nothing` if `with_coherent(config.construction) == false`.
+# Returns
+Matrices `\$U_k = exp(-i delta B_k)\$`, or `nothing` when the construction has
+no coherent term.
 """
 function _precompute_coherent_unitary(
     jumps::AbstractVector{<:JumpOp},
@@ -97,7 +91,7 @@ function _precompute_coherent_unitary(
     config::Config{Thermalize},
     precomputed_data;
     trotter::Union{Nothing, AbstractTrotter}=nothing,
-    delta_scale::Real = 1.0  # for randomized channels
+    delta_scale::Real = 1.0
     )
 
     with_coherent(config.construction) || return nothing
@@ -108,7 +102,7 @@ function _precompute_coherent_unitary(
 
     if config.domain isa TimeDomain
         (; b_minus, b_plus, gamma_norm_factor) = precomputed_data
-        # Outer/inner integration registers (qf-9z0.3).
+        # Independent outer and inner integration grids.
         t0_outer = register_t0_b_minus(config)
         t0_inner = register_t0_b_plus(config)
         @inbounds for (k, jump) in pairs(jumps)
@@ -121,8 +115,7 @@ function _precompute_coherent_unitary(
     elseif config.domain isa TrotterDomain
         (; b_minus, b_plus, gamma_norm_factor) = precomputed_data
         @assert trotter !== nothing
-        # Outer/inner integration registers (qf-9z0.3); the Trotter step
-        # `trotter.t0` is independent and stays as the per-substep duration.
+        # The integration grids are independent of the Trotter substep.
         t0_outer = register_t0_b_minus(config)
         t0_inner = register_t0_b_plus(config)
         @inbounds for (k, jump) in pairs(jumps)
@@ -144,12 +137,21 @@ function _precompute_coherent_unitary(
     return U_terms
 end
 
-# (3.1) and Proposition III.1
-# Has to be on a symmetric time domain, otherwise it can't be Hermitian.
-# qf-9z0.3: outer integration spacing `t0_outer` (b_-(t)) and inner spacing
-# `t0_inner` (b_+(τ)) are now independent, mapping each leg to its own QPE
-# register on the quantum side. Final scaling is `t0_outer * t0_inner` from
-# the nested Riemann sums (thesis Eq. on line 744 of `2_methods.tex`).
+"""
+    B_time(jumps, hamiltonian, b_minus, b_plus, t0_outer, t0_inner, beta, sigma)
+
+Construct the KMS coherent correction by nested time quadrature.
+
+# Arguments
+- `jumps`, `hamiltonian`: Operators and spectral data.
+- `b_minus`, `b_plus`: Truncated outer and inner kernels.
+- `t0_outer`, `t0_inner`: Independent Riemann-sum spacings.
+- `beta`, `sigma`: Algorithm-side temperature and Gaussian width.
+
+# Returns
+The coherent matrix in the Hamiltonian eigenbasis. Both time grids must be
+symmetric for Hermiticity.
+"""
 function B_time(jumps::AbstractVector{<:JumpOp}, hamiltonian::HamHam,
         b_minus, b_plus, t0_outer::Real, t0_inner::Real, beta, sigma)
 
@@ -157,13 +159,8 @@ function B_time(jumps::AbstractVector{<:JumpOp}, hamiltonian::HamHam,
     CT = Complex{eltype(hamiltonian.eigvals)}
     eigvals = hamiltonian.eigvals
 
-    # qf-6af.5: at construction time, the dominant cost in `_precompute_coherent_B`
-    # is this nested b_+(τ) × jumps × b_-(t) loop. Parallelise the inner τ-loop
-    # over (jump, τ) pairs, then the outer t-loop over `t` values, with private
-    # partials reduced afterwards. Each task pins BLAS to 1 thread (Julia tasks
-    # do the work; BLAS multithreading inside a per-thread mul! actively hurt
-    # in measurements). Falls back to the serial inline body when nthreads()=1
-    # or work below threshold (~OMEGA_THREAD_THRESHOLD).
+    # Thread tasks own their partial matrices; BLAS stays single-threaded to
+    # avoid nested parallelism.
     tau_keys = collect(keys(b_plus))
     n_jumps  = length(jumps)
     n_inner_work = length(tau_keys) * n_jumps
@@ -190,7 +187,7 @@ function B_time(jumps::AbstractVector{<:JumpOp}, hamiltonian::HamHam,
         end
     end
 
-    # Outer summand b_minus — uses the outer register grid t0_outer.
+    # The outer kernel uses its own register grid.
     t_keys = collect(keys(b_minus))
     if Threads.nthreads() > 1 && length(t_keys) >= OMEGA_THREAD_THRESHOLD
         B = _b_time_outer_threaded(eigvals, b_plus_summand, b_minus, t_keys, sigma, d, CT)
@@ -207,9 +204,7 @@ function B_time(jumps::AbstractVector{<:JumpOp}, hamiltonian::HamHam,
     return B .* (t0_outer * t0_inner)
 end
 
-# Threaded inner τ × jumps accumulation for `B_time`. Each task builds a
-# private partial b_+(τ)-summand (d×d) using its own diag_u/diag_u2/tmp/M
-# buffers. Reduction sums into a final result without holding the GIL.
+# Thread-local inner-kernel accumulation.
 function _b_time_inner_threaded(jumps, eigvals, b_plus, tau_keys, beta, d, ::Type{CT}) where {CT}
     n_inner = length(tau_keys) * length(jumps)
     nt = min(Threads.nthreads(), n_inner)
@@ -270,8 +265,7 @@ function _b_time_inner_chunk!(partial::Matrix{CT}, jumps, eigvals, b_plus,
     return nothing
 end
 
-# Threaded outer t-loop accumulation for `B_time`. Reads `b_plus_summand` as
-# a constant (already final at this point) and accumulates B partials.
+# Thread-local outer-kernel accumulation.
 function _b_time_outer_threaded(eigvals, b_plus_summand, b_minus, t_keys,
     sigma, d, ::Type{CT}) where {CT}
     n_t = length(t_keys)
@@ -313,38 +307,32 @@ function _b_time_outer_chunk!(partial::Matrix{CT}, eigvals, b_plus_summand,
     return nothing
 end
 
-# Legacy 6-arg form (single t0); forwards to the explicit-outer-inner form
-# with `t0_outer = t0_inner = t0`. Retained so callers that did not migrate
-# still see byte-identical behaviour (B .* t0² ≡ B .* t0 .* t0).
+# Compatibility overload using one spacing for both quadratures.
 B_time(jumps::AbstractVector{<:JumpOp}, hamiltonian::HamHam, b_minus, b_plus,
     t0::Real, beta::Real, sigma::Real) =
     B_time(jumps, hamiltonian, b_minus, b_plus, t0, t0, beta, sigma)
 
-# qf-9z0.3: Trotter coherent gains (t0_outer, t0_inner) for the nested Riemann
-# sum integration weight. This single-cache `B_trotter(::TrottTrott)` method runs
-# both the inner b_+(τ) loop and the outer b_-(t) loop against the SAME Trotter
-# cache (`trotter.eigvals_t0` at step `trotter.t0`). The canonical KMS coherent
-# path uses `B_trotter(::TrotterTriple)` instead, which gives each leg its own
-# cache and eigenbasis. Per-grid step counts:
-#   - inner b_+(τ) loop: round(τ·β / t0), since τ·β advances the evolution by
-#     k·t0_grid·β per τ-grid increment.
-#   - outer b_-(t) loop: round(t / (σ·t0)), correct for general σ (coincides
-#     with the β form when σ = 1/β).
+"""
+    B_trotter(jumps, trotter, b_minus, b_plus, t0_outer, t0_inner, beta, sigma)
+
+Construct the KMS coherent correction with Trotterised time evolutions.
+
+The `TrottTrott` method reuses one evolution cache for both quadratures; the
+`TrotterTriple` method uses independent caches and bases. The result is in the
+dissipative construction basis.
+"""
 function B_trotter(jumps::AbstractVector{<:JumpOp}, trotter::TrottTrott,
         b_minus, b_plus, t0_outer::Real, t0_inner::Real, beta, sigma)
 
     d = size(trotter.eigvecs, 1)
     CT = Complex{eltype(trotter.bohr_freqs)}
 
-    # Single-cache: both legs run against the same Trotter cache, diagonal in
-    # `trotter.eigvecs`.
+    # Both quadrature legs share the same diagonal Trotter cache.
     eigvals_outer = trotter.eigvals_t0
     eigvals_inner = trotter.eigvals_t0
     t0_step_outer = trotter.t0
     t0_step_inner = trotter.t0
 
-    # qf-6af.5: thread the inner τ × jumps loop and the outer t-loop. See the
-    # `B_time` parallelisation for rationale (Julia tasks; BLAS pinned to 1).
     tau_keys = collect(keys(b_plus))
     n_jumps  = length(jumps)
     n_inner_work = length(tau_keys) * n_jumps
@@ -494,29 +482,13 @@ function _b_trotter_outer_chunk!(partial::Matrix{CT}, eigvals_outer,
     return nothing
 end
 
-# Legacy form: forwards to the explicit-outer-inner form using `trotter.t0`
-# for both legs (matches the pre-qf-9z0 behaviour `B .* trotter.t0²`).
+# Compatibility overload using the Trotter step for both quadratures.
 B_trotter(jumps::AbstractVector{<:JumpOp}, trotter::TrottTrott, b_minus, b_plus,
     beta::Real, sigma::Real) =
     B_trotter(jumps, trotter, b_minus, b_plus, trotter.t0, trotter.t0, beta, sigma)
 
-# ---------------------------------------------------------------------------
-# qf-e4z.20.3 — B_trotter on TrotterTriple (independent per-leg caches).
-#
-# Pipeline (jumps arrive in V_D basis; final B is returned in V_D):
-#
-#   1. Rotate jumps V_D → V_bp:   J_bp = R_bp_in_D · J_D · R_bp_in_D'.
-#   2. Inner τ-loop in V_bp:      runs against `triple.b_plus.eigvals_t0`,
-#                                  `triple.b_plus.t0`. Output: b_+_summand in V_bp.
-#   3. Rotate summand V_bp → V_bm: summand_bm = R_bm_in_bp · summand_bp · R_bm_in_bp'.
-#   4. Outer t-loop in V_bm:      runs against `triple.b_minus.eigvals_t0`,
-#                                  `triple.b_minus.t0`. Output: B in V_bm.
-#   5. Rotate B V_bm → V_D:       B_D = R_bm_in_D' · B_bm · R_bm_in_D.
-#
-# Convention: R_{Y←X} := V_Y' · V_X, so M_Y = R_{Y←X} · M_X · R_{Y←X}'.
-# The rotations are O(d^3) per call (6 GEMMs) — sub-dominant to the
-# threaded τ × jumps inner loop at d ≤ 64 and competitive at d ≤ 512.
-# ---------------------------------------------------------------------------
+# Basis convention: $R_(Y <- X) = V_Y^dagger V_X$ and
+# $M_Y = R_(Y <- X) M_X R_(Y <- X)^dagger$.
 function B_trotter(
     jumps::AbstractVector{<:JumpOp},
     triple::TrotterTriple,
@@ -527,7 +499,7 @@ function B_trotter(
     d  = size(triple.D.eigvecs, 1)
     CT = Complex{eltype(triple.D.bohr_freqs)}
 
-    # Step 1: rotate jumps V_D → V_bp.  J_bp = R_bp_in_D · J_D · R_bp_in_D'.
+    # Rotate jumps from the dissipative basis to the inner-kernel basis.
     R_bp_in_D = triple.R_bp_in_D
     jumps_bp  = Vector{JumpOp}(undef, length(jumps))
     @inbounds for (k, j) in pairs(jumps)
@@ -535,8 +507,7 @@ function B_trotter(
         jumps_bp[k] = JumpOp(j.data, j_bp, j.orthogonal, j.hermitian)
     end
 
-    # Step 2: inner τ-loop in V_bp. Reuses the existing threaded helper —
-    # `eigvals_inner = triple.b_plus.eigvals_t0` is diagonal in V_bp.
+    # Accumulate the inner kernel where its Trotter step is diagonal.
     eigvals_inner = triple.b_plus.eigvals_t0
     t0_step_inner = triple.b_plus.t0
     tau_keys = collect(keys(b_plus))
@@ -566,12 +537,11 @@ function B_trotter(
         end
     end
 
-    # Step 3: rotate summand V_bp → V_bm.  summand_bm = R_bm_in_bp · summand_bp · R_bm_in_bp'.
+    # Rotate the inner sum to the outer-kernel basis.
     R_bm_in_bp        = triple.R_bm_in_bp
     b_plus_summand_bm = Matrix{CT}(R_bm_in_bp * b_plus_summand_bp * R_bm_in_bp')
 
-    # Step 4: outer t-loop in V_bm. `eigvals_outer = triple.b_minus.eigvals_t0`
-    # is diagonal in V_bm.
+    # Accumulate the outer kernel where its Trotter step is diagonal.
     eigvals_outer = triple.b_minus.eigvals_t0
     t0_step_outer = triple.b_minus.t0
     t_keys = collect(keys(b_minus))
@@ -589,36 +559,26 @@ function B_trotter(
         end
     end
 
-    # Step 5: rotate V_bm → V_D.  B_D = R_bm_in_D' · B_bm · R_bm_in_D.
+    # Return to the dissipative basis.
     R_bm_in_D = triple.R_bm_in_D
     B_D = Matrix{CT}(R_bm_in_D' * B_bm * R_bm_in_D)
 
     return B_D .* (t0_outer * t0_inner)  # B in V_D
 end
 
-# Legacy form for TrotterTriple: forwards using `triple.D.t0` for both grid
-# spacings (matches the pre-qf-9z0 single-cache convention).
+# Compatibility overload using the dissipative step for both quadratures.
 B_trotter(jumps::AbstractVector{<:JumpOp}, triple::TrotterTriple, b_minus, b_plus,
     beta::Real, sigma::Real) =
     B_trotter(jumps, triple, b_minus, b_plus, triple.D.t0, triple.D.t0, beta, sigma)
 
-#* GQSP POLYNOMIAL APPROXIMATION ------------------------------------------------------------------------------------------
 """
     _coherent_unitary_step(jump, B, precomputed_data, t0_outer, t0_inner, delta_eff,
                            with_gqsp, gqsp_degree) -> Matrix{<:Complex}
 
-Single-jump coherent step `U_a ≈ exp(-i·delta_eff·B_a)`. `B` is assumed already scaled by
-`gamma_norm_factor` (same convention as the dissipator construction). It is hermitised
-in-place to absorb numerical noise; both branches then operate on the same Hermitian
-matrix:
-- `with_gqsp = false`: returns `exp(-i·delta_eff·Hermitian(B))` (exact matrix exp).
-- `with_gqsp = true`: returns the post-selected GQSP polynomial `f_{gqsp_degree}(B/α)`
-  approximating `exp(-i·delta_eff·B_a)` with truncation error
-  `O((delta_eff·α)^{gqsp_degree+1})` (Bessel-tail bound; MW 2024 Eq. 62–63).
-  `α = _gqsp_block_encoding_alpha(...)` is built from the **outer** and **inner**
-  Riemann-sum spacings independently (qf-9z0.3). Reads `b_minus`, `b_plus`,
-  `gamma_norm_factor` from `precomputed_data` only in this branch — `validate_config!`
-  guarantees those fields exist when `with_gqsp = true` (Time/TrotterDomain only).
+Return one coherent channel step from an already normalised Hermitian `B`.
+
+The exact branch evaluates `exp(-i delta_eff B)`; the GQSP branch evaluates a
+degree-`gqsp_degree` Jacobi–Anger polynomial of the block-encoded operator.
 """
 function _coherent_unitary_step(
     jump::JumpOp,
@@ -641,8 +601,7 @@ function _coherent_unitary_step(
     end
 end
 
-# Legacy 7-arg form: forwards to the explicit-outer-inner form with
-# `t0_outer = t0_inner = t0_sim`.
+# Compatibility overload using one spacing for both quadratures.
 _coherent_unitary_step(jump, B, precomputed_data, t0_sim::Real, delta_eff::Real,
     with_gqsp::Bool, gqsp_degree::Int) =
     _coherent_unitary_step(jump, B, precomputed_data, t0_sim, t0_sim, delta_eff,
@@ -652,17 +611,11 @@ _coherent_unitary_step(jump, B, precomputed_data, t0_sim::Real, delta_eff::Real,
     _gqsp_block_encoding_alpha(jump, b_minus, b_plus, t0_outer, t0_inner,
                                gamma_norm_factor) -> Real
 
-Block-encoding norm `α_a` of the simulator-side `B_a` operator (Time/TrotterDomain),
-with **independent outer/inner** Riemann-sum spacings (qf-9z0.3).
+Return an upper bound on the coherent block-encoding norm.
 
-Following Alg. `alg:coh` in the thesis, with `B_a` already scaled by `gamma_norm_factor`:
-
-    α_a = γ_nf · t0_outer · t0_inner · ‖b_-‖_{ℓ¹} · ‖b_+‖_{ℓ¹} · ‖A_a‖²_op
-
-where the ℓ¹ norms are the truncated-grid sums of `|b_minus[t]|` and `|b_plus[τ]|`.
-The `‖A_a‖²` factor (not `‖A_a‖`) reflects the two `A_a` factors in the inner
-integrand `A_a^† · e^{-2iHβτ} · A_a` (the inner unitary has operator norm 1).
-This guarantees `‖B_a / α_a‖_op ≤ 1` so the GQSP polynomial of `B_a / α_a` is faithful.
+Math: `alpha_a = gamma_norm_factor t0_outer t0_inner
+norm(b_minus)_1 norm(b_plus)_1 norm(A_a)_op^2`, which ensures
+`norm(B_a / alpha_a)_op <= 1`.
 """
 function _gqsp_block_encoding_alpha(
     jump::JumpOp,
@@ -678,48 +631,21 @@ function _gqsp_block_encoding_alpha(
     return gamma_norm_factor * t0_outer * t0_inner * l1_minus * l1_plus * A_norm_sq
 end
 
-# Legacy 5-arg form: forwards to the explicit-outer-inner form.
+# Compatibility overload using one spacing for both quadratures.
 _gqsp_block_encoding_alpha(jump, b_minus, b_plus, t0_sim::Real, gamma_norm_factor::Real) =
     _gqsp_block_encoding_alpha(jump, b_minus, b_plus, t0_sim, t0_sim, gamma_norm_factor)
 
 """
     _gqsp_apply_polynomial(B::AbstractMatrix{<:Complex}, alpha::Real, delta::Real, d::Int)
 
-Compute the post-selected anc=|0⟩ block of the GQSP circuit at degree `d`, i.e. the
-Chebyshev expansion produced by qubitization + Jacobi-Anger truncation:
+Evaluate the degree-`d` post-selected GQSP polynomial by Clenshaw recurrence.
 
-    f_d(B/α) = J_0(δα) I + Σ_{k=1}^{d} 2 (-i)^k J_k(δα) T_k(B/α)
+Math: `f_d(B/alpha) = J_0(delta alpha) I +
+sum_(k=1)^d 2 (-i)^k J_k(delta alpha) T_k(B/alpha)`.
 
-This is the post-selected anc=|0⟩ block of the GQSP Laurent polynomial
-`L_d(W) = Σ_{n=-d}^{d} (-i)^n J_n(δα) W^n` evaluated on the qubitization walk `W`
-of `B/α` (Motlagh & Wiebe 2024, Theorem 7 + Cor. 8, Eq. 62–66). The `(-i)^n`
-phase comes from MW Eq. 62 `e^{it cos θ} = Σ_n i^n J_n(t) e^{inθ}` with `t = -δα`
-combined with `J_n(-x) = (-1)^n J_n(x)`; the factor `2` on `k ≥ 1` collapses the
-two-sided sum onto Chebyshev `T_k(cos θ) = cos(kθ)`.
-
-To `O((δα)^{d+1})` this approximates `exp(-iδ B)` (Bessel-tail bound,
-MW Eq. 63). The d=1 special case `f_1(B/α) = J_0(δα) I − 2i J_1(δα) (B/α)` requires
-no matmul. For `d ≥ 2`, the function uses the Clenshaw recurrence on `T_k(B/α)`
-with three n×n scratch buffers reused across iterations (allocation is `O(1)` in d).
-
-Returns a `Matrix{eltype(B)}`. `f_d` is unitary up to `O((δα)^{d+1})` but in general not
-Hermitian; do not Hermitianize the output.
-
-# Circuit form (cost-model only — has no effect on this evaluator)
-
-This routine is a circuit-form-agnostic Clenshaw evaluator of `f_d(B/α)`; it
-returns the post-selected QSP=|0⟩ block of the GQSP unitary, which is the
-*same* operator for both Form B and Form C (algebraic identity from MW2024
-Eqs. 49→53). The implementation target on hardware is **Form B (MW2024 Eq. 46)**:
-`d` open-controlled-`W` slots + `d` closed-controlled-`W†` slots (the `A'`
-of MW Eq. 45) = `2d` block-encoding queries — 1.5× cheaper than Form C
-(Eq. 52: all controlled-`W` + uncontrolled `W^{-d}` tail = `3d` queries).
-The Hamiltonian-simulation cost model in `src/simulation_time.jl` charges
-the Form-B count. See `src/python/tests/test_gqsp.py::test_form_b_equivalent_to_form_c`
-for the numerical confirmation that Form B ≡ Form C on the post-selected
-block (≤ 1e-12, qf-e4z.19).
-
-Reference: scripts/scratch_gqsp_B_n3.jl, scripts/scratch_gqsp_random_h.jl (qf-0x6 POC).
+# Returns
+A matrix approximating `exp(-i delta B)` with Bessel-tail error
+`O((delta alpha)^(d+1))`. The result is generally not Hermitian.
 """
 function _gqsp_apply_polynomial(
     B::AbstractMatrix{<:Complex},
@@ -734,7 +660,7 @@ function _gqsp_apply_polynomial(
     delta_alpha = delta * alpha
     a0 = CT(besselj(0, delta_alpha))
 
-    # d = 1 fast path: f_1 = J_0 I − 2i J_1 (B/α)  -- scalar-axpy, no matmul
+    # Degree one needs no matrix multiplication.
     if d == 1
         a1_over_alpha = CT(-2im * besselj(1, delta_alpha) / alpha)
         result = Matrix{CT}(undef, n, n)
@@ -747,10 +673,7 @@ function _gqsp_apply_polynomial(
         return result
     end
 
-    # d ≥ 2: Clenshaw recurrence on T_k(x), x = B/α
-    # f(x) = a_0 + Σ_{k=1}^d a_k T_k(x), a_k = 2 (-i)^k J_k(δα)
-    # b_{d+1} = b_{d+2} = 0;  for k = d, d-1, …, 1: b_k = a_k I + 2 x b_{k+1} - b_{k+2}
-    # f(x) = a_0 I + x b_1 - b_2
+    # Math: Clenshaw uses $b_k = a_k I + 2 x b_(k+1) - b_(k+2)$.
     inv_alpha = inv(alpha)
     x = Matrix{CT}(undef, n, n)
     @inbounds for j in 1:n, i in 1:n
@@ -764,16 +687,15 @@ function _gqsp_apply_polynomial(
 
     @inbounds for k in d:-1:1
         ak = CT(2 * cis(-π/2 * k) * besselj(k, delta_alpha))
-        mul!(tmp, x, b_kp1)            # tmp = x · b_{k+1}
-        @. b_k = 2 * tmp - b_kp2       # b_k = 2 x b_{k+1} − b_{k+2}
+        mul!(tmp, x, b_kp1)
+        @. b_k = 2 * tmp - b_kp2
         for i in 1:n
-            b_k[i, i] += ak            # add a_k I on diagonal
+            b_k[i, i] += ak
         end
-        # Rotate buffers: next iter's (b_{k+2}, b_{k+1}) ← (b_{k+1}, b_k); old b_{k+2} freed
+        # Rotate the three recurrence buffers without allocating.
         b_kp2, b_kp1, b_k = b_kp1, b_k, b_kp2
     end
 
-    # b_kp1 holds b_1, b_kp2 holds b_2
     result = Matrix{CT}(undef, n, n)
     mul!(result, x, b_kp1)
     @. result = result - b_kp2
@@ -783,7 +705,6 @@ function _gqsp_apply_polynomial(
     return result
 end
 
-#* B1 AND B2 ---------------------------------------------------------------------------------------------------------------
 function _compute_b_minus(t::Real, beta::Real, sigma::Real)  # 2pi sqrt(pi) * f_minus(t / sigma_E)
     f1(t) = 1 / cosh(2 * pi * t / (beta * sigma))
     f2(t) = sin(-t * beta * sigma) * exp(-2 * t^2)
@@ -817,7 +738,6 @@ function _compute_truncated_func(target_func::Function, time_labels::AbstractVec
     return Dict(zip(time_labels[indices_to_keep], f_vals[indices_to_keep]))
 end
 
-#* TOOLS --------------------------------------------------------------------------------------------------------------------
 function _get_truncated_indices(fvals::AbstractVector{<:Number}; atol::Real = 1e-12)
     return findall(abs.(fvals) .>= atol)
 end

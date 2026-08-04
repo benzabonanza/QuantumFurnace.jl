@@ -1,28 +1,10 @@
-# ============================================================================
-# Quantum discriminant of a KMS detailed-balance Lindbladian
-# ============================================================================
-#
-# Computes the discriminant
-#
-#     D(sigma, L) := sigma^{-1/4} L( sigma^{1/4} . sigma^{1/4} ) sigma^{-1/4}
-#
-# (thesis 1_preliminaries.tex Eq. eq:discriminant; identical to Chen et al.
-# 2025 "Purifying Lindbladians" Sec. I).  KMS detailed balance is equivalent
-# to D being Hermitian under the Hilbert-Schmidt inner product.
-#
-# Phase 1 (this file): foundational primitives
-#   - DiscriminantBuffers{T}        : preallocated dxd scratch matrices
-#   - gibbs_fractional_powers       : sigma^{1/4}, sigma^{-1/4}, sigma^{1/2}
-#                                     extracted from a diagonal Gibbs state
-#                                     (Bohr / Energy / Time domains).
+# KMS quantum discriminant.
+# Math: $D(X) = sigma^(-1/4) L(sigma^(1/4) X sigma^(1/4)) sigma^(-1/4)$.
 
 """
     DiscriminantBuffers{T<:Complex}
 
-Preallocated `dxd` scratch matrices for the closure-style discriminant
-action `apply_discriminant!` (Phase 2).  Three buffers are needed: one to
-hold `sigma^{1/4} X sigma^{1/4}`, one to receive the Lindbladian action,
-and one for the final left/right multiplication by `sigma^{-1/4}`.
+Three reusable matrices for `apply_discriminant!`.
 
 # Fields
 - `work1`, `work2`, `work3`: `Matrix{T}` of size `dim x dim`.
@@ -36,8 +18,7 @@ end
 """
     DiscriminantBuffers{T}(dim::Int) where {T<:Complex}
 
-Construct empty `DiscriminantBuffers` with three `Matrix{T}(undef, dim, dim)`
-scratch buffers.
+Allocate three uninitialised `dim × dim` buffers of element type `T`.
 """
 function DiscriminantBuffers{T}(dim::Int) where {T<:Complex}
     return DiscriminantBuffers{T}(
@@ -50,31 +31,20 @@ end
 """
     DiscriminantBuffers(dim::Int)
 
-Convenience constructor with `T = ComplexF64`.
+Allocate `ComplexF64` discriminant buffers.
 """
 DiscriminantBuffers(dim::Int) = DiscriminantBuffers{ComplexF64}(dim)
 
 """
     gibbs_fractional_powers(gibbs::Hermitian{Complex{T}}; eps_trunc=1e-12)
 
-Extract the diagonal of `gibbs` (assumed diagonal in the working basis --
-true for `BohrDomain`, `EnergyDomain`, `TimeDomain`) and return three
-length-`d` vectors
+Return diagonal vectors for `sigma^(1/4)`, `sigma^(-1/4)`, and `sigma^(1/2)`.
 
-    sigma_quarter      = sigma^{1/4}
-    sigma_inv_quarter  = sigma^{-1/4}
-    sigma_half         = sigma^{1/2}
+# Keywords
+- `eps_trunc`: Floor applied before the negative fractional power.
 
-as a `NamedTuple{(:sigma_quarter, :sigma_inv_quarter, :sigma_half)}`.
-
-Diagonal entries below `eps_trunc` are floored before exponentiation to
-prevent `sigma^{-1/4}` from blowing up at very low temperature.  In the
-QuantumFurnace.jl regime (rescaled `H in [0, 0.45]`, `beta <= 20`) the
-floor is never triggered in practice; it is kept as a defensive guard.
-
-`TrotterDomain` is not yet supported -- there `gibbs` is generally
-non-diagonal in the working basis and an eigendecomposition would be
-required.
+The input must be diagonal in the working basis; Trotter-domain Gibbs states
+generally do not meet this requirement.
 """
 function gibbs_fractional_powers(
     gibbs::Hermitian{Complex{T}, Matrix{Complex{T}}};
@@ -92,28 +62,17 @@ end
 """
     apply_discriminant!(out, X, lindblad_action!, sigma_quarter, sigma_inv_quarter, buffers)
 
-Apply the KMS quantum discriminant
-
-    D(X) = sigma^{-1/4} * L(sigma^{1/4} X sigma^{1/4}) * sigma^{-1/4}
-
-to a `dxd` operator `X`, writing the result into `out`.  The Lindbladian
-appears only through the closure `lindblad_action!(out_mat, in_mat)`, so
-this routine never materialises the `d^2 x d^2` superoperator.
+Apply the KMS quantum discriminant without materialising a superoperator.
 
 # Arguments
-- `out::AbstractMatrix{T}`: output buffer of size `dxd`.
+- `out`: Destination matrix.
 - `X::AbstractMatrix{T}`: input operator.
-- `lindblad_action!::F`: a callable that, given `(out_mat, in_mat)`, writes
-  `L(in_mat)` to `out_mat` in place.  Typical wrappers:
-    - dense Lindbladian `L::Matrix` of size `d^2 x d^2`:
-      `f!(o, x) = (mul!(vec(o), L, vec(x)); o)`
-    - QuantumFurnace `apply_lindbladian!` (closes over a `Workspace`):
-      `f!(o, x) = (apply_lindbladian!(ws, x, config, ham); copyto!(o, ws.scratch.rho_out))`
-- `sigma_quarter`, `sigma_inv_quarter`: real length-`d` vectors from
-  `gibbs_fractional_powers` (diagonal of `sigma^{1/4}`, `sigma^{-1/4}`).
-- `buffers::DiscriminantBuffers{T}`: pre-allocated `dxd` scratch.
+- `lindblad_action!`: In-place callable `L(out, X)`.
+- `sigma_quarter`, `sigma_inv_quarter`: Diagonal fractional powers.
+- `buffers`: Reusable scratch matrices.
 
-The routine performs zero allocations after warmup.
+# Returns
+`out`.
 """
 function apply_discriminant!(
     out::AbstractMatrix{T},
@@ -127,15 +86,14 @@ function apply_discriminant!(
     work2 = buffers.work2
     d = size(X, 1)
 
-    # work1 = sigma^{1/4} X sigma^{1/4}  (fused row + column scale)
+    # Math: $work1 = sigma^(1/4) X sigma^(1/4)$.
     @inbounds for j in 1:d, i in 1:d
         work1[i, j] = sigma_quarter[i] * X[i, j] * sigma_quarter[j]
     end
 
-    # work2 = L(work1)
     lindblad_action!(work2, work1)
 
-    # out = sigma^{-1/4} * work2 * sigma^{-1/4}
+    # Math: $out = sigma^(-1/4) L(work1) sigma^(-1/4)$.
     @inbounds for j in 1:d, i in 1:d
         out[i, j] = sigma_inv_quarter[i] * work2[i, j] * sigma_inv_quarter[j]
     end
@@ -147,20 +105,14 @@ end
     materialize_discriminant!(D, L, sigma_quarter, sigma_inv_quarter)
     materialize_discriminant!(D, L, gibbs::Hermitian; eps_trunc=1e-12)
 
-In-place materialisation of the KMS quantum discriminant as a `d^2 x d^2`
-matrix.  Writes into the preallocated buffer `D`.
+Materialise the KMS quantum discriminant in `D`.
 
-In column-stacking vec convention,
+Column stacking gives the diagonal similarity transform
+`D = (sigma^(-1/4) tensor sigma^(-1/4)) L
+(sigma^(1/4) tensor sigma^(1/4))`; Kronecker factors are not allocated.
 
-    D[k, l] = sigma_inv_quarter[r1] * sigma_inv_quarter[c1]
-             * L[k, l]
-             * sigma_quarter[r2]    * sigma_quarter[c2]
-
-where `k = (c1-1)*d + r1` and `l = (c2-1)*d + r2`.  This is the diagonal
-similarity transform `D = (sigma^{-1/4} kron sigma^{-1/4}) * L *
-(sigma^{1/4} kron sigma^{1/4})` written without ever forming the
-`d^2 x d^2` Kronecker products explicitly -- only the two length-`d`
-fractional-power vectors are needed.
+# Returns
+`D`.
 """
 function materialize_discriminant!(
     D::AbstractMatrix{<:Complex},
@@ -198,8 +150,7 @@ end
 """
     materialize_discriminant(L, gibbs::Hermitian; eps_trunc=1e-12) -> Matrix
 
-Allocating wrapper around `materialize_discriminant!`.  Returns a freshly
-allocated `d^2 x d^2` matrix of the same element type as `L`.
+Allocate and return the dense KMS quantum discriminant.
 """
 function materialize_discriminant(
     L::AbstractMatrix{T},
@@ -214,15 +165,10 @@ end
     hermitian_antihermitian_split(D::AbstractMatrix) -> (H, A)
     hermitian_antihermitian_split!(H, A, D)
 
-Split a square matrix into its Hermitian and anti-Hermitian parts under
-the conjugate-transpose involution:
+Split `D` into Hermitian and anti-Hermitian parts.
 
-    H = (D + D') / 2   (Hermitian)
-    A = (D - D') / 2   (anti-Hermitian)
-
-`H + A = D` exactly.  For the discriminant of a KMS detailed-balance
-Lindbladian, `A = 0` (the discriminant is HS-self-adjoint), so the
-operator norm of `A` is the diagnostic for KMS-DB violation.
+Math: `\$H = (D + D^dagger)/2\$` and `\$A = (D-D^dagger)/2\$`. KMS detailed
+balance implies `A = 0`.
 """
 function hermitian_antihermitian_split(D::AbstractMatrix)
     H = (D + D') / 2
@@ -230,6 +176,18 @@ function hermitian_antihermitian_split(D::AbstractMatrix)
     return (H, A)
 end
 
+"""
+    hermitian_antihermitian_split!(H, A, D) -> (H, A)
+
+Write the Hermitian and anti-Hermitian parts of `D` into preallocated matrices.
+
+# Arguments
+- `H`, `A`: Destination matrices.
+- `D`: Input square matrix.
+
+# Returns
+The tuple `(H, A)`.
+"""
 function hermitian_antihermitian_split!(
     H::AbstractMatrix{T},
     A::AbstractMatrix{T},
@@ -247,17 +205,7 @@ end
 """
     DiscriminantSpectrum
 
-Leading eigenvalues of the Hermitian part of the KMS quantum discriminant.
-
-When the underlying Lindbladian is KMS detailed-balanced, the discriminant
-is HS-self-adjoint (`A_part = 0`), so `H_part = D` and
-`eigvals(H_part) == eigvals(L)` -- all real, with one near-zero eigenvalue
-corresponding to the steady state (purification of the Gibbs state) and
-the rest negative.  The "parent Hamiltonian" is `-H_part`, and `H_gap`
-is its smallest positive eigenvalue (the spectral gap).
-
-For non-KMS-DB Lindbladians, `H_part` is still Hermitian; its spectrum
-no longer matches `eigvals(L)`, but it remains a useful diagnostic.
+Leading eigenvalues of the Hermitian discriminant part.
 
 # Fields
 - `H_eigenvalues::Vector{Float64}`: leading `n_modes` eigenvalues of the
@@ -274,10 +222,14 @@ end
 """
     discriminant_spectrum(L, gibbs::Hermitian; n_modes=20, eps_trunc=1e-12) -> DiscriminantSpectrum
 
-Compute leading eigenvalues of the Hermitian part of the discriminant of
-the Lindbladian `L`.  Materialises the discriminant once and uses dense
-`eigvals(Hermitian(...))`, which is `O(d^6)` and feasible up to `n=6`
-(`d^2 = 4096`).
+Compute the dense Hermitian-discriminant spectrum.
+
+# Keywords
+- `n_modes`: Number of eigenvalues nearest zero to retain.
+- `eps_trunc`: Gibbs fractional-power floor.
+
+# Returns
+A `DiscriminantSpectrum`. Dense eigendecomposition costs `O(d^6)`.
 """
 function discriminant_spectrum(
     L::AbstractMatrix{<:Complex},
@@ -288,16 +240,15 @@ function discriminant_spectrum(
     D = materialize_discriminant(L, gibbs; eps_trunc = eps_trunc)
     H, _ = hermitian_antihermitian_split(D)
 
-    # Numerical Hermitization (cleanup floating-point asymmetry).
+    # Remove roundoff asymmetry before the Hermitian eigensolve.
     H_clean = Hermitian((H + H') / 2)
     H_eigs = eigvals(H_clean)
 
-    # Sort by ascending |λ| (steady state -- nearest zero -- first).
+    # Sort by distance to the stationary eigenvalue.
     perm = sortperm(abs.(H_eigs))
     n = min(n_modes, length(H_eigs))
     leading = H_eigs[perm[1:n]]
 
-    # Parent-Hamiltonian gap = second-smallest |λ| (first ≈ 0).
     gap = n >= 2 ? abs(leading[2]) : 0.0
 
     return DiscriminantSpectrum(leading, gap, n)
@@ -306,8 +257,7 @@ end
 """
     DBVerificationResult
 
-Result of `verify_detailed_balance` -- a complete diagnostic bundle for
-KMS detailed balance of a Lindbladian.
+Diagnostics returned by `verify_detailed_balance`.
 
 # Fields
 - `antihermitian_norm::Float64`: `||A||_{2→2}`, the operator-2 norm of the
@@ -339,18 +289,15 @@ end
 """
     verify_detailed_balance(L, gibbs::Hermitian; atol=1e-10, eps_trunc=1e-12) -> DBVerificationResult
 
-End-to-end KMS detailed-balance verification.  Materialises the
-discriminant once, splits it into Hermitian / anti-Hermitian parts,
-and computes:
-- the operator-2 norm of the anti-Hermitian part (KMS-DB diagnostic),
-- the discriminant norm and their ratio,
-- the fixed-point residual `||D · vec(σ^{1/2})||`,
-- the Hermitian-part gap (parent-Hamiltonian gap), and
-- the spectral gap of `L` for cross-validation.
+Verify KMS detailed balance from the dense quantum discriminant.
 
-Uses dense `opnorm` and `eigvals`, both `O(d^6)` -- feasible up to `n=6`
-(`d^2 = 4096`).  For larger systems an action-only Krylov path will be
-needed; that is deferred until needed.
+# Keywords
+- `atol`: Threshold for the relative anti-Hermitian norm.
+- `eps_trunc`: Gibbs fractional-power floor.
+
+# Returns
+A `DBVerificationResult` containing the defect, fixed-point residual, and
+dense gap cross-check. The calculation costs `O(d^6)`.
 """
 function verify_detailed_balance(
     L::AbstractMatrix{<:Complex},
@@ -358,16 +305,14 @@ function verify_detailed_balance(
     atol::Float64 = 1e-10,
     eps_trunc::Real = 1e-12,
 )
-    # Materialise the discriminant once and split.
     D = materialize_discriminant(L, gibbs; eps_trunc = eps_trunc)
     H_part, A_part = hermitian_antihermitian_split(D)
 
-    # Operator-2 norms (Schatten-∞), per thesis Def. def:approx-db.
     A_norm   = opnorm(A_part)
     D_norm   = opnorm(D)
     rel_norm = A_norm / max(D_norm, 1e-30)
 
-    # Fixed-point residual: D · vec(σ^{1/2}) should be 0.
+    # Math: the stationary discriminant vector is $vec(sigma^(1/2))$.
     powers = gibbs_fractional_powers(gibbs; eps_trunc = eps_trunc)
     sigma_half = powers.sigma_half
     d = length(sigma_half)
@@ -377,12 +322,10 @@ function verify_detailed_balance(
     end
     fp_residual = norm(D * vec_sh)
 
-    # Parent-Hamiltonian gap.
     H_clean = Hermitian((H_part + H_part') / 2)
     H_eigs  = eigvals(H_clean)
     H_gap   = sort(abs.(H_eigs))[2]
 
-    # L spectral gap (smallest |Re(λ)| above zero).
     L_eigs = eigvals(Matrix(L))
     L_gap  = sort(abs.(real.(L_eigs)))[2]
 
