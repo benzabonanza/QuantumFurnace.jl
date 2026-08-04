@@ -59,10 +59,6 @@ using StableRNGs
         @test result.converged == true
         @test isapprox(result.gap, gap_true; atol=0.01)
 
-        # Test internal helper directly
-        p0 = QuantumFurnace._log_linear_initial_guess(times, values)
-        @test length(p0) == 3
-        @test p0[2] > 0.0  # gap guess positive
     end
 
     # -----------------------------------------------------------------------
@@ -112,9 +108,9 @@ using StableRNGs
     end
 
     # -----------------------------------------------------------------------
-    # FIT-05: gap > 0 enforced via bounds
+    # FIT-05: non-negative gap enforced via bounds
     # -----------------------------------------------------------------------
-    @testset "FIT-05: gap > 0 enforced via bounds" begin
+    @testset "FIT-05: non-negative gap bound" begin
         times = collect(0.0:0.1:10.0)
         # Negative amplitude: rising exponential that LM might explore negative gap for
         values = -1.5 .* exp.(-0.3 .* times) .+ 2.0
@@ -178,15 +174,15 @@ using StableRNGs
         @test result.r_squared > 0.999
 
         # Slow mode (spectral gap)
-        @test isapprox(result.gap, g2_true; rtol=0.05)
-        @test isapprox(result.amplitude, A2_true; rtol=0.1)
+        @test isapprox(result.gap, g2_true; rtol=1e-7)
+        @test isapprox(result.amplitude, A2_true; rtol=1e-7)
 
         # Fast mode
-        @test isapprox(result.gap_fast, g1_true; rtol=0.1)
-        @test isapprox(result.amplitude_fast, A1_true; rtol=0.1)
+        @test isapprox(result.gap_fast, g1_true; rtol=1e-7)
+        @test isapprox(result.amplitude_fast, A1_true; rtol=1e-7)
 
         # Offset
-        @test isapprox(result.offset, C_true; atol=1e-3)
+        @test isapprox(result.offset, C_true; atol=1e-12)
 
         # Mode sorting: fast >= slow
         @test result.gap_fast >= result.gap
@@ -218,6 +214,7 @@ using StableRNGs
         biexp_err  = abs(biexp_fit.offset - C_true)
 
         @test biexp_err < single_err
+        @test biexp_err <= 1e-12
         @info "BIEXP-02 offset comparison" true_C=C_true single_C=single_fit.offset biexp_C=biexp_fit.offset single_err=single_err biexp_err=biexp_err
     end
 
@@ -240,9 +237,10 @@ using StableRNGs
         r2 = fit_biexponential_decay(times, values; skip_initial=0.2)
 
         @test length(r2.times_used) < length(r1.times_used)
-        # Both should recover reasonable gap
-        @test isapprox(r1.gap, g2_true; rtol=0.1)
-        @test isapprox(r2.gap, g2_true; rtol=0.1)
+        @test isapprox(r1.gap, g2_true; rtol=1e-7)
+        @test isapprox(r2.gap, g2_true; rtol=1e-7)
+        @test isapprox(r1.gap_fast, g1_true; rtol=1e-7)
+        @test isapprox(r2.gap_fast, g1_true; rtol=1e-7)
     end
 
     # -----------------------------------------------------------------------

@@ -77,13 +77,12 @@ const _BPS_RESCALE = _BPS_HAM.rescaling_factor
             @test isfinite(r.mixing_time)
 
             # Sidecar filename must carry the betaphys<β_phys> tag, not beta<β_alg>.
-            files = readdir(tmp)
-            phys_keyed = filter(f -> occursin("betaphys", f), files)
-            @test !isempty(phys_keyed)
-            @test all(f -> !occursin("_beta1.", f) || occursin("betaphys", f), files)
+            files = filter(endswith(".bson"), readdir(tmp))
+            expected_file = "sweep_n3_betaphys1_seed42_L_KMS_Bohr.bson"
+            @test files == [expected_file]
 
             # Loaded sidecar dict carries the new keys.
-            loaded = BSON.load(joinpath(tmp, phys_keyed[1]), QuantumFurnace)[:result]
+            loaded = BSON.load(joinpath(tmp, expected_file), QuantumFurnace)[:result]
             @test loaded[:beta_phys] == β_phys
             @test loaded[:beta_alg] ≈ β_alg_expected
             @test haskey(loaded, :rescaling_factor)

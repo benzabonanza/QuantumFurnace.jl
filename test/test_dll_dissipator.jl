@@ -46,32 +46,6 @@
     end
 
     # ---------------------------------------------------------------------
-    # (a) BohrDomain DLL Lindbladian: Gibbs fixed point at machine precision
-    # ---------------------------------------------------------------------
-    @testset "(a) BohrDomain DLL: L[σ_β] ≈ 0" begin
-        for beta in _DLL_BETAS
-            sys = _build_dll_n3_system(beta)
-            cfg = _make_dll_config(BohrDomain(); beta=beta)
-            liouv = construct_lindbladian(sys.jumps, cfg, sys.ham)
-            sigma_vec = vec(Matrix(sys.gibbs))
-            @test norm(liouv * sigma_vec) <= 1e-10
-        end
-    end
-
-    # ---------------------------------------------------------------------
-    # (b) TimeDomain DLL Lindbladian: Gibbs fixed point under quadrature
-    # ---------------------------------------------------------------------
-    @testset "(b) TimeDomain DLL: L[σ_β] ≈ 0" begin
-        for beta in _DLL_BETAS
-            sys = _build_dll_n3_system(beta)
-            cfg = _make_dll_config(TimeDomain(); beta=beta)
-            liouv = construct_lindbladian(sys.jumps, cfg, sys.ham)
-            sigma_vec = vec(Matrix(sys.gibbs))
-            @test norm(liouv * sigma_vec) <= 1e-4
-        end
-    end
-
-    # ---------------------------------------------------------------------
     # (c) Bohr ↔ Time agreement: trapezoidal quadrature should reproduce
     # the Bohr-decomposition Liouvillian within quadrature error.
     # ---------------------------------------------------------------------

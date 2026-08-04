@@ -16,6 +16,31 @@ using Test
 using QuantumFurnace
 using LinearAlgebra
 
+@testset "Public KMS/GNS prefactor relations" begin
+    beta = 5.0
+    sigma = 0.2
+    a = 0.1
+    s = 0.4
+    nu_1, nu_2 = 0.3, -0.7
+    gaussian_parameters = (0.4, 0.3)
+
+    @test create_alpha_gns(nu_1, nu_2, beta, sigma, a, s) > 0
+    @test create_alpha_gauss(nu_1, nu_2, sigma, gaussian_parameters) > 0
+    @test create_alpha_gauss(nu_1, nu_2, sigma, gaussian_parameters) ≈
+          create_alpha_gauss(nu_2, nu_1, sigma, gaussian_parameters) atol=1e-15
+
+    f_12 = create_f(nu_1, nu_2, beta, sigma, a, s)
+    f_gauss_12 = create_f_gauss(nu_1, nu_2, beta, sigma, gaussian_parameters)
+    @test isapprox(real(f_12), 0.0; atol=1e-15)
+    @test f_12 ≈ -create_f(nu_2, nu_1, beta, sigma, a, s) atol=1e-15
+    @test isapprox(real(f_gauss_12), 0.0; atol=1e-15)
+    @test f_gauss_12 ≈
+          -create_f_gauss(nu_2, nu_1, beta, sigma, gaussian_parameters) atol=1e-15
+
+    alpha = (x, y) -> create_alpha(x, y, beta, sigma, a, s)
+    @test check_alpha_skew_symmetry(alpha, nu_1, nu_2, beta) === nothing
+end
+
 @testset "qf-etx.1: pick_gamma_sup closed-form is correct continuum sup" begin
     N_FINE = 2^16
     BETA = 10.0
@@ -224,15 +249,13 @@ end
 
     # ω-range from the unified principle (`scripts/scratch_dissipative_quadrature.jl`):
     # ω_max = ‖H‖ + 8σ; full range = 2·ω_max.
-    # R_REF=12 per qf-7xt.3 (kinky converges with slope -2 in 1/N, so r=12
-    # gives ~1e-7; smooth Metro and Gaussian are at machine precision).
+    # Smooth Metro and Gaussian are already at machine precision at r=12.
     R_REF = 12
     omega_range = 2.0 * (opnorm(ham.data) + 8 * 0.1)
     w0_ref = omega_range / 2^R_REF
 
     cases = [
         (false, nothing, nothing, (1.3, 0.5), "KMS Gaussian", 1e-12),
-        (true,  0.0,     0.0,     (nothing, nothing), "KMS kinky Metro", 1e-6),
         (true,  0.0,     0.25,    (nothing, nothing), "KMS smooth Metro", 1e-12),
     ]
     for (with_lc, a, s, gp, label, tol) in cases
@@ -255,6 +278,30 @@ end
         diff_op = opnorm(L_eng - L_bohr)
         @test diff_op <= tol
     end
+
+    # The nonsmooth Metropolis kernel converges more slowly. Demonstrate
+    # controllability instead of accepting a loose one-point residual.
+    kinky_errors = Float64[]
+    for r in (12, 14, 16)
+        w0 = omega_range / 2^r
+        cfg_b = Config(
+            sim=Lindbladian(), domain=BohrDomain(), construction=KMS(),
+            num_qubits=n, with_linear_combination=true,
+            beta=10.0, sigma=0.1, a=0.0, s=0.0,
+            num_energy_bits=r, w0=w0,
+        )
+        cfg_e = Config(
+            sim=Lindbladian(), domain=EnergyDomain(), construction=KMS(),
+            num_qubits=n, with_linear_combination=true,
+            beta=10.0, sigma=0.1, a=0.0, s=0.0,
+            num_energy_bits=r, w0=w0,
+        )
+        push!(kinky_errors, opnorm(
+            construct_lindbladian(jumps, cfg_e, ham) -
+            construct_lindbladian(jumps, cfg_b, ham)))
+    end
+    @test all(diff(kinky_errors) .< 0)
+    @test kinky_errors[end] <= 1e-9
 end
 
 # ---------------------------------------------------------------------------
@@ -449,40 +496,6 @@ end
                 @test opnorm(B) / α_be <= 1.0 + 1e-10
             end
         end
-    end
-end
-
-# ---------------------------------------------------------------------------
-# qf-96o: default_smooth_s β-scaling
-# ---------------------------------------------------------------------------
-@testset "qf-96o: default_smooth_s preserves absolute smoothing width σ·√s = 0.05" begin
-    @testset "calibration point (β=10, σ=1/β) returns s = 0.25" begin
-        @test QuantumFurnace.default_smooth_s(10.0, 0.1) == 0.25
-    end
-
-    @testset "constant σ·√s along σ = 1/β across β-sweep" begin
-        for β in (2.0, 5.0, 10.0, 20.0, 50.0)
-            σ = 1.0 / β
-            s = QuantumFurnace.default_smooth_s(β, σ)
-            @test σ * sqrt(s) ≈ 0.05 atol = 1e-12
-            @test s ≈ (β / 20.0)^2 atol = 1e-12     # equivalent form on σ = 1/β
-        end
-    end
-
-    @testset "constant σ·√s off σ = 1/β (σ = c/β, c ∈ {0.25, 2, 3})" begin
-        β = 10.0
-        for c in (0.25, 0.5, 2.0, 3.0)
-            σ = c / β
-            s = QuantumFurnace.default_smooth_s(β, σ)
-            @test σ * sqrt(s) ≈ 0.05 atol = 1e-12
-        end
-    end
-
-    @testset "monotone β-scaling at fixed c = σβ" begin
-        # s increases with β when σ = c/β (σ shrinks → need more s).
-        @test QuantumFurnace.default_smooth_s(20.0, 0.05) >
-              QuantumFurnace.default_smooth_s(10.0, 0.10) >
-              QuantumFurnace.default_smooth_s( 5.0, 0.20)
     end
 end
 

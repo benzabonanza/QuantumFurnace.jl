@@ -1,9 +1,9 @@
 # test/test_kms_geometry_sandbox.jl
 #
 # Sandbox shadow of test_kms_geometry.jl (qf-x56.1). The NO_SANDBOX heavy
-# test exercises the kms_geometry public surface over multiple (n, β,
-# filter) cells; this shadow covers 9/10 of the unique public API at the
-# smallest fixture that still exercises every code path:
+# test exercises the KMS-geometry public surface over multiple (n, β,
+# filter) cells; this shadow covers the same public invariants at the smallest
+# fixture that still exercises every code path:
 #
 #   - n = 3, β = 10, single point
 #   - BohrDomain CKG, smooth-Metropolis at thesis-numerics defaults
@@ -21,10 +21,9 @@
 #     hs_operator_norm_krylov                                        (testset 4)
 #
 # Tolerances mirror the heavy test (≤ 1e-9 absolute / relative for the
-# KMS-DBC witness, 1e-10 for the closed-form algebraic identities). The
-# only public function NOT covered is `build_dense_superoperator` — that
-# is invoked transitively here through `_build_dense_lindbladian_sandbox`,
-# so no surface is left untested in spirit.
+# KMS-DBC witness, 1e-10 for the closed-form algebraic identities).
+# `build_dense_superoperator` is exercised directly by
+# `_build_dense_lindbladian_sandbox`.
 
 using LinearAlgebra: I, eigvals, Hermitian, opnorm, tr, norm
 using Random
@@ -95,7 +94,7 @@ function _build_dense_lindbladian_sandbox(
 end
 
 
-@testset "KMS geometry [sandbox shadow] (qf-x56.1)" begin
+@testset "KMS geometry [sandbox shadow]" begin
     Random.seed!(20260512)
     β = 10.0
     sys  = make_dll_n3_system(β)

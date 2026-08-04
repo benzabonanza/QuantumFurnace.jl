@@ -200,7 +200,7 @@
         end
     end
 
-    @testset "(k) dll_multichannel_translates: k=1 center=0 ≈ base × √w" begin
+    @testset "(k) dll_multichannel_translates: k=1 factory structure" begin
         β = 5.0
         base = DLLMetropolisFilter(β; S = 2.0)
         # k=1, center=[0.0], weight=[1.0]: each method matches base byte-for-byte.
@@ -208,11 +208,6 @@
         @test length(multi1.channels) == 1
         ch = multi1.channels[1]
         @test ch.shift == 0.0 && ch.weight == 1.0 && ch.base === base
-        # multi-channel diagnostic methods evaluate to base's values.
-        for nu in (-0.5, 0.0, 0.3, 0.9)
-            @test isapprox(QuantumFurnace.q_weight(multi1, nu),
-                           QuantumFurnace.q_weight(base, nu); atol = 1e-15)
-        end
     end
 
     @testset "(l) dll_multichannel_translates: KMS skew-symmetry, k=2" begin

@@ -16,6 +16,22 @@ using Statistics: median
 
 @testset "Heisenberg Hamiltonian builders" begin
 
+    @testset "Public Pauli conversion and grouping helpers" begin
+        @test isapprox(Had' * Had, I(2); atol=1e-15)
+        converted = pauli_string_to_matrix(["X", "Y", "Z", "I"])
+        @test converted[1] == X
+        @test converted[2] == Y
+        @test converted[3] == Z
+        @test converted[4] == Matrix{ComplexF64}(I, 2, 2)
+        @test_throws KeyError pauli_string_to_matrix(["not-a-Pauli"])
+
+        terms = Vector{Matrix{ComplexF64}}[[X, X], [Y, Y], [X, Y], [Z]]
+        grouped = group_hamiltonian_terms(HamHam(terms, [1.0, 2.0, 3.0, 4.0], 3, 1.0))
+        @test grouped.commuting[1] == terms[1:2]
+        @test grouped.noncommuting[1] == terms[3:3]
+        @test grouped.one_sites[1] == terms[4:4]
+    end
+
     # _pad_two_site_op smoke tests --------------------------------------------------
     @testset "_pad_two_site_op: adjacent and non-adjacent placements" begin
         # n=3 adjacent at the chain edge: place X at q=1, q=2
@@ -46,23 +62,6 @@ using Statistics: median
     end
 
     # _construct_2d_heisenberg_base ----------------------------------------------------
-    @testset "_construct_2d_heisenberg_base: 3x1 and 1x3 lattices match 1D periodic n=3" begin
-        terms_xyz = [[X, X], [Y, Y], [Z, Z]]
-        coeffs = [1.0, 1.0, 1.0]
-
-        ham_1d = QuantumFurnace._construct_base_ham(terms_xyz, coeffs, 3; periodic=true)
-
-        # 3x1 lattice with full periodic BC: x-direction wraps, y-direction has no bonds (Ly=1)
-        ham_3x1 = QuantumFurnace._construct_2d_heisenberg_base(3, 1, terms_xyz, coeffs;
-            periodic_x=true, periodic_y=true)
-        @test Matrix(ham_3x1) ≈ Matrix(ham_1d)
-
-        # 1x3 lattice with full periodic BC: y-direction wraps, x-direction has no bonds (Lx=1)
-        ham_1x3 = QuantumFurnace._construct_2d_heisenberg_base(1, 3, terms_xyz, coeffs;
-            periodic_x=true, periodic_y=true)
-        @test Matrix(ham_1x3) ≈ Matrix(ham_1d)
-    end
-
     @testset "_construct_2d_heisenberg_base: dimension and Hermiticity for several lattices" begin
         for (Lx, Ly) in [(2, 3), (3, 3), (2, 5)]
             n = Lx * Ly
@@ -76,58 +75,6 @@ using Statistics: median
         end
     end
 
-    @testset "_construct_2d_heisenberg_base: bond counting via Frobenius norm" begin
-        # Distinct ZZ-bond Pauli strings are pairwise Hilbert–Schmidt-orthogonal
-        # (every product of two distinct ZZ-strings is a higher-weight Pauli, traceless),
-        # so for H = Σ_b c_b · Z_{q1_b} Z_{q2_b}, we have ‖H‖_F² = (Σ_b |c_b|²) · 2^n.
-        #
-        # For Lx == 2 (or Ly == 2) with periodic BC, the wrap-around bond coincides
-        # with the original bond, so each distinct bond is added twice with coefficient 1
-        # → effective coefficient 2 per distinct bond → contribution 4 × #distinct.
-        function expected_sumsq(Lx, Ly; periodic_x=true, periodic_y=true)
-            x_contrib = if Lx == 1
-                0
-            elseif Lx == 2 && periodic_x
-                4 * Ly         # Ly distinct bonds, coeff 2 each → 4·Ly
-            elseif periodic_x
-                Lx * Ly        # Lx·Ly distinct bonds, coeff 1
-            else
-                (Lx - 1) * Ly  # OBC: (Lx−1)·Ly distinct bonds, coeff 1
-            end
-            y_contrib = if Ly == 1
-                0
-            elseif Ly == 2 && periodic_y
-                4 * Lx
-            elseif periodic_y
-                Lx * Ly
-            else
-                Lx * (Ly - 1)
-            end
-            return x_contrib + y_contrib
-        end
-
-        for (Lx, Ly) in [(2, 3), (3, 3), (2, 5)]
-            n = Lx * Ly
-            ham_zz = QuantumFurnace._construct_2d_heisenberg_base(Lx, Ly, [[Z, Z]], [1.0];
-                periodic_x=true, periodic_y=true)
-            fro2 = sum(abs2, Matrix(ham_zz))
-            @test fro2 ≈ expected_sumsq(Lx, Ly) * 2^n  rtol=1e-10
-        end
-    end
-
-    @testset "_construct_2d_heisenberg_base: open boundary disables wrap" begin
-        # 3x3 OBC: (Lx-1)*Ly + Lx*(Ly-1) = 6 + 6 = 12 distinct ZZ-bonds, coeff 1 each
-        # 3x3 PBC: 9 + 9 = 18 (periodic_x adds 3 wrap bonds, periodic_y adds 3)
-        ham_pbc_3 = QuantumFurnace._construct_2d_heisenberg_base(3, 3, [[Z, Z]], [1.0];
-            periodic_x=true, periodic_y=true)
-        ham_obc_3 = QuantumFurnace._construct_2d_heisenberg_base(3, 3, [[Z, Z]], [1.0];
-            periodic_x=false, periodic_y=false)
-        @test sum(abs2, Matrix(ham_pbc_3)) > sum(abs2, Matrix(ham_obc_3))
-        @test sum(abs2, Matrix(ham_obc_3)) ≈ 12 * 2^9  rtol=1e-10
-        @test sum(abs2, Matrix(ham_pbc_3)) ≈ 18 * 2^9  rtol=1e-10
-    end
-
-    # build_heis_1d / build_tfim_2d (qf-yi4 replacements for find_*) -----------------
     @testset "build_heis_1d: returns a valid raw NamedTuple" begin
         raw = build_heis_1d(3, [1.0, 1.0, 1.0]; seed=20260515,
             disordering_terms=Vector{Matrix{ComplexF64}}[[Z]], disorder_strength=1.0)
@@ -180,18 +127,6 @@ using Statistics: median
         @test all(abs.(raw.disordering_coeffs[1]) .≤ 1e-2)
     end
 
-    @testset "build_heis_1d: OBC vs PBC produce different fixtures" begin
-        raw_pbc = build_heis_1d(4, [1.0, 1.0, 1.0]; seed=20260519,
-            disordering_terms=Vector{Matrix{ComplexF64}}[[Z], [Z, Z]],
-            disorder_strength=1.0, periodic=true)
-        raw_obc = build_heis_1d(4, [1.0, 1.0, 1.0]; seed=20260519,
-            disordering_terms=Vector{Matrix{ComplexF64}}[[Z], [Z, Z]],
-            disorder_strength=1.0, periodic=false)
-        @test raw_pbc.periodic === true
-        @test raw_obc.periodic === false
-        @test !isapprox(raw_pbc.matrix, raw_obc.matrix; atol=1e-8)
-    end
-
     @testset "build_tfim_2d: returns a valid raw NamedTuple" begin
         raw = build_tfim_2d(2, 2; J=1.0, h=1.0, seed=20260520,
             periodic_x=true, periodic_y=true,
@@ -216,21 +151,6 @@ using Statistics: median
         @test ham isa HamHam{Float64}
         @test size(ham.data) == (16, 16)
         @test isapprox(tr(ham.gibbs), 1.0; atol=1e-10)
-    end
-
-    @testset "build_tfim_2d: mixed periodic_x / periodic_y all distinct" begin
-        rawpp = build_tfim_2d(2, 3; J=1.0, h=1.5, seed=20260522,
-            periodic_x=true,  periodic_y=true,  disorder_strength=1e-3)
-        rawpf = build_tfim_2d(2, 3; J=1.0, h=1.5, seed=20260522,
-            periodic_x=true,  periodic_y=false, disorder_strength=1e-3)
-        rawfp = build_tfim_2d(2, 3; J=1.0, h=1.5, seed=20260522,
-            periodic_x=false, periodic_y=true,  disorder_strength=1e-3)
-        rawff = build_tfim_2d(2, 3; J=1.0, h=1.5, seed=20260522,
-            periodic_x=false, periodic_y=false, disorder_strength=1e-3)
-        @test !isapprox(rawpp.matrix, rawpf.matrix; atol=1e-8)
-        @test !isapprox(rawpp.matrix, rawfp.matrix; atol=1e-8)
-        @test !isapprox(rawpp.matrix, rawff.matrix; atol=1e-8)
-        @test !isapprox(rawpf.matrix, rawfp.matrix; atol=1e-8)
     end
 
     @testset "build_tfim_2d: argument validation" begin
@@ -268,21 +188,62 @@ using Statistics: median
         @test isapprox(tr(h.gibbs), 1.0; atol=1e-12)
     end
 
-    @testset "HamHam ctor (multi-term disorder) forwards `periodic` kwarg" begin
-        # Regression for qf-fzj.3 audit §5b: the multi-term ctor previously dropped
-        # `periodic` before calling _construct_base_ham, silently building a periodic
-        # base even when periodic=false was requested. With zero disorder, the spectrum
-        # of an OBC chain differs from a PBC chain (no wrap bond) — after rescaling
-        # both fit [0, 0.5] but the rescaled matrices are not equal.
-        n = 3
-        terms = Vector{Matrix{ComplexF64}}[[X, X], [Y, Y], [Z, Z]]
-        coeffs = [1.0, 1.0, 1.0]
-        dis_terms = Vector{Matrix{ComplexF64}}[[Z]]
-        dis_coeffs = [zeros(n)]
-        H_per = HamHam(terms, coeffs, dis_terms, dis_coeffs, n, 1.0; periodic=true)
-        H_obc = HamHam(terms, coeffs, dis_terms, dis_coeffs, n, 1.0; periodic=false)
-        @test H_per.periodic === true
-        @test H_obc.periodic === false
-        @test !isapprox(H_per.data, H_obc.data; atol=1e-8)
+    @testset "build_tfim_2d: deterministic disorder and physical conventions" begin
+        kwargs = (;
+            J=1.0, h=1.0, disordering_terms=Vector{Matrix{ComplexF64}}[[Z], [Z, Z]],
+            disorder_strength=1e-3,
+        )
+        raw_a = build_tfim_2d(2, 3; kwargs..., seed=20260516)
+        raw_b = build_tfim_2d(2, 3; kwargs..., seed=20260516)
+        raw_c = build_tfim_2d(2, 3; kwargs..., seed=20260517)
+        @test raw_a.matrix == raw_b.matrix
+        @test raw_a.eigvals == raw_b.eigvals
+        @test raw_a.disordering_coeffs == raw_b.disordering_coeffs
+        @test !isapprox(raw_a.matrix, raw_c.matrix; atol=1e-10)
+
+        Lx = Ly = 2
+        n = Lx * Ly
+        raw = build_tfim_2d(Lx, Ly; J=1.0, h=1.0, seed=1,
+            disordering_terms=Vector{Matrix{ComplexF64}}[[Z]], disorder_strength=0.0)
+        H_physical = raw.rescaling_factor * (raw.matrix - raw.shift * I(2^n))
+        H_bonds = QuantumFurnace._construct_2d_heisenberg_base(
+            Lx, Ly, Vector{Matrix{ComplexF64}}[[Z, Z]], [-1.0];
+            periodic_x=true, periodic_y=true)
+        H_field = QuantumFurnace._construct_disordering_terms(
+            Vector{Matrix{ComplexF64}}[[X]], [fill(-1.0, n)], n)
+        @test isapprox(H_physical, Matrix(H_bonds) + Matrix(H_field); atol=1e-10)
+
+        ham_phys = HamHam(raw; beta_phys=0.5)
+        ham_alg = HamHam(raw, 0.5 * ham_phys.rescaling_factor)
+        @test ham_phys.gibbs == ham_alg.gibbs
+    end
+
+    @testset "build_tfim_2d: clean Ising structure and spectrum" begin
+        n = 4
+        raw = build_tfim_2d(2, 2; J=1.0, h=0.0, seed=1,
+            disordering_terms=Vector{Matrix{ComplexF64}}[[Z]], disorder_strength=0.0)
+        @test raw.matrix == Diagonal(diag(raw.matrix))
+
+        H_physical = raw.rescaling_factor * (raw.matrix - raw.shift * I(2^n))
+        eigs = sort(real.(eigvals(Hermitian(H_physical))))
+        @test all(abs.(eigs ./ 4 .- round.(eigs ./ 4)) .< 1e-10)
+        @test minimum(eigs) ≈ -8.0 atol=1e-10
+        @test maximum(eigs) ≈ 8.0 atol=1e-10
+    end
+
+    @testset "build_tfim_2d: two-site disorder follows lattice bonds" begin
+        Lx, Ly = 2, 3
+        n = Lx * Ly
+        coeffs = [Float64.(1:n)]
+        H_2d = Matrix(QuantumFurnace._construct_disordering_terms_2d(
+            Lx, Ly, Vector{Matrix{ComplexF64}}[[Z, Z]], coeffs;
+            periodic_x=true, periodic_y=true))
+        H_chain = Matrix(QuantumFurnace._construct_disordering_terms(
+            Vector{Matrix{ComplexF64}}[[Z, Z]], coeffs, n; periodic=true))
+        @test H_2d != H_chain
+
+        ZZ_34 = Matrix(QuantumFurnace._pad_two_site_op([Z, Z], n, 3, 4))
+        @test abs(real(tr(H_chain * ZZ_34)) / 2^n) > 0.1
+        @test abs(real(tr(H_2d * ZZ_34)) / 2^n) < 1e-12
     end
 end

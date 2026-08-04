@@ -321,18 +321,58 @@ using Random: MersenneTwister
         @test length(grid.tau_obs) == length(n_vals)
         @test length(grid.tau_pred_at_obs) == length(n_vals)
         @test length(grid.residuals_log) == length(n_vals)
+        for i in eachindex(grid.n_grid), j in eachindex(grid.beta_grid)
+            @test grid.tau_predicted[i, j] ==
+                predict_scaling(fits[:M0], grid.n_grid[i], grid.beta_grid[j])
+        end
+        @test grid.tau_pred_at_obs == exp.(fits[:M0].log_tau_predicted)
+        @test grid.residuals_log ≈ log.(grid.tau_obs) .- log.(grid.tau_pred_at_obs)
 
         # Explicit grids honoured
         grid2 = scaling_fit_grid(fits[:M0]; n_grid = [3, 5, 7], beta_grid = [5.0, 10.0])
         @test grid2.n_grid == [3, 5, 7]
         @test grid2.beta_grid ≈ [5.0, 10.0]
         @test size(grid2.tau_predicted) == (3, 2)
+        for i in eachindex(grid2.n_grid), j in eachindex(grid2.beta_grid)
+            @test grid2.tau_predicted[i, j] ==
+                predict_scaling(fits[:M0], grid2.n_grid[i], grid2.beta_grid[j])
+        end
+    end
+
+    @testset "(j) result rows select physical or algorithmic beta" begin
+        rescale = 3.0
+        rows_phys = [(
+            n=n,
+            beta=βp * rescale,
+            beta_alg=βp * rescale,
+            beta_phys=βp,
+            rescaling_factor=rescale,
+            mixing_time=Float64(n)^2 * βp^1.5,
+            mixing_time_source=:extrapolated,
+        ) for n in 3:8 for βp in (1.0, 2.0, 3.0)]
+        fit_phys = fit_scaling(rows_phys)[:M0]
+        @test fit_phys.beta_kind === :phys
+        @test Set(fit_phys.beta_values) == Set((1.0, 2.0, 3.0))
+
+        rows_legacy = [(
+            n=n,
+            beta=β,
+            mixing_time=Float64(n)^2 * β^1.5,
+            mixing_time_source=:extrapolated,
+        ) for n in 3:8 for β in (5.0, 10.0, 20.0)]
+        fit_legacy = fit_scaling(rows_legacy)[:M0]
+        @test fit_legacy.beta_kind === :alg
+        @test Set(fit_legacy.beta_values) == Set((5.0, 10.0, 20.0))
+
+        fit_alg = fit_scaling(rows_phys; beta_kind=:alg)[:M0]
+        @test fit_alg.beta_kind === :alg
+        @test Set(fit_alg.beta_values) == Set((3.0, 6.0, 9.0))
     end
 
     # ------------------------------------------------------------------------
-    # (j) AICc weights edge cases
+    # (k) AICc weights edge cases
     # ------------------------------------------------------------------------
-    @testset "(j) AICc weights edge cases" begin
+    @testset "(k) AICc weights edge cases" begin
         # Empty dict
         @test isempty(aicc_weights(Dict{Symbol, ScalingFit}()))
         @test_throws ArgumentError compare_models(Dict{Symbol, ScalingFit}())

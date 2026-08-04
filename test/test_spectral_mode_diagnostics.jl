@@ -12,6 +12,7 @@
 # the energy eigenbasis) has off_diag_weight ≈ 0.
 
 using LinearAlgebra: I, diagm
+using Random
 using Test
 using QuantumFurnace
 
@@ -40,23 +41,23 @@ using QuantumFurnace
     end
 
     # -----------------------------------------------------------------------
-    # (c) off_diag_weight ∈ [0,1] for a random complex R.
+    # (c) off_diag_weight equals the explicit off-diagonal HS-mass fraction.
     # -----------------------------------------------------------------------
-    @testset "(c) off_diag_weight ∈ [0,1] for random complex R" begin
-        R = randn(ComplexF64, 5, 5)
+    @testset "(c) explicit off-diagonal mass formula" begin
+        R = randn(MersenneTwister(1), ComplexF64, 5, 5)
         eig = ComplexF64[0.0]
         c = ComplexF64[1.0]
         diag_obj = spectral_mode_diagnostics(eig, [R], c)
-        w = diag_obj.off_diag_weight[1]
-        @test 0.0 <= w <= 1.0
-        @test isfinite(w)
+        explicit = sum(abs2(R[i, j]) for i in axes(R, 1), j in axes(R, 2) if i != j) /
+            sum(abs2, R)
+        @test isapprox(diag_obj.off_diag_weight[1], explicit; atol=1e-12)
     end
 
     # -----------------------------------------------------------------------
     # (d) Phase/scale invariance: R_k → α R_k leaves off_diag_weight fixed.
     # -----------------------------------------------------------------------
     @testset "(d) off_diag_weight phase/scale invariance" begin
-        R = randn(ComplexF64, 4, 4)
+        R = randn(MersenneTwister(2), ComplexF64, 4, 4)
         α = 3im
         eig = ComplexF64[0.0]
         c = ComplexF64[1.0]
@@ -70,7 +71,7 @@ using QuantumFurnace
     #     modal_hs_weight = |c_k|²‖R_k‖²_HS unchanged.
     # -----------------------------------------------------------------------
     @testset "(e) modal_hs_weight invariance under (R→αR, c→c/α)" begin
-        R = randn(ComplexF64, 4, 4)
+        R = randn(MersenneTwister(3), ComplexF64, 4, 4)
         c0 = 0.7 - 0.3im
         α = 2.0 - 1.5im
         eig = ComplexF64[0.0]
@@ -94,19 +95,21 @@ using QuantumFurnace
     end
 
     # -----------------------------------------------------------------------
-    # (g) Complex eigenvalues (a conjugate pair) ⇒ no error, off_diag finite
-    #     and in [0,1].
+    # (g) A Hermiticity-preserving generator pairs (lambda,R) with
+    #     (conj(lambda),R†); the diagnostic must agree on the pair.
     # -----------------------------------------------------------------------
-    @testset "(g) complex conjugate-pair eigenvalues" begin
-        R1 = randn(ComplexF64, 3, 3)
-        R2 = randn(ComplexF64, 3, 3)
-        R3 = randn(ComplexF64, 3, 3)
-        eig = ComplexF64[0.0, -0.5 + 1.2im, -0.5 - 1.2im]  # conjugate pair
-        c = ComplexF64[0.0, 1.0 + 0im, 1.0 + 0im]
-        diag_obj = spectral_mode_diagnostics(eig, [R1, R2, R3], c)
-        @test all(isfinite, diag_obj.off_diag_weight)
-        @test all(0.0 .<= diag_obj.off_diag_weight .<= 1.0)
-        @test isapprox(diag_obj.mode_spacing[2], abs(eig[2] - eig[3]); atol = 1e-12)
+    @testset "(g) conjugate partners have equal off-diagonal weight" begin
+        R = randn(MersenneTwister(4), ComplexF64, 5, 5)
+        eig = ComplexF64[-0.5 + 1.2im, -0.5 - 1.2im]
+        diag_obj = spectral_mode_diagnostics(eig, [R, Matrix(R')])
+        @test isapprox(diag_obj.off_diag_weight[1], diag_obj.off_diag_weight[2];
+            atol=1e-13)
+
+        Q = ComplexF64[2 1; 0 2]
+        raw_weight = spectral_mode_diagnostics(ComplexF64[0], [Q]).off_diag_weight[1]
+        herm_weight = spectral_mode_diagnostics(
+            ComplexF64[0], [(Q + Q') / 2]).off_diag_weight[1]
+        @test !isapprox(raw_weight, herm_weight; atol=1e-3)
     end
 
     # -----------------------------------------------------------------------
@@ -135,5 +138,15 @@ using QuantumFurnace
         @test isapprox(dobj.off_diag_weight[2], 1.0; atol = 1e-12)
         @test dobj.mode_spacing[1] == abs(eig[1] - eig[2])
         @test dobj.mode_spacing[2] == Inf
+    end
+
+    @testset "(j) zero-norm and single-mode defaults" begin
+        zero_mode = zeros(ComplexF64, 3, 3)
+        dobj = spectral_mode_diagnostics(
+            ComplexF64[0], [zero_mode], ComplexF64[2])
+        @test dobj.off_diag_weight == [0.0]
+        @test dobj.modal_hs_weight == [0.0]
+        @test dobj.c_abs2 == [4.0]
+        @test dobj.mode_spacing == [Inf]
     end
 end

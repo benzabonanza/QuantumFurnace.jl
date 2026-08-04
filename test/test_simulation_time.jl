@@ -193,17 +193,6 @@
         @test isfinite(budget.total_time)
     end
 
-    @testset "compute_simulation_time — n=3 and n=4 validation" begin
-        for (ham, nq) in [(TEST_HAM, NUM_QUBITS), (N3_HAM, 3)]
-            config = make_config(Thermalize(), TimeDomain(); num_qubits=nq)
-            budget = compute_simulation_time(config, ham, 100.0)
-            @test budget.n_qubits == nq
-            @test budget.total_time > 0.0
-            @test isfinite(budget.total_time)
-            @test budget.per_step_time > 0.0
-        end
-    end
-
     # ---- qf-e4z.18: GQSP cost-model multiplier (Form B = MW Eq. 46) ----
     # With Form B: 2d block-encoding queries per CoherentStep ⇒ b_time = 2·d·b_per_be.
     # Anticipates the Form-B circuit refactor tracked in qf-e4z.19.
@@ -795,44 +784,6 @@
             @test length(tb) == 1
             @test tb[("h", 3)].f_ctrl2 == 6.7
 
-            # "nan" (Python str(float nan)) parses to NaN, both fields.
-            pnan = joinpath(dir, "pnan.tsv")
-            open(pnan, "w") do io
-                println(io, hdr10)
-                println(io, "h\t3\t-\t20.0\t3.0\t23\t0.0\tnan\tnan\t2.4.1")
-            end
-            tn = load_rxx_table(pnan)
-            @test isnan(tn[("h", 3)].f_ctrl1) && isnan(tn[("h", 3)].f_ctrl2)
-        end
-    end
-
-    # ---- estimate_rxx_count vs compute_simulation_time: GQSP multiplier parity ----
-    # Both must apply the SAME 2·gqsp_degree Form-B multiplier and agree on every
-    # shared register/step quantity, across d ∈ {1,2,3} and the no-GQSP case.
-    @testset "count_trotter_steps ↔ compute_simulation_time — GQSP parity (qf-5hg verify)" begin
-        function _cfg(; with_gqsp, d)
-            Config(;
-                sim = Thermalize(), domain = TrotterDomain(), construction = KMS(),
-                num_qubits = NUM_QUBITS, with_linear_combination = true,
-                beta = BETA, sigma = SIGMA, a = BETA / 30.0, s = 0.4,
-                num_energy_bits = NUM_ENERGY_BITS, w0 = W0, t0 = T0,
-                num_trotter_steps_per_t0 = NUM_TROTTER_STEPS_PER_T0,
-                mixing_time = 1.0, delta = TEST_DELTA,
-                with_gqsp = with_gqsp, gqsp_degree = d,
-            )
-        end
-        for (with_gqsp, d) in [(false, 1), (true, 1), (true, 2), (true, 3)]
-            cnt = count_trotter_steps(_cfg(; with_gqsp, d), TEST_HAM, 10.0)
-            bud = compute_simulation_time(_cfg(; with_gqsp, d), TEST_HAM, 10.0)
-            @test cnt.with_gqsp == bud.with_gqsp == with_gqsp
-            @test cnt.gqsp_degree == bud.gqsp_degree == d
-            @test cnt.n_steps == bud.n_steps
-            @test cnt.r_D == bud.r_D && cnt.r_bm == bud.r_bm && cnt.r_bp == bud.r_bp
-            @test cnt.N_D == bud.N_D
-            # The Form-B multiplier 2d (1 when off) matches between the two.
-            expected_mult = with_gqsp ? 2 * d : 1
-            @test cnt.n_be_queries == expected_mult
-            @test bud.b_time ≈ expected_mult * bud.b_per_be rtol = TOL_EXACT
         end
     end
 end

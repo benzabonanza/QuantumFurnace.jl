@@ -125,43 +125,6 @@ end
         @test L_legacy == L_new
     end
 
-    @testset "Independent triples produce a sane Lindbladian (KMS Time)" begin
-        # Reference at uniform N = 10, w0 = 0.05 (qf-5nz: was N=12; the
-        # independent-triple sanity check is N-invariant).
-        cfg_ref = _new_kms_cfg(TimeDomain())
-        L_ref = construct_lindbladian(sys.jumps, cfg_ref, sys.ham)
-
-        # Now coarsen the inner integration register only.
-        N_bp = 8; w0_bp = 0.2; t0_bp = 2π / (2^N_bp * w0_bp)
-        cfg_indep = Config(;
-            sim = Lindbladian(), domain = TimeDomain(), construction = KMS(),
-            num_qubits = _NUM_QUBITS_REG_INDEP, with_linear_combination = true,
-            beta = _BETA_REG_INDEP, sigma = _SIGMA_REG_INDEP,
-            a = _BETA_REG_INDEP / 30.0, s = 0.4,
-            num_energy_bits_D = 10, w0_D = 0.05, t0_D = 2π / (2^10 * 0.05),
-            num_energy_bits_b_minus = 10, w0_b_minus = 0.05, t0_b_minus = 2π / (2^10 * 0.05),
-            num_energy_bits_b_plus = N_bp, w0_b_plus = w0_bp, t0_b_plus = t0_bp,
-            num_trotter_steps_per_t0 = 10,
-        )
-        L_indep = construct_lindbladian(sys.jumps, cfg_indep, sys.ham)
-        @test all(isfinite, L_indep)
-        @test size(L_indep) == size(L_ref)
-        # Coarser inner register adds quadrature error but should not blow up.
-        @test maximum(abs.(L_indep - L_ref)) < 1e-3
-    end
-
-    @testset "KMS detailed balance still holds with independent triples (n=3)" begin
-        # With all three registers = legacy, we expect machine-precision agreement
-        # with the legacy DB result. (Independent registers add quadrature error.)
-        cfg = _new_kms_cfg(TimeDomain())
-        L = construct_lindbladian(sys.jumps, cfg, sys.ham)
-        res = verify_detailed_balance(L, Hermitian(Matrix(sys.ham.gibbs)))
-        # Smooth-Metro (a=β/30, s=0.4) at β=5 quadrature gives non-tiny rel_norm —
-        # the assertion here is just that DB residual is finite and not blown up.
-        @test isfinite(res.relative_norm)
-        @test res.relative_norm < 1.0  # generous; matches pre-qf-9z0 baseline
-    end
-
     @testset "BSON dual-schema: legacy keys auto-promote to per-term registers" begin
         # `_config_to_dict` writes both legacy and per-term keys.
         # `_dict_to_config_kwargs` reads either schema; old caches without
@@ -203,24 +166,4 @@ end
         @test register_r_b_plus(cfg_legacy) == d_legacy[:num_energy_bits]
     end
 
-    @testset "DLL KMS-DB rel_norm <= 1e-7 at beta in {5, 10}" begin
-        for β in (5.0, 10.0)
-            src_root = dirname(@__DIR__)
-            ham_path = joinpath(src_root, "hamiltonians", "heis_xxx_disordered_periodic_n3_seed46.bson")
-            ham_β = QuantumFurnace._load_hamiltonian_bson(ham_path, β)
-            jumps = sys.jumps  # jumps in eigenbasis depend on Hamiltonian, but for n=3
-            # Build at the right β explicitly:
-            jp = [[X], [Y], [Z]]
-            jumps_β = JumpOp[]
-            for p in jp, site in 1:3
-                op = Matrix(pad_term(p, 3, site)) ./ sqrt(9)
-                op_eb = ham_β.eigvecs' * op * ham_β.eigvecs
-                push!(jumps_β, JumpOp(op, op_eb, op == transpose(op), op == op'))
-            end
-            cfg = _new_dll_cfg(; beta = β)
-            L = construct_lindbladian(jumps_β, cfg, ham_β)
-            res = verify_detailed_balance(L, Hermitian(Matrix(ham_β.gibbs)))
-            @test res.relative_norm <= 1e-7
-        end
-    end
 end

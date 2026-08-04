@@ -218,9 +218,9 @@ using StableRNGs
     # ===================================================================
 
     # -----------------------------------------------------------------------
-    # BIEXP-MIX-01: Extrapolation accuracy <5% on synthetic bi-exp data
+    # BIEXP-MIX-01: extrapolation accuracy on exact synthetic bi-exp data
     # -----------------------------------------------------------------------
-    @testset "BIEXP-MIX-01: biexp extrapolation accuracy <5%" begin
+    @testset "BIEXP-MIX-01: biexp extrapolation accuracy" begin
         # Synthetic bi-exponential data mimicking Liouvillian multi-timescale decay
         A1_true = 1.0    # fast mode
         g1_true = 2.0    # fast gap
@@ -254,48 +254,18 @@ using StableRNGs
         @test est_biexp.mixing_time_extrapolated !== nothing
 
         biexp_err = abs(est_biexp.mixing_time_extrapolated - t_true) / t_true
-        @test biexp_err < 0.05  # <5% error (acceptance criterion)
+        @test biexp_err < 1e-7
 
         # Compare with single-exp extrapolation
         est_single = estimate_mixing_time(result;
             model=:single, skip_initial=0.1,
             target_epsilon=target, extrapolate=true)
 
-        if est_single.mixing_time_extrapolated !== nothing && !isnan(est_single.mixing_time_extrapolated)
-            single_err = abs(est_single.mixing_time_extrapolated - t_true) / t_true
-            @test biexp_err < single_err  # biexp should be more accurate
-            @info "BIEXP-MIX-01" t_true=t_true t_biexp=est_biexp.mixing_time_extrapolated t_single=est_single.mixing_time_extrapolated biexp_err=biexp_err single_err=single_err
-        else
-            @info "BIEXP-MIX-01 (single-exp extrapolation failed)" t_true=t_true t_biexp=est_biexp.mixing_time_extrapolated biexp_err=biexp_err
-        end
-    end
-
-    # -----------------------------------------------------------------------
-    # BIEXP-MIX-02: Backward compat — default model=:single
-    # -----------------------------------------------------------------------
-    @testset "BIEXP-MIX-02: backward compat default model" begin
-        A_true = 1.5
-        gap_true = 0.3
-        C_true = 0.001
-        times = collect(0.0:0.1:50.0)
-        dists = A_true .* exp.(-gap_true .* times) .+ C_true
-
-        result = _make_synthetic_result(times, dists; mixing_time=50.0)
-        est = estimate_mixing_time(result; skip_initial=0.1, target_epsilon=0.01, extrapolate=true)
-
-        # Default model should be :single
-        @test est.model_used == :single
-        @test est.biexp_fit_result === nothing
-
-        # Should produce identical results to explicit model=:single
-        est_explicit = estimate_mixing_time(result;
-            model=:single, skip_initial=0.1, target_epsilon=0.01, extrapolate=true)
-
-        @test est.fitted_gap == est_explicit.fitted_gap
-        @test est.mixing_time == est_explicit.mixing_time
-        @test est.offset == est_explicit.offset
-
-        @info "BIEXP-MIX-02 backward compat" model=est.model_used biexp_fit=est.biexp_fit_result
+        @test est_single.mixing_time_extrapolated !== nothing
+        @test isfinite(est_single.mixing_time_extrapolated)
+        single_err = abs(est_single.mixing_time_extrapolated - t_true) / t_true
+        @test biexp_err < single_err
+        @info "BIEXP-MIX-01" t_true=t_true t_biexp=est_biexp.mixing_time_extrapolated t_single=est_single.mixing_time_extrapolated biexp_err=biexp_err single_err=single_err
     end
 
     # -----------------------------------------------------------------------
@@ -494,34 +464,24 @@ using StableRNGs
         end
 
         # ---------------------------------------------------------------
-        # (c) Complex-eigenvalue robustness: oscillating slow mode
+        # (c) Complex-eigenvalue robustness: rotating off-diagonal mode
         # ---------------------------------------------------------------
         @testset "(c) complex conjugate-pair eigenmodes" begin
             d = 4
-            # Conjugate pair (-0.3 ± 0.5i) with paired conjugate c and R_modes.
-            # The residual is real Hermitian (imaginary parts cancel).
+            # A conjugate pair on |0><1| and |1><0| rotates phase while its
+            # singular values decay monotonically as exp(-0.3t).
             eigenvalues = ComplexF64[0.0, -0.3 + 0.5im, -0.3 - 0.5im]
             c           = ComplexF64[0.0, 0.25 + 0.0im, 0.25 + 0.0im]
-            toy = _build_toy_decomp(eigenvalues, c; d=d)
             sigma_beta = Matrix{ComplexF64}(I, d, d) / d
             rho_inf    = copy(sigma_beta)
-
-            # Residual: (c_+ e^{(-0.3+0.5i)t} + c_- e^{(-0.3-0.5i)t}) M
-            #         = 0.5 * cos(0.5 t) * e^{-0.3 t} * M    (paired conjugates)
-            M_norm = sum(svdvals(toy.M))
+            R_steady = copy(sigma_beta)
+            R_plus = zeros(ComplexF64, d, d); R_plus[1, 2] = 1
+            R_minus = Matrix(R_plus')
+            R_modes = [R_steady, R_plus, R_minus]
             target = 0.05
-            # The bisection in d(t) handles the |cos| fluctuation by tracking
-            # absolute trace distance — the function is non-monotone, so it
-            # may have multiple crossings. Bisection picks the first root
-            # in [0, t_upper] which is the SMALLEST t where d(t) = ε.
-            # We compare to the same: the first crossing of the analytic
-            # |0.5 cos(0.5 t) e^{-0.3 t}| * M_norm / 2 = ε.
-            f_true(t) = 0.5 * cos(0.5 * t) * exp(-0.3 * t) * M_norm / 2 - target
-            # Find first crossing on [0, big].
-            # f(0) = 0.5 * 1 * 4/2 - 0.05 = 1.0 - 0.05 = 0.95 > 0; f decays.
-            t_true = Roots.find_zero(f_true, (0.0, 50.0), Roots.Bisection())
+            t_true = log(0.25 / target) / 0.3
 
-            res = eigenmode_mixing_time(eigenvalues, c, toy.R_modes,
+            res = eigenmode_mixing_time(eigenvalues, c, R_modes,
                                           rho_inf, sigma_beta, target;
                                           atol=1e-4)
             @test res.source === :extrapolated
@@ -566,23 +526,13 @@ using StableRNGs
                                                             target_epsilon=target,
                                                             extrapolate=true)
 
-            # Cross-check: dense fine-grid eval of d(t) at the helper's τ.
-            # Use the same closed-form (this is the strongest possible check
-            # short of run_thermalize).
-            function d_at_dense(t::Float64)
-                d_local = size(pres.rho_inf, 1)
-                rho_t = copy(pres.rho_inf)
-                @inbounds for i in 1:length(pres.eigenvalues)
-                    abs(pres.eigenvalues[i]) < 1e-10 && continue
-                    phase = exp(pres.eigenvalues[i] * t)
-                    rho_t .+= (pres.c[i] * phase) .* pres.R_modes[i]
-                end
-                @inbounds for j in 1:d_local, k in 1:d_local
-                    rho_t[k, j] = (rho_t[k, j] + conj(rho_t[j, k])) / 2
-                end
-                return sum(svdvals(rho_t .- pres.sigma_beta)) / 2
-            end
-            @test isapprox(d_at_dense(res_eig.mixing_time), target; rtol=1e-2)
+            # Independent dense evolution cross-check at the inferred time.
+            L_dense = construct_lindbladian(jumps, cfg, ham)
+            rho_dense = reshape(
+                exp(res_eig.mixing_time * L_dense) * vec(rho_0), d, d)
+            rho_dense .= (rho_dense + rho_dense') / 2
+            dense_distance = sum(svdvals(rho_dense .- pres.sigma_beta)) / 2
+            @test isapprox(dense_distance, target; rtol=2e-2)
             @info "(d) predict_lindbladian + eigenmode_mixing_time" τ=res_eig.mixing_time gap=res_eig.gap floor=res_eig.floor_distance n_evals=res_eig.n_evals
         end
 

@@ -30,8 +30,8 @@ basis-projected jumps are construction-agnostic.
 """
 make_ckg_n3_system(beta::Real) = make_dll_n3_system(beta)
 
-# PHYSICS CHECK: a=0, s=0.25 is the locked thesis-numerics convention for CKG
-# smooth-Metropolis (see MEMORY.md and src/lindblad_action.jl docstring).
+# PHYSICS CHECK: a=0, s=0.25 matches the CKG smooth-Metropolis defaults in
+# `sweep_mixing_times`.
 """
     ckg_smooth_metro_config(beta) -> Config
 
@@ -243,8 +243,6 @@ end
         R = -(ws_no_coh.G_left .+ ws_no_coh.G_right)
         ws_no_coh.G_left  .= -0.5 .* R
         ws_no_coh.G_right .= -0.5 .* R
-        ws_no_coh.G_left_adj  .= ws_no_coh.G_right
-        ws_no_coh.G_right_adj .= ws_no_coh.G_left
         L_apply_no_coh! = function (out, X)
             apply_lindbladian!(ws_no_coh, X, cfg, sys.ham)
             copyto!(out, ws_no_coh.scratch.rho_out)

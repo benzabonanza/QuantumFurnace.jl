@@ -74,12 +74,10 @@
 
         @test fp isa FixedPointResult
 
-        # Fixed point trace distance should be small for BohrDomain with KMS construction.
-        # KMS gives exact detailed balance, so the Lindbladian fixed point equals the Gibbs state
-        # up to Gaussian filter smoothing in the frequency domain. For 3-qubit, the smoothing
-        # effect is small, giving trace_distance ~ O(1e-3). Threshold 0.01 gives ~10x margin.
-        @test fp.trace_distance < 0.01
-        @info "DIAG-02: Bohr fixed point trace distance" trace_distance=fp.trace_distance threshold=0.01
+        # Bohr-domain KMS detailed balance fixes Gibbs exactly; the transition
+        # profile changes rates, not the stationary state.
+        @test fp.trace_distance < 1e-12
+        @info "DIAG-02: Bohr fixed point trace distance" trace_distance=fp.trace_distance threshold=1e-12
 
         # Fixed point is normalized: tr(rho) = 1.
         # Density matrix reconstruction from eigenvector; trace error O(DIM * eps) ~ 8 * 2.2e-16 ~ 1.8e-15.
@@ -258,15 +256,15 @@
         # Within a true multiplet, eigenvalues differ by O(DIM * eps) ~ 1e-14 relative,
         # so 1% is extremely generous. The threshold is set by the detection algorithm's default.
         max_rel_err = 0.0
-        for group in multiplets
-            if length(group.eigenvalue_indices) > 1
-                vals = [eigen_result.eigenvalues[i] for i in group.eigenvalue_indices]
-                for (a, b) in Iterators.product(vals, vals)
-                    denom = max(abs(a), abs(b), 1e-10)
-                    rel_err = abs(a - b) / denom
-                    max_rel_err = max(max_rel_err, rel_err)
-                    @test rel_err < 0.01
-                end
+        nontrivial_multiplets = filter(g -> length(g.eigenvalue_indices) > 1, multiplets)
+        @test !isempty(nontrivial_multiplets)
+        for group in nontrivial_multiplets
+            vals = [eigen_result.eigenvalues[i] for i in group.eigenvalue_indices]
+            for (a, b) in Iterators.product(vals, vals)
+                denom = max(abs(a), abs(b), 1e-10)
+                rel_err = abs(a - b) / denom
+                max_rel_err = max(max_rel_err, rel_err)
+                @test rel_err < 0.01
             end
         end
         @info "Multiplet relative spread" max_relative_error=max_rel_err threshold=0.01 n_multiplets=length(multiplets)
@@ -447,13 +445,10 @@ end
 
         @test fp isa FixedPointResult
 
-        # TrotterDomain fixed point distance should be NON-TRIVIALLY larger
-        # than BohrDomain due to Trotter error shifting the fixed point.
-        # Trotter error is O(dt^2) where dt = T0/n_steps. For 3-qubit with 10 Trotter steps,
-        # the distance is small but nonzero. Threshold 0.5 is very conservative upper bound.
-        @test fp.trace_distance > 0.0
-        @test fp.trace_distance < 0.5
-        @info "DIAG-02 Trotter: fixed point trace distance" trace_distance=fp.trace_distance upper_bound=0.5
+        # Numerical error need not be strictly nonzero. This fixture resolves
+        # the Trotter approximation to O(1e-8).
+        @test fp.trace_distance < 1e-6
+        @info "DIAG-02 Trotter: fixed point trace distance" trace_distance=fp.trace_distance upper_bound=1e-6
 
         # Fixed point is normalized: same error analysis as BohrDomain DIAG-02.
         fp_tr = real(tr(fp.fixed_point))
@@ -471,20 +466,6 @@ end
         @test all(v -> v >= -1e-12, fp_eigvals)
         @info "DIAG-02 Trotter: fixed point positivity" min_eigenvalue=min_eigval threshold=-1e-12
 
-        # Compare to BohrDomain fixed point distance -- both should be similar magnitude
-        # (for 3-qubit with 10 Trotter steps, Trotter error is very small so distances
-        # are nearly equal; we just verify they're in the same ballpark)
-        config_bohr = make_config(Lindbladian(), BohrDomain(); num_qubits=3, construction=KMS())
-        L_bohr_sparse = construct_lindbladian(N3_JUMPS, config_bohr, N3_HAM)
-        L_bohr = Matrix{ComplexF64}(L_bohr_sparse)
-        eigen_bohr = extract_leading_eigendata(L_bohr; n_modes=10)
-        fp_bohr = compute_fixed_point_distance(eigen_bohr, N3_GIBBS)
-        # Both distances are small with KMS (exact detailed balance).
-        # Trotter has tiny residual Trotter error; Bohr is near machine precision.
-        # Threshold 0.01 is conservative for both.
-        @test fp.trace_distance < 0.01
-        @test fp_bohr.trace_distance < 0.01
-        @info "DIAG-02: Trotter vs Bohr comparison" trotter_dist=fp.trace_distance bohr_dist=fp_bohr.trace_distance threshold=0.01
     end
 
     # -------------------------------------------------------------------
@@ -582,12 +563,10 @@ end
         @test result.eigen isa EigenDecompositionResult
         @test length(result.eigen.eigenvalues) == 10
 
-        # Fixed point sub-result: trace distance < 0.5 (Trotter has larger error than Bohr).
-        # For 3-qubit with 10 Trotter steps, actual distance is typically < 0.01,
-        # but 0.5 gives margin for different Trotter step counts.
+        # Bundle coverage is orchestration-only; numerical fixed-point accuracy
+        # is asserted once in DIAG-02 above.
         @test result.fixed_point isa FixedPointResult
-        @test result.fixed_point.trace_distance < 0.5
-        @info "Trotter bundle: fixed point trace distance" trace_distance=result.fixed_point.trace_distance threshold=0.5
+        @test isfinite(result.fixed_point.trace_distance)
 
         # Defect sub-result
         @test result.defect isa DefectResult

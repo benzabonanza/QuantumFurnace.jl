@@ -1,7 +1,7 @@
-# Sandbox tests for the classical SSE QMC sampler (src/classical_qmc.jl, beads qf-h23.3).
+# Sandbox tests for the SSE quantum Monte Carlo implementation, used as a
+# classical-computation baseline for quantum Gibbs sampling.
 #
-# The sampler is the sign-free classical Gibbs-sampling baseline competing with the KMS
-# Lindbladian sampler. Correctness gate = (1) the reconstructed physical Hamiltonian matches
+# Correctness gate = (1) the reconstructed physical Hamiltonian matches
 # the fixture's un-rescaled Hamiltonian to machine precision, and (2) MC thermal observables
 # reproduce the exact dense ρ_β within a few Monte-Carlo error bars.
 #
@@ -13,7 +13,7 @@
 using QuantumFurnace
 using Test
 
-@testset "classical_qmc (SSE QMC) — qf-h23.3" begin
+@testset "classical_qmc module (SSE quantum Monte Carlo)" begin
 
     # --- Reconstruction: H_phys matches the fixture un-rescaled Hamiltonian to ~1e-10 -----------
     @testset "model reconstruction vs fixture" begin
@@ -71,7 +71,7 @@ using Test
         end
     end
 
-    # --- Local-update baseline: correct where it mixes; freezes (ergodicity breaks) in deep order --
+    # --- Local-update baseline: correct where it mixes; metastable in deep order -----------------
     @testset "TFIM local update — correctness + freezing" begin
         # Where it mixes (paramagnet / mild order) the local sampler must reproduce exact ρ_β.
         for (h, β) in ((3.5, 0.25), (1.0, 1.0))
@@ -83,8 +83,9 @@ using Test
             check(res.mz2, res.mz2_err, ex.mz2)
             h == 3.5 && @test res.n_signflips > 100   # paramagnet: tunnels freely (ergodic)
         end
-        # Deep ordered phase: the local update freezes into one sector (⟨m_z⟩ ↛ 0, few/no flips),
-        # while the cluster stays ergodic (⟨m_z⟩ ≈ 0, many flips). Sector-symmetric ⟨m_z²⟩ is
+        # On this finite run in the deep ordered phase, the local update remains in one
+        # sector (⟨m_z⟩ ↛ 0, few/no flips), while the cluster update tunnels
+        # (⟨m_z⟩ ≈ 0, many flips). Sector-symmetric ⟨m_z²⟩ is
         # blind to this — the freezing shows only in the sector-odd ⟨m_z⟩ / the flip count.
         m  = build_sse_tfim_model(2, 4; seed = 46, h = 1.0, disorder_strength = 1e-3)
         rc = run_sse(m, 2.0; pairs = [(1, 2)], nsweeps = 60_000, nwarm = 20_000, seed = 7, update = :cluster)

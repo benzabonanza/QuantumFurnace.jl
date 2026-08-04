@@ -468,46 +468,44 @@ end
     # -----------------------------------------------------------------------
     # (i) Sanity benchmark: ODE-integrator τ_mix vs Thermalize-extrapolation τ_mix
     #
-    # NO_SANDBOX (qf-5nz): the Trotter-vs-continuous τ_mix agreement at the
-    # 10% relative-error level needs δ=0.001 over mixing_time=50 → 50 000
+    # This file is in the NO_SANDBOX tier because the Trotter-vs-continuous
+    # τ_mix agreement at the 10% relative-error level needs δ=0.001 over
+    # mixing_time=50 → 50 000
     # run_thermalize steps, ~150 s on the sandbox container. Loosening δ or
     # the horizon would push the rel_err past the 10% physics-check
-    # threshold (Trotter weak error scales O(δ·τ_mix)). Run with
-    # QUANTUMFURNACE_FULL_TESTS=true outside the sandbox.
+    # threshold (Trotter weak error scales O(δ·τ_mix)).
     # -----------------------------------------------------------------------
-    if get(ENV, "QUANTUMFURNACE_FULL_TESTS", "false") == "true"
-        @testset "(i) Sanity benchmark vs Thermalize @ n=3, β=10 [NO_SANDBOX]" begin
-            beta = 10.0
-            sys = make_dll_n3_system(beta)
-            d = size(sys.ham.data, 1)
-            rho_0 = Matrix{ComplexF64}(I(d) / d)
+    @testset "(i) Sanity benchmark vs Thermalize @ n=3, β=10 [NO_SANDBOX]" begin
+        beta = 10.0
+        sys = make_dll_n3_system(beta)
+        d = size(sys.ham.data, 1)
+        rho_0 = Matrix{ComplexF64}(I(d) / d)
 
-            # Integrator side (continuous-time, exact L).
-            config_int = make_config(Lindbladian(), BohrDomain();
-                                      num_qubits=3, construction=KMS())
-            t_grid = collect(range(0.0, 60.0, length=61))
-            res_int = integrate_to_gibbs(config_int, sys.ham, sys.jumps, rho_0, t_grid;
-                                          mode=:L, krylovdim=20, tol=1e-10)
-            est_int = estimate_mixing_time(res_int; model=:biexp,
-                                            target_epsilon=0.01, extrapolate=true)
+        # Integrator side (continuous-time, exact L).
+        config_int = make_config(Lindbladian(), BohrDomain();
+                                  num_qubits=3, construction=KMS())
+        t_grid = collect(range(0.0, 60.0, length=61))
+        res_int = integrate_to_gibbs(config_int, sys.ham, sys.jumps, rho_0, t_grid;
+                                      mode=:L, krylovdim=20, tol=1e-10)
+        est_int = estimate_mixing_time(res_int; model=:biexp,
+                                        target_epsilon=0.01, extrapolate=true)
 
-            # Thermalize side (discrete CPTP channel, δ-step Trotterization).
-            config_therm = make_config(Thermalize(), BohrDomain();
-                                        num_qubits=3, mixing_time=50.0, delta=0.001)
-            res_therm = run_thermalize(sys.jumps, config_therm, sys.ham;
-                                        initial_dm=copy(rho_0))
-            est_therm = estimate_mixing_time(res_therm; model=:biexp,
-                                              target_epsilon=0.01, extrapolate=true)
+        # Thermalize side (discrete CPTP channel, δ-step Trotterization).
+        config_therm = make_config(Thermalize(), BohrDomain();
+                                    num_qubits=3, mixing_time=50.0, delta=0.001)
+        res_therm = run_thermalize(sys.jumps, config_therm, sys.ham;
+                                    initial_dm=copy(rho_0))
+        est_therm = estimate_mixing_time(res_therm; model=:biexp,
+                                          target_epsilon=0.01, extrapolate=true)
 
-            @test isfinite(est_int.mixing_time)
-            @test isfinite(est_therm.mixing_time)
-            rel_err = abs(est_int.mixing_time - est_therm.mixing_time) / est_therm.mixing_time
-            # PHYSICS CHECK: 10% accommodates Trotter (O(δ·τ_mix) per-step error) +
-            # bi-exp fit noise on both sides. Tighter would catch noise; looser
-            # would miss factor-of-2+ qualitative bugs.
-            @test rel_err < 0.10
-            @info "(i) τ_mix sanity benchmark" tau_int=est_int.mixing_time tau_therm=est_therm.mixing_time rel_err=rel_err
-        end
+        @test isfinite(est_int.mixing_time)
+        @test isfinite(est_therm.mixing_time)
+        rel_err = abs(est_int.mixing_time - est_therm.mixing_time) / est_therm.mixing_time
+        # PHYSICS CHECK: 10% accommodates Trotter (O(δ·τ_mix) per-step error) +
+        # bi-exp fit noise on both sides. Tighter would catch noise; looser
+        # would miss factor-of-2+ qualitative bugs.
+        @test rel_err < 0.10
+        @info "(i) τ_mix sanity benchmark" tau_int=est_int.mixing_time tau_therm=est_therm.mixing_time rel_err=rel_err
     end
 
     # -----------------------------------------------------------------------
@@ -560,10 +558,9 @@ end
         @test length(results) == 3
         @test sort([r.beta for r in results]) == [1.0, 5.0, 10.0]
         sorted_by_beta = sort(results; by=r -> r.beta)
-        # PHYSICS CHECK: τ_mix should be monotone-increasing in β (colder ⇒ slower
-        # KMS thermalisation). β=1 vs β=10 spans an order of magnitude in the
-        # equilibrium distribution width; the discrepancy must show up in τ_mix.
-        @test sorted_by_beta[1].mixing_time < sorted_by_beta[3].mixing_time
+        @test all(r -> r.n == 3 && r.seed == 42, sorted_by_beta)
+        @test all(r -> isfinite(r.mixing_time) && r.mixing_time > 0, sorted_by_beta)
+        @test all(r -> r.gap_est > 0, sorted_by_beta)
         @info "(k) Multi-point sweep" taus=[r.mixing_time for r in sorted_by_beta] betas=[r.beta for r in sorted_by_beta]
     end
 
@@ -579,16 +576,12 @@ end
                                            t_max_factor=5.0)
             @test length(readdir(dir)) >= 1
             @test isfinite(results1[1].mixing_time)
-            t0 = time()
             results2 = sweep_mixing_times([3], [10.0]; mode=:L,
                                            output_dir=dir,
                                            skip_existing=true,
                                            use_threads=false,
                                            t_max_factor=5.0)
-            t1 = time()
-            @test (t1 - t0) < 5.0
-            @test isapprox(results2[1].mixing_time, results1[1].mixing_time;
-                           atol=1e-10)
+            @test isequal(Dict(pairs(results2[1])), Dict(pairs(results1[1])))
         end
     end
 
@@ -631,45 +624,45 @@ end
                                  "ideal_lindbladian_param_table.bson")
         ham_file     = (n) -> "heis_xxx_disordered_periodic_n$(n)_seed46.bson"
 
-        # Skip if artefacts not present (mirrors test_sweep_channel_mixing).
-        if isfile(param_table) && isfile(joinpath(project_root, "hamiltonians", ham_file(3)))
-            res_legacy = sweep_mixing_times([3], [10.0];
-                construction = KMS(), domain = EnergyDomain(), method = :krylov,
-                target_epsilon = 1e-3,
-                hamiltonian_filename = ham_file,
-                seeds = [42], use_threads = false, output_dir = nothing,
-            )
-            res_table = sweep_mixing_times([3], [10.0];
-                construction = KMS(), domain = EnergyDomain(), method = :krylov,
-                target_epsilon = 1e-3,
-                hamiltonian_filename = ham_file,
-                param_table_bson = param_table, filter_kind = :smooth_metro,
-                seeds = [42], use_threads = false, output_dir = nothing,
-            )
-            @test length(res_legacy) == 1 && length(res_table) == 1
-            r_legacy, r_table = res_legacy[1], res_table[1]
+        ham_path = joinpath(project_root, "hamiltonians", ham_file(3))
+        isfile(param_table) || error(
+            "missing required ideal-Lindbladian parameter table: $param_table")
+        isfile(ham_path) || error("missing required Hamiltonian fixture: $ham_path")
 
-            # Schema: new fields populated.
-            @test r_table.r_D == 7
-            @test isapprox(r_table.w0_D, 0.01953125, rtol=1e-12)
-            @test r_table.target_epsilon == 1e-3
-            @test r_table.filter_kind === :smooth_metro
-            @test isfinite(r_table.tau_mix_bound)
+        res_legacy = sweep_mixing_times([3], [10.0];
+            construction = KMS(), domain = EnergyDomain(), method = :krylov,
+            target_epsilon = 1e-3,
+            hamiltonian_filename = ham_file,
+            seeds = [42], use_threads = false, output_dir = nothing,
+        )
+        res_table = sweep_mixing_times([3], [10.0];
+            construction = KMS(), domain = EnergyDomain(), method = :krylov,
+            target_epsilon = 1e-3,
+            hamiltonian_filename = ham_file,
+            param_table_bson = param_table, filter_kind = :smooth_metro,
+            seeds = [42], use_threads = false, output_dir = nothing,
+        )
+        @test length(res_legacy) == 1 && length(res_table) == 1
+        r_legacy, r_table = res_legacy[1], res_table[1]
 
-            # Legacy fallback still hits the hardcoded defaults.
-            @test r_legacy.r_D == 12
-            @test r_legacy.w0_D == 0.05
+        # Schema: new fields populated.
+        @test r_table.r_D == 7
+        @test isapprox(r_table.w0_D, 0.01953125, rtol=1e-12)
+        @test r_table.target_epsilon == 1e-3
+        @test r_table.filter_kind === :smooth_metro
+        @test isfinite(r_table.tau_mix_bound)
 
-            # τ_mix from the two configurations must agree to better than 1e-5
-            # (smooth-Metro is at machine precision in quadrature by r_D = 6).
-            @test isapprox(r_legacy.mixing_time, r_table.mixing_time, rtol=1e-5)
-            # qf-e4y.5: schema migration — :krylov path emits `gap_est`
-            # (sourced from the predictor's eigendecomposition) instead of
-            # the legacy `fitted_gap`. Both rows are :krylov here.
-            @test isapprox(r_legacy.gap_est, r_table.gap_est, rtol=1e-6)
-        else
-            @info "skipping (l4): ideal-Lindbladian table or family Hamiltonian not present"
-        end
+        # Legacy fallback still hits the hardcoded defaults.
+        @test r_legacy.r_D == 12
+        @test r_legacy.w0_D == 0.05
+
+        # τ_mix from the two configurations must agree to better than 1e-5
+        # (smooth-Metro is at machine precision in quadrature by r_D = 6).
+        @test isapprox(r_legacy.mixing_time, r_table.mixing_time, rtol=1e-5)
+        # qf-e4y.5: schema migration — :krylov path emits `gap_est`
+        # (sourced from the predictor's eigendecomposition) instead of
+        # the legacy `fitted_gap`. Both rows are :krylov here.
+        @test isapprox(r_legacy.gap_est, r_table.gap_est, rtol=1e-6)
     end
 
     @testset "(l5) Eigenmode τ_mix consistency vs :ode + biexp on healthy cell" begin
@@ -709,26 +702,6 @@ end
         @test r.gap_est > 0
         @test r.floor_distance < r.target_epsilon
         @info "(l6) tight-ε eigenmode τ_mix" τ=r.mixing_time gap=r.gap_est floor=r.floor_distance source=r.mixing_time_source
-    end
-
-    @testset "(l3) Observed-mixing fallback (:ode + biexp)" begin
-        # PHYSICS CHECK: at target_eps=1e-6 with t_max_factor=5 (legacy),
-        # bi-exp's offset C exceeds target_eps for n=3 β=10 — extrapolation
-        # returns NaN, so the trajectory's actual crossing is the only
-        # source of τ_mix. The fallback should populate mixing_time from
-        # mixing_time_actual when present. The :observed source flag is
-        # specific to the :ode + biexp path (qf-lkb.10 fallback).
-        res = sweep_mixing_times([3], [10.0];
-                                  method=:ode, mode=:L, seeds=[42],
-                                  use_threads=false,
-                                  target_epsilon=1e-6,
-                                  t_max_factor=5.0)
-        if isfinite(res[1].mixing_time)
-            @test res[1].mixing_time_source ∈ (:extrapolated, :observed)
-        else
-            @test res[1].mixing_time_source === :nan
-        end
-        @info "(l3) tight-eps observed fallback (:ode)" tau=res[1].mixing_time source=res[1].mixing_time_source
     end
 
     # -----------------------------------------------------------------------

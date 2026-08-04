@@ -1,24 +1,5 @@
-"""
-Regression matrix for boundary-condition handling across the Hamiltonian and
-Trotterization code paths (qf-91g).
-
-Covers every combination of:
-- Geometry: 1D (n ∈ {3, 4, 5}), 2D (Lx, Ly ∈ {(2,2), (2,3), (3,3)}, plus chain edge cases).
-- BCs: 1D `periodic ∈ {true, false}`; 2D `periodic_x ∈ {T, F}` × `periodic_y ∈ {T, F}`.
-- Disorder: none, [Z]-only, [Z,Z]-only, [[Z], [Z,Z]] combined.
-
-The audit revealed two latent bugs (now fixed):
-1. `_construct_disordering_terms` dropped the `periodic` flag → OBC base + PBC
-   wrap disorder for 2-site terms.
-2. `expm_pauli_padded` returned `cos(c)*I` (a phase) instead of `I` when the
-   underlying `pad_term` returned zeros for OBC wrap. Trotterization picked up
-   spurious phase factors at the boundary.
-
-The assertions below are layered: low-level matrix-element checks, then
-manual-reconstruction equality, then Trotter convergence to `exp(-iδH)`,
-finishing with a small cross-domain invariance check between Krylov spectra
-of OBC and PBC fixtures.
-"""
+# Boundary-condition invariants for 1D/2D Hamiltonian construction, disorder,
+# Pauli exponentials, Trotterisation, and a small OBC Krylov integration case.
 
 using Test
 using LinearAlgebra
@@ -140,7 +121,7 @@ end
         for n in (3, 4, 5)
             ham_path = joinpath(source_root, "hamiltonians",
                 "heis_xxx_disordered_periodic_n$(n)_seed46.bson")
-            isfile(ham_path) || continue
+            isfile(ham_path) || error("missing required Hamiltonian fixture: $ham_path")
             raw = BSON.load(ham_path)[:hamiltonian]
             @test raw.periodic === true
             # Rebuild from the stored disorder coefficients

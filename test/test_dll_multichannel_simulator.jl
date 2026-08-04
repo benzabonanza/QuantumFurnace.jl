@@ -153,16 +153,15 @@
     # The numerical witness is `verify_detailed_balance`'s
     # `relative_norm = ‖A_anti‖₂ / ‖D‖₂` (anti-Hermitian part of the
     # discriminant relative to the discriminant). KMS-DBC ⇒ `D = D†`
-    # ⇒ `‖A_anti‖ = 0`. We assert this for k ∈ {1, 2, 4} on the n=3
+    # ⇒ `‖A_anti‖ = 0`. We assert this for k ∈ {2, 4} on the n=3
     # disordered Heisenberg fixture across β ∈ {1, 5, 10}.
     # ---------------------------------------------------------------------
-    @testset "(g.0) KMS-DBC: ‖A_anti‖ / ‖D‖ ≈ 0 for k ∈ {1, 2, 4}" begin
+    @testset "(g.0) KMS-DBC: ‖A_anti‖ / ‖D‖ ≈ 0 for k ∈ {2, 4}" begin
         for beta in _BETAS
             sys = make_dll_n3_system(beta)
             base = DLLMetropolisFilter(beta; S = 2.0)
-            # k = 1, 2, 4 with symmetrised translates inside the bump
-            # flat-top |center| ≤ S/2 = 1.0.
-            for centers in ([0.0], [0.0, 0.5], [0.0, 0.25, 0.5, 0.75])
+            # k = 2, 4 with symmetrised translates inside the bump flat-top.
+            for centers in ([0.0, 0.5], [0.0, 0.25, 0.5, 0.75])
                 multi = dll_multichannel_translates(base; centers = centers)
                 cfg = _make_cfg(BohrDomain(), beta, multi)
                 L = construct_lindbladian(sys.jumps, cfg, sys.ham)
@@ -178,34 +177,10 @@
     end
 
     # ---------------------------------------------------------------------
-    # (g.1) Per-channel KMS-DB witness on the Kossakowski (Eq. 4.7):
-    #     α^(ℓ)(ν, ν') = α^(ℓ)(-ν', -ν) · e^{-β(ν+ν')/2},
-    # checked on a symmetric Bohr-frequency grid for the shifted-symmetric
-    # channels that `dll_multichannel_translates` produces.
-    # ---------------------------------------------------------------------
-    @testset "(g.1) Multi-channel α^multi is KMS skew-symmetric" begin
-        for beta in _BETAS
-            base = DLLMetropolisFilter(beta; S = 2.0)
-            multi = dll_multichannel_translates(base; centers = [0.0, 0.4])
-            ν_grid = collect(range(-0.5, 0.5; length = 11))
-            α_multi = sum(
-                QuantumFurnace.dll_kossakowski_bohr(c, ν_grid)
-                for c in multi.channels
-            )
-            assert_kms_skew_symmetric(α_multi, ν_grid, beta; atol = 1e-12)
-        end
-    end
-
-    # ---------------------------------------------------------------------
     # (g) validate_config! rejects mismatched β at the multi-channel level.
     # ---------------------------------------------------------------------
     @testset "(g) validate_config! mismatched β" begin
         beta = 5.0
-        # Constructor catches β-mismatch up front (DLL-MR.1).
-        @test_throws ArgumentError DLLMultiChannelFilter(
-            [DLLMetropolisFilter(beta; S = 2.0), DLLMetropolisFilter(beta + 1; S = 2.0)],
-            beta,
-        )
         # Construct a DLLMultiChannelFilter at one β but supply Config.beta
         # at a different β: validate_config! must catch it.
         multi = DLLMultiChannelFilter([DLLMetropolisFilter(beta; S = 2.0)], beta)

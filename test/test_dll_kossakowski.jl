@@ -44,6 +44,7 @@
         α = dll_kossakowski_bohr(v.filter, v.ν_outer)
         vec_v = [freq_kernel(v.filter, ν) for ν in v.ν_outer]
         @test norm(α - vec_v * vec_v') <= 1e-14
+        @test dissipator_trace_alpha(α) ≈ sum(abs2, vec_v) rtol=1e-14
     end
 
     # ---------------------------------------------------------------------

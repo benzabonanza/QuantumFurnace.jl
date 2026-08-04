@@ -67,39 +67,12 @@ end
         # Strang eigenbasis is orthonormal and eigenvalues sit on the unit circle.
         @test isapprox(trotter.eigvecs * trotter.eigvecs', I; atol = 1e-10)
         @test all(abs.(abs.(trotter.eigvals_t0) .- 1) .< 1e-10)
-    end
 
-    @testset "Single-cache B_trotter saturates when grid spacings differ from t0" begin
-        # The single-cache `B_trotter(::TrottTrott)` runs both coherent legs at
-        # the same `trotter.t0`. When the b_-/b_+ grid spacings differ from t0,
-        # the τ·β / t0 and t/(σ·t0) step-count rounding does NOT improve with M
-        # — error saturates. This is exactly why the canonical KMS coherent path
-        # uses `TrotterTriple` (per-leg caches), tested below.
-        r_D = 8; r_b = 10
-        T_minus = 10.0; T_plus = 5.0
-        eta = 1e-3
-        w0_D = pi / (5 * beta)
-        t0_D = 2pi / (2^r_D * w0_D)
-        bd = _make_b_dicts(beta, sigma; r_b, T_minus, T_plus, eta)
-        t0_bm = bd.t0_minus; t0_bp = bd.t0_plus
-        b_minus = bd.b_minus; b_plus = bd.b_plus
-
-        jumps_h = _build_jumps_in_basis(ham, ham.eigvecs, n)
-        B_ref = B_time(jumps_h, ham, b_minus, b_plus, t0_bm, t0_bp, beta, sigma)
-
-        errs_single = Float64[]
-        for M in (4, 8, 16)
-            trotter = TrottTrott(ham, t0_D, M)  # single-cache
-            jumps_t = _build_jumps_in_basis(ham, trotter.eigvecs, n)
-            B_t = B_trotter(jumps_t, trotter, b_minus, b_plus, t0_bm, t0_bp, beta, sigma)
-            U = ham.eigvecs' * trotter.eigvecs
-            B_lifted = U * B_t * U'
-            push!(errs_single, opnorm(B_ref - B_lifted))
-        end
-        # Saturated: ratio of M=4 to M=16 error should be ~1 (within 50%) since
-        # the t0-rounding error dominates.
-        ratio = errs_single[1] / errs_single[end]
-        @test 0.5 < ratio < 2.0
+        # Public error helper agrees with independently materialised unitaries.
+        t = trotter.t0
+        U_exact = exp(1im .* Matrix(ham.data) .* t)
+        U_trotter = trotter.eigvecs * Diagonal(trotter.eigvals_t0) * trotter.eigvecs'
+        @test compute_trotter_error(ham, trotter, t) ≈ norm(U_exact - U_trotter) atol=1e-12
     end
 
     @testset "make_trotter_for_config returns single-cache TrottTrott for GNS" begin
@@ -206,7 +179,7 @@ end
         B_ref = B_time(jumps_h, ham, b_minus, b_plus, t0_bm, t0_bp, beta, sigma_off)
 
         errs = Float64[]
-        for M in (1, 2, 4)
+        for M in (1, 2, 4, 8, 16, 32, 64)
             triple = TrotterTriple(ham, t0_D, t0_bm_evol, t0_bp_evol, M, M, M)
             jumps_t = _build_jumps_in_basis(ham, triple.eigvecs, n)
             B_t = B_trotter(jumps_t, triple, b_minus, b_plus, t0_bm, t0_bp, beta, sigma_off)
@@ -215,6 +188,7 @@ end
         end
         @test issorted(errs; rev = true)
         @test all(errs[k] / errs[k+1] > 3 for k in 1:length(errs)-1)
+        @test errs[end] < 1e-9
     end
 
     @testset "Slope -2 in joint M tightening (Strang 2nd order)" begin
@@ -236,7 +210,7 @@ end
         B_ref   = B_time(jumps_h, ham, b_minus, b_plus, t0_bm, t0_bp, beta, sigma)
 
         errs = Float64[]
-        for M in (1, 2, 4, 8)
+        for M in (1, 2, 4, 8, 16)
             triple = TrotterTriple(ham, t0_D, t0_bm_evol, t0_bp_evol, M, M, M)
             jumps_t = _build_jumps_in_basis(ham, triple.eigvecs, n)
             B_t = B_trotter(jumps_t, triple, b_minus, b_plus, t0_bm, t0_bp, beta, sigma)
@@ -246,6 +220,7 @@ end
         @test issorted(errs; rev = true)
         # Each doubling of M should give roughly 4× improvement (Strang -2).
         @test all(errs[k] / errs[k+1] > 3 for k in 1:length(errs)-1)
+        @test errs[end] < 1e-9
     end
 
     @testset "Independent leg-knob tightening (M_b_minus only)" begin
@@ -327,7 +302,8 @@ end
     end
 
     @testset "construct_lindbladian with TrotterTriple (smoke)" begin
-        cfg = make_config(Lindbladian(), TrotterDomain(); num_qubits=3, construction=KMS())
+        cfg = make_config(Lindbladian(), TrotterDomain(); num_qubits=3,
+            construction=KMS(), num_trotter_steps_per_t0=40)
         trotter = make_trotter_for_config(N3_HAM, cfg)
         @test trotter isa TrotterTriple
         jumps = _build_jumps_in_basis(N3_HAM, trotter.eigvecs, n)
@@ -336,8 +312,6 @@ end
         # σ_β in V_D
         sigma_beta = trotter.eigvecs' * N3_HAM.eigvecs * N3_HAM.gibbs *
                      N3_HAM.eigvecs' * trotter.eigvecs
-        # ‖L · σ_β‖_HS should be small (residue of detailed balance); not
-        # asserting an exact value here, just that it's bounded.
-        @test norm(L * vec(sigma_beta)) < 1e-2
+        @test norm(L * vec(sigma_beta)) < 1e-9
     end
 end
