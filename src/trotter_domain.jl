@@ -1,35 +1,21 @@
 """
     AbstractTrotter{T<:AbstractFloat}
 
-Common supertype for Trotter-cache objects passed to TrotterDomain code paths
-(`construct_lindbladian`, `run_thermalize`, `B_trotter`, ...).
-
-Two concrete subtypes:
-
-- [`TrottTrott`](@ref): single-cache mode — one Strang Trotterization at a
-  single step `t0`, one eigenbasis. Used for the dissipator-only (GNS) path
-  and as the per-leg building block of `TrotterTriple`.
-- [`TrotterTriple`](@ref) (qf-e4z.20): **three independent** Strang substeps and
-  eigenbases — one each for the dissipative (`D`), outer coherent (`b_-`), and
-  inner coherent (`b_+`) legs. The canonical KMS coherent scheme in
-  TrotterDomain. The dissipator runs in `V_D` and `B_trotter` performs
-  explicit inter-basis rotations.
+Supertype for Trotter-domain caches. [`TrottTrott`](@ref) stores one Strang
+cache; [`TrotterTriple`](@ref) stores independent dissipative and coherent
+caches with explicit basis rotations.
 """
 abstract type AbstractTrotter{T<:AbstractFloat} end
 
 """
     TrottTrott{T<:AbstractFloat}
 
-    Single-cache Strang Trotter data for time evolution `exp(-iHt)` at a fixed
-    Trotter step `t0`. Parameterized on element type `T`, inferred from the
-    HamHam used for construction.
+Single-cache Strang Trotter data at duration `t0`.
 
-    # Fields
-    - `t0`: Trotter-step duration.
-    - `num_trotter_steps_per_t0`: Number of elementary Strang substeps composing one `t0` step.
-    - `eigvals_t0`: Eigenvalues of `S_2(t0/M)^M`, the Strang one-step operator at duration `t0`.
-    - `eigvecs`: Strang eigenbasis.
-    - `bohr_freqs`: Quasi-Bohr frequencies extracted from `eigvals_t0` at scale `t0`.
+# Fields
+- `num_trotter_steps_per_t0`: elementary Strang substeps per cached step.
+- `eigvals_t0`, `eigvecs`: cached step eigendecomposition.
+- `bohr_freqs`: quasi-Bohr frequencies at scale `t0`.
 """
 struct TrottTrott{T<:AbstractFloat} <: AbstractTrotter{T}
     t0::T
@@ -67,39 +53,19 @@ function _trotter_bohr_freqs(trottU_T_eigvals::Vector{ComplexF64}, t::Float64)
     return bohr_freqs .- bohr_freqs'  # dim×dim
 end
 
-# ---------------------------------------------------------------------------
-# qf-e4z.20 — independent per-leg Trotter caches (canonical KMS coherent scheme).
-#
-# `TrotterTriple` gives each coherent-term leg its own Trotterization,
-# eigenbasis, and substep count `M_X`. `B_trotter` performs explicit
-# inter-basis rotations to glue the three legs together. The three substeps
-# `δt₀_X = t0_X / M_X` are fully independent — tightening one leg never
-# inflates another.
-# ---------------------------------------------------------------------------
+# Each channel leg has an independent Strang step and eigenbasis.
 
 """
     TrotterTriple{T<:AbstractFloat}  <:  AbstractTrotter{T}
 
-Three independent Strang Trotter caches (one per coherent-term leg) plus the
-inter-basis rotation matrices.
+Independent dissipative and coherent Strang caches with basis rotations.
 
 # Fields
-- `D::TrottTrott{T}`: dissipative leg, canonical basis `V_D`. The final
-  Lindbladian / channel state `ρ` lives in `V_D`; `σ_β` rotates into `V_D`.
-- `b_minus::TrottTrott{T}`: outer coherent leg (`b_-(t)` loop).
-- `b_plus::TrottTrott{T}`:  inner coherent leg (`b_+(τ)` loop).
-- `R_bm_in_D = V_bm' · V_D`: maps `V_D` operator coords to `V_bm` via
-  `M_bm = R_bm_in_D · M_D · R_bm_in_D'`.
-- `R_bp_in_D = V_bp' · V_D`: same pattern, `D → b_+`.
-- `R_bm_in_bp = V_bm' · V_bp`: same pattern, `b_+ → b_-`.
+- `D`, `b_minus`, `b_plus`: per-leg [`TrottTrott`](@ref) caches.
+- `R_bm_in_D`, `R_bp_in_D`, `R_bm_in_bp`: unitary coordinate rotations.
 
-# `getproperty` aliasing
-Field access for the single-cache names — `:t0`, `:eigvecs`, `:bohr_freqs`,
-`:eigvals_t0`, `:num_trotter_steps_per_t0` — transparently delegate to the
-`D` leg. This lets every TrotterDomain consumer that reads
-`trotter.eigvecs` / `trotter.bohr_freqs` / etc. work without modification
-(the channel I/O basis is `V_D`; `predict_channel_trajectory` and the
-qf-72g `superop_distance` tool rely on this delegation).
+Single-cache properties such as `eigvecs` and `bohr_freqs` delegate to `D`,
+which is the channel input/output basis.
 """
 struct TrotterTriple{T<:AbstractFloat} <: AbstractTrotter{T}
     D::TrottTrott{T}
@@ -114,17 +80,10 @@ end
     TrotterTriple(ham::HamHam{T}, t0_D, t0_b_minus_evol, t0_b_plus_evol,
                   M_D, M_b_minus, M_b_plus) -> TrotterTriple{T}
 
-Build three independent Strang Trotter caches at substeps
-`δt₀_X = t0_X / M_X` for `X ∈ {D, b_minus, b_plus}`.
+Build three independent Strang caches and their basis rotations.
 
-`t0_b_minus_evol` and `t0_b_plus_evol` are the **Trotter-step durations**
-of the outer (`b_-(t/σ)` → grid step `register_t0_b_minus / σ`) and inner
-(`b_+(τβ)` → grid step `β · register_t0_b_plus`) coherent-integral
-evolutions. Each leg is Trotterized independently with its OWN `M_X`, so the
-three substeps need not be commensurate.
-
-Each sub-cache is built via the single-cache `TrottTrott(ham, t0_X, M_X)`
-constructor. The inter-basis rotations are computed once and stored.
+The three `t0` values are physical evolution durations for their respective
+integrals and need not be commensurate. Each `M` must be positive.
 """
 function TrotterTriple(
     hamiltonian::HamHam{T},
@@ -177,6 +136,12 @@ function Base.propertynames(::TrotterTriple, private::Bool=false)
             :t0, :eigvecs, :bohr_freqs, :eigvals_t0, :num_trotter_steps_per_t0)
 end
 
+"""
+    compute_trotter_error(hamiltonian, trotter, t) -> Real
+
+Return the operator-norm error between exact and cached Trotter evolution at
+time `t`. `t` is interpreted as an integer number of `trotter.t0` steps.
+"""
 function compute_trotter_error(hamiltonian::HamHam, trotter::TrottTrott, t::Float64)
 
     num_t0_steps = Int(t / trotter.t0)
@@ -190,19 +155,8 @@ end
 """
     _check_1d_trotter_compatible(ham; tol=1e-10)
 
-Verify that the 1D-chain decomposition assumed by `_trotterize2` matches the
-stored Hamiltonian `ham.data`. The 1D Trotter places base and two-site
-disorder bonds on consecutive qubits `(q, q+1)` (with optional wrap when
-`ham.periodic`). A 2D HamHam from `find_*_2d_heisenberg` stores a different
-bond structure that `_trotterize2` cannot represent.
-
-Returns the operator-norm deviation between the 1D reconstruction and
-`ham.data`. Callers that require a 1D-chain HamHam (currently the
-`TrottTrott` constructors) should throw on `err > tol`.
-
-The check costs one extra `_construct_base_ham` + `_construct_disordering_terms`
-plus an `opnorm` on a `2^n × 2^n` matrix — negligible against the rest of the
-Trotter construction at the sandbox n ≤ 8 envelope.
+Check that `_trotterize2`'s 1D-chain reconstruction matches `ham.data`.
+Returns the operator-norm deviation and throws when it exceeds `tol`.
 """
 function _check_1d_trotter_compatible(ham::HamHam{T}; tol::Real=1e-10) where {T<:AbstractFloat}
     n = Int(log2(size(ham.data, 1)))
@@ -231,26 +185,15 @@ function _check_1d_trotter_compatible(ham::HamHam{T}; tol::Real=1e-10) where {T<
             "_construct_disordering_terms(...)` (with `periodic = ham.periodic`) " *
             "by ‖ΔH‖_op = $err > tol = $tol. This usually means a 2D HamHam " *
             "from `find_*_2d_heisenberg` was passed; `_trotterize2` does not " *
-            "yet model 2D lattice bond structure (see qf-91g.3)."))
+            "yet model 2D lattice bond structure."))
     end
     return err
 end
 
 function _trotterize2(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
-    """
-    2nd-order Strang Trotter for 1D chain Hamiltonians with 1- and 2-site terms.
-
-    Honors `hamiltonian.periodic`: with `periodic=false`, every 2-site term whose
-    placement would wrap past site `num_qubits` is dropped (via the `periodic`
-    kwarg of `expm_pauli_padded`). 1-site terms have no boundary issue.
-
-    **Limitation**: this is a 1D-chain Trotterizer. Passing a 2D HamHam yields
-    an operator that does not reproduce `exp(-i δ H_2D)` — the bond structure of
-    the 2D lattice (right + up neighbours) is not modeled here. The
-    `_check_1d_trotter_compatible` guard (invoked from `TrottTrott` constructors)
-    throws on this mismatch so 2D HamHams cannot reach this function silently.
-    2D HamHams are currently only used in EnergyDomain/BohrDomain pipelines.
-    """
+    # Second-order Strang Trotterization for 1D one- and two-site terms.
+    # Math: $S_2(dt) = exp(A dt / 2) exp(B dt) exp(A dt / 2)$.
+    # Open boundaries omit wrapping terms; constructors reject 2D bond layouts.
     timestep::Float64 = t / num_trotter_steps
     num_qubits::Int64 = Int(log2(size(hamiltonian.data)[1]))
     dim = 2^num_qubits
@@ -331,6 +274,17 @@ function _does_term_differ_at_both_sites(term, list_to_compare_with)::Bool
     end
 end
 
+"""
+    group_hamiltonian_terms(hamiltonian) -> NamedTuple
+
+Partition one- and two-site base terms for product-formula construction.
+
+# Arguments
+- `hamiltonian`: Hamiltonian with local base terms and coefficients.
+
+# Returns
+The `commuting`, `noncommuting`, and `one_sites` term/coefficient groups.
+"""
 function group_hamiltonian_terms(hamiltonian::HamHam{T}) where {T<:AbstractFloat}
     CT = Complex{T}
     list_of_kinda_commuting_2site_terms::Vector{Vector{Matrix{CT}}} = []
@@ -379,9 +333,20 @@ function _compute_U_group(terms, couplings, sites::Vector{Int64},
     return U_group
 end
 
-function trotterize(hamiltonian::HamHam, T::Float64, num_trotter_steps::Int64)
-    """1st order Trotter. Honors `hamiltonian.periodic`."""
+"""
+    trotterize(hamiltonian, T, num_trotter_steps) -> Matrix
 
+Approximate the time-`T` propagator with a first-order product formula.
+
+# Arguments
+- `hamiltonian`: Local Hamiltonian, including boundary-condition metadata.
+- `T`: Total evolution time.
+- `num_trotter_steps`: Number of equal product-formula steps.
+
+# Returns
+The dense approximate propagator.
+"""
+function trotterize(hamiltonian::HamHam, T::Float64, num_trotter_steps::Int64)
     timestep::Float64 = T / num_trotter_steps
     num_qubits::Int64 = Int(log2(size(hamiltonian.data)[1]))
     periodic::Bool = hamiltonian.periodic

@@ -204,4 +204,90 @@ using QuantumFurnace
         @test all(0.0 .<= sm.off_diag_weight .<= 1.0)
         @test sm.off_diag_weight[1] < 1e-6     # fixed_point ≈ σ_β: diagonal
     end
+
+    @testset "Predictor workspace reuse and guards" begin
+        psi_plus = ones(ComplexF64, N3_DIM) / sqrt(N3_DIM)
+        rho_plus_computational = psi_plus * psi_plus'
+        rho_0 = Matrix{ComplexF64}(
+            N3_HAM.eigvecs' * rho_plus_computational * N3_HAM.eigvecs)
+
+        cfg_L = make_config(Lindbladian(), EnergyDomain(); num_qubits=3)
+        t_grid = [0.0, 1.0, 2.0]
+        fresh_L = predict_lindbladian_trajectory(
+            cfg_L, N3_HAM, N3_JUMPS, rho_0, t_grid; krylovdim=20)
+        ws_L = Workspace(cfg_L, N3_HAM, N3_JUMPS)
+        reuse_L1 = predict_lindbladian_trajectory(
+            cfg_L, N3_HAM, N3_JUMPS, rho_0, t_grid; krylovdim=20, workspace=ws_L)
+        reuse_L2 = predict_lindbladian_trajectory(
+            cfg_L, N3_HAM, N3_JUMPS, rho_0, t_grid; krylovdim=20, workspace=ws_L)
+        @test fresh_L.distances == reuse_L1.distances == reuse_L2.distances
+        @test fresh_L.spectral_gap == reuse_L1.spectral_gap == reuse_L2.spectral_gap
+        @test fresh_L.eigenvalues == reuse_L1.eigenvalues
+
+        cfg_C = make_config(Thermalize(), EnergyDomain(); num_qubits=3)
+        k_grid = [0, 5, 10]
+        fresh_C = predict_channel_trajectory(
+            cfg_C, N3_HAM, N3_JUMPS, rho_0, k_grid; krylovdim=20)
+        ws_C = Workspace(cfg_C, N3_HAM, N3_JUMPS)
+        reuse_C1 = predict_channel_trajectory(
+            cfg_C, N3_HAM, N3_JUMPS, rho_0, k_grid; krylovdim=20, workspace=ws_C)
+        reuse_C2 = predict_channel_trajectory(
+            cfg_C, N3_HAM, N3_JUMPS, rho_0, k_grid; krylovdim=20, workspace=ws_C)
+        @test fresh_C.distances == reuse_C1.distances == reuse_C2.distances
+        @test fresh_C.spectral_gap == reuse_C1.spectral_gap == reuse_C2.spectral_gap
+        @test fresh_C.eigenvalues == reuse_C1.eigenvalues
+
+        cfg_C_mismatch = make_config(
+            Thermalize(), EnergyDomain(); num_qubits=3, delta=2 * TEST_DELTA)
+        cfg_C_random = make_config(
+            Thermalize(), EnergyDomain(); num_qubits=3, jump_selection=:random)
+        @test_throws ArgumentError predict_channel_trajectory(
+            cfg_C_random, N3_HAM, N3_JUMPS, rho_0, k_grid; krylovdim=20)
+        @test_throws ArgumentError predict_channel_trajectory(
+            cfg_C_mismatch, N3_HAM, N3_JUMPS, rho_0, k_grid;
+            krylovdim=20, workspace=ws_C)
+        @test_throws ArgumentError predict_lindbladian_trajectory(
+            cfg_L, N3_HAM, N3_JUMPS, rho_0, t_grid;
+            krylovdim=20, workspace=ws_C)
+        @test_throws ArgumentError predict_channel_trajectory(
+            cfg_C, N3_HAM, N3_JUMPS, rho_0, k_grid;
+            krylovdim=20, workspace=ws_L)
+
+        rho_wrong = Matrix{ComplexF64}(I(2 * N3_DIM) / (2 * N3_DIM))
+        @test_throws AssertionError predict_lindbladian_trajectory(
+            cfg_L, N3_HAM, N3_JUMPS, rho_wrong, t_grid;
+            krylovdim=20, workspace=ws_L)
+        @test_throws AssertionError predict_lindbladian_trajectory(
+            cfg_L, N3_HAM, N3_JUMPS[1:end-1], rho_0, t_grid;
+            krylovdim=20, workspace=ws_L)
+    end
+
+    @testset "True-gap pass on a parity-symmetric fixture" begin
+        system = make_classical_ising_n3()
+        (; ham, jumps) = system
+        dim = size(ham.data, 1)
+        rho_0 = Matrix{ComplexF64}(I(dim) / dim)
+
+        cfg_L = make_classical_ising_config(Lindbladian(), system)
+        dense_eigs = eigvals(construct_lindbladian(jumps, cfg_L, ham))
+        gap_dense = abs(real(dense_eigs[sortperm(real.(dense_eigs); by=abs)[2]]))
+        pass1_L = predict_lindbladian_trajectory(
+            cfg_L, ham, jumps, rho_0, [0.0, 1.0, 2.0]; krylovdim=40)
+        pass2_L = predict_lindbladian_trajectory(
+            cfg_L, ham, jumps, rho_0, [0.0, 1.0, 2.0];
+            krylovdim=40, compute_true_gap=true)
+        @test abs(pass1_L.spectral_gap - pass2_L.spectral_gap) / pass2_L.spectral_gap > 0.5
+        @test isapprox(pass2_L.spectral_gap, gap_dense; rtol=1e-8)
+        @test pass2_L.total_matvecs > pass1_L.total_matvecs
+
+        cfg_C = make_classical_ising_config(Thermalize(), system; delta=1e-3)
+        pass1_C = predict_channel_trajectory(
+            cfg_C, ham, jumps, rho_0, [0, 5, 10]; krylovdim=40)
+        pass2_C = predict_channel_trajectory(
+            cfg_C, ham, jumps, rho_0, [0, 5, 10];
+            krylovdim=40, compute_true_gap=true)
+        @test abs(pass2_C.spectral_gap - gap_dense) / gap_dense < 1e-3
+        @test pass2_C.total_matvecs > pass1_C.total_matvecs
+    end
+
 end

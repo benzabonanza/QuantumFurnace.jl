@@ -1,51 +1,7 @@
-# ---------------------------------------------------------------------------
-# Sandwich-only helpers (Phase 32 optimization)
-# These are stripped-down versions of the dissipator functions with the
-# L'L and anticommutator terms removed (absorbed into precomputed G_left/G_right).
-# Each performs only 2 GEMMs per call (down from 5 in the full dissipator).
-# ---------------------------------------------------------------------------
+# Sandwich-only helpers. The anticommutator terms are absorbed into the
+# precomputed `G_left`/`G_right`; these helpers only perform the two GEMMs.
 
-"""
-    _accumulate_sandwich!(out, L_op, rho, scalar, ws) -> nothing
-
-Accumulate `scalar * L * rho * L'` into `out`. Used for:
-- Forward Lindbladian positive-frequency sandwich (L * rho * L')
-- Adjoint Lindbladian negative-frequency Hermitian partner (HS adjoint of L'*rho*L is L*rho*L')
-
-Uses `sc.sandwich_tmp`, `sc.sandwich_out` as scratch (sc obtained via type assertion).
-"""
-@inline function _accumulate_sandwich!(
-    out::Matrix{T},
-    L_op::Matrix{T},
-    rho::Matrix{T},
-    scalar::Real,
-    ws::Workspace{KrylovSpectrum},
-) where {T<:Complex}
-    sc = ws.scratch::KrylovScratch{T}
-    _accumulate_sandwich_scratch!(out, L_op, rho, scalar, sc.sandwich_tmp, sc.sandwich_out)
-end
-
-"""
-    _accumulate_sandwich_adj!(out, L_op, rho, scalar, ws) -> nothing
-
-Accumulate `scalar * L' * rho * L` into `out`. Used for:
-- Forward Lindbladian negative-frequency Hermitian partner (L_neg = L')
-- Adjoint Lindbladian positive-frequency sandwich (HS adjoint of L*rho*L' is L'*rho*L)
-
-Uses `sc.sandwich_tmp`, `sc.sandwich_out` as scratch (sc obtained via type assertion).
-"""
-@inline function _accumulate_sandwich_adj!(
-    out::Matrix{T},
-    L_op::Matrix{T},
-    rho::Matrix{T},
-    scalar::Real,
-    ws::Workspace{KrylovSpectrum},
-) where {T<:Complex}
-    sc = ws.scratch::KrylovScratch{T}
-    _accumulate_sandwich_adj_scratch!(out, L_op, rho, scalar, sc.sandwich_tmp, sc.sandwich_out)
-end
-
-# --- Scratch-only sandwich helpers (no Workspace access, zero allocation on hot path) ---
+# No `Workspace` wrapper: callers already own the path-specific scratch.
 
 @inline function _accumulate_sandwich_scratch!(
     out::Matrix{T},
@@ -79,14 +35,12 @@ end
     return nothing
 end
 
-# ---------------------------------------------------------------------------
-# EnergyDomain forward and adjoint Lindbladian
-# ---------------------------------------------------------------------------
-
 """
     apply_lindbladian!(ws, rho, config, hamiltonian) -> sc.rho_out
 
-Compute L(rho) for `EnergyDomain` configs, storing the result in `sc.rho_out`.
+Apply the energy-domain Lindbladian and return `ws.scratch.rho_out`.
+
+Set `include_coherent=false` only for an explicitly labelled dissipator-only diagnostic.
 """
 function apply_lindbladian!(
     ws::Workspace{KrylovSpectrum},
@@ -157,7 +111,9 @@ end
 """
     apply_adjoint_lindbladian!(ws, rho, config, hamiltonian) -> sc.rho_out
 
-Compute L*(rho) (Hilbert-Schmidt adjoint) for `EnergyDomain` configs.
+Apply the Hilbert--Schmidt adjoint energy-domain Lindbladian.
+
+Set `include_coherent=false` only for an explicitly labelled dissipator-only diagnostic.
 """
 function apply_adjoint_lindbladian!(
     ws::Workspace{KrylovSpectrum},
@@ -167,8 +123,8 @@ function apply_adjoint_lindbladian!(
     include_coherent::Bool = true,
 ) where {T<:Complex}
     sc = ws.scratch::KrylovScratch{T}
-    G_left_adj = ws.G_left_adj::Matrix{T}
-    G_right_adj = ws.G_right_adj::Matrix{T}
+    G_left_adj = ws.G_right::Matrix{T}
+    G_right_adj = ws.G_left::Matrix{T}
     jump_eigenbases = ws.jump_eigenbases::Vector{Matrix{T}}
     jump_hermitian = ws.jump_hermitian::Vector{Bool}
     prefactor = (ws.oft_domain_prefactor::Float64) * (ws.gamma_norm_factor::Float64)
@@ -225,10 +181,6 @@ function apply_adjoint_lindbladian!(
     return sc.rho_out
 end
 
-# ---------------------------------------------------------------------------
-# BohrDomain forward and adjoint Lindbladian
-# ---------------------------------------------------------------------------
-
 """
     _accumulate_sandwich_2op!(out, A, B_dag, rho, scalar, ws) -> nothing
 
@@ -276,7 +228,7 @@ end
 """
     apply_lindbladian!(ws, rho, config, hamiltonian) -> sc.rho_out
 
-Compute L(rho) for `BohrDomain` configs.
+Apply the Bohr-domain Lindbladian and return `ws.scratch.rho_out`.
 """
 function apply_lindbladian!(
     ws::Workspace{KrylovSpectrum},
@@ -326,7 +278,7 @@ end
 """
     apply_adjoint_lindbladian!(ws, rho, config, hamiltonian) -> sc.rho_out
 
-Compute L*(rho) (Hilbert-Schmidt adjoint) for `BohrDomain` configs.
+Apply the Hilbert--Schmidt adjoint Bohr-domain Lindbladian.
 """
 function apply_adjoint_lindbladian!(
     ws::Workspace{KrylovSpectrum},
@@ -343,11 +295,11 @@ function apply_adjoint_lindbladian!(
     ZT = zero(T)
 
     if include_coherent
-        BLAS.gemm!('N', 'N', CT, ws.G_left_adj, rho, ZT, sc.rho_out)
-        BLAS.gemm!('N', 'N', CT, rho, ws.G_right_adj, CT, sc.rho_out)
+        BLAS.gemm!('N', 'N', CT, ws.G_right, rho, ZT, sc.rho_out)
+        BLAS.gemm!('N', 'N', CT, rho, ws.G_left, CT, sc.rho_out)
     else
         neg_R = sc.sandwich_tmp
-        @. neg_R = ws.G_left_adj + ws.G_right_adj
+        @. neg_R = ws.G_right + ws.G_left
         half = T(0.5)
         BLAS.gemm!('N', 'N', half, neg_R, rho, ZT, sc.rho_out)
         BLAS.gemm!('N', 'N', half, rho, neg_R, CT, sc.rho_out)
@@ -373,28 +325,13 @@ function apply_adjoint_lindbladian!(
     return sc.rho_out
 end
 
-# ---------------------------------------------------------------------------
-# BohrDomain DLL forward and adjoint Lindbladian (qf-lkb.9)
-# ---------------------------------------------------------------------------
-#
-# DLL collapses the CKG outer ω-loop into a single Lindblad operator per
-# coupling: `L_a = dll_lindblad_op_bohr(jump, hamiltonian, filter)` (Ding-Li-Lin
-# 2024 Eq. 3.4 first form). The matrix-free hot path is:
-#
-#   L(ρ)  = G_left · ρ + ρ · G_right + Σ_a L_a · ρ · L_a†
-#   L*(ρ) = G_left_adj · ρ + ρ · G_right_adj + Σ_a L_a† · ρ · L_a
-#
-# with `G_left = +1im · transpose(G) − 0.5 · R_total`, `G_right = −1im ·
-# transpose(G) − 0.5 · R_total`, `G_left_adj = G_right`, `G_right_adj = G_left`
-# (precomputed in the DLL specialised `Workspace` constructor). The sandwich
-# helpers are reused from the EnergyDomain/TimeDomain path so allocation
-# profile matches CKG.
+# DLL uses one Lindblad matrix per coupling or channel.
+# Math: $L(rho) = G_L rho + rho G_R + sum_a L_a rho L_a^dagger$.
 
 """
     apply_lindbladian!(ws, rho, config, hamiltonian) -> sc.rho_out
 
-Compute L(rho) for `Config{Lindbladian, BohrDomain, DLL}`. Reuses
-`_accumulate_sandwich_scratch!` for the per-jump `L_a · ρ · L_a†` term.
+Apply the DLL Bohr-domain Lindbladian.
 """
 function apply_lindbladian!(
     ws::Workspace{KrylovSpectrum},
@@ -437,9 +374,7 @@ end
 """
     apply_adjoint_lindbladian!(ws, rho, config, hamiltonian) -> sc.rho_out
 
-Compute L*(rho) (Hilbert-Schmidt adjoint) for `Config{Lindbladian, BohrDomain,
-DLL}`. The HS-adjoint of `L_a · ρ · L_a†` is `L_a† · ρ · L_a`; the coherent
-contribution sign-flips through `G_left_adj = G_right`, `G_right_adj = G_left`.
+Apply the Hilbert--Schmidt adjoint DLL Bohr-domain Lindbladian.
 """
 function apply_adjoint_lindbladian!(
     ws::Workspace{KrylovSpectrum},
@@ -449,8 +384,8 @@ function apply_adjoint_lindbladian!(
     include_coherent::Bool = true,
 ) where {T<:Complex}
     sc = ws.scratch::KrylovScratch{T}
-    G_left_adj  = ws.G_left_adj::Matrix{T}
-    G_right_adj = ws.G_right_adj::Matrix{T}
+    G_left_adj  = ws.G_right::Matrix{T}
+    G_right_adj = ws.G_left::Matrix{T}
     dll_lindblads = ws.dll_lindblads::Vector{Matrix{T}}
 
     CT = one(T)
@@ -479,14 +414,10 @@ function apply_adjoint_lindbladian!(
     return sc.rho_out
 end
 
-# ---------------------------------------------------------------------------
-# TimeDomain / TrotterDomain forward and adjoint Lindbladian
-# ---------------------------------------------------------------------------
-
 """
     apply_lindbladian!(ws, rho, config, hamiltonian) -> sc.rho_out
 
-Compute L(rho) for `TimeDomain` and `TrotterDomain` configs.
+Apply a time- or Trotter-domain Lindbladian.
 """
 function apply_lindbladian!(
     ws::Workspace{KrylovSpectrum},
@@ -560,7 +491,7 @@ end
 """
     apply_adjoint_lindbladian!(ws, rho, config, hamiltonian) -> sc.rho_out
 
-Compute L*(rho) (Hilbert-Schmidt adjoint) for `TimeDomain` and `TrotterDomain` configs.
+Apply the Hilbert--Schmidt adjoint time- or Trotter-domain Lindbladian.
 """
 function apply_adjoint_lindbladian!(
     ws::Workspace{KrylovSpectrum},
@@ -573,8 +504,8 @@ function apply_adjoint_lindbladian!(
     _nufft = ws.oft_nufft_prefactors::NUFFTPrefactors{real(T), Array{T, 3}}
     nufft_data = _nufft.data
     nufft_idx = _nufft.energy_to_index
-    G_left_adj = ws.G_left_adj::Matrix{T}
-    G_right_adj = ws.G_right_adj::Matrix{T}
+    G_left_adj = ws.G_right::Matrix{T}
+    G_right_adj = ws.G_left::Matrix{T}
     jump_eigenbases = ws.jump_eigenbases::Vector{Matrix{T}}
     jump_hermitian = ws.jump_hermitian::Vector{Bool}
     prefactor = (ws.oft_domain_prefactor::Float64) * (ws.gamma_norm_factor::Float64)
@@ -631,16 +562,8 @@ function apply_adjoint_lindbladian!(
     return sc.rho_out
 end
 
-# ---------------------------------------------------------------------------
-# Threaded ω-loop variants (qf-in3) — mirror channel pattern in jump_workers.jl
-# ---------------------------------------------------------------------------
-#
-# Build a flat work-list of (jump_idx, label_idx) pairs, partition across
-# threads, and accumulate per-thread `rho_out` chunks into a final reduction
-# that is added to the (already-coherent-populated) `sc.rho_out`.
-#
-# Reuses `OMEGA_THREAD_THRESHOLD` and `_partition_range` from `jump_workers.jl`
-# (loaded earlier; both are package-internal).
+# Threaded frequency loops use a flat `(jump_idx, label_idx)` work list and
+# private output matrices before the final deterministic reduction.
 
 # Build flat (k, li) work list honoring the hermitian-fold convention:
 # Hermitian: only li with w_raw <= 1e-12 are queued (non-positive labels).
@@ -665,8 +588,6 @@ function _populate_lindblad_work_list!(
     end
     return work
 end
-
-# --- EnergyDomain threaded variant ---
 
 function _apply_lindbladian_threaded_energy!(
     sc::KrylovScratch{T},
@@ -765,15 +686,13 @@ function _apply_lindbladian_chunk_energy!(
     return nothing
 end
 
-# --- BohrDomain / DLL threaded variant ---
-#
 # The DLL Bohr dissipator Σ_a L_a ρ L_a† is a flat sum over the per-jump
 # operators in `ws.dll_lindblads` (one dense L_a per coupling — or per channel
 # for multi-channel filters). Parallelise over the jump index `a`: the direct
 # analogue of the EnergyDomain ω-loop, where each (jump, ω) term is itself one
 # Lindblad operator. Each task accumulates a private `rho_out`; the coherent
 # term (already in `sc.rho_out` when this is called) is preserved by the `.+=`
-# reduction. Mirrors `_apply_lindbladian_threaded_energy!` (qf-edk.5).
+# reduction.
 
 function _apply_lindbladian_threaded_bohr_dll!(
     sc::KrylovScratch{T},

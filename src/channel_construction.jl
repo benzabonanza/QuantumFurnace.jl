@@ -4,17 +4,15 @@
 # channel workspace.
 
 """
-    precompute_R(jumps, ham_or_trott, config, precomputed_data, scratch) -> Matrix{<:Complex}
+    _precompute_R(jumps, ham_or_trott, config, precomputed_data, scratch)
 
-    Compute
-        R = sum_{k>0} L_k^dagger L_k
-    in the same basis as `jump.in_eigenbasis` (Hamiltonian eigenbasis for `HamHam`, Trotter basis for `TrottTrott`).
+Accumulate the channel rate operator in the active spectral basis.
 
-    Conventions are matched to `jump_contribution!(domain, ::Config{Thermalize}, ...)`:
-    - the weights are `rate2(w) = base_prefactor * transition(w)` (no extra delta factor),
-    - for Hermitian jumps we iterate half-grid and add the mirrored negative-frequency partner explicitly.
+Hermitian jumps use the positive half-grid plus the explicit negative-frequency
+partner. Weights exclude the channel step size.
 
-    This returns `scratch.R` (Hermitianized).
+# Returns
+Hermitianized `scratch.R`.
 """
 function _precompute_R(
     jumps::AbstractVector{<:JumpOp},
@@ -138,16 +136,13 @@ end
 """
     _precompute_R(jumps, hamiltonian, config::Config{Thermalize, BohrDomain}, precomputed_data, scratch)
 
-Compute R = sum_{nu_2} A_{nu_2}^dagger * B_{nu_2} for BohrDomain, where
-B_{nu_2} = sum_{nu_1} alpha(nu_1, nu_2) * A^a.
+Accumulate the Bohr-domain rate operator.
 
-Uses precomputed Bohr bucket indices (bohr_keys, bohr_is, bohr_js) when available
-from precomputed_data, falling back to hamiltonian.bohr_dict otherwise.
+Math: \$R = sum_(nu_2) A_(nu_2)^dagger sum_(nu_1) alpha_(nu_1,nu_2) A_(nu_1)\$.
+Per-jump probability rescaling is left to the caller.
 
-The scaling factor uses `gamma_norm_factor` (bare, no 1/p_jump) -- the caller
-applies any per-jump probability rescaling separately.
-
-Returns `scratch.R` (Hermitianized).
+# Returns
+Hermitianized `scratch.R`.
 """
 function _precompute_R(
     jumps::AbstractVector{<:JumpOp},
@@ -170,7 +165,7 @@ function _precompute_R(
 
     fill!(scratch.R, 0)
 
-    # qf-qmi.1: concrete-typed view of jump.in_eigenbasis (see _jump_contribution!).
+    # Keep the hot-loop matrix view concretely typed.
     CT = eltype(scratch.jump_oft)
 
     @inbounds for jump in jumps
@@ -278,7 +273,7 @@ function _precompute_R_chunk_energy!(
 
     @inbounds for li in label_indices
         w_raw = energy_labels[li]
-        w = abs(w_raw)
+        w = jump.hermitian ? abs(w_raw) : w_raw
 
         oft!(scratch.jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
 
@@ -358,7 +353,7 @@ function _precompute_R_chunk_timetrot!(
 
     @inbounds for li in label_indices
         w_raw = energy_labels[li]
-        w = abs(w_raw)
+        w = jump.hermitian ? abs(w_raw) : w_raw
 
         nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
         @. scratch.jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
@@ -438,7 +433,7 @@ function _precompute_R_chunk_bohr!(
     (; alpha) = precomputed_data
     fill!(scratch.R, 0)
 
-    # qf-qmi.1: concrete-typed view of jump.in_eigenbasis (see _jump_contribution!).
+    # Keep the hot-loop matrix view concretely typed.
     in_eb = jump.in_eigenbasis::Matrix{CT}
 
     @inbounds for k in key_indices

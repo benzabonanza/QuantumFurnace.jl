@@ -11,7 +11,7 @@
 # a = 0, s = 0.25, r_D = 12).
 # Dense L_super is 64 × 64 ⇒ ≪ 1 MiB. Sandbox-safe.
 
-using LinearAlgebra: I, Hermitian, eigvals, tr, opnorm
+using LinearAlgebra: I, Hermitian, dot, eigvals, norm, tr, opnorm
 using Test
 using QuantumFurnace
 
@@ -52,6 +52,31 @@ using QuantumFurnace
         rel = opnorm(L_b - L_e) / opnorm(L_b)
         @test rel < 1e-9
         @info "(q0) sandbox Bohr ≈ Energy" beta rel threshold=1e-9
+    end
+
+    @testset "Discriminant integration analytic projector (mode=:K)" begin
+        psi_eq = Matrix{ComplexF64}(I, 2, 2) / sqrt(2)
+        psi_0 = sqrt(2) .* ComplexF64[1 0; 0 0]
+        t_grid = [0.0, 0.25, 0.5, 1.0]
+        K_apply! = function (out, X)
+            equilibrium_component = dot(psi_eq, X)
+            @. out = -(X - equilibrium_component * psi_eq)
+            return out
+        end
+
+        res = discriminant_action_integrate(
+            K_apply!, psi_0, psi_eq, t_grid;
+            krylovdim=4, tol=1e-12, save_states=true,
+        )
+        initial_distance = norm(psi_0 - psi_eq)
+        exact_distances = initial_distance .* exp.(-t_grid)
+        exact_final = psi_eq + exp(-t_grid[end]) .* (psi_0 - psi_eq)
+
+        @test res.all_converged
+        @test maximum(abs.(res.distances - exact_distances)) < 1e-10
+        @test norm(res.psi_final - exact_final) < 1e-10
+        @test length(res.states) == length(t_grid)
+        @test all(abs(dot(psi_eq, psi) - 1) < 1e-12 for psi in res.states)
     end
 
     # -----------------------------------------------------------------------

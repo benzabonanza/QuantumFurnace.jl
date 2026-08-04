@@ -39,16 +39,15 @@ using Test
         @test_throws ArgumentError validate_config!(cfg_bad)
     end
 
-    @testset "One outer DM step uses the retained channel route" begin
-        delta = 0.05
-        base = make_config(Thermalize(), EnergyDomain();
-            num_qubits=3, construction=KMS(), delta=delta, mixing_time=delta)
+    @testset "random expectation and sweep converge to the dense step" begin
         psi = normalize(ComplexF64.(1:N3_DIM) .+ im .* ComplexF64.(N3_DIM:-1:1))
         rho0 = psi * psi'
-        seed = 29
+        n_jumps = length(N3_JUMPS)
 
-        for selection in (:sweep, :random)
-            cfg = Config(; sim=base.sim, domain=base.domain,
+        function selection_config(delta, selection)
+            base = make_config(Thermalize(), EnergyDomain();
+                num_qubits=3, construction=KMS(), delta=delta, mixing_time=delta)
+            return Config(; sim=base.sim, domain=base.domain,
                 construction=base.construction, num_qubits=base.num_qubits,
                 with_linear_combination=base.with_linear_combination,
                 beta=base.beta, sigma=base.sigma,
@@ -57,94 +56,48 @@ using Test
                 w0=base.w0, t0=base.t0,
                 num_trotter_steps_per_t0=base.num_trotter_steps_per_t0,
                 mixing_time=delta, delta=delta, jump_selection=selection)
-
-            reference = run_thermalize(
-                N3_JUMPS, cfg, N3_HAM;
-                initial_dm=rho0, rng=Xoshiro(seed), save_every=1,
-            )
-
-            # Reassemble exactly one outer step from the canonical retained
-            # construction/application helpers. This guards both selection
-            # semantics without relying on an independent simulator.
-            precomputed_data = QuantumFurnace._precompute_data(cfg, N3_HAM)
-            n_jumps = length(N3_JUMPS)
-            p_jump = 1.0 / n_jumps
-            rescale = selection === :random
-            coherent_unitaries = QuantumFurnace._precompute_coherent_unitary(
-                N3_JUMPS, N3_HAM, cfg, precomputed_data;
-                delta_scale=rescale ? 1.0 / p_jump : 1.0,
-            )
-            (; K0s, U_residuals) = QuantumFurnace._precompute_per_jump_channels(
-                N3_JUMPS, N3_HAM, cfg, precomputed_data;
-                rescale_by_inv_prob=rescale,
-            )
-            jump_weight_scaling = rescale ?
-                precomputed_data.gamma_norm_factor / p_jump :
-                precomputed_data.gamma_norm_factor
-            scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, N3_DIM)
-            assembled = copy(rho0)
-
-            if selection === :sweep
-                for a in 1:n_jumps
-                    QuantumFurnace._apply_one_dm_substep!(
-                        assembled, scratch, N3_JUMPS[a], coherent_unitaries[a],
-                        K0s[a], U_residuals[a], N3_HAM, cfg,
-                        precomputed_data, jump_weight_scaling,
-                    )
-                end
-            else
-                a = rand(Xoshiro(seed), 1:n_jumps)
-                QuantumFurnace._apply_one_dm_substep!(
-                    assembled, scratch, N3_JUMPS[a], coherent_unitaries[a],
-                    K0s[a], U_residuals[a], N3_HAM, cfg,
-                    precomputed_data, jump_weight_scaling,
-                )
-            end
-
-            @test isapprox(assembled, reference.final_dm; atol=1e-13, rtol=0)
         end
-    end
 
-    @testset "Both modes reach the Gibbs state (DM)" begin
-        cfg_sweep = make_config(Thermalize(), EnergyDomain();
-            num_qubits=3, construction=KMS(), delta=0.05, mixing_time=2.0)
-        cfg_random = Config(; sim=cfg_sweep.sim, domain=cfg_sweep.domain,
-            construction=cfg_sweep.construction, num_qubits=cfg_sweep.num_qubits,
-            with_linear_combination=cfg_sweep.with_linear_combination,
-            beta=cfg_sweep.beta, sigma=cfg_sweep.sigma,
-            gaussian_parameters=cfg_sweep.gaussian_parameters,
-            a=cfg_sweep.a, s=cfg_sweep.s, num_energy_bits=cfg_sweep.num_energy_bits,
-            w0=cfg_sweep.w0, t0=cfg_sweep.t0,
-            num_trotter_steps_per_t0=cfg_sweep.num_trotter_steps_per_t0,
-            mixing_time=cfg_sweep.mixing_time, delta=cfg_sweep.delta,
-            jump_selection=:random)
+        # One deterministic seed per possible first random jump makes the
+        # finite average exact rather than Monte Carlo noisy.
+        seed_for_jump = fill(0, n_jumps)
+        for seed in 1:10_000
+            a = rand(Xoshiro(seed), 1:n_jumps)
+            seed_for_jump[a] == 0 && (seed_for_jump[a] = seed)
+            all(>(0), seed_for_jump) && break
+        end
+        @test all(>(0), seed_for_jump)
 
-        r_sweep  = run_thermalize(N3_JUMPS, cfg_sweep,  N3_HAM; rng=Xoshiro(11))
-        r_random = run_thermalize(N3_JUMPS, cfg_random, N3_HAM; rng=Xoshiro(11))
+        cfg_L = make_config(Lindbladian(), EnergyDomain();
+            num_qubits=3, construction=KMS())
+        L = construct_lindbladian(N3_JUMPS, cfg_L, N3_HAM)
+        random_errors = Float64[]
+        sweep_errors = Float64[]
 
-        td0_sweep  = r_sweep.trace_distances[1]
-        td_sweep   = r_sweep.trace_distances[end]
-        td_random  = r_random.trace_distances[end]
+        for delta in (0.04, 0.02, 0.01)
+            cfg_random = selection_config(delta, :random)
+            one_jump_states = [
+                run_thermalize(N3_JUMPS, cfg_random, N3_HAM;
+                    initial_dm=rho0, rng=Xoshiro(seed), save_every=1).final_dm
+                for seed in seed_for_jump
+            ]
+            rho_random_expect = reduce(+, one_jump_states) ./ n_jumps
 
-        # Both modes should *decrease* the trace distance compared to t=0.
-        @test td_sweep  < td0_sweep
-        @test td_random < td0_sweep
-        # Final TDs should be in the same ballpark (within an order of magnitude).
-        @test 0.1 * td_sweep <= td_random <= 10.0 * td_sweep
-    end
+            cfg_sweep = selection_config(delta, :sweep)
+            rho_sweep = run_thermalize(N3_JUMPS, cfg_sweep, N3_HAM;
+                initial_dm=rho0, rng=Xoshiro(1), save_every=1).final_dm
+            rho_exact = reshape(exp(delta * L) * vec(rho0), N3_DIM, N3_DIM)
 
-    @testset "rescale_by_inv_prob kwarg overrides config" begin
-        cfg = make_config(Thermalize(), EnergyDomain();
-            num_qubits=3, construction=KMS(), delta=0.05, mixing_time=0.5)
+            push!(random_errors, norm(rho_random_expect - rho_exact))
+            push!(sweep_errors, norm(rho_sweep - rho_exact))
+        end
 
-        # Even though config.jump_selection == :sweep, an explicit rescale=true
-        # forces rate-rescaled channels (advancing more physical time per substep).
-        # Both runs should still complete without throwing.
-        r_sweep_default = run_thermalize(N3_JUMPS, cfg, N3_HAM; rng=Xoshiro(7))
-        r_sweep_rescale = run_thermalize(N3_JUMPS, cfg, N3_HAM; rng=Xoshiro(7),
-            rescale_by_inv_prob=true)
-
-        @test length(r_sweep_default.trace_distances) >= 1
-        @test length(r_sweep_rescale.trace_distances) >= 1
+        @test all(diff(random_errors) .< 0)
+        @test all(diff(sweep_errors) .< 0)
+        random_orders = log2.(random_errors[1:end-1] ./ random_errors[2:end])
+        sweep_orders = log2.(sweep_errors[1:end-1] ./ sweep_errors[2:end])
+        @test all((1.8 .< random_orders) .& (random_orders .< 2.2))
+        @test all((1.8 .< sweep_orders) .& (sweep_orders .< 2.2))
+        @info "jump-selection delta refinement" random_errors sweep_errors random_orders sweep_orders
     end
 end

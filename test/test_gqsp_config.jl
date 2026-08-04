@@ -14,6 +14,12 @@ Covers Step qf-63j.1:
 
 @testset "GQSP config fields and validation (qf-63j.1)" begin
 
+    @testset "coherent construction trait" begin
+        @test with_coherent(KMS())
+        @test !with_coherent(GNS())
+        @test with_coherent(DLL())
+    end
+
     # Build a Thermalize/KMS/TimeDomain config with overridable kwargs
     function _make_cfg(; construction=KMS(), domain=TimeDomain(), with_gqsp=false, gqsp_degree=1)
         Config(;

@@ -1,10 +1,4 @@
-# ============================================================================
-# Result serialization infrastructure
-# ============================================================================
-
-# ---------------------------------------------------------------------------
-# Domain string <-> singleton lookup
-# ---------------------------------------------------------------------------
+# Result serialization infrastructure.
 
 const DOMAIN_LOOKUP = Dict(
     "TrotterDomain" => TrotterDomain(),
@@ -25,7 +19,8 @@ function _config_to_dict(config::Config)
 
     # Type tags
     d[:config_type] = config.construction isa GNS ? "GNS" : config.construction isa KMS ? "KMS" : "DLL"
-    d[:config_kind] = config.sim isa Thermalize ? "thermalize" : "lindbladian"
+    d[:config_kind] = config.sim isa Thermalize ? "thermalize" :
+        config.sim isa KrylovSpectrum ? "krylov_spectrum" : "lindbladian"
     d[:domain] = string(typeof(config.domain))
 
     # Shared fields (all config types have these)
@@ -33,14 +28,12 @@ function _config_to_dict(config::Config)
     d[:with_coherent]           = with_coherent(config.construction)
     d[:with_linear_combination] = config.with_linear_combination
     d[:beta]                    = config.beta
+    d[:beta_phys]               = config.beta_phys
     d[:sigma]                   = config.sigma
     d[:gaussian_parameters]     = config.gaussian_parameters
     d[:a]                       = config.a
     d[:s]                       = config.s
-    # Per-register triples (qf-9z0). Legacy single-register kwargs retained
-    # for old caches: dual-schema reader in `_dict_to_config_kwargs` promotes
-    # `num_energy_bits/t0/w0` -> all three triples when only the legacy keys
-    # are present.
+    # Preserve shared-register fields so older caches remain readable.
     d[:num_energy_bits]         = config.num_energy_bits
     d[:t0]                      = config.t0
     d[:w0]                      = config.w0
@@ -55,6 +48,13 @@ function _config_to_dict(config::Config)
     d[:w0_b_plus]               = config.w0_b_plus
     d[:eta]                     = config.eta
     d[:num_trotter_steps_per_t0] = config.num_trotter_steps_per_t0
+    d[:num_trotter_steps_per_t0_D] = config.num_trotter_steps_per_t0_D
+    d[:num_trotter_steps_per_t0_b_minus] = config.num_trotter_steps_per_t0_b_minus
+    d[:num_trotter_steps_per_t0_b_plus] = config.num_trotter_steps_per_t0_b_plus
+    d[:with_gqsp]               = config.with_gqsp
+    d[:gqsp_degree]             = config.gqsp_degree
+    d[:jump_selection]          = config.jump_selection
+    d[:filter]                  = config.filter
 
     # Thermalize-specific fields
     if config.sim isa Thermalize
@@ -85,10 +85,12 @@ function _reconstruct_config(d::Dict)
     construction = config_type == "GNS" ? GNS() : config_type == "DLL" ? DLL() : KMS()
     sim = if config_kind == "thermalize"
         Thermalize()
+    elseif config_kind == "krylov_spectrum"
+        KrylovSpectrum()
     elseif config_kind !== nothing
         Lindbladian()
     else
-        # Legacy fallback: infer from presence of mixing_time
+        # Untagged compatibility schema: infer from `mixing_time`.
         (haskey(d, :mixing_time) && d[:mixing_time] !== nothing) ? Thermalize() : Lindbladian()
     end
 
@@ -110,21 +112,30 @@ function _dict_to_config_kwargs(d::Dict, domain)
     kwargs[:beta]                    = d[:beta]
     kwargs[:sigma]                   = d[:sigma]
 
-    # Optional fields (only set if present and non-nothing). Per-register
-    # fields (qf-9z0) added alongside legacy `num_energy_bits/t0/w0` kwargs.
-    # Older BSON caches without per-register keys fall through to the legacy
-    # kwargs and the Config helper accessors then promote them.
+    # Optional per-leg and shared-register fields support both cache schemas.
     for key in (
-        :a, :s, :eta, :num_trotter_steps_per_t0,
+        :beta_phys, :a, :s, :eta, :num_trotter_steps_per_t0,
+        :num_trotter_steps_per_t0_D,
+        :num_trotter_steps_per_t0_b_minus,
+        :num_trotter_steps_per_t0_b_plus,
         :num_energy_bits, :t0, :w0,
         :num_energy_bits_D, :t0_D, :w0_D,
         :num_energy_bits_b_minus, :t0_b_minus, :w0_b_minus,
         :num_energy_bits_b_plus, :t0_b_plus, :w0_b_plus,
+        :filter,
     )
         val = get(d, key, nothing)
         if val !== nothing
             kwargs[key] = val
         end
+    end
+
+    for (key, default) in (
+        (:with_gqsp, false),
+        (:gqsp_degree, 1),
+        (:jump_selection, :sweep),
+    )
+        kwargs[key] = get(d, key, default)
     end
 
     # gaussian_parameters: BSON stores tuples as arrays, so convert back
@@ -214,21 +225,13 @@ function _extract_hamiltonian_params(ham::HamHam)
 end
 
 
-# ============================================================================
-# New Result serialization (Phase 36)
-# ============================================================================
-
-# ---------------------------------------------------------------------------
-# Result type tag helper
-# ---------------------------------------------------------------------------
+# Result type tags.
 
 _result_type_tag(::LindbladResults) = "lindblad"
 _result_type_tag(::ThermalizeResults) = "thermalize"
 _result_type_tag(::KrylovSpectrumResults) = "krylov_spectrum"
 
-# ---------------------------------------------------------------------------
-# Result -> Dict conversion (for BSON serialization)
-# ---------------------------------------------------------------------------
+# Result-to-dictionary conversion.
 
 function _lindblad_to_dict(r::LindbladResults)
     return Dict{Symbol, Any}(

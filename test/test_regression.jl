@@ -55,4 +55,15 @@ ref_dir = joinpath(source_root, "test", "reference")
         @info "TINF-02: DM regression (TrotterDomain, coherent)" max_element_error=max_err threshold_atol=1e-10
     end
 
+    @testset "run_lindblad dense spectral API" begin
+        config = make_config(Lindbladian(), BohrDomain(); num_qubits=3, construction=KMS())
+        result = run_lindblad(N3_JUMPS, config, N3_HAM)
+        L = Matrix{ComplexF64}(construct_lindbladian(N3_JUMPS, config, N3_HAM))
+        dense_gap = sort(abs.(real.(eigvals(L))))[2]
+
+        @test result isa LindbladResults
+        @test trace_distance_nh(result.fixed_point, Matrix{ComplexF64}(N3_HAM.gibbs)) < 1e-10
+        @test isapprox(abs(real(result.spectral_gap)), dense_gap; rtol=1e-8)
+    end
+
 end

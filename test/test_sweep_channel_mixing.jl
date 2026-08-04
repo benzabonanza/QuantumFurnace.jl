@@ -12,9 +12,8 @@
     ham_path     = joinpath(project_root, "hamiltonians",
                             "heis_xxx_disordered_periodic_n3_seed46.bson")
 
-    if !isfile(param_table) || !isfile(ham_path)
-        @warn "Skipping sweep_channel_mixing tests: required artefacts missing" param_table ham_path
-    else
+    isfile(param_table) || error("missing required channel parameter table: $param_table")
+    isfile(ham_path) || error("missing required Hamiltonian fixture: $ham_path")
         @testset "smoke: matches direct predict_channel_trajectory" begin
             results = sweep_channel_mixing(
                 [3], [10.0];
@@ -38,10 +37,8 @@
             @test r.domain == "Time"
             @test r.with_gqsp === true
             @test r.gqsp_degree == 1
-            # qf-e4y.6: enum is now {:extrapolated, :floor, :nan}. At
-            # n=3 β=10 ε=1e-3 smooth-Metro the channel asymptotic floor
-            # (~3.94e-3) exceeds ε ⇒ :floor source. tau_mix is the
-            # conservative log(d/ε)/λ_gap fallback and stays finite.
+            # The finite channel may either cross ε or remain above it; both
+            # branches must return a finite reported time at this smoke cell.
             @test r.tau_mix_source in (:extrapolated, :floor)
             @test isfinite(r.tau_mix)
             @test isfinite(r.lambda_gap_channel)
@@ -58,7 +55,7 @@
             row  = _lookup_channel_params(rows, 3, 10.0, 1e-3, :smooth_metro)
             ham  = _load_hamiltonian_bson(ham_path, 10.0)
             cfg  = _build_channel_config(row, 3, 10.0, TimeDomain(), KMS())
-            jumps = _jumps_in_basis(ham, 3, ham.eigvecs)
+            jumps = _jumps_in_basis(3, ham.eigvecs)
             d = size(ham.data, 1)
             rho_0 = Matrix{ComplexF64}(I(d) ./ d)
             k_grid = unique(round.(Int, exp10.(range(0, 4, length=40))))
@@ -66,7 +63,7 @@
                                                      krylovdim=30)
 
             # Mirror the post-processing that sweep_channel_mixing performs
-            # (src/lindblad_action.jl::sweep_channel_mixing).  In the
+            # (`src/mixing_sweeps.jl::sweep_channel_mixing`). In the
             # :extrapolated branch `r.tau_mix` is the eigenmode bisection
             # crossing, NOT `log(d/ε)/gap` — the latter is only used as the
             # :floor fallback.
@@ -114,7 +111,6 @@
                 @test isfile(sidecar)
 
                 # Second run with skip_existing=true: should hit the cache.
-                t0 = time()
                 r2 = sweep_channel_mixing(
                     [3], [10.0];
                     target_epsilons = [1e-3],
@@ -125,13 +121,8 @@
                     krylovdim = 30, k_grid_max_log = 4, k_grid_length = 40,
                     output_dir = tmp, skip_existing = true,
                 )
-                cached_wall = time() - t0
-
                 @test length(r2) == 1
-                @test r2[1].lambda_gap_channel ≈ r1[1].lambda_gap_channel rtol=1e-12
-                @test r2[1].tau_mix ≈ r1[1].tau_mix rtol=1e-12
-                # Cache hit should be much faster than the original run (~10s).
-                @test cached_wall < 5.0
+                @test Dict(pairs(r2[1])) == Dict(pairs(r1[1]))
             end
         end
 
@@ -156,7 +147,7 @@
             row  = _lookup_channel_params(rows, 3, 10.0, 1e-3, :smooth_metro)
             ham  = _load_hamiltonian_bson(ham_path, 10.0)
             cfg  = _build_channel_config(row, 3, 10.0, TimeDomain(), KMS())
-            jumps = _jumps_in_basis(ham, 3, ham.eigvecs)
+            jumps = _jumps_in_basis(3, ham.eigvecs)
             d = size(ham.data, 1)
             rho_0 = Matrix{ComplexF64}(I(d) ./ d)
             k_grid = unique(round.(Int, exp10.(range(0, 4, length=40))))
@@ -174,7 +165,7 @@
             results = sweep_channel_mixing(
                 [3], [10.0];
                 target_epsilons = [1e-3],   # below floor at this fixture
-                filter_kinds = [:smooth_metro],
+                filter_kinds = [:gaussian],
                 domain = TimeDomain(),
                 construction = KMS(),
                 seeds = [42],
@@ -182,17 +173,13 @@
                 output_dir = nothing,
             )
             r = results[1]
-            # Sanity: the floor must exceed ε for this assertion to fire.
-            if r.floor_distance > r.eps
-                @test r.tau_mix_source === :floor
-                @test isfinite(r.tau_mix) && r.tau_mix > 0
-                @test isapprox(r.tau_mix,
-                                log(2^r.n / r.eps) / r.lambda_gap_channel;
-                                rtol=1e-12)
-                @info "(zz) floor branch" floor=r.floor_distance ε=r.eps τ=r.tau_mix
-            else
-                @info "(zz) skipped — fixture has floor below ε; assertion moot" floor=r.floor_distance ε=r.eps
-            end
+            @test r.floor_distance > r.eps
+            @test r.tau_mix_source === :floor
+            @test isfinite(r.tau_mix) && r.tau_mix > 0
+            @test isapprox(r.tau_mix,
+                            log(2^r.n / r.eps) / r.lambda_gap_channel;
+                            rtol=1e-12)
+            @info "(zz) floor branch" floor=r.floor_distance ε=r.eps τ=r.tau_mix
         end
 
         @testset "multi-cell expansion" begin
@@ -219,5 +206,4 @@
             @test results[1].filter === :smooth_metro
             @test results[2].filter === :gaussian
         end
-    end
 end

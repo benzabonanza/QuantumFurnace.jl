@@ -33,7 +33,7 @@ using Test
 using LinearAlgebra
 using Random
 using QuantumFurnace
-using QuantumFurnace: _parse_hamiltonian_bson, _build_jump_set,
+using QuantumFurnace: _parse_hamiltonian_bson, _jumps_in_basis,
                      apply_lindbladian!, apply_adjoint_lindbladian!,
                      _apply_lindbladian_threaded_bohr_dll!, KrylovScratch,
                      OMEGA_THREAD_THRESHOLD
@@ -87,7 +87,7 @@ _rand_herm(rng, d) = (G = randn(rng, ComplexF64, d, d); (G + G') / 2)
         @test OMEGA_THREAD_THRESHOLD == 10
         for n in _NS
             ham = _load_heis(n, 0.5)
-            jumps = _build_jump_set(ham, n)
+            jumps = _jumps_in_basis(n, ham.eigvecs)
             cfg = _dll_bohr_cfg(n, ham, 0.5)
             validate_config!(cfg, ham)
             ws = Workspace(cfg, ham, jumps)
@@ -113,7 +113,7 @@ _rand_herm(rng, d) = (G = randn(rng, ComplexF64, d, d); (G + G') / 2)
         for n in _NS, bp in _BETAS_PHYS
             ham = _load_heis(n, bp)
             d = 2^n
-            jumps = _build_jump_set(ham, n)
+            jumps = _jumps_in_basis(n, ham.eigvecs)
             cfg = _dll_bohr_cfg(n, ham, bp)
             validate_config!(cfg, ham)
             ws = Workspace(cfg, ham, jumps)
@@ -142,7 +142,7 @@ _rand_herm(rng, d) = (G = randn(rng, ComplexF64, d, d); (G + G') / 2)
         for n in _NS, bp in _BETAS_PHYS
             ham = _load_heis(n, bp)
             d = 2^n
-            jumps = _build_jump_set(ham, n)
+            jumps = _jumps_in_basis(n, ham.eigvecs)
             cfg = _dll_bohr_cfg(n, ham, bp)
             validate_config!(cfg, ham)
             ws = Workspace(cfg, ham, jumps)
@@ -172,7 +172,7 @@ _rand_herm(rng, d) = (G = randn(rng, ComplexF64, d, d); (G + G') / 2)
         for n in _NS
             ham = _load_heis(n, 0.5)
             d = 2^n
-            jumps = _build_jump_set(ham, n)
+            jumps = _jumps_in_basis(n, ham.eigvecs)
             cfg = _dll_bohr_cfg(n, ham, 0.5)
             validate_config!(cfg, ham)
             ws = Workspace(cfg, ham, jumps)
@@ -189,7 +189,7 @@ _rand_herm(rng, d) = (G = randn(rng, ComplexF64, d, d); (G + G') / 2)
                 @test rf < 1e-12
                 max_f = max(max_f, rf)
                 # explicit adjoint
-                expl_a = ws.G_left_adj * rho + rho * ws.G_right_adj
+                expl_a = ws.G_right * rho + rho * ws.G_left
                 for L_a in ws.dll_lindblads
                     expl_a += L_a' * rho * L_a
                 end
@@ -213,7 +213,7 @@ _rand_herm(rng, d) = (G = randn(rng, ComplexF64, d, d); (G + G') / 2)
         for n in _NS
             ham = _load_heis(n, 0.5)
             d = 2^n
-            jumps = _build_jump_set(ham, n)
+            jumps = _jumps_in_basis(n, ham.eigvecs)
             cfg = _dll_bohr_cfg(n, ham, 0.5)
             validate_config!(cfg, ham)
             ws = Workspace(cfg, ham, jumps)
@@ -240,7 +240,7 @@ _rand_herm(rng, d) = (G = randn(rng, ComplexF64, d, d); (G + G') / 2)
         n = 5  # threaded path
         ham = _load_heis(n, 0.5)
         d = 2^n
-        jumps = _build_jump_set(ham, n)
+        jumps = _jumps_in_basis(n, ham.eigvecs)
         cfg = _dll_bohr_cfg(n, ham, 0.5)
         validate_config!(cfg, ham)
         ws = Workspace(cfg, ham, jumps)
@@ -282,7 +282,7 @@ _rand_herm(rng, d) = (G = randn(rng, ComplexF64, d, d); (G + G') / 2)
         for n in (3, 5)
             ham = _load_heis(n, 0.5)
             d = 2^n
-            jumps = _build_jump_set(ham, n)
+            jumps = _jumps_in_basis(n, ham.eigvecs)
             β_alg = beta_alg(ham, 0.5)
             ch = DLLMetropolisFilter(β_alg; S = 2.0)
             multi = DLLMultiChannelFilter([ch, ch], β_alg)
@@ -321,7 +321,7 @@ _rand_herm(rng, d) = (G = randn(rng, ComplexF64, d, d); (G + G') / 2)
         n = 5
         ham = _load_heis(n, 0.5)
         d = 2^n
-        jumps = _build_jump_set(ham, n)
+        jumps = _jumps_in_basis(n, ham.eigvecs)
         cfg = _dll_bohr_cfg(n, ham, 0.5)
         validate_config!(cfg, ham)
         ws = Workspace(cfg, ham, jumps)
@@ -340,8 +340,8 @@ _rand_herm(rng, d) = (G = randn(rng, ComplexF64, d, d); (G + G') / 2)
 
         # adjoint: same, with adjoint=true and the adj coherent seed
         sc_a = KrylovScratch(ComplexF64, d; num_threads = 1)
-        mul!(sc_a.rho_out, ws.G_left_adj, rho)
-        mul!(sc_a.rho_out, rho, ws.G_right_adj, 1.0, 1.0)
+        mul!(sc_a.rho_out, ws.G_right, rho)
+        mul!(sc_a.rho_out, rho, ws.G_left, 1.0, 1.0)
         _apply_lindbladian_threaded_bohr_dll!(sc_a, rho, ws.dll_lindblads; adjoint = true)
         ref_a = reshape(L_dense' * vec(rho), d, d)
         @test norm(sc_a.rho_out - ref_a) / norm(ref_a) < 1e-12
@@ -356,7 +356,7 @@ _rand_herm(rng, d) = (G = randn(rng, ComplexF64, d, d); (G + G') / 2)
         n = 5
         ham = _load_heis(n, 0.5)
         d = 2^n
-        jumps = _build_jump_set(ham, n)
+        jumps = _jumps_in_basis(n, ham.eigvecs)
         cfg = _dll_bohr_cfg(n, ham, 0.5)
         validate_config!(cfg, ham)
         ws = Workspace(cfg, ham, jumps)
@@ -383,7 +383,7 @@ _rand_herm(rng, d) = (G = randn(rng, ComplexF64, d, d); (G + G') / 2)
     @testset "(j) krylov_spectral_gap (threaded) == dense eigen gap" begin
         n = 4
         ham = _load_heis(n, 0.5)
-        jumps = _build_jump_set(ham, n)
+        jumps = _jumps_in_basis(n, ham.eigvecs)
         cfg = _dll_bohr_cfg(n, ham, 0.5)
         validate_config!(cfg, ham)
         L_dense = construct_lindbladian(jumps, cfg, ham)

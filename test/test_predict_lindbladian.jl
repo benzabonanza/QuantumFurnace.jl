@@ -12,8 +12,8 @@ using QuantumFurnace
 #    Krylov-truncation tolerance set by the captured-vs-missing eigenmode
 #    amplitudes; for the standard 3n single-Pauli jump set on the small
 #    Heisenberg test fixtures the error is < 1e-7 throughout the trajectory.
-# 2. The bi-exp τ_mix extracted from the spectral curve agrees with the
-#    ODE τ_mix to within fitting noise (< 1% relative).
+# 2. The spectral bisection time reproduces the target trace distance under
+#    the independently materialised dense propagator.
 
 @testset "predict_lindbladian_trajectory" begin
 
@@ -85,15 +85,8 @@ using QuantumFurnace
         max_abs_err = maximum(abs.(res_kr.distances .- distances_dense))
         @test max_abs_err < 1e-7
 
-        # τ_mix cross-check. The Krylov spectral path uses the EXACT closed-form
-        # bisection on its eigendecomposition (`eigenmode_mixing_time`) — the
-        # production estimator — NOT a biexp curve fit (qf-3uj). The dense and
-        # ODE references keep the legitimate biexp fit of their sampled curves.
-        est_dense = estimate_mixing_time(t_grid, distances_dense;
-                                          model=:biexp, target_epsilon=1e-3,
-                                          extrapolate=true)
-        est_ode = estimate_mixing_time(res_ode; model=:biexp,
-                                        target_epsilon=1e-3, extrapolate=true)
+        # τ_mix cross-check. The Krylov spectral path uses exact bisection on
+        # its eigendecomposition (`eigenmode_mixing_time`), not a bi-exp fit.
         est_kr = eigenmode_mixing_time(res_kr, 1e-3)
         @test est_kr.source === :extrapolated
         @test isfinite(est_kr.mixing_time) && est_kr.mixing_time > 0
@@ -104,17 +97,6 @@ using QuantumFurnace
         rho_tau = reshape(exp(est_kr.mixing_time * L_dense) * v0, d, d)
         rho_tau .= (rho_tau .+ rho_tau') ./ 2
         @test isapprox(sum(svdvals(rho_tau .- sigma_beta)) / 2, 1e-3; rtol=1e-2)
-
-        # Cross-method: bisection (Krylov) vs biexp (dense / ODE), guarded so a
-        # biexp degeneracy on the flat tail cannot hard-fail the comparison.
-        if isfinite(est_dense.mixing_time)
-            @test abs(est_kr.mixing_time - est_dense.mixing_time) /
-                  est_dense.mixing_time < 0.01
-        end
-        if isfinite(est_ode.mixing_time)
-            @test abs(est_kr.mixing_time - est_ode.mixing_time) /
-                  est_ode.mixing_time < 0.01
-        end
 
         # qf-3uj: the curve-fit estimator must REJECT a trajectory-predictor
         # result; τ_mix on this path comes only from the bisection above.
@@ -317,7 +299,7 @@ using QuantumFurnace
         )
         β_phys = 0.5
         ham_ising = HamHam(raw; beta_phys=β_phys)
-        jumps_ising = QuantumFurnace._build_jump_set(ham_ising, n_ising)
+        jumps_ising = QuantumFurnace._jumps_in_basis(n_ising, ham_ising.eigvecs)
         β_alg = beta_alg(ham_ising, β_phys)
 
         σ = 1.0 / β_alg

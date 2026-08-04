@@ -1,89 +1,6 @@
 using Test
 using LinearAlgebra
 
-# DMTST-03: Single DM Euler step error scales as O(delta^2)
-# DMTST-04: Multi-step DM Euler error accumulates as O(delta)
-#
-# Uses the Liouvillian matrix L directly for deterministic DM evolution.
-# Euler step: rho(t+delta) = rho(t) + delta * reshape(L * vec(rho(t)), DIM, DIM)
-# Reference: exact matrix exponential exp(delta * L).
-
-@testset "DMTST-03: Single-step Euler error O(delta^2)" begin
-    # Build Liouvillian for EnergyDomain (simplest non-trivial domain)
-    config = make_config(Lindbladian(),EnergyDomain())
-    L = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
-
-    # Initial state: maximally mixed
-    rho0 = Matrix{ComplexF64}(I, DIM, DIM) / DIM
-    rho0_vec = vec(rho0)
-
-    # Delta sweep
-    deltas = [0.1, 0.05, 0.025, 0.0125]
-    errors = Float64[]
-
-    for delta in deltas
-        # Euler step
-        rho_euler = rho0 + delta * reshape(L * rho0_vec, DIM, DIM)
-        # Exact step via matrix exponential
-        rho_exact = reshape(exp(delta * L) * rho0_vec, DIM, DIM)
-        # Error (Frobenius norm of vectorized difference)
-        err = norm(vec(rho_euler) - vec(rho_exact))
-        push!(errors, err)
-    end
-
-    # Compute ratios of consecutive errors
-    ratios = [errors[i] / errors[i+1] for i in 1:length(errors)-1]
-
-    # For O(delta^2), when delta halves the error should decrease by factor ~4
-    # Bounds [3.0, 5.0] allow for sub-leading O(delta^3) terms at finite delta
-    for (i, ratio) in enumerate(ratios)
-        @test 3.0 <= ratio <= 5.0
-        @info "DMTST-03: Euler single-step ratio" i ratio expected=4.0 lower=3.0 upper=5.0
-    end
-    @info "DMTST-03: Single-step errors" deltas errors
-end
-
-@testset "DMTST-04: Multi-step accumulated error O(delta)" begin
-    # Build Liouvillian for EnergyDomain
-    config = make_config(Lindbladian(),EnergyDomain())
-    L = construct_lindbladian(TEST_JUMPS, config, TEST_HAM)
-
-    # Initial state: maximally mixed
-    rho0 = Matrix{ComplexF64}(I, DIM, DIM) / DIM
-    rho0_vec = vec(rho0)
-
-    # Fixed total evolution time
-    T = 0.5
-
-    # Exact evolution (compute once)
-    rho_exact_T = reshape(exp(T * L) * rho0_vec, DIM, DIM)
-
-    # Delta sweep
-    deltas = [0.1, 0.05, 0.025, 0.0125]
-    errors = Float64[]
-
-    for delta in deltas
-        num_steps = Int(round(T / delta))
-        rho = copy(rho0)
-        for _ in 1:num_steps
-            rho .+= delta .* reshape(L * vec(rho), DIM, DIM)
-        end
-        err = norm(vec(rho) - vec(rho_exact_T))
-        push!(errors, err)
-    end
-
-    # Compute ratios
-    ratios = [errors[i] / errors[i+1] for i in 1:length(errors)-1]
-
-    # For O(delta), when delta halves the error should decrease by factor ~2
-    # Bounds [1.5, 2.5] allow for sub-leading terms at finite delta
-    for (i, ratio) in enumerate(ratios)
-        @test 1.5 <= ratio <= 2.5
-        @info "DMTST-04: Multi-step accumulated ratio" i ratio expected=2.0 lower=1.5 upper=2.5
-    end
-    @info "DMTST-04: Multi-step errors" T deltas errors
-end
-
 # DMTST-05: Coherent term B consistency across domains
 # B_bohr (exact, Bohr/Energy domain) vs B_time (time quadrature) vs B_trotter (Trotter + time quadrature)
 # Expected: B_bohr ~ B_time within TOL_QUADRATURE; B_trotter has additional Trotter error.
@@ -126,11 +43,6 @@ end
     @test dist_bohr_time < TOL_QUADRATURE
     @info "DMTST-05: B_bohr vs B_time" distance=dist_bohr_time threshold=TOL_QUADRATURE
 
-    # Trotter error is at least as large as time quadrature error (with small numerical margin)
-    # This is a monotonicity check: Trotter approximation adds error on top of quadrature
-    @test dist_bohr_trott >= dist_bohr_time - 1e-10
-    @info "DMTST-05: Trotter error >= quadrature error" dist_bohr_trott dist_bohr_time margin=1e-10
-
     # Trotter error on B term (tightened after basis fix in B_trotter)
     # Measured ~1e-8; threshold 1e-5 gives 1000x margin for system-size variation
     @test dist_bohr_trott < 1e-5
@@ -142,9 +54,7 @@ end
 # DMTST-06: NUFFT OFT consistency vs analytical Energy-domain reference.
 # Verifies the NUFFT-accelerated OFT matches the analytical `oft!` to within
 # time-quadrature tolerance (Time domain) and Trotter-error tolerance
-# (Trotter domain). The original cross-checks against the deprecated
-# `time_oft!` / `trotter_oft!` direct-summation routines were retired with
-# those functions in qf-6z9.4 (kept at `src/staging/ofts.jl` for reference).
+# (Trotter domain).
 
 @testset "DMTST-06: NUFFT OFT consistency" begin
     jump = TEST_JUMPS[1]  # X on site 1

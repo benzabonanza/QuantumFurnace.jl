@@ -10,37 +10,31 @@ buffers, and broadcasting overhead from closure-based element-wise operations).
 Eliminated patterns that these tests guard against:
 - B_bohr: per-frequency spzeros + sparse-dense multiply (O(num_freqs * dim^2))
 - B_time/B_trotter: per-iteration Diagonal wrapper construction
-- _jump_contribution! (Time/Trotter): filter+abs vector intermediates
+- retained channel step: per-step R construction and eigendecomposition
 """
 
 using QuantumFurnace: B_bohr, B_time, B_trotter,
-                      _precompute_data, _jump_contribution!,
-                      ThermalizeScratch
+                      _precompute_data, _apply_one_dm_substep!
 
 @testset "Allocation Regression" begin
 
     @testset "B_bohr allocations" begin
         config = make_config(Lindbladian(), BohrDomain())
         jump = TEST_JUMPS[1]
-        num_freqs = length(keys(TEST_HAM.bohr_dict))
+        budget = 64 * 1024
 
         # Single-jump (wrapped as vector): warmup + measure
         B_ref = B_bohr(TEST_HAM, JumpOp[jump], config)
         allocs = @allocated B_bohr(TEST_HAM, JumpOp[jump], config)
-        # Budget: return matrix + scratch + per-frequency broadcasting overhead.
-        # Must NOT include per-frequency sparse matrix allocations (the eliminated O(num_freqs * dim^2) pattern).
-        max_expected = num_freqs * DIM^2 * sizeof(ComplexF64)  # generous upper bound for broadcasting
-        @test allocs <= max_expected  # B_bohr single-jump: allow buffers + broadcasting, catch sparse matrix reintroduction
-        @info "B_bohr allocations (single-jump)" allocs_bytes=allocs threshold=max_expected num_freqs=num_freqs
+        @test allocs <= budget
+        @info "B_bohr allocations (single-jump)" allocs_bytes=allocs threshold=budget
 
         # Multi-jump: warmup + measure
         B_ref_multi = B_bohr(TEST_HAM, TEST_JUMPS, config)
         allocs_multi = @allocated B_bohr(TEST_HAM, TEST_JUMPS, config)
-        # Multi-jump: overhead scales linearly with number of jumps.
-        num_jumps = length(TEST_JUMPS)
-        max_expected_multi = num_jumps * max_expected
-        @test allocs_multi <= max_expected_multi  # B_bohr multi-jump: linear scaling with n_jumps
-        @info "B_bohr allocations (multi-jump)" allocs_bytes=allocs_multi threshold=max_expected_multi num_jumps=num_jumps
+        # The row cache reuses the same fixed-size buffers for every jump.
+        @test allocs_multi <= budget
+        @info "B_bohr allocations (multi-jump)" allocs_bytes=allocs_multi threshold=budget
     end
 
     @testset "B_time allocations" begin
@@ -107,30 +101,39 @@ using QuantumFurnace: B_bohr, B_time, B_trotter,
         @info "B_trotter allocations (multi-jump)" allocs_bytes=allocs_m threshold=max_expected_multi num_jumps=num_jumps
     end
 
-    @testset "_jump_contribution! Time/Trotter filter allocation" begin
-        # Verify that _jump_contribution! for Time/Trotter thermalize does not allocate
-        # filter+abs vectors. This function operates in-place on scratch buffers,
-        # so the only allocations should be from _finalize_kraus_step! (eigen decomposition).
+    @testset "Retained channel hot-path allocations" begin
         config_therm = make_config(Thermalize(), TimeDomain(); delta=0.01)
         precomputed = _precompute_data(config_therm, TEST_HAM)
-        CT = ComplexF64
-        d = DIM
-        scratch = ThermalizeScratch(CT, d)
-        jump = TEST_JUMPS[1]
-        evolving_dm = copy(Matrix{CT}(TEST_GIBBS))
+        ws = Workspace(config_therm, TEST_HAM, TEST_JUMPS)
+        scratch = ws.scratch
+        U_coherent = ws.U_coherents === nothing ? nothing : ws.U_coherents[1]
+        evolving_dm = copy(Matrix{ComplexF64}(TEST_GIBBS))
 
-        # Warmup
-        _jump_contribution!(evolving_dm, jump, TEST_HAM, config_therm, precomputed, scratch)
+        _apply_one_dm_substep!(
+            evolving_dm, scratch, TEST_JUMPS[1], U_coherent,
+            ws.K0s[1], ws.U_residuals[1], TEST_HAM, config_therm,
+            precomputed, precomputed.gamma_norm_factor,
+        )
 
-        # Measure
-        evolving_dm .= Matrix{CT}(TEST_GIBBS)
-        allocs = @allocated _jump_contribution!(evolving_dm, jump, TEST_HAM, config_therm, precomputed, scratch)
+        evolving_dm .= Matrix{ComplexF64}(TEST_GIBBS)
+        substep_allocs = @allocated _apply_one_dm_substep!(
+            evolving_dm, scratch, TEST_JUMPS[1], U_coherent,
+            ws.K0s[1], ws.U_residuals[1], TEST_HAM, config_therm,
+            precomputed, precomputed.gamma_norm_factor,
+        )
 
-        # Budget: eigen() + mul! temporaries in _finalize_kraus_step!.
-        # Must NOT include filter+abs vector overhead (2 * num_energies * sizeof(Float64) per iteration).
-        max_expected = 50 * d^2 * sizeof(CT)  # generous for eigen decomposition + scratch
-        @test allocs < max_expected  # _jump_contribution! in-place: allow eigen, catch filter vector reintroduction
-        @info "_jump_contribution! allocations (TimeDomain)" allocs_bytes=allocs threshold=max_expected
+        # Thread-task overhead is expected; rebuilding R/K0/U_residual or running
+        # an eigendecomposition inside the step is not.
+        substep_budget = 16_384 * max(Threads.nthreads(), 1)
+        @test substep_allocs < substep_budget
+        @info "_apply_one_dm_substep! allocations (TimeDomain)" allocs_bytes=substep_allocs threshold=substep_budget
+
+        rho = copy(Matrix{ComplexF64}(TEST_GIBBS))
+        apply_delta_channel!(ws, rho, config_therm, TEST_HAM)
+        channel_allocs = @allocated apply_delta_channel!(ws, rho, config_therm, TEST_HAM)
+        channel_budget = substep_budget * length(TEST_JUMPS)
+        @test channel_allocs < channel_budget
+        @info "apply_delta_channel! allocations (TimeDomain)" allocs_bytes=channel_allocs threshold=channel_budget
     end
 
 end

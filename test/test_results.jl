@@ -1,8 +1,15 @@
 using Random
 using BSON
 
-# All tests in this file are exact round-trip checks (atol=0 or exact equality);
-# no @info needed per test output policy.
+# Every persisted field is compared exactly: a BSON round-trip must not alter
+# numerical results or the physical configuration used to produce them.
+
+function _test_config_roundtrip(loaded::Config, expected::Config)
+    @test typeof(loaded) === typeof(expected)
+    for field in fieldnames(typeof(expected))
+        @test isequal(getfield(loaded, field), getfield(expected, field))
+    end
+end
 
 @testset "New Result types serialization" begin
 
@@ -11,7 +18,17 @@ using BSON
     # -----------------------------------------------------------------------
     @testset "LindbladResults round-trip" begin
         mktempdir() do tmpdir
-            config = make_config(Lindbladian(), EnergyDomain(); num_qubits=3, construction=GNS())
+            beta = 5.0
+            r_D = 8
+            w0_D = 0.1
+            config = Config(;
+                sim=Lindbladian(), domain=TimeDomain(), construction=DLL(),
+                num_qubits=3, with_linear_combination=true,
+                beta=beta, beta_phys=2.0, sigma=1 / beta, a=0.0, s=0.25,
+                num_energy_bits_D=r_D, w0_D=w0_D,
+                t0_D=2π / (2^r_D * w0_D), num_trotter_steps_per_t0_D=7,
+                filter=DLLGaussianFilter(beta),
+            )
             dim = N3_DIM
             eigenvalues = [0.0 + 0.0im, -0.5 + 0.01im]
             fixed_point = Matrix(random_density_matrix(Int(log2(dim))))
@@ -26,21 +43,19 @@ using BSON
 
             loaded = load_result(path)
             @test loaded isa LindbladResults
-            @test loaded.config.num_qubits == config.num_qubits
-            @test loaded.config.beta == config.beta
-            @test loaded.config.domain isa EnergyDomain
-            @test isapprox(loaded.eigenvalues, eigenvalues; atol=0)
-            @test isapprox(loaded.fixed_point, fixed_point; atol=0)
-            @test isapprox(loaded.gap_mode, gap_mode; atol=0)
+            _test_config_roundtrip(loaded.config, config)
+            @test loaded.eigenvalues == eigenvalues
+            @test loaded.fixed_point == fixed_point
+            @test loaded.gap_mode == gap_mode
             @test loaded.spectral_gap == spectral_gap
-            @test loaded.metadata[:wall_time_seconds] == 1.5
+            @test loaded.metadata == metadata
 
             # Companion .txt exists
             txt_path = replace(path, ".bson" => ".txt")
             @test isfile(txt_path)
             content = read(txt_path, String)
             @test occursin("LindbladResults", content)
-            @test occursin("EnergyDomain", content)
+            @test occursin("TimeDomain", content)
         end
     end
 
@@ -49,7 +64,23 @@ using BSON
     # -----------------------------------------------------------------------
     @testset "ThermalizeResults round-trip" begin
         mktempdir() do tmpdir
-            config = make_config(Thermalize(), EnergyDomain(); num_qubits=3, construction=GNS())
+            beta = 5.0
+            config = Config(;
+                sim=Thermalize(), domain=TimeDomain(), construction=KMS(),
+                num_qubits=3, with_linear_combination=true,
+                beta=beta, beta_phys=2.0, sigma=1 / beta, a=0.0, s=0.25,
+                num_energy_bits_D=8, w0_D=0.1, t0_D=2π / (2^8 * 0.1),
+                num_energy_bits_b_minus=7, w0_b_minus=0.2,
+                t0_b_minus=2π / (2^7 * 0.2),
+                num_energy_bits_b_plus=6, w0_b_plus=0.25,
+                t0_b_plus=2π / (2^6 * 0.25),
+                num_trotter_steps_per_t0=9,
+                num_trotter_steps_per_t0_D=7,
+                num_trotter_steps_per_t0_b_minus=5,
+                num_trotter_steps_per_t0_b_plus=3,
+                mixing_time=0.4, delta=0.01,
+                with_gqsp=true, gqsp_degree=2, jump_selection=:random,
+            )
             dim = N3_DIM
             final_dm = Matrix(random_density_matrix(Int(log2(dim))))
             trace_distances = [0.5, 0.3, 0.1, 0.05]
@@ -63,13 +94,11 @@ using BSON
 
             loaded = load_result(path)
             @test loaded isa ThermalizeResults
-            @test loaded.config isa Config{Thermalize}
-            @test loaded.config.mixing_time == config.mixing_time
-            @test loaded.config.delta == config.delta
-            @test isapprox(loaded.final_dm, final_dm; atol=0)
-            @test isapprox(loaded.trace_distances, trace_distances; atol=0)
-            @test isapprox(loaded.time_steps, time_steps; atol=0)
-            @test loaded.metadata[:wall_time_seconds] == 2.0
+            _test_config_roundtrip(loaded.config, config)
+            @test loaded.final_dm == final_dm
+            @test loaded.trace_distances == trace_distances
+            @test loaded.time_steps == time_steps
+            @test loaded.metadata == metadata
 
             txt_path = replace(path, ".bson" => ".txt")
             @test isfile(txt_path)
@@ -81,7 +110,12 @@ using BSON
     # -----------------------------------------------------------------------
     @testset "KrylovSpectrumResults round-trip" begin
         mktempdir() do tmpdir
-            config = make_config(Lindbladian(), EnergyDomain(); num_qubits=3, construction=GNS())
+            config = Config(;
+                sim=KrylovSpectrum(), domain=EnergyDomain(), construction=GNS(),
+                num_qubits=3, with_linear_combination=true,
+                beta=10.0, sigma=0.1, a=0.0, s=0.25,
+                num_energy_bits=8, w0=0.05,
+            )
             dim = N3_DIM
             eigenvalues = [0.0+0.0im, -0.3+0.0im, -0.5+0.01im, -0.8+0.0im]
             spectral_gap = 0.3
@@ -100,15 +134,18 @@ using BSON
 
             loaded = load_result(path)
             @test loaded isa KrylovSpectrumResults
-            @test isapprox(loaded.eigenvalues, eigenvalues; atol=0)
+            _test_config_roundtrip(loaded.config, config)
+            @test loaded.eigenvalues == eigenvalues
             @test loaded.spectral_gap == spectral_gap
-            @test isapprox(loaded.fixed_point, fixed_point; atol=0)
+            @test loaded.fixed_point == fixed_point
+            @test loaded.gap_mode == gap_mode
             @test loaded.converged == 4
             @test loaded.matvec_count == 100
             @test loaded.num_restarts == 2
+            @test loaded.normres == [1e-11, 1e-10, 1e-9, 1e-8]
             @test loaded.channel_eigenvalues === nothing
             @test loaded.delta_used === nothing
-            @test loaded.metadata[:wall_time_seconds] == 5.0
+            @test loaded.metadata == metadata
 
             txt_path = replace(path, ".bson" => ".txt")
             @test isfile(txt_path)
@@ -139,7 +176,7 @@ using BSON
             loaded = load_result(path)
             @test loaded isa KrylovSpectrumResults
             @test loaded.channel_eigenvalues !== nothing
-            @test isapprox(loaded.channel_eigenvalues, channel_eigs; atol=0)
+            @test loaded.channel_eigenvalues == channel_eigs
             @test loaded.delta_used == 0.01
         end
     end

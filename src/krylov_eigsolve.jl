@@ -1,32 +1,9 @@
-# ============================================================================
-# Krylov Eigensolver: matrix-free spectral gap computation via KrylovKit
-# ============================================================================
-#
-# Wraps KrylovKit.eigsolve around the Krylov matvec infrastructure (Phase 27-28)
-# to provide a single-call API for computing Lindbladian spectral gaps without
-# constructing the full dense Liouvillian.
-#
-# Two dispatch paths via config type:
-#   - Config{Lindbladian}  -> Lindbladian eigsolve with :LR targeting
-#   - Config{Thermalize}   -> CPTP channel eigsolve with :LM targeting
-#
-# Covers: MATVEC-06, KRYLOV-01 through KRYLOV-05
-
-
-# ---------------------------------------------------------------------------
-# Pre-flight memory guard
-# ---------------------------------------------------------------------------
+# Matrix-free Krylov eigensolvers for Lindbladians and channels.
 
 """
     _check_krylov_memory(n_qubits, krylovdim)
 
-Advisory pre-flight memory check for Krylov eigsolve.
-
-Estimates memory usage as `krylovdim * 4^n_qubits * 16 * 1.5` bytes (KrylovKit
-stores `krylovdim` vectors of length `dim^2 = 4^n`, each ComplexF64 = 16 bytes,
-with a 1.5x overhead factor for internal Hessenberg matrix and temporaries).
-
-Issues `@warn` if the estimate exceeds 80% of `Sys.free_memory()`. Does not error.
+Warn when the estimated Krylov storage exceeds 80% of free memory.
 """
 function _check_krylov_memory(n_qubits::Int, krylovdim::Int)
     estimated_bytes = krylovdim * (4^n_qubits) * 16 * 1.5
@@ -40,32 +17,18 @@ function _check_krylov_memory(n_qubits::Int, krylovdim::Int)
     return nothing
 end
 
-# ---------------------------------------------------------------------------
-# Eigsolve with retry logic
-# ---------------------------------------------------------------------------
-
 """
     _eigsolve_with_retry(f, x0, howmany, which; krylovdim=30, tol=1e-10, maxiter=100, max_retries=3, krylov_kwargs...)
 
-Wrapper around `KrylovKit.eigsolve` with automatic retry on partial convergence.
-
-On each retry, increases `krylovdim` by 50% (multiplied by 1.5, rounded up).
-Issues `@warn` on each retry attempt.  Throws an error if all attempts fail.
-
-Retry sequence (default): krylovdim = 30 -> 45 -> 68 -> 102.
+Run `KrylovKit.eigsolve`, enlarging `krylovdim` by 50% after partial convergence.
 
 # Arguments
-- `f`: Linear map (callable `Vector -> Vector`)
-- `x0`: Initial vector
-- `howmany`: Number of eigenvalues requested
-- `which`: Eigenvalue targeting (`:LR`, `:LM`, etc.)
-- `krylovdim`: Initial Krylov subspace dimension (default 30)
-- `tol`: Convergence tolerance (default 1e-10)
-- `maxiter`: Maximum restart iterations (default 100)
-- `max_retries`: Maximum number of retries (default 3)
+- `f`, `x0`: Linear map and starting vector.
+- `howmany`, `which`: Requested eigenpairs and targeting rule.
+- `krylovdim`, `tol`, `maxiter`, `max_retries`: Arnoldi controls.
 
 # Returns
-`(vals, vecs, info)` from KrylovKit.eigsolve
+`(vals, vecs, info)` from `KrylovKit.eigsolve`.
 """
 function _eigsolve_with_retry(f, x0, howmany::Int, which::Symbol;
     krylovdim::Int=30, tol::Real=1e-10, maxiter::Int=100, max_retries::Int=3,
@@ -95,63 +58,15 @@ function _eigsolve_with_retry(f, x0, howmany::Int, which::Symbol;
           "after $(max_retries + 1) attempts (final krylovdim=$(current_krylovdim))")
 end
 
-# ---------------------------------------------------------------------------
-# Default starting vector for krylov_spectral_gap (qf-8fr)
-# ---------------------------------------------------------------------------
-#
-# The MAXIMALLY MIXED state ρ₀ = I/d is symmetry-protected: it is invariant
-# under every unitary U that commutes with the Lindbladian's symmetry group
-# (translations, spin-flip, etc.). For symmetric Hamiltonians (e.g. clean
-# 1D Ising) the orbit {I/d, L(I/d), L²(I/d), ...} stays inside the
-# trivial-symmetric sector and the Arnoldi factorisation MISSES every
-# eigenmode in non-trivial symmetry sectors — including the true spectral
-# gap when it lives in a broken-symmetry sector. The result is a silently
-# wrong gap (verified on classical Ising n = 4, where I/d returns the
-# 2nd-symmetric mode at λ = -0.169 while the true gap is the
-# spin-flip-odd mode at λ = -0.0445).
-#
-# Fix: start from I/d plus a small *traceless* Hermitian GUE perturbation.
-# The perturbation has generic overlap with every symmetry sector while the
-# leading I/d component is preserved, so the recovered fixed-point eigenmode
-# (steady state) is still numerically dominant and clean. Determinism is
-# achieved with a fixed RNG seed.
-#
-# For non-symmetric systems (disordered Heisenberg, the production fixtures)
-# the small perturbation is a no-op up to a tiny numerical reshuffle of
-# Krylov subspace bases — pre/post-patch gaps agree to KrylovKit `tol`.
+# A pure maximally mixed seed stays in the trivial symmetry sector. Add a
+# deterministic traceless Hermitian perturbation to overlap other sectors.
 """
     _krylov_default_x0(dim) -> Vector{ComplexF64}
 
-Build a deterministic symmetry-broken starting vector for `krylov_spectral_gap`.
-Equals `vec(I/d + ε · H_GUE_traceless)` with `ε = 1e-10` and a fixed RNG seed.
+Build `vec(I/d + epsilon H)` using a fixed traceless Hermitian random matrix.
 
-`H_GUE_traceless` is a Hermitian, traceless matrix derived from a complex
-Gaussian draw, with `‖H‖₂ = 1`. The trace-zero structure preserves the
-`tr(rho) = 1` normalisation of the leading I/d component (the Lindbladian
-preserves trace; starting in trace-1 keeps the steady-state eigenvalue
-exactly at λ = 0 numerically).
-
-ε is empirically tuned to the narrowest working window:
-  - ε must be ≳ the KrylovKit `tol = 1e-10` floor so the symmetry-broken
-    content survives Arnoldi orthogonalisation; ε = 1e-11 reverts the
-    patch to a no-op (bug returns on classical Ising). ε = 1e-10 sits
-    right at the floor and still gives ≤ 1e-14 relative gap on classical
-    1D Ising n = 3..8.
-  - ε must be ≪ 1e-8 so the captured Krylov subspace stays numerically
-    dominated by I/d on the existing channel-path tests, which compare
-    against the dense Lindbladian via the channel-conversion formula
-    `λ_L = (μ − 1)/δ`. The conversion is order-O(δ) but at δ = 0.001 the
-    channel eigenvalues are clustered at ≤ 1e-5 separation, and any
-    perturbation of x_0 can swap the second-slowest mode for a near
-    neighbour (qf-8fr test-suite tuning).
-
-Disordered-fixture coverage: the L-vs-E convergence test
-(`test_krylov_crossvalidation.jl::L-vs-E convergence (KMS)`) had a
-threshold of 0.85 → 0.8 chosen for the pre-patch x_0 = I/d behaviour;
-that threshold was relaxed to 0.55 in the same patch as this helper
-because individual mid-range δ-pair orders fluctuate by ±0.2 across x_0
-choices (TrotterDomain bottoms at ~0.60). The test still asserts that a
-clearly-first-order rate is attained at some δ-pair.
+The fixed `epsilon = 1e-10` is large enough to survive Arnoldi
+orthogonalisation while leaving the trace-one steady-state component dominant.
 """
 function _krylov_default_x0(dim::Integer)
     rng = MersenneTwister(0xb8fae9d3)
@@ -168,52 +83,23 @@ function _krylov_default_x0(dim::Integer)
     return vec(rho0)
 end
 
-# ---------------------------------------------------------------------------
-# Note: _thermalize_to_liouv_config has been deleted. With unified Config{S,D,C,T},
-# the Thermalize path passes Config directly (no conversion needed).
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# apply_delta_channel! -- Faithful jumpwise Φ_δ matvec (qf-po5)
-# ---------------------------------------------------------------------------
-
 """
     apply_delta_channel!(ws, rho, config, hamiltonian) -> ws.scratch.rho_next
 
-Apply the **faithful** jumpwise Lie–Trotter Φ_δ matvec to a density matrix —
-the same per-step dynamics `run_thermalize :sweep` (`src/furnace.jl:230-249`)
-runs on the simulator, modulo Krylov truncation upstream.
-
-The matvec sweeps the per-jump substep `e^{δ𝓛_a}` for `a = 1, …, n_jumps`:
-
-    1. Coherent unitary    : ρ ← U^a_coh · ρ · U^a_coh'      (GQSP-built when config.with_gqsp)
-    2. Dissipator          : ρ_jump ← δ · Σ_ω rate²(ω) · L^a_ω · ρ · L^a_ω'
-    3. Weak-measurement    : ρ ← K0_a · ρ · K0_a' + ρ_jump + U_residual_a · ρ · U_residual_a'
-
-Each substep is `_apply_one_dm_substep!` (`src/furnace_utensils.jl:390`), which is the
-single canonical kernel used by both `run_thermalize` and `predict_channel_trajectory`.
-The final `ρ` is published via `ws.scratch.rho_next`.
+Apply one faithful jumpwise Lie--Trotter channel step.
 
 # Arguments
-- `ws::Workspace{KrylovSpectrum, D, C, T}`: Pre-allocated workspace populated by
-  `Workspace(::Config{Thermalize}, ...)` — exposes per-jump `K0s`, `U_residuals`,
-  `U_coherents` plus the `precomputed_data` view, the threading pool on
-  `ws.scratch.task_scratches`, and `ws.ham_or_trott` for the dissipator dispatch.
-- `rho::Matrix{T}`: Input density matrix (dim x dim)
-- `config::Config{Thermalize, D}`: Configuration (read for `delta`, `sigma`, etc.)
-- `hamiltonian::HamHam`: Hamiltonian (kept on the signature for parity with the
-  Lindbladian path; the dissipator dispatch consults `ws.ham_or_trott`).
+- `ws`: Precomputed thermalization workspace.
+- `rho`: Input matrix.
+- `config`: Channel configuration, including `delta`.
+- `hamiltonian`: Hamiltonian associated with the workspace.
 
-# Keyword Arguments
-- `hermitize::Bool=true`: per-substep Hermitian projection of the output (the
-  physical, density-matrix-preserving default; an exact-arithmetic no-op on
-  Hermitian inputs). Set `false` for the genuine **ℂ-linear** channel `Φ` (no
-  hermitisation), required when applying `Φ` to non-Hermitian operators — e.g.
-  the anti-Hermitian quantum-discriminant diagnostic (qf-e4z.50). The HS-adjoint
-  counterpart is [`apply_adjoint_delta_channel!`](@ref).
+# Keywords
+- `hermitize`: Project each substep onto Hermitian matrices. Set `false` when
+  materialising the complex-linear channel on arbitrary operators.
 
 # Returns
-`ws.scratch.rho_next` containing Φ_δ(ρ).
+`ws.scratch.rho_next` containing the channel output.
 """
 function apply_delta_channel!(
     ws::Workspace{KrylovSpectrum, D, C, T},
@@ -230,9 +116,7 @@ function apply_delta_channel!(
     ham_or_trott = ws.ham_or_trott
     jws = ws.gamma_norm_factor::Float64
 
-    # NamedTuple view of precomputed_data fields stored on the workspace; lets
-    # `_apply_one_dm_substep!` and its `_accumulate_rho_jump!` callee read the
-    # same field surface they read inside `run_thermalize`.
+    # Present workspace data through the full-DM substep's shared field surface.
     pd = (
         transition           = ws.transition,
         gamma_norm_factor    = ws.gamma_norm_factor,
@@ -247,20 +131,11 @@ function apply_delta_channel!(
         b_plus               = ws.b_plus,
     )
 
-    # Use sc.rho_work as the evolving density matrix. CRITICAL: `evolving_dm`
-    # MUST NOT alias any of the buffers `_apply_precomputed_channel!` writes to
-    # (`scratch.rho_next`, `scratch.sandwich_tmp`) — that helper reads
-    # `evolving_dm` after writing `scratch.rho_next`, so aliasing the two
-    # would clobber the input mid-channel and break trace preservation.
-    # `run_thermalize` pre-qf-po5 already follows this convention (its
-    # `evolving_dm` is the user-supplied initial DM, distinct from the scratch).
+    # The evolving input must not alias buffers written by the channel kernel.
     copyto!(sc.rho_work, rho)
     evolving_dm = sc.rho_work
 
-    # qf-po5: hoist the BLAS=1 clamp once per matvec. The threaded
-    # `_accumulate_rho_jump_threaded_*!` entries inside `_accumulate_rho_jump!`
-    # save/restore on entry too — that nested save/restore becomes a no-op
-    # under this outer clamp.
+    # Julia threads own the outer reduction; suppress nested BLAS threading.
     old_blas = BLAS.get_num_threads()
     BLAS.set_num_threads(1)
     try
@@ -277,8 +152,6 @@ function apply_delta_channel!(
         BLAS.set_num_threads(old_blas)
     end
 
-    # Publish via sc.rho_next (mirrors the `_apply_precomputed_channel!` final
-    # `copyto!(evolving_dm, scratch.rho_next)`; both buffers hold Φ_δ(ρ) here).
     copyto!(sc.rho_next, evolving_dm)
     return sc.rho_next
 end
@@ -286,40 +159,18 @@ end
 """
     apply_adjoint_delta_channel!(ws, rho, config, hamiltonian; hermitize=true) -> ws.scratch.rho_next
 
-Apply the **Hilbert–Schmidt adjoint** `Φ_δ†` of the faithful jumpwise channel
-[`apply_delta_channel!`](@ref) to a `d×d` operator, writing the result to
-`ws.scratch.rho_next`.  `Φ_δ†` is the dual map satisfying `tr(Y† Φ_δ(X)) =
-tr((Φ_δ†(Y))† X)`; it is needed wherever the channel's HS-adjoint enters, e.g. the
-anti-Hermitian part of the quantum discriminant of the channel's effective
-generator (qf-e4z.50, [`discriminant_antiherm_norm`](@ref)).
+Apply the Hilbert--Schmidt adjoint of the faithful jumpwise channel.
 
-# Construction
-The forward channel is `Φ_δ = Sₙ ∘ ⋯ ∘ S₁` with per-jump substep
-`Sₐ = WMₐ ∘ Cohₐ`, so
+Substeps run in reverse order with adjointed Kraus operators. Hermitian jumps
+allow the dissipator adjoint to reuse the forward kernel with frequencies
+negated; non-Hermitian jumps are rejected.
 
-    Φ_δ† = S₁† ∘ ⋯ ∘ Sₙ†,   Sₐ† = Cohₐ† ∘ WMₐ†
-
-— the substeps run in REVERSE order and each is adjointed
-([`_apply_one_adjoint_dm_substep!`](@ref)): the stored Kraus operators `K0`,
-`U_res`, `U_coh` are conjugate-transposed, and the dissipator
-`δ Σ_ν γ(ν) Aᵥ · Aᵥ†` becomes `δ Σ_ν γ(ν) Aᵥ† · Aᵥ`.  For **Hermitian jumps**
-(`Aᵥ† = A₋ᵥ`) the latter equals the forward dissipator with the rate function
-flipped (`γ(ν) → γ(−ν)`), so the full (threaded) forward
-`_accumulate_rho_jump!` is reused with a rate-flipped `precomputed_data`.
-
-# Scope
-Hermitian jumps only (the canonical Pauli CKG jump set — covers 1D Heisenberg
-and 2D TFIM, the entire thesis numerics). Non-Hermitian (paired `A`, `A†`) jump
-sets would need an explicit adjoint sandwich and are not yet supported; an
-`ArgumentError` is thrown.
-
-# Keyword Arguments
-- `hermitize::Bool=true`: per-substep Hermitian projection (matches the forward
-  default). Set `false` for the genuine ℂ-linear adjoint used by the discriminant
-  diagnostic.
+# Keywords
+- `hermitize`: Project each substep onto Hermitian matrices. Set `false` for
+  the complex-linear adjoint on arbitrary operators.
 
 # Returns
-`ws.scratch.rho_next` containing `Φ_δ†(rho)`.
+`ws.scratch.rho_next` containing the adjoint-channel output.
 """
 function apply_adjoint_delta_channel!(
     ws::Workspace{KrylovSpectrum, D, C, T},
@@ -341,9 +192,7 @@ function apply_adjoint_delta_channel!(
         "(the rate-flip dissipator-adjoint reuse assumes Aᵥ† = A₋ᵥ). Got a " *
         "non-Hermitian jump in the set."))
 
-    # Same precomputed_data view as the forward channel, but with the transition
-    # (rate) function flipped ν → −ν: that turns the forward dissipator into the
-    # adjoint dissipator for Hermitian jumps (see `_apply_one_adjoint_dm_substep!`).
+    # Math: for Hermitian jumps, the adjoint dissipator uses $gamma(nu) -> gamma(-nu)$.
     transition_adj = let t = ws.transition
         w -> t(-w)
     end
@@ -367,7 +216,7 @@ function apply_adjoint_delta_channel!(
     old_blas = BLAS.get_num_threads()
     BLAS.set_num_threads(1)
     try
-        # Φ_δ† = S₁† ∘ ⋯ ∘ Sₙ† — substeps in REVERSE order.
+        # The adjoint reverses substep composition order.
         @inbounds for a in length(jumps):-1:1
             U_a = U_coherents === nothing ? nothing : U_coherents[a]
             _apply_one_adjoint_dm_substep!(
@@ -385,53 +234,22 @@ function apply_adjoint_delta_channel!(
     return sc.rho_next
 end
 
-# ---------------------------------------------------------------------------
-# krylov_spectral_gap: Lindbladian path (Config{Lindbladian})
-# ---------------------------------------------------------------------------
-
-# qf-6yw: shared by both krylov_spectral_gap methods. Pass-2 has no seeded ρ₀,
-# hence no modal coefficient c — the c-side fields come back NaN; the R-side
-# (off_diag_weight, mode_spacing) is the ρ₀-INDEPENDENT operator characterisation.
-# `eigenvalues_sorted` carries each method's eigenvalue convention (Lindbladian λ),
-# so mode_spacing is in those units.
+# Operator diagnostics do not have state-dependent modal coefficients.
 function _operator_spectral_modes(eigenvalues_sorted::AbstractVector{<:Complex},
                                   vecs_sorted::AbstractVector, dim::Integer)
     R_modes_diag = [reshape(vecs_sorted[i], dim, dim) for i in eachindex(vecs_sorted)]
     return spectral_mode_diagnostics(eigenvalues_sorted, R_modes_diag)
 end
 
-# qf-umr: optional pre-built `Workspace{KrylovSpectrum}` reuse for both
-# `krylov_spectral_gap` methods. Returns either a freshly built workspace (when
-# `workspace === nothing`) or the supplied one after validating that it is safe
-# to reuse, mirroring the qf-qmi.2 guard block in `predict_*_trajectory`
-# (`src/lindblad_action.jl`). The only expensive shareable resource between the
-# trajectory (Pass-1) and gap (Pass-2) pipelines is this Workspace — the O(d^3.x)
-# operator build dwarfs a krylovdim-matvec Arnoldi at n>=6 — so reuse lets the
-# `compute_true_gap=true` convenience path forward the trajectory's already-built
-# workspace and skip the redundant second build. The Krylov factorisations
-# themselves are NOT shared (different seed / targeting / krylovdim by design).
-#
-# `scratch_check` is the path-specific scratch-type predicate (`KrylovScratch` for
-# the Lindbladian matvec, `ThermalizeScratch` for the channel matvec) and
-# `scratch_name` names it in the error. `dim_of` reads the workspace dimension
-# from the path-appropriate field (`G_left` Lindbladian / `scratch.rho_next`
-# channel) for the dim assertion.
-function _reuse_or_build_krylov_workspace(
-    workspace::Union{Nothing, Workspace{KrylovSpectrum}},
+# A trajectory predictor and its optional independent gap solve may share the
+# expensive precomputed operator workspace, but never their Krylov
+# factorisations. These two dispatches keep path-specific scratch and dimension
+# checks in one place for predictors and gap solvers alike.
+function _validate_reused_krylov_workspace(
+    workspace::Workspace{KrylovSpectrum},
     config::Config,
-    hamiltonian::HamHam,
     jumps::Vector{JumpOp},
-    trotter::Union{AbstractTrotter, Nothing},
-    dim::Integer,
-    scratch_check::F,
-    scratch_name::AbstractString,
-    dim_of::G,
-    caller::AbstractString,
-) where {F, G}
-    workspace === nothing && return Workspace(config, hamiltonian, jumps; trotter=trotter)
-    scratch_check(workspace.scratch) || throw(ArgumentError(
-        "$caller requires a Workspace with scratch::$scratch_name; " *
-        "got workspace with scratch::$(typeof(workspace.scratch))"))
+)
     workspace.cached_cfg === nothing && throw(ArgumentError(
         "workspace was built without a cached config (internal API path?). " *
         "Public callers should pass a workspace built via Workspace(config, ham, jumps; trotter=...)."))
@@ -439,85 +257,71 @@ function _reuse_or_build_krylov_workspace(
         "workspace.cached_cfg != config — cannot reuse a workspace whose " *
         "construction config differs from the call-site config (β, σ, a, s, δ, " *
         "register triples, with_gqsp, jump_selection, etc. all matter). Rebuild the workspace."))
-    @assert dim_of(workspace) == dim  "workspace dim must match hamiltonian"
     @assert length(workspace.jumps) == length(jumps)  "workspace jump count mismatch"
+    return workspace
+end
+
+function _reuse_or_build_krylov_workspace(
+    workspace::Union{Nothing, Workspace{KrylovSpectrum}},
+    config::Config{Lindbladian},
+    hamiltonian::HamHam,
+    jumps::Vector{JumpOp},
+    trotter::Union{AbstractTrotter, Nothing},
+    dim::Integer;
+    caller::AbstractString,
+)
+    workspace === nothing && return Workspace(config, hamiltonian, jumps; trotter=trotter)
+    workspace.scratch isa KrylovScratch || throw(ArgumentError(
+        "$caller requires Workspace(::Config{Lindbladian}, ...); " *
+        "got workspace with scratch::$(typeof(workspace.scratch))"))
+    _validate_reused_krylov_workspace(workspace, config, jumps)
+    @assert size(workspace.G_left, 1) == dim  "workspace dim mismatch"
+    return workspace
+end
+
+function _reuse_or_build_krylov_workspace(
+    workspace::Union{Nothing, Workspace{KrylovSpectrum}},
+    config::Config{Thermalize},
+    hamiltonian::HamHam,
+    jumps::Vector{JumpOp},
+    trotter::Union{AbstractTrotter, Nothing},
+    dim::Integer;
+    caller::AbstractString,
+)
+    workspace === nothing && return Workspace(config, hamiltonian, jumps; trotter=trotter)
+    workspace.scratch isa ThermalizeScratch || throw(ArgumentError(
+        "$caller requires Workspace(::Config{Thermalize}, ...); " *
+        "got workspace with scratch::$(typeof(workspace.scratch))"))
+    _validate_reused_krylov_workspace(workspace, config, jumps)
+    @assert size(workspace.scratch.rho_next, 1) == dim  "workspace dim mismatch"
     return workspace
 end
 
 """
     krylov_spectral_gap(config::Config{Lindbladian}, hamiltonian, jumps; kwargs...) -> NamedTuple
 
-Compute the Lindbladian spectral gap matrix-free using KrylovKit Arnoldi with `:LR` targeting.
+Compute the Lindbladian operator spectrum matrix-free with `:LR` targeting.
 
-# Pipeline B — spectral-gap / spectrum (qf-umr)
-This is the **operator-spectrum** pipeline. It estimates the OPERATOR's spectral
-properties — fixed point, spectral gap, gap mode, and gap-mode character
-(coherent-like vs population-like via `_operator_spectral_modes`) — INDEPENDENT
-of any particular ρ₀. The target is the spectrum, NOT a specific state's mixing,
-so the pipeline is FREE to choose and vary its seed for a better result (the
-default `_krylov_default_x0 = I/d + 1e-10·H_GUE` symmetry-breaks per qf-8fr).
-
-Per qf-x6j this is a DIFFERENT numerical problem from the trajectory pipeline
-(`predict_lindbladian_trajectory`): resolving one eigenvalue of a non-normal
-generator with spectrum clustered near the steady state needs a thick restart
-(`_eigsolve_with_retry`) and a freely-chosen seed — whereas the trajectory only
-needs the Krylov subspace to span ρ₀'s orbit and is therefore krylovdim-robust.
-The two are reachable separately; do NOT fold one into the other.
-
-# Robustness diagnostic when dense is infeasible (qf-x6j / qf-9lp)
-If the gap at size `n` breaks the smooth trend from `n-1`, `n-2` (a jump/kink
-that doesn't fit the scaling), suspect a WRONG-MODE artifact: the true slow mode
-is near-orthogonal to the seed, so Arnoldi reports `converged` onto a FASTER mode
-and overstates the gap. `_eigsolve_with_retry`'s krylovdim bump does NOT catch
-this — it only handles under-convergence (`info.converged < howmany`), whereas
-here the solve converges to the wrong eigenpair. To gain confidence WITHOUT a
-dense superoperator:
-  1. Re-run with ≥3 *structurally diverse* seeds — NOT three draws of
-     `I/d + tiny·GUE` (structurally still I/d, ~1e-10 traceless content ⇒ same
-     blind spot). The gap eigenvector is TRACELESS (⊥ the pure-trace steady
-     state), so a probe seed needs O(1) traceless content to overlap it: e.g. a
-     random pure state `|ψ⟩⟨ψ|`, `I/d + O(1)·(random traceless Hermitian)`, or a
-     random full-rank ρ with non-uniform spectrum. Vary the STRUCTURE, not just
-     the RNG seed of one form.
-  2. Confirm krylovdim has PLATEAUED (gap stable across e.g. 30→60→120).
-  3. All ≥3 diverse seeds + the plateau agreeing ⇒ trust the gap.
-CAVEAT: this works for the KMS-DB Lindbladian (self-adjoint in the KMS inner
-product ⇒ real, well-conditioned spectrum). It does NOT rescue the channel Φ_δ —
-qf-9lp showed its slow mode is near-orthogonal to ALL physical/random seeds
-(~1e-5 overlap), so seed-consensus can agree on the WRONG mode; take the channel
-gap from 𝓛's λ₂ instead (= dense Φ_δ to O(δ)). Consensus is strong evidence, not
-proof: a blind spot shared by every seed defeats it. NB there is currently no
-`x0` kwarg, so custom seeds require calling the matvec + `_eigsolve_with_retry`
-directly (as the qf-9lp pilot did).
-
-Wraps the existing `apply_lindbladian!` matvec in a KrylovKit closure to find the leading
-eigenvalues of the Lindbladian superoperator without constructing the full dense matrix.
-
-The steady-state eigenvalue is near Re(lambda) ~ 0 (largest real part). The spectral gap
-is `abs(real(lambda_2))` where lambda_2 is the second eigenvalue sorted by |Re(lambda)|.
+This solve is independent of any initial state and uses a deterministic
+symmetry-broken seed. A converged Arnoldi solve can still select the wrong mode
+when the true eigenvector is nearly seed-orthogonal; suspicious gaps should be
+checked across Krylov dimensions and structurally different seeds.
 
 # Arguments
-- `config::Config{Lindbladian}`: Lindbladian configuration (EnergyDomain, TimeDomain, etc.)
-- `hamiltonian::HamHam`: Hamiltonian with eigenbasis data
-- `jumps::Vector{JumpOp}`: Jump operators
+- `config`: Lindbladian construction and numerical settings.
+- `hamiltonian`: Hamiltonian spectral data.
+- `jumps`: Coupling operators.
 
-# Keyword Arguments
-- `trotter::Union{AbstractTrotter, Nothing}=nothing`: Trotter object (required for TrotterDomain)
-- `krylovdim::Int=30`: Krylov subspace dimension
-- `howmany::Int=4`: Number of eigenvalues to compute
-- `tol::Real=1e-10`: Convergence tolerance
-- `max_retries::Int=3`: Maximum retry attempts on partial convergence
-- `workspace::Union{Nothing, Workspace{KrylovSpectrum}}=nothing`: optional pre-built
-  Workspace to reuse instead of building one (qf-umr). Must have been built via
-  `Workspace(config, ham, jumps)` for the SAME `(config, ham, jumps)`; a mismatch
-  throws `ArgumentError`. Reuse is bit-identical to a fresh build and lets
-  `predict_lindbladian_trajectory(compute_true_gap=true)` skip the redundant
-  O(d^3.x) operator build (the only expensive resource shared between the two
-  pipelines; the Krylov factorisations are not shared).
-- `krylov_kwargs...`: Additional keyword arguments passed to KrylovKit
+# Keywords
+- `trotter`: Required construction for `TrotterDomain`.
+- `krylovdim`, `howmany`, `tol`, `max_retries`: Eigensolver controls.
+- `workspace`: Matching precomputed workspace; Krylov factorizations are not reused.
+- `allow_unpaired_nonhermitian`: Opt out of adjoint-pair validation.
+- `krylov_kwargs...`: Additional `KrylovKit` keywords.
 
 # Returns
-A NamedTuple with Lindbladian eigenvalues, spectral gap, fixed point, and gap mode.
+A named tuple with eigenvalues, gap, stationary state, gap mode, residuals,
+convergence metadata, and spectral-mode diagnostics.
 """
 function krylov_spectral_gap(
     config::Config{Lindbladian},
@@ -540,26 +344,19 @@ function krylov_spectral_gap(
     # Dimensions
     dim = size(hamiltonian.data, 1)
 
-    # Allocate workspace, or reuse a pre-built one (qf-umr). The Lindbladian
-    # matvec consumes a KrylovScratch (`ws.scratch.rho_out`); dim is read off
-    # `G_left`. Reuse is bit-identical to a fresh build and lets the
-    # `compute_true_gap=true` trajectory path forward its already-built
-    # workspace instead of paying the O(d^3.x) build twice.
+    # Reuse construction data when provided; the Arnoldi factorization is fresh.
     ws = _reuse_or_build_krylov_workspace(
-        workspace, config, hamiltonian, jumps, trotter, dim,
-        sc -> sc isa KrylovScratch, "KrylovScratch",
-        w -> size(w.G_left, 1), "krylov_spectral_gap(::Config{Lindbladian}, ...)")
+        workspace, config, hamiltonian, jumps, trotter, dim;
+        caller="krylov_spectral_gap(::Config{Lindbladian}, ...)")
 
     # Build matvec closure: Vector{ComplexF64} -> Vector{ComplexF64}
     function lindbladian_matvec(v::AbstractVector)
         rho = reshape(v, dim, dim)
         apply_lindbladian!(ws, rho, config, hamiltonian)
-        return copy(vec(ws.scratch.rho_out))  # CRITICAL: copy to avoid aliasing (Pitfall 1)
+        return copy(vec(ws.scratch.rho_out))  # KrylovKit must own each returned vector.
     end
 
-    # Initial vector: I/d + small traceless Hermitian perturbation. Pure I/d is
-    # symmetry-protected and silently misses the gap mode for symmetric systems
-    # (qf-8fr). See `_krylov_default_x0` for the rationale.
+    # Pure `I/d` can miss non-trivial symmetry sectors.
     x0 = _krylov_default_x0(dim)
 
     # Eigsolve with retry
@@ -588,7 +385,6 @@ function krylov_spectral_gap(
     # Residual norms (reorder to match sorted eigenvalues)
     normres = Float64.(info.normres[perm])
 
-    # qf-6yw: operator-side spectral diagnostics (no seeded ρ₀ ⇒ c-side NaN).
     spectral_modes = _operator_spectral_modes(eigenvalues_sorted, vecs_sorted, dim)
 
     return (;
@@ -606,57 +402,29 @@ function krylov_spectral_gap(
     )
 end
 
-# ---------------------------------------------------------------------------
-# krylov_spectral_gap: Channel path (Config{Thermalize})
-# ---------------------------------------------------------------------------
-
 """
     krylov_spectral_gap(config::Config{Thermalize}, hamiltonian, jumps; kwargs...) -> NamedTuple
 
-Compute the Lindbladian spectral gap via the faithful Chen CPTP channel (Eq. 3.2),
-using KrylovKit Arnoldi with `:LM` targeting.
+Compute the faithful channel spectrum with `:LM` targeting and convert it to
+generator rates using `(mu - 1)/delta`.
 
-# Pipeline B — spectral-gap / spectrum (qf-umr)
-The channel counterpart of the `Config{Lindbladian}` method: estimate the
-OPERATOR spectrum (fixed point, gap, gap mode, mode character) of the implemented
-channel Φ_δ, INDEPENDENT of any ρ₀, with a freely-chosen seed (qf-8fr). Per
-qf-x6j this is a different numerical problem from the trajectory pipeline
-(`predict_channel_trajectory`) — resolving a clustered eigenvalue of a non-normal
-operator vs powering Φ_δ^k ρ₀ — and the two stay separate.
-
-## qf-9lp: prefer the L-direct route for the channel operator gap
-The ROBUST operator gap for the channel comes from the **EnergyDomain Lindbladian**
-`𝓛`'s second eigenvalue λ₂ (`krylov_spectral_gap(::Config{Lindbladian}, ...)`),
-which equals the dense Φ_δ gap to ~0.04%. Arnoldi directly on the non-normal Φ_δ
-(this method) is a **fragile fallback**: at stiff Trotter cells it can lock onto
-the wrong eigenmode (qf-e4z.37: +11% and up, independent of krylovdim). Use the
-Lindbladian method for the recommended channel operator gap; reach for this
-`Config{Thermalize}` method only when you specifically need the channel's own
-spectrum (e.g. to inspect μ-eigenvalues / `channel_eigenvalues`) and accept the
-fragility. Note this is distinct from `predict_channel_trajectory`'s default
-Pass-1 gap, which is the ρ₀-coupled mixing rate `|log|μ_2||/δ` (Pipeline A).
-
-The channel eigenvalues mu are related to Lindbladian eigenvalues by the first-order
-approximation: `lambda_L = (mu - 1) / delta`. Since mu = exp(delta * lambda_L) + O(delta^2),
-the conversion introduces O(delta) error. The steady state has mu ~ 1 (largest magnitude),
-and the gap is recovered from the second eigenvalue after conversion.
-
-The channel is CPTP and O(delta^2) accurate, matching what `run_thermalize`
-actually implements via `_finalize_kraus_step!`.
+Direct Arnoldi on a non-normal channel can select a faster mode even after
+formal convergence. Prefer the Lindbladian overload when only the robust
+operator gap is needed; use this method to inspect the implemented channel's
+own eigenvalues.
 
 # Arguments
-- `config::Config{Thermalize}`: Thermalization configuration (provides delta)
-- `hamiltonian::HamHam`: Hamiltonian with eigenbasis data
-- `jumps::Vector{JumpOp}`: Jump operators
+- `config`: Thermalization configuration, including `delta`.
+- `hamiltonian`: Hamiltonian spectral data.
+- `jumps`: Coupling operators.
 
 # Keyword Arguments
-Same as the `Config{Lindbladian}` method, including the optional
-`workspace::Union{Nothing, Workspace{KrylovSpectrum}}=nothing` reuse kwarg (qf-umr;
-must match `(config, ham, jumps; trotter)`, reuse is bit-identical).
+As for the Lindbladian overload. A supplied workspace must match all
+construction inputs.
 
 # Returns
-A NamedTuple with converted Lindbladian eigenvalues, spectral gap, fixed point,
-gap mode, and the raw channel eigenvalues stored in `channel_eigenvalues`.
+A named tuple with converted rates, gap data, diagnostics, and raw channel
+eigenvalues in `channel_eigenvalues`.
 """
 function krylov_spectral_gap(
     config::Config{Thermalize},
@@ -682,28 +450,19 @@ function krylov_spectral_gap(
     # Dimensions
     dim = size(hamiltonian.data, 1)
 
-    # Allocate workspace, or reuse a pre-built one (qf-umr). The channel matvec
-    # consumes a ThermalizeScratch (`ws.scratch.rho_next`); dim is read off that
-    # buffer. Reuse is bit-identical to a fresh build and lets the
-    # `compute_true_gap=true` trajectory path forward its already-built
-    # workspace instead of paying the build twice.
+    # Reuse construction data when provided; the Arnoldi factorization is fresh.
     ws = _reuse_or_build_krylov_workspace(
-        workspace, config, hamiltonian, jumps, trotter, dim,
-        sc -> sc isa ThermalizeScratch, "ThermalizeScratch",
-        w -> size(w.scratch.rho_next, 1), "krylov_spectral_gap(::Config{Thermalize}, ...)")
+        workspace, config, hamiltonian, jumps, trotter, dim;
+        caller="krylov_spectral_gap(::Config{Thermalize}, ...)")
 
-    # Build channel matvec closure using the faithful jumpwise Φ_δ (qf-po5).
-    # `apply_delta_channel!` publishes the result via `ws.scratch.rho_next`
-    # (ThermalizeScratch) — same convention as the per-step run_thermalize loop.
+    # Build the faithful jumpwise channel matvec.
     function channel_matvec(v::AbstractVector)
         rho = reshape(v, dim, dim)
         apply_delta_channel!(ws, rho, config, hamiltonian)
-        return copy(vec(ws.scratch.rho_next))  # CRITICAL: copy to avoid aliasing
+        return copy(vec(ws.scratch.rho_next))  # KrylovKit must own each returned vector.
     end
 
-    # Initial vector: I/d + small traceless Hermitian perturbation. Pure I/d is
-    # symmetry-protected and silently misses the gap mode for symmetric systems
-    # (qf-8fr). See `_krylov_default_x0` for the rationale.
+    # Pure `I/d` can miss non-trivial symmetry sectors.
     x0 = _krylov_default_x0(dim)
 
     # Eigsolve with :LM targeting (channel eigenvalues cluster near 1)
@@ -739,9 +498,7 @@ function krylov_spectral_gap(
     # Residual norms (reorder to match sorted eigenvalues)
     normres = Float64.(info.normres[perm])
 
-    # qf-6yw: operator-side spectral diagnostics (no seeded ρ₀ ⇒ c-side NaN).
-    # eigenvalues_sorted are the converted Lindbladian λ, so mode_spacing is in
-    # Lindbladian units, consistent with the Config{Lindbladian} method.
+    # Diagnostics use converted generator-rate units.
     spectral_modes = _operator_spectral_modes(eigenvalues_sorted, vecs_sorted, dim)
 
     return (;
@@ -759,37 +516,25 @@ function krylov_spectral_gap(
     )
 end
 
-# ---------------------------------------------------------------------------
-# run_krylov_spectrum: new public entry point (Phase 36)
-# ---------------------------------------------------------------------------
-
 """
     run_krylov_spectrum(jumps, config, hamiltonian, trotter=nothing; krylov_kwargs...) -> KrylovSpectrumResults
 
-Matrix-free spectral gap computation via KrylovKit, returning a `KrylovSpectrumResults` struct.
-
-Wraps `krylov_spectral_gap` with the uniform positional signature
-`(jumps, config, hamiltonian, trotter)` and adds config + timing metadata to the result.
-
-Works for both `Config{Lindbladian}` (direct Lindbladian matvec with `:LR` targeting)
-and `Config{Thermalize}` (CPTP channel matvec with `:LM` targeting and delta conversion).
+Run the matrix-free spectral solver and attach configuration and timing metadata.
 
 # Arguments
-- `jumps::Vector{JumpOp}`: Jump operators
-- `config::Config`: Lindbladian or Thermalize configuration
-- `hamiltonian::HamHam`: Hamiltonian with eigenbasis data
-- `trotter::Union{AbstractTrotter, Nothing}=nothing`: Trotter object (required for TrotterDomain)
+- `jumps`: Coupling operators.
+- `config`: Lindbladian or thermalization configuration.
+- `hamiltonian`: Hamiltonian spectral data.
+- `trotter`: Required for `TrotterDomain`.
 
 # Keyword Arguments
-- `krylovdim::Int=30`: Krylov subspace dimension
-- `howmany::Int=4`: Number of eigenvalues to compute
-- `tol::Real=1e-10`: Convergence tolerance
-- `max_retries::Int=3`: Maximum retry attempts on partial convergence
-- `krylov_kwargs...`: Additional keyword arguments passed to KrylovKit
+- `krylovdim`, `howmany`, `tol`, `max_retries`: Eigensolver controls.
+- `allow_unpaired_nonhermitian`: Opt out of adjoint-pair validation.
+- `krylov_kwargs...`: Additional `KrylovKit` keywords.
 
 # Returns
-`KrylovSpectrumResults` with eigenvalues, spectral gap, fixed point, gap mode,
-convergence info, optional channel data, config, and timing metadata.
+A `KrylovSpectrumResults` with spectrum, stationary state, convergence data,
+optional channel eigenvalues, configuration, and metadata.
 """
 function run_krylov_spectrum(
     jumps::Vector{JumpOp},
@@ -806,8 +551,6 @@ function run_krylov_spectrum(
 
     t_start = time()
 
-    # Delegate to existing krylov_spectral_gap (handles both Config{Lindbladian} and Config{Thermalize})
-    # Note: krylov_spectral_gap uses (config, hamiltonian, jumps; ...) argument order
     krylov_result = krylov_spectral_gap(
         config, hamiltonian, jumps;
         trotter=trotter, krylovdim=krylovdim, howmany=howmany,
@@ -818,8 +561,6 @@ function run_krylov_spectrum(
 
     wall_time = time() - t_start
     metadata = _capture_metadata(wall_time_seconds=wall_time)
-    # qf-6yw: operator-side spectral diagnostics (off_diag_weight, mode_spacing;
-    # c-side NaN — no seeded ρ₀) attached via the struct's metadata extension.
     metadata[:spectral_modes] = krylov_result.spectral_modes
 
     return KrylovSpectrumResults{Float64}(

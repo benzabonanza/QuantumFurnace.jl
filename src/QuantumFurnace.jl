@@ -52,9 +52,7 @@ export materialize_discriminant, materialize_discriminant!,
 export DiscriminantSpectrum, discriminant_spectrum
 export DBVerificationResult, verify_detailed_balance
 
-# --- KMS geometry (qf-mto.{1,2,3}, parked diagnostic — see src/kms_geometry.jl) ---
-# These compare Lindbladian magnitudes (CKG vs DLL); they are not used to
-# rescale generators in mainline simulations.
+# --- KMS geometry diagnostics ---
 export kms_inner_product, kms_norm, kms_variance, kms_dirichlet_form
 export build_dense_superoperator
 export spectral_gap_kms, max_dirichlet_rate_kms, intrinsic_mixing_ratio
@@ -74,14 +72,11 @@ export trace_distance_h, trace_distance_nh, trace_norm_h, trace_norm_nh,
 export gibbs_state, gibbs_state_in_eigen,
        build_heis_1d, build_tfim_2d, load_hamiltonian,
        create_bohr_dict, compute_trotter_error, make_trotter_for_config
-# β_phys ↔ β_alg helpers (qf-6vr) — convert physical and algorithm-side
-# inverse temperatures through `ham.rescaling_factor`. See docstrings in
-# `src/hamiltonian.jl` for the convention.
+# Physical and algorithm-side inverse-temperature conversion.
 export beta_alg, beta_phys
 export pick_transition, pick_gamma_sup, create_alpha, create_alpha_gns, create_alpha_gauss,
        create_f, create_f_gauss, check_alpha_skew_symmetry
-# `default_smooth_s` (src/bohr_domain.jl) intentionally not exported — internal
-# helper used by production β-sweep scripts. Call as `QuantumFurnace.default_smooth_s`.
+# `default_smooth_s` remains internal; scripts may qualify it explicitly.
 export B_time, B_trotter, B_bohr
 export X, Y, Z, Had,
        pad_term, expm_pauli_padded, pauli_string_to_matrix,
@@ -93,49 +88,41 @@ export register_t0_D, register_w0_D, register_r_D,
        register_M_D, register_M_b_minus, register_M_b_plus
 export oft!
 
-# --- Filters (DLL-1) ---
+# --- DLL filters ---
 export AbstractFilter, GaussianFilter, DLLGaussianFilter, DLLMetropolisFilter
 export time_kernel, freq_kernel, filter_time_cutoff
 
-# --- Multi-channel DLL (qf-7go epic, parked diagnostic — see src/dll_multichannel.jl) ---
+# --- Multi-channel DLL ---
 export DLLMultiChannelFilter, ShiftedSymmetricFilter, dll_multichannel_translates
 
-# --- DLL dissipator helpers (DLL-2) ---
+# --- DLL dissipator helpers ---
 export dll_lindblad_op_bohr, dll_lindblad_op_time
 
-# --- DLL coherent helpers (DLL-3) ---
+# --- DLL coherent helpers ---
 export dll_coherent_op_bohr, dll_coherent_op_time
-# dll_coherent_kernel_bohr is intentionally not exported — internal kernel
-# (Eq. 3.5) used by the test-only legacy reference path. Reach via
-# QuantumFurnace.dll_coherent_kernel_bohr if needed in scripts.
+# `dll_coherent_kernel_bohr` is an internal reference kernel.
 
-# --- DLL Kossakowski (DLL-4) ---
+# --- DLL Kossakowski representation ---
 export dll_kossakowski_bohr
 
-# --- Lindbladian-action ODE integrator (qf-lkb.1) ---
+# --- Lindbladian integration ---
 export lindblad_action_integrate, discriminant_action_integrate, integrate_to_gibbs, sweep_mixing_times
 
-# --- Krylov spectral-expansion trajectory (qf-ev5) ---
+# --- Krylov spectral dynamics ---
 export predict_lindbladian_trajectory, predict_channel_trajectory
 
-# --- Matrix-free superoperator trace-norm distance (qf-72g) ---
+# --- Matrix-free superoperator distances ---
 export PropagatorArm, propagator_trace_distance, propagator_fixed_point_distance
 export lindbladian_arm, channel_arm
-# --- Slow-subspace generator-mismatch distance (qf-e4z.45) ---
 export slow_subspace_generator_distance
-# --- Robust fixed-point extraction + fixed-point-vs-Gibbs distance (qf-e4z.48) ---
 export arm_fixed_point, fixed_point_gibbs_distance
-# --- Anti-Hermitian quantum-discriminant norm: channel KMS-DB violation (qf-e4z.50) ---
 export discriminant_antiherm_norm, channel_discriminant_antiherm_norm,
        lindbladian_discriminant_antiherm_norm
 
-# --- Channel sweep harness (qf-e4z.2 / P0b) ---
+# --- Channel sweeps ---
 export sweep_channel_mixing
 
-# STAGING: estimate_spectral_gap, OverlapAnalysisResult, eigenbasis_overlap_analysis
-# Archived staging APIs: estimate_spectral_gap, OverlapAnalysisResult,
-# eigenbasis_overlap_analysis, compute_oft_trotter_error, and
-# compute_oft_trotter_error_all_jumps are preserved under archive/inactive_staging/.
+# --- Fitting and resource estimates ---
 export fit_exponential_decay, FitResult
 export fit_biexponential_decay, BiexpFitResult
 export estimate_mixing_time, MixingTimeEstimate
@@ -144,21 +131,20 @@ export SimulationTimeBudget, compute_simulation_time
 export TrotterStepBudget, count_trotter_steps
 export RxxBudget, estimate_rxx_count, load_rxx_table
 
-# --- Empirical scaling-law extraction (qf-now) ---
+# --- Empirical scaling laws ---
 export ScalingFit, fit_scaling, predict_scaling, aicc_weights, compare_models,
        formula_string, scaling_fit_grid
-# STAGING: LSIFramework, compute_LSI_alpha2
-
 # --- Internal Implementation ---
 include("constants.jl")
 include("hamiltonian.jl")
 include("trotter_domain.jl")
 include("filters.jl")
+include("nufft.jl")
 include("structs.jl")
+include("dense_lindbladian_workspace.jl")
 include("qi_tools.jl")
 include("misc_tools.jl")
 include("time_domain.jl")
-include("nufft.jl")
 include("ofts.jl")
 include("energy_domain.jl")
 include("bohr_domain.jl")
@@ -175,7 +161,9 @@ include("krylov_eigsolve.jl")
 include("diagnostics.jl")
 include("discriminant.jl")
 include("kms_geometry.jl")
-include("lindblad_action.jl")
+include("lindblad_dynamics.jl")
+include("krylov_dynamics.jl")
+include("mixing_sweeps.jl")
 include("superop_distance.jl")
 include("results.jl")
 include("fitting.jl")
@@ -183,9 +171,7 @@ include("mixing.jl")
 include("scaling_fit.jl")
 include("simulation_time.jl")
 
-# Classical Gibbs-sampling baseline (sign-free SSE QMC) — the directly-comparable classical
-# competitor to the KMS Lindbladian sampler (qf-h23). Self-contained sub-module; re-export its
-# public API into the QuantumFurnace namespace.
+# Sign-free stochastic-series-expansion baseline.
 include("classical_qmc.jl")
 using .ClassicalQMC
 export SSEResult, run_sse, build_sse_heis_model, build_sse_tfim_model,

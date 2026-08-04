@@ -1,3 +1,25 @@
+"""
+    construct_lindbladian(jumps, config, hamiltonian; trotter=nothing,
+                          include_coherent=true, allow_unpaired_nonhermitian=false,
+                          verbose=false) -> Matrix
+
+Construct the dense, column-vectorised Lindbladian superoperator.
+
+# Arguments
+- `jumps`: Jump operators in the domain's working basis.
+- `config`: Lindbladian configuration.
+- `hamiltonian`: Hamiltonian and spectral data.
+
+# Keywords
+- `trotter`: Required cache for `TrotterDomain`.
+- `include_coherent`: Include the coherent correction; `false` constructs the
+  dissipator-only diagnostic.
+- `allow_unpaired_nonhermitian`: Skip adjoint-closure validation.
+- `verbose`: Print construction progress.
+
+# Returns
+The dense `d^2 x d^2` generator acting on column-stacked operators.
+"""
 function construct_lindbladian(jumps::Vector{JumpOp}, config::Config{Lindbladian}, hamiltonian::HamHam;
     trotter::Union{AbstractTrotter, Nothing}=nothing,
     include_coherent::Bool=true,
@@ -25,23 +47,7 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::Config{Lindbladian
     CT = Complex{T}
     total_lindbladian = zeros(CT, dim^2, dim^2)
 
-    # Build Workspace{Lindbladian} with LiouvillianScratch
-    sc = LiouvillianScratch(CT, dim)
-    Id = Matrix{CT}(I, dim, dim)
-    ws = Workspace{Lindbladian, typeof(config.domain), typeof(config.construction), T}(
-        nothing, nothing, nothing, nothing,  # physics data
-        nothing,                              # dll_lindblads
-        nothing, nothing, nothing, nothing,  # G fields
-        nothing, nothing,  # channel scalars (alpha, delta) — qf-po5 dropped K0/U_residual/U_coherent
-        nothing, nothing, nothing, nothing,  # domain precomputed (transition, gnf, energy_labels, oft_domain_prefactor)
-        nothing, nothing, nothing, nothing, nothing, nothing, nothing,  # domain-specific (oft_nufft_prefactors, bohr_alpha, bohr_keys, bohr_is, bohr_js, b_minus, b_plus)
-        nothing,  # U_coherents
-        nothing, nothing, nothing, nothing,  # per-jump channel state
-        nothing,  # jump_selection (Lindbladian path)
-        Id,       # Id
-        sc,       # scratch
-        config,   # cached_cfg (qf-qmi.2; only used by Krylov predict_*_trajectory but kept here for ctor uniformity)
-    )
+    ws = DenseLindbladianWorkspace(CT, dim)
 
     # Precompute all B's for the A's if for KMS DB and with_coherent.
     # `include_coherent=false` skips the coherent contribution even when the
@@ -74,19 +80,17 @@ end
 """
     run_lindblad(jumps, config, hamiltonian, trotter=nothing) -> LindbladResults
 
-Dense Liouvillian spectral analysis via Arpack shift-invert.
-
-Constructs the full Lindbladian superoperator, finds the two eigenvalues nearest zero
-(steady state and gap mode), and returns spectral data in a `LindbladResults` struct.
+Construct the dense Lindbladian and extract its steady state and gap mode with
+shift-invert Arnoldi.
 
 # Arguments
-- `jumps::Vector{JumpOp}`: Jump operators
-- `config::Config{Lindbladian}`: Lindbladian configuration
-- `hamiltonian::HamHam`: Hamiltonian with eigenbasis data
-- `trotter::Union{AbstractTrotter, Nothing}=nothing`: Trotter object (required for TrotterDomain)
+- `jumps`: jump operators in the construction's working basis.
+- `config`: Lindbladian configuration.
+- `hamiltonian`: Hamiltonian and eigenbasis data.
+- `trotter`: required cache for `TrotterDomain`.
 
 # Returns
-`LindbladResults` with eigenvalues, fixed point, gap mode, spectral gap, and metadata.
+A [`LindbladResults`](@ref) with spectral data and metadata.
 """
 function run_lindblad(
     jumps::Vector{JumpOp},
@@ -140,27 +144,26 @@ end
 """
     run_thermalize(jumps, config, hamiltonian, trotter=nothing; initial_dm=nothing, rng, rescale_by_inv_prob, save_every) -> ThermalizeResults
 
-Density-matrix Kraus evolution toward the Gibbs state.
-
-Evolves an initial density matrix via random jump channels, recording trace distance
-to the Gibbs state at configurable intervals. Returns the final state and convergence
-history in a `ThermalizeResults` struct.
+Evolve a density matrix with the retained faithful channel and record its
+distance from the Gibbs state.
 
 # Arguments
-- `jumps::Vector{JumpOp}`: Jump operators
-- `config::Config{Thermalize}`: Thermalization configuration (provides mixing_time, delta)
-- `hamiltonian::HamHam`: Hamiltonian with eigenbasis data
-- `trotter::Union{AbstractTrotter, Nothing}=nothing`: Trotter object (required for TrotterDomain)
+- `jumps`: jump operators in the channel's working basis.
+- `config`: thermalisation configuration, including `mixing_time` and `delta`.
+- `hamiltonian`: Hamiltonian and eigenbasis data.
+- `trotter`: required cache for `TrotterDomain`.
 
-# Keyword Arguments
-- `initial_dm::Union{Nothing, Matrix{<:Complex}}=nothing`: Initial density matrix (defaults to maximally mixed I/d)
-- `rng::AbstractRNG=Random.default_rng()`: Random number generator (used only when `config.jump_selection == :random`)
-- `rescale_by_inv_prob::Union{Bool, Nothing}=nothing`: Override the rate-rescaling rule. By default, the choice follows `config.jump_selection`: `:random` ⇒ rescale rates by `S = |jumps|` (1 substep per outer δ-step, `E[step] ≈ e^{δ𝓛}`); `:sweep` ⇒ bare rates and `S` substeps per outer δ-step (`Φ_𝓐 = e^{δ𝓛_S}∘⋯∘e^{δ𝓛_1} ≈ e^{δ𝓛}`).
-- `save_every::Int=1`: Record trace distance every `save_every` outer steps. Default 1 preserves per-step recording. Convergence cutoff is only checked at save points.
-- `verbose::Bool=false`: When true, print the parameter "press" once at the start and the running trace-distance every save_every step. Default `false` keeps tests / batch runs silent.
+# Keywords
+- `initial_dm`: initial state; defaults to `I/d`.
+- `rng`: used only for `jump_selection=:random`.
+- `rescale_by_inv_prob`: override the selection-dependent rate rescaling.
+- `save_every`: record and check convergence every this many outer steps.
+- `allow_unpaired_nonhermitian`: opt out of adjoint-pair validation.
+- `verbose`: print configuration and recorded distances.
 
 # Returns
-`ThermalizeResults` with final density matrix, trace distances, time steps, and metadata.
+A [`ThermalizeResults`](@ref) with the final state, saved distances and times,
+and metadata.
 """
 function run_thermalize(
     jumps::Vector{JumpOp},
@@ -203,9 +206,8 @@ function run_thermalize(
 
     precomputed_data = _precompute_data(config, ham_or_trott)
 
-    # Resolve rate-rescaling: explicit kwarg wins, otherwise follow config.jump_selection.
-    # :random -> rescale rates by S=|jumps| so a single random pick reproduces δ𝓛 in
-    # expectation; :sweep -> bare rates with S sequential substeps per outer δ-step.
+    # Random selection rescales by the jump count to reproduce the full generator
+    # in expectation; a sweep applies every bare-rate subchannel sequentially.
     rescale = rescale_by_inv_prob === nothing ? (config.jump_selection == :random) : rescale_by_inv_prob
 
     n_jumps = length(jumps)
@@ -236,7 +238,7 @@ function run_thermalize(
         BLAS.set_num_threads(Threads.nthreads())
         for step in 1:num_steps
             if config.jump_selection == :sweep
-                # Deterministic Lie-Trotter sweep: Φ_𝓐 = e^{δ𝓛_S} ∘ ⋯ ∘ e^{δ𝓛_1}.
+                # Math: $Phi_A = Phi_S compose dots compose Phi_1 approx exp(delta cal(L))$.
                 @inbounds for a in 1:n_jumps
                     _apply_one_dm_substep!(
                         evolving_dm, scratch, jumps[a],

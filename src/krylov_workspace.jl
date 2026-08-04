@@ -1,10 +1,9 @@
 """
     Workspace(config::Config{Lindbladian}, hamiltonian, jumps; trotter=nothing)
 
-Construct a `Workspace{KrylovSpectrum}` pre-allocating all scratch matrices for the given
-(config, hamiltonian) pair. Mirrors `construct_lindbladian` setup in `furnace.jl`.
+Construct a matrix-free Lindbladian workspace and preallocate its scratch data.
 
-Returns `Workspace{KrylovSpectrum,D,C,T}`.
+A `Workspace{KrylovSpectrum,D,C,T}` matching the configuration and Hamiltonian.
 """
 function Workspace(
     config::Config{Lindbladian},
@@ -38,7 +37,7 @@ function Workspace(
     # Allocate KrylovScratch (no channel_rho_jump for Lindbladian)
     sc = KrylovScratch(CT, dim; with_channel_rho_jump=false)
 
-    # Precompute G_left/G_right for optimized Lindbladian matvec (Phase 32)
+    # Precompute the anticommutator and coherent left/right factors.
     R_total = zeros(CT, dim, dim)
     _accumulate_R_total!(R_total, jump_eigenbases, jump_hermitian,
                          precomputed_data, config, ham_or_trott)
@@ -53,9 +52,6 @@ function Workspace(
         G_right = Matrix{CT}(-0.5 .* R_total)
     end
 
-    G_left_adj  = G_right
-    G_right_adj = G_left
-
     # Absorb precomputed_data fields into flat workspace fields
     pd_transition = hasproperty(precomputed_data, :transition) ? precomputed_data.transition : nothing
     pd_gnf = hasproperty(precomputed_data, :gamma_norm_factor) ? precomputed_data.gamma_norm_factor : nothing
@@ -69,7 +65,7 @@ function Workspace(
     pd_bminus = hasproperty(precomputed_data, :b_minus) ? precomputed_data.b_minus : nothing
     pd_bplus = hasproperty(precomputed_data, :b_plus) ? precomputed_data.b_plus : nothing
 
-    # qf-in3.4: pre-build the (jump_idx, label_idx) work list for the threaded
+    # Pre-build the `(jump_idx, label_idx)` work list for threaded reductions.
     # ω-loop dispatch in apply_lindbladian! (EnergyDomain / TimeDomain /
     # TrotterDomain). BohrDomain leaves the list empty.
     if pd_el !== nothing
@@ -80,30 +76,23 @@ function Workspace(
     C = typeof(config.construction)
 
     return Workspace{KrylovSpectrum, D, C, T}(
-        jump_eigenbases, jump_hermitian, jumps, B_total,
+        jump_eigenbases, jump_hermitian, jumps,
         nothing,  # dll_lindblads (CKG/GNS path; populated by DLL specialised constructor)
-        G_left, G_right, G_left_adj, G_right_adj,
-        nothing, nothing,  # alpha, delta (Lindbladian path: no CPTP scaffolding)
+        G_left, G_right,
         pd_transition, pd_gnf, pd_el, pd_odp, pd_nufft,
         pd_alpha, pd_bkeys, pd_bis, pd_bjs, pd_bminus, pd_bplus,
-        nothing,  # U_coherents (Lindbladian path: no per-jump coherent unitaries)
         nothing, nothing, nothing, nothing,  # per-jump channel state
-        nothing,  # jump_selection (KrylovSpectrum path: no per-step jump selection)
-        nothing,  # Id
         sc,
-        config,   # cached_cfg (qf-qmi.2): used by predict_*_trajectory(workspace=...) to validate reuse
+        config,   # Cached to validate predictor workspace reuse.
     )
 end
-
-# ---------------------------------------------------------------------------
-# R_total accumulation helpers (physics convention: R = sum rate^2 * L' * L)
-# ---------------------------------------------------------------------------
 
 """
     _accumulate_R_total!(R, ws, config, hamiltonian) -> nothing
 
-Accumulate R_total = sum over all jumps and frequencies of rate^2 * (L' * L)
-in physics convention. Used at workspace construction time (not per-matvec).
+Accumulate the total rate operator during workspace construction.
+
+Math: \$R = sum_(a,omega) rate(omega)^2 L_(a,omega)^dagger L_(a,omega)\$.
 """
 function _accumulate_R_total!(
     R::Matrix{T},
@@ -251,7 +240,7 @@ function _accumulate_R_total!(
 end
 
 # ---------------------------------------------------------------------------
-# Threaded R_total accumulation (qf-6af) — mirrors the matvec ω-loop pattern
+# Threaded rate-operator accumulation mirrors the matvec frequency loop.
 # from `src/krylov_matvec.jl`, but for the construction-time additive
 # accumulator. Allocates per-task buffers locally (one-time at Workspace
 # construction; trivial overhead vs. the BLAS work it covers). Each task
@@ -520,12 +509,7 @@ end
 """
     _accumulate_R_total_dll!(R, dll_lindblads_out, jumps, precomputed_data, config, hamiltonian) -> nothing
 
-DLL Bohr-domain accumulation of `R = Σ_a L_a' L_a` plus capture of the per-jump
-`L_a = dll_lindblad_op_bohr(jump, hamiltonian, filter)` matrices into
-`dll_lindblads_out` (mutated in-place). Distinct from the
-`_accumulate_R_total!` family because (i) the dispatch key here is
-`Config{<:Any, BohrDomain, DLL}` and (ii) we need the per-jump matrices
-themselves for the matrix-free dispatch in `apply_lindbladian!`.
+Accumulate the DLL rate operator and retain each Bohr-domain Lindblad matrix.
 """
 function _accumulate_R_total_dll!(
     R::Matrix{T},
@@ -538,7 +522,7 @@ function _accumulate_R_total_dll!(
     (; filter) = precomputed_data
     n_jumps = length(jumps)
 
-    # Threaded path (qf-6af.4): each task builds its (per-channel) DLL Lindblad
+    # Each task builds its DLL Lindblad operators into private accumulators.
     # operator(s) and accumulates a private R_partial. Reduce after `@sync`.
     # `dll_lindblads_out` retains deterministic per-jump order.
     if Threads.nthreads() > 1 && n_jumps >= 2
@@ -578,7 +562,7 @@ function _accumulate_R_total_dll!(
     for jump in jumps
         L_or_Ls = dll_lindblad_op_bohr(jump, hamiltonian, filter)
         # Single-channel filters return a Matrix; multi-channel filters
-        # (qf-7go.1) return a Vector{Matrix} of length k. Flatten into the
+        # Multi-channel filters return a vector; flatten it in jump-major order.
         # output `dll_lindblads_out` — the matrix-free hot path
         # `apply_lindbladian!` iterates `for L_a in dll_lindblads` and the
         # dissipator `Σ_a L_a ρ L_a†` is a flat sum over all per-channel
@@ -625,31 +609,14 @@ function _accumulate_R_total_dll_chunk!(
     return nothing
 end
 
-# ---------------------------------------------------------------------------
-# DLL BohrDomain Lindbladian workspace constructor
-# ---------------------------------------------------------------------------
-
 """
     Workspace(config::Config{Lindbladian, BohrDomain, DLL}, hamiltonian, jumps; trotter=nothing)
 
-DLL-specialised `Workspace{KrylovSpectrum, BohrDomain, DLL, T}` for Bohr-domain
-matrix-free `apply_lindbladian!` (qf-lkb.9). Precomputes:
+Construct the DLL Bohr-domain matrix-free workspace.
 
-- `dll_lindblads = [dll_lindblad_op_bohr(jump, hamiltonian, filter) for jump in jumps]`
-  (Ding–Li–Lin 2024 Eq. 3.4 first form),
-- `R_total = Σ_a L_a' L_a`, hermitised post-accumulation,
-- `G = dll_coherent_op_bohr(jumps, hamiltonian, filter, β)` (Eq. 3.5 + 3.7),
-  stored in the existing `B_total` slot.
-
-Sign convention for `G_left`/`G_right` matches the CKG path
-(`_vectorize_liouvillian_coherent!`): with `B_T = transpose(G)`,
-
-    G_left  = +1im · B_T − 0.5 · R_total
-    G_right = −1im · B_T − 0.5 · R_total
-
-so that `apply_lindbladian!`'s gemm pattern `G_left·ρ + ρ·G_right` realises
-`+i [B_T, ρ] − 0.5 {R, ρ}`, byte-for-byte agreement with
-`Matrix(construct_lindbladian(jumps, config, hamiltonian)) · vec(ρ)`.
+It stores per-channel Lindblad matrices, the total rate operator, and the
+coherent correction. The left/right factors follow the package's transposed
+column-stacking convention.
 """
 function Workspace(
     config::Config{Lindbladian, BohrDomain, DLL},
@@ -667,7 +634,7 @@ function Workspace(
     CT = Complex{T}
 
     # Per-jump DLL Lindblad operators + accumulated R_total. For
-    # multi-channel filters (qf-7go.1) this stores k×|jumps| flattened
+    # Multi-channel filters store `k * length(jumps)` matrices.
     # operators (one per channel per coupling).
     n_channels = filter isa DLLMultiChannelFilter ? length(filter.channels) : 1
     dll_lindblads = Vector{Matrix{CT}}()
@@ -684,50 +651,33 @@ function Workspace(
     B_T = Matrix{CT}(transpose(G))
     G_left  = Matrix{CT}( 1im .* B_T .- 0.5 .* R_total)
     G_right = Matrix{CT}(-1im .* B_T .- 0.5 .* R_total)
-    G_left_adj  = G_right
-    G_right_adj = G_left
-
     jump_eigenbases = [Matrix{CT}(j.in_eigenbasis) for j in jumps]
     jump_hermitian  = [j.hermitian for j in jumps]
 
     sc = KrylovScratch(CT, dim; with_channel_rho_jump=false)
 
     return Workspace{KrylovSpectrum, BohrDomain, DLL, T}(
-        jump_eigenbases, jump_hermitian, jumps, G,  # B_total slot stores G
+        jump_eigenbases, jump_hermitian, jumps,
         dll_lindblads,
-        G_left, G_right, G_left_adj, G_right_adj,
-        nothing, nothing,  # alpha, delta (DLL Lindbladian path)
+        G_left, G_right,
         nothing, nothing, nothing, nothing, nothing,  # transition/gnf/energy_labels/odp/nufft
         nothing, nothing, nothing, nothing, nothing, nothing,  # bohr_alpha/bohr_keys/bohr_is/bohr_js/b_minus/b_plus
-        nothing,  # U_coherents (DLL Lindbladian path)
         nothing, nothing, nothing, nothing,  # per-jump channel state
-        nothing,  # jump_selection
-        nothing,  # Id
         sc,
-        config,   # cached_cfg (qf-qmi.2)
+        config,   # Cached to validate predictor workspace reuse.
     )
 end
-
-# ---------------------------------------------------------------------------
-# Config{Thermalize} workspace constructor
-# ---------------------------------------------------------------------------
 
 """
     Workspace(config::Config{Thermalize}, hamiltonian, jumps; trotter=nothing)
 
-Construct a `Workspace{KrylovSpectrum, Thermalize, ...}` with **per-jump** CPTP channel
-matrices for the faithful jumpwise Φ_δ matvec (qf-po5).
+Construct a matrix-free workspace for the faithful deterministic channel.
 
-The workspace stores per-jump `K0s`, `U_residuals`, `U_coherents` (length = `n_jumps`),
-exactly the matrices `run_thermalize :sweep` builds via `_precompute_per_jump_channels`
-and `_precompute_coherent_unitary` — `apply_delta_channel!` then sweeps over them in
-order, matching the implementable algorithm bit-for-bit modulo Krylov truncation.
+The workspace stores per-jump no-event, residual, and coherent matrices in
+sweep order. `jump_selection=:random` is rejected because it does not define a
+single deterministic channel map.
 
-`jump_selection = :random` is rejected here: a single random jump pick reproduces δ𝓛
-in expectation only, not as a deterministic channel matvec, so the Krylov spectral
-expansion of Φ_δ is undefined for that mode.
-
-Returns `Workspace{KrylovSpectrum,D,C,T}`.
+A `Workspace{KrylovSpectrum,D,C,T}` for channel application and Krylov solves.
 """
 function Workspace(
     config::Config{Thermalize},
@@ -743,7 +693,7 @@ function Workspace(
         hamiltonian
     end
 
-    # qf-po5: reject :random — the channel matvec is deterministic by construction.
+    # A Krylov matvec requires a deterministic channel.
     config.jump_selection === :sweep || throw(ArgumentError(
         "Workspace(::Config{Thermalize}, ...) for the Krylov channel matvec " *
         "requires config.jump_selection = :sweep (got :$(config.jump_selection)). " *
@@ -761,7 +711,7 @@ function Workspace(
     jump_eigenbases = [Matrix{CT}(j.in_eigenbasis) for j in jumps]
     jump_hermitian  = [j.hermitian for j in jumps]
 
-    # qf-po5: per-jump coherent unitaries (GQSP-built when config.with_gqsp).
+    # Precompute per-jump coherent unitaries, using GQSP when configured.
     # :sweep ⇒ delta_scale = 1.0 (matches run_thermalize at furnace.jl:206-207).
     coh_raw = _precompute_coherent_unitary(
         jumps, hamiltonian, config, precomputed_data;
@@ -774,16 +724,13 @@ function Workspace(
         Vector{Union{Nothing, Matrix{CT}}}(coh_raw)
     end
 
-    # qf-po5: per-jump CPTP (K0_a, U_residual_a) — same helper run_thermalize :sweep uses.
+    # Reuse the full-DM simulator's per-jump channel construction.
     (; K0s, U_residuals) = _precompute_per_jump_channels(
         jumps, ham_or_trott, config, precomputed_data;
         rescale_by_inv_prob=false,
     )
 
-    # qf-po5: ThermalizeScratch with task pool plumbed by Commit 1. The faithful
-    # `apply_delta_channel!` per-jump sweep delegates the dissipator ω-loop to the
-    # threaded `_accumulate_rho_jump_threaded_*!` entries, which consume this pool
-    # via `scratch.task_scratches` (no fresh per-call allocation per jump).
+    # Thread-local accumulators avoid per-jump allocation in channel matvecs.
     sc = ThermalizeScratch(CT, dim;
         with_task_pool = Threads.nthreads() > 1,
         num_threads = Threads.nthreads(),
@@ -804,21 +751,14 @@ function Workspace(
 
     D = typeof(config.domain)
     C = typeof(config.construction)
-    delta = config.delta
-    n_jumps = length(jumps)
-
     return Workspace{KrylovSpectrum, D, C, T}(
-        jump_eigenbases, jump_hermitian, jumps, nothing,  # B_total: unused on the Thermalize matvec path
+        jump_eigenbases, jump_hermitian, jumps,
         nothing,  # dll_lindblads (Thermalize path)
-        nothing, nothing, nothing, nothing,  # G_left/G_right/G_left_adj/G_right_adj: only used by the Lindbladian matvec
-        nothing, Float64(delta),  # alpha (CPTP scalar — unused for KrylovSpectrum), delta (read by predict_channel_trajectory's k-grid → t-grid)
+        nothing, nothing,  # G_left/G_right: only used by the Lindbladian matvec
         pd_transition, pd_gnf, pd_el, pd_odp, pd_nufft,
         pd_alpha, pd_bkeys, pd_bis, pd_bjs, pd_bminus, pd_bplus,
-        U_coherents,  # qf-po5: per-jump coherent unitaries (replaces the dropped summed `U_coherent`)
-        ham_or_trott, n_jumps, K0s, U_residuals,
-        :sweep,  # jump_selection (constructor enforced :sweep above)
-        nothing,  # Id
+        ham_or_trott, K0s, U_residuals, U_coherents,
         sc,
-        config,   # cached_cfg (qf-qmi.2)
+        config,   # Cached to validate predictor workspace reuse.
     )
 end

@@ -30,10 +30,10 @@ need to sweep β ∈ {1, 5, 10}.
 
 Returns the same shape as `make_test_system`.
 """
-function make_dll_n3_system(beta::Real)
+function make_dll_n3_system(beta_alg::Real)
     source_root = dirname(@__DIR__)
     ham_path = joinpath(source_root, "hamiltonians", "heis_xxx_disordered_periodic_n3_seed46.bson")
-    ham = _load_test_hamiltonian(ham_path, Float64(beta))
+    ham = _load_test_hamiltonian(ham_path, Float64(beta_alg))
     jump_paulis = [[X], [Y], [Z]]
     num_jumps = length(jump_paulis) * 3
     jump_norm = sqrt(num_jumps)
@@ -46,6 +46,78 @@ function make_dll_n3_system(beta::Real)
         end
     end
     return (; ham, jumps, gibbs = ham.gibbs)
+end
+
+"""
+    make_classical_ising_n3(; beta_phys=0.5)
+
+Build the clean periodic three-qubit Ising fixture used to test symmetry-
+breaking Krylov starts and the predictors' optional true-gap pass.
+"""
+function make_classical_ising_n3(; beta_phys::Real=0.5)
+    n = 3
+    terms = Vector{Vector{Matrix{ComplexF64}}}([[Z, Z]])
+    coeffs = [1.0]
+    base_ham = QuantumFurnace._construct_base_ham(terms, coeffs, n; periodic=true)
+    rescaling_factor, shift = QuantumFurnace._rescaling_and_shift_factors(base_ham)
+    dim = 2^n
+    matrix = Matrix(base_ham) ./ rescaling_factor .+ shift * I(dim)
+    eigvals, eigvecs = eigen(Hermitian(matrix))
+    raw = (
+        matrix=matrix,
+        terms=terms,
+        base_coeffs=coeffs ./ rescaling_factor,
+        disordering_terms=nothing,
+        disordering_coeffs=nothing,
+        eigvals=eigvals,
+        eigvecs=eigvecs,
+        nu_min=minimum(diff(eigvals)),
+        shift=shift,
+        rescaling_factor=rescaling_factor,
+        periodic=true,
+    )
+    ham = HamHam(raw; beta_phys=beta_phys)
+    jumps = QuantumFurnace._jumps_in_basis(n, ham.eigvecs)
+    return (; ham, jumps, beta_phys=Float64(beta_phys), beta_alg=QuantumFurnace.beta_alg(ham, beta_phys))
+end
+
+"""Build the matched EnergyDomain KMS config for `make_classical_ising_n3`."""
+function make_classical_ising_config(
+    sim,
+    system;
+    domain=EnergyDomain(),
+    r_D::Int=7,
+    delta::Float64=1e-3,
+    mixing_time::Float64=1.0,
+)
+    (; ham, beta_phys, beta_alg) = system
+    sigma = 1.0 / beta_alg
+    omega_range = 2.0 * (maximum(abs, ham.eigvals) + 8sigma)
+    w0_D = omega_range / 2.0^r_D
+    therm_kw = sim isa Thermalize ? (;
+        delta=delta,
+        mixing_time=mixing_time,
+        jump_selection=:sweep,
+    ) : (;)
+    return Config(;
+        sim=sim,
+        domain=domain,
+        construction=KMS(),
+        num_qubits=3,
+        with_linear_combination=true,
+        beta=beta_alg,
+        beta_phys=beta_phys,
+        sigma=sigma,
+        a=0.0,
+        s=0.25,
+        gaussian_parameters=(nothing, nothing),
+        num_energy_bits_D=r_D,
+        w0_D=w0_D,
+        t0_D=2pi / (2.0^r_D * w0_D),
+        num_trotter_steps_per_t0=10,
+        filter=nothing,
+        therm_kw...,
+    )
 end
 
 """
@@ -92,7 +164,6 @@ const SIGMA = 1.0 / BETA  # 0.1
 # ---------------------------------------------------------------------------
 const TOL_EXACT = 1e-12          # machine precision identities
 const TOL_QUADRATURE = 1e-6      # quadrature / discretization errors
-TOL_DELTA(delta) = 5.0 * delta   # unraveling error, C = 5.0
 
 # ---------------------------------------------------------------------------
 # Test step size
@@ -194,7 +265,8 @@ const N3_TROTTER_JUMPS = make_test_system(; num_qubits=3, trotter=N3_TROTTER).ju
 # Unified config factory
 # ---------------------------------------------------------------------------
 """
-    make_config(sim, domain; num_qubits=NUM_QUBITS, construction=KMS(), delta=TEST_DELTA, mixing_time=1.0) -> Config
+    make_config(sim, domain; num_qubits=NUM_QUBITS, construction=KMS(), delta=TEST_DELTA,
+                mixing_time=1.0, jump_selection=:sweep) -> Config
 
 Create a Config with locked test parameters.
 
@@ -206,8 +278,11 @@ function make_config(sim, domain;
     construction=KMS(),
     delta::Float64=TEST_DELTA,
     mixing_time::Float64=1.0,
+    jump_selection::Symbol=:sweep,
+    num_trotter_steps_per_t0::Int=NUM_TROTTER_STEPS_PER_T0,
 )
-    therm_kw = sim isa Thermalize ? (; mixing_time=mixing_time, delta=delta) : (;)
+    therm_kw = sim isa Thermalize ?
+        (; mixing_time=mixing_time, delta=delta, jump_selection=jump_selection) : (;)
     Config(;
         sim = sim,
         domain = domain,
@@ -221,7 +296,7 @@ function make_config(sim, domain;
         num_energy_bits = NUM_ENERGY_BITS,
         w0 = W0,
         t0 = T0,
-        num_trotter_steps_per_t0 = NUM_TROTTER_STEPS_PER_T0,
+        num_trotter_steps_per_t0 = num_trotter_steps_per_t0,
         therm_kw...,
     )
 end

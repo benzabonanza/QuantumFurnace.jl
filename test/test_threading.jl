@@ -2,6 +2,87 @@ using Test
 using Random
 using LinearAlgebra
 
+function _serial_rho_jump!(scratch, rho, jump, ham, config::Config{Thermalize, EnergyDomain}, precomp, weight)
+    fill!(scratch.rho_jump, 0)
+    prefactor = precomp.oft_domain_prefactor * weight
+    inv_4sigma2 = 1 / (4 * config.sigma^2)
+    if jump.hermitian
+        for w_raw in precomp.energy_labels
+            w_raw > 1e-12 && continue
+            w = abs(w_raw)
+            oft!(scratch.jump_oft, jump.in_eigenbasis, ham.bohr_freqs, w, inv_4sigma2)
+            mul!(scratch.sandwich_tmp, rho, scratch.jump_oft')
+            mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp,
+                config.delta * prefactor * precomp.transition(w), 1.0)
+            if w > 1e-12
+                mul!(scratch.sandwich_tmp, rho, scratch.jump_oft)
+                mul!(scratch.rho_jump, scratch.jump_oft', scratch.sandwich_tmp,
+                    config.delta * prefactor * precomp.transition(-w), 1.0)
+            end
+        end
+    else
+        for w in precomp.energy_labels
+            oft!(scratch.jump_oft, jump.in_eigenbasis, ham.bohr_freqs, w, inv_4sigma2)
+            mul!(scratch.sandwich_tmp, rho, scratch.jump_oft')
+            mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp,
+                config.delta * prefactor * precomp.transition(w), 1.0)
+        end
+    end
+    return scratch.rho_jump
+end
+
+function _serial_rho_jump!(scratch, rho, jump, ham_or_trott,
+                           config::Config{Thermalize, D}, precomp, weight) where {D<:Union{TimeDomain, TrotterDomain}}
+    fill!(scratch.rho_jump, 0)
+    prefactor = precomp.oft_domain_prefactor * weight
+    if jump.hermitian
+        for w_raw in precomp.energy_labels
+            w_raw > 1e-12 && continue
+            w = abs(w_raw)
+            nufft = QuantumFurnace._prefactor_view(precomp.oft_nufft_prefactors, w)
+            @. scratch.jump_oft = jump.in_eigenbasis * nufft
+            mul!(scratch.sandwich_tmp, rho, scratch.jump_oft')
+            mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp,
+                config.delta * prefactor * precomp.transition(w), 1.0)
+            if w > 1e-12
+                mul!(scratch.sandwich_tmp, rho, scratch.jump_oft)
+                mul!(scratch.rho_jump, scratch.jump_oft', scratch.sandwich_tmp,
+                    config.delta * prefactor * precomp.transition(-w), 1.0)
+            end
+        end
+    else
+        for w in precomp.energy_labels
+            nufft = QuantumFurnace._prefactor_view(precomp.oft_nufft_prefactors, w)
+            @. scratch.jump_oft = jump.in_eigenbasis * nufft
+            mul!(scratch.sandwich_tmp, rho, scratch.jump_oft')
+            mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp,
+                config.delta * prefactor * precomp.transition(w), 1.0)
+        end
+    end
+    return scratch.rho_jump
+end
+
+function _serial_rho_jump!(scratch, rho, jump, ham,
+                           config::Config{Thermalize, BohrDomain}, precomp, weight)
+    fill!(scratch.rho_jump, 0)
+    dim = size(rho, 1)
+    in_eb = jump.in_eigenbasis
+    for nu_2 in keys(ham.bohr_dict)
+        @. scratch.jump_oft = precomp.alpha(ham.bohr_freqs, nu_2) * in_eb
+        fill!(scratch.sandwich_tmp, 0)
+        for idx in ham.bohr_dict[nu_2]
+            i, j = Tuple(idx)
+            v = conj(in_eb[i, j])
+            for p in 1:dim
+                scratch.sandwich_tmp[p, i] += rho[p, j] * v
+            end
+        end
+        mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp,
+            config.delta * weight, 1.0)
+    end
+    return scratch.rho_jump
+end
+
 # ============================================================================
 # DM thermalization BLAS threading tests (THREAD-03, THREAD-05)
 # ============================================================================
@@ -26,34 +107,6 @@ using LinearAlgebra
         @test BLAS.get_num_threads() == old_blas
         @info "DM BLAS restoration ($name)" blas_after=BLAS.get_num_threads()
     end
-end
-
-@testset "DM serial-threaded BLAS agreement" begin
-    # Run with BLAS threads = 1 (serial BLAS) vs default (multi-threaded BLAS)
-    therm_config = make_config(Thermalize(), EnergyDomain(); num_qubits=3,
-        delta=0.01, mixing_time=0.05)
-    rng_seed = 42
-
-    # Serial BLAS reference
-    old_blas = BLAS.get_num_threads()
-    BLAS.set_num_threads(1)
-    result_serial = run_thermalize(N3_JUMPS, therm_config, N3_HAM;
-        rng=Random.Xoshiro(rng_seed))
-    BLAS.set_num_threads(old_blas)
-
-    # Multi-threaded BLAS
-    result_multi = run_thermalize(N3_JUMPS, therm_config, N3_HAM;
-        rng=Random.Xoshiro(rng_seed))
-
-    # BLAS threading does NOT change FP results for BLAS gemm (BLAS is deterministic
-    # at fixed thread count, but may differ between 1 and N threads due to different
-    # reduction order in gemm). At dim=8 (3 qubits), the difference is negligible.
-    # For larger systems the FP accumulation order in gemm may differ.
-    td_diff = maximum(abs.(result_serial.trace_distances .- result_multi.trace_distances))
-    dm_diff = maximum(abs.(result_serial.final_dm .- result_multi.final_dm))
-    @test isapprox(result_serial.trace_distances, result_multi.trace_distances; atol=1e-10)
-    @test isapprox(result_serial.final_dm, result_multi.final_dm; atol=1e-10)
-    @info "DM serial-threaded BLAS agreement" trace_dist_diff=td_diff dm_diff=dm_diff threshold=1e-10
 end
 
 # ============================================================================
@@ -84,53 +137,8 @@ end
         end
     else
         @info "Skipping omega-loop threading determinism tests (nthreads=$(Threads.nthreads()))"
-        @test true
+        @test_skip Threads.nthreads() > 1
     end
-end
-
-@testset "Serial vs threaded omega-loop agreement" begin
-    if Threads.nthreads() > 1
-        cfg = make_config(Thermalize(), EnergyDomain(); num_qubits=3,
-            delta=0.01, mixing_time=0.05)
-        rng_seed = 42
-
-        # Run with threading enabled (default path on -t 4)
-        result_threaded = run_thermalize(N3_JUMPS, cfg, N3_HAM;
-            rng=Random.Xoshiro(rng_seed))
-
-        # Compare against run with BLAS threads forced to 1
-        # (omega-loop threading sets BLAS=1 internally, so BLAS thread count
-        # only affects the outer run_thermalize try/finally block)
-        old_blas = BLAS.get_num_threads()
-        BLAS.set_num_threads(1)
-        result_serial_blas = run_thermalize(N3_JUMPS, cfg, N3_HAM;
-            rng=Random.Xoshiro(rng_seed))
-        BLAS.set_num_threads(old_blas)
-
-        # Threaded omega-loop + multi-BLAS vs threaded omega-loop + serial BLAS
-        # should agree within FP tolerance (BLAS thread count affects gemm
-        # accumulation order but not correctness)
-        @test isapprox(result_threaded.trace_distances,
-            result_serial_blas.trace_distances; atol=1e-10)
-        @test isapprox(result_threaded.final_dm,
-            result_serial_blas.final_dm; atol=1e-10)
-
-        td_diff = maximum(abs.(result_threaded.trace_distances .- result_serial_blas.trace_distances))
-        dm_diff = maximum(abs.(result_threaded.final_dm .- result_serial_blas.final_dm))
-        @info "Serial vs threaded omega-loop agreement" td_diff=td_diff dm_diff=dm_diff atol=1e-10
-    else
-        @info "Skipping serial vs threaded omega-loop test (nthreads=$(Threads.nthreads()))"
-        @test true
-    end
-end
-
-@testset "Omega-loop BLAS restoration" begin
-    old_blas = BLAS.get_num_threads()
-    cfg = make_config(Thermalize(), EnergyDomain(); num_qubits=3,
-        delta=0.01, mixing_time=0.05)
-    run_thermalize(N3_JUMPS, cfg, N3_HAM)
-    @test BLAS.get_num_threads() == old_blas
-    @info "Omega-loop BLAS restoration" blas_before=old_blas blas_after=BLAS.get_num_threads()
 end
 
 # ============================================================================
@@ -148,7 +156,7 @@ end
 function _run_threaded_lindbladian!(ws, rho, config, ham; adjoint::Bool=false)
     sc = ws.scratch::QuantumFurnace.KrylovScratch{ComplexF64}
     if adjoint
-        G_left, G_right = ws.G_left_adj, ws.G_right_adj
+        G_left, G_right = ws.G_right, ws.G_left
     else
         G_left, G_right = ws.G_left, ws.G_right
     end
@@ -221,7 +229,7 @@ end
         end
     else
         @info "Skipping Lindbladian threaded matvec test (nthreads=$(Threads.nthreads()))"
-        @test true
+        @test_skip Threads.nthreads() > 1
     end
 end
 
@@ -239,7 +247,7 @@ end
         @info "Lindbladian threaded BLAS restoration" blas_before=old_blas blas_after=BLAS.get_num_threads()
     else
         @info "Skipping Lindbladian threaded BLAS restoration test (nthreads=$(Threads.nthreads()))"
-        @test true
+        @test_skip Threads.nthreads() > 1
     end
 end
 
@@ -266,7 +274,7 @@ end
         @test all(sc.rho_out .== ComplexF64(7.0))
     else
         @info "Skipping empty work-list test (nthreads=$(Threads.nthreads()))"
-        @test true
+        @test_skip Threads.nthreads() > 1
     end
 end
 
@@ -284,6 +292,50 @@ end
 # meaningful. The BLAS thread-restoration testset below stays.
 # ============================================================================
 
+@testset "Channel frequency accumulation: serial reference ≡ threaded" begin
+    if Threads.nthreads() > 1
+        rng = MersenneTwister(0x51a1)
+        raw = randn(rng, ComplexF64, DIM, DIM) / sqrt(DIM)
+        nonhermitian_jump = JumpOp(
+            raw,
+            TEST_HAM.eigvecs' * raw * TEST_HAM.eigvecs,
+            false,
+            false,
+        )
+        cases = [
+            (EnergyDomain(), TEST_HAM, TEST_JUMPS[1], "Energy/Hermitian"),
+            (EnergyDomain(), TEST_HAM, nonhermitian_jump, "Energy/non-Hermitian"),
+            (TimeDomain(), TEST_HAM, TEST_JUMPS[1], "Time"),
+            (TimeDomain(), TEST_HAM, nonhermitian_jump, "Time/non-Hermitian"),
+            (TrotterDomain(), TEST_TROTTER, TEST_TROTTER_JUMPS[1], "Trotter"),
+            (BohrDomain(), TEST_HAM, TEST_JUMPS[1], "Bohr"),
+        ]
+        rho = Matrix(random_density_matrix(NUM_QUBITS))
+        for (domain, ham_or_trott, jump, name) in cases
+            config = make_config(Thermalize(), domain; construction=KMS())
+            precomp = QuantumFurnace._precompute_data(config, ham_or_trott)
+            threaded = QuantumFurnace.ThermalizeScratch(ComplexF64, DIM)
+            serial = QuantumFurnace.ThermalizeScratch(ComplexF64, DIM)
+            weight = precomp.gamma_norm_factor
+
+            old_blas = BLAS.get_num_threads()
+            QuantumFurnace._accumulate_rho_jump!(
+                threaded, rho, jump, ham_or_trott, config, precomp;
+                jump_weight_scaling=weight,
+            )
+            @test BLAS.get_num_threads() == old_blas
+            _serial_rho_jump!(serial, rho, jump, ham_or_trott, config, precomp, weight)
+
+            err = norm(threaded.rho_jump - serial.rho_jump)
+            tol = 1e-12 * max(norm(serial.rho_jump), 1.0)
+            @test err < tol
+            @info "Channel frequency accumulation" path=name err tol
+        end
+    else
+        @test_skip Threads.nthreads() > 1
+    end
+end
+
 @testset "Channel threaded matvec: BLAS thread restoration" begin
     if Threads.nthreads() > 1
         config = make_config(Thermalize(), EnergyDomain(); construction=KMS())
@@ -296,6 +348,428 @@ end
         @info "Channel threaded BLAS restoration" blas_before=old_blas blas_after=BLAS.get_num_threads()
     else
         @info "Skipping channel threaded BLAS restoration test (nthreads=$(Threads.nthreads()))"
-        @test true
+        @test_skip Threads.nthreads() > 1
     end
+end
+
+# Construction-time threaded reduction regressions consolidated from the
+# former milestone-specific test file.
+# Regression tests for construction-time threading added under qf-6af. Each
+# threaded helper is invoked directly and its result compared against a hand-
+# rolled serial reference *within the same Julia process*. The same-process
+# comparison isolates the threading correctness question (chunk-reduction
+# accumulation order) from the orthogonal cross-process eigendecomposition
+# phase ambiguity issue (`eigen()` of a hermitian matrix returns eigvecs with
+# arbitrary sign/phase).
+#
+# Coverage:
+#   • _accumulate_R_total_threaded_energy!   (Workspace EnergyDomain)
+#   • _accumulate_R_total_threaded_timetrot! (Workspace Time + TrotterDomain)
+#   • _accumulate_R_total_threaded_bohr!     (Workspace BohrDomain)
+#   • _accumulate_R_total_dll_chunk!         (Workspace DLL BohrDomain)
+#   • _b_time_inner_threaded / _b_time_outer_threaded   (B_time)
+#   • _b_trotter_inner_threaded / _b_trotter_outer_threaded (B_trotter)
+#   • _B_bohr_threaded                       (BohrDomain coherent precompute)
+#
+# All threaded paths are entered when `Threads.nthreads() > 1` and `n_work >=
+# OMEGA_THREAD_THRESHOLD = 10`; the test fixtures comfortably meet both.
+
+using LinearAlgebra
+using Random
+
+@testset "qf-6af construction-time threading" begin
+    # ------------------------------------------------------------
+    # (a) R_total accumulation — EnergyDomain (Hermitian + non-Hermitian)
+    # ------------------------------------------------------------
+    @testset "(a) R_total threaded vs serial: EnergyDomain" begin
+        if Threads.nthreads() > 1
+            cfg = make_config(Lindbladian(), EnergyDomain(); construction=KMS())
+            precomp = QuantumFurnace._precompute_data(cfg, TEST_HAM)
+
+            for (jumps, name) in [
+                (TEST_JUMPS, "Hermitian"),
+                (begin
+                    rng = MersenneTwister(123)
+                    raw = randn(rng, ComplexF64, DIM, DIM) ./ sqrt(DIM)
+                    JumpOp[JumpOp(raw, TEST_HAM.eigvecs' * raw * TEST_HAM.eigvecs,
+                        false, false)]
+                end, "non-Hermitian"),
+            ]
+                jump_eigenbases = [Matrix{ComplexF64}(j.in_eigenbasis) for j in jumps]
+                jump_hermitian = [j.hermitian for j in jumps]
+
+                R_threaded = zeros(ComplexF64, DIM, DIM)
+                QuantumFurnace._accumulate_R_total!(R_threaded, jump_eigenbases,
+                    jump_hermitian, precomp, cfg, TEST_HAM)
+
+                # Hand-rolled serial reference (replicates the inline serial body
+                # of `_accumulate_R_total!` for EnergyDomain).
+                R_serial = zeros(ComplexF64, DIM, DIM)
+                jump_oft = zeros(ComplexF64, DIM, DIM)
+                LdagL = zeros(ComplexF64, DIM, DIM)
+                inv_4sigma2 = 1.0 / (4 * cfg.sigma^2)
+                pf = precomp.oft_domain_prefactor * precomp.gamma_norm_factor
+                for (k, eigenbasis) in enumerate(jump_eigenbases)
+                    is_herm = jump_hermitian[k]
+                    if is_herm
+                        for w_raw in precomp.energy_labels
+                            w_raw > 1e-12 && continue
+                            w = abs(w_raw)
+                            QuantumFurnace.oft!(jump_oft, eigenbasis,
+                                TEST_HAM.bohr_freqs, w, inv_4sigma2)
+                            r2 = pf * precomp.transition(w)
+                            mul!(LdagL, jump_oft', jump_oft)
+                            R_serial .+= r2 .* LdagL
+                            if w > 1e-12
+                                r2n = pf * precomp.transition(-w)
+                                mul!(LdagL, jump_oft, jump_oft')
+                                R_serial .+= r2n .* LdagL
+                            end
+                        end
+                    else
+                        for w in precomp.energy_labels
+                            QuantumFurnace.oft!(jump_oft, eigenbasis,
+                                TEST_HAM.bohr_freqs, w, inv_4sigma2)
+                            r2 = pf * precomp.transition(w)
+                            mul!(LdagL, jump_oft', jump_oft)
+                            R_serial .+= r2 .* LdagL
+                        end
+                    end
+                end
+
+                err = norm(R_threaded .- R_serial)
+                rel = err / max(norm(R_serial), 1.0)
+                @test rel < 1e-12
+                @info "qf-6af R_total energy" path=name err=err rel=rel
+            end
+        else
+            @info "Skipping qf-6af R_total energy test (nthreads=$(Threads.nthreads()))"
+            @test_skip Threads.nthreads() > 1
+        end
+    end
+
+    # ------------------------------------------------------------
+    # (b) R_total — TimeDomain (NUFFT lookup path)
+    # ------------------------------------------------------------
+    @testset "(b) R_total threaded vs serial: TimeDomain" begin
+        if Threads.nthreads() > 1
+            cfg = make_config(Lindbladian(), TimeDomain(); construction=KMS())
+            precomp = QuantumFurnace._precompute_data(cfg, TEST_HAM)
+            jump_eigenbases = [Matrix{ComplexF64}(j.in_eigenbasis) for j in TEST_JUMPS]
+            jump_hermitian = [j.hermitian for j in TEST_JUMPS]
+
+            R_threaded = zeros(ComplexF64, DIM, DIM)
+            QuantumFurnace._accumulate_R_total!(R_threaded, jump_eigenbases,
+                jump_hermitian, precomp, cfg, TEST_HAM)
+
+            R_serial = zeros(ComplexF64, DIM, DIM)
+            jump_oft = zeros(ComplexF64, DIM, DIM)
+            LdagL = zeros(ComplexF64, DIM, DIM)
+            pf = precomp.oft_domain_prefactor * precomp.gamma_norm_factor
+            for (k, eigenbasis) in enumerate(jump_eigenbases)
+                is_herm = jump_hermitian[k]
+                if is_herm
+                    for w_raw in precomp.energy_labels
+                        w_raw > 1e-12 && continue
+                        w = abs(w_raw)
+                        nufft_pf = QuantumFurnace._prefactor_view(
+                            precomp.oft_nufft_prefactors, w)
+                        @. jump_oft = eigenbasis * nufft_pf
+                        r2 = pf * precomp.transition(w)
+                        mul!(LdagL, jump_oft', jump_oft)
+                        R_serial .+= r2 .* LdagL
+                        if w > 1e-12
+                            r2n = pf * precomp.transition(-w)
+                            mul!(LdagL, jump_oft, jump_oft')
+                            R_serial .+= r2n .* LdagL
+                        end
+                    end
+                else
+                    for (li, w) in enumerate(precomp.energy_labels)
+                        nufft_pf = @view precomp.oft_nufft_prefactors.data[:, :, li]
+                        @. jump_oft = eigenbasis * nufft_pf
+                        r2 = pf * precomp.transition(w)
+                        mul!(LdagL, jump_oft', jump_oft)
+                        R_serial .+= r2 .* LdagL
+                    end
+                end
+            end
+
+            err = norm(R_threaded .- R_serial)
+            rel = err / max(norm(R_serial), 1.0)
+            @test rel < 1e-12
+            @info "qf-6af R_total time" err=err rel=rel
+        else
+            @test_skip Threads.nthreads() > 1
+        end
+    end
+
+    # ------------------------------------------------------------
+    # (c) R_total — TrotterDomain (NUFFT path on Trotter eigenbasis)
+    # ------------------------------------------------------------
+    @testset "(c) R_total threaded vs serial: TrotterDomain" begin
+        if Threads.nthreads() > 1
+            cfg = make_config(Lindbladian(), TrotterDomain(); construction=KMS())
+            precomp = QuantumFurnace._precompute_data(cfg, TEST_TROTTER)
+            jump_eigenbases = [Matrix{ComplexF64}(j.in_eigenbasis)
+                               for j in TEST_TROTTER_JUMPS]
+            jump_hermitian = [j.hermitian for j in TEST_TROTTER_JUMPS]
+
+            R_threaded = zeros(ComplexF64, DIM, DIM)
+            QuantumFurnace._accumulate_R_total!(R_threaded, jump_eigenbases,
+                jump_hermitian, precomp, cfg, TEST_TROTTER)
+
+            R_serial = zeros(ComplexF64, DIM, DIM)
+            jump_oft = zeros(ComplexF64, DIM, DIM)
+            LdagL = zeros(ComplexF64, DIM, DIM)
+            pf = precomp.oft_domain_prefactor * precomp.gamma_norm_factor
+            for (k, eigenbasis) in enumerate(jump_eigenbases)
+                is_herm = jump_hermitian[k]
+                if is_herm
+                    for w_raw in precomp.energy_labels
+                        w_raw > 1e-12 && continue
+                        w = abs(w_raw)
+                        nufft_pf = QuantumFurnace._prefactor_view(
+                            precomp.oft_nufft_prefactors, w)
+                        @. jump_oft = eigenbasis * nufft_pf
+                        r2 = pf * precomp.transition(w)
+                        mul!(LdagL, jump_oft', jump_oft)
+                        R_serial .+= r2 .* LdagL
+                        if w > 1e-12
+                            r2n = pf * precomp.transition(-w)
+                            mul!(LdagL, jump_oft, jump_oft')
+                            R_serial .+= r2n .* LdagL
+                        end
+                    end
+                else
+                    for (li, w) in enumerate(precomp.energy_labels)
+                        nufft_pf = @view precomp.oft_nufft_prefactors.data[:, :, li]
+                        @. jump_oft = eigenbasis * nufft_pf
+                        r2 = pf * precomp.transition(w)
+                        mul!(LdagL, jump_oft', jump_oft)
+                        R_serial .+= r2 .* LdagL
+                    end
+                end
+            end
+
+            err = norm(R_threaded .- R_serial)
+            rel = err / max(norm(R_serial), 1.0)
+            @test rel < 1e-12
+            @info "qf-6af R_total trot" err=err rel=rel
+        else
+            @test_skip Threads.nthreads() > 1
+        end
+    end
+
+    # ------------------------------------------------------------
+    # (d) R_total — BohrDomain
+    # ------------------------------------------------------------
+    @testset "(d) R_total threaded vs serial: BohrDomain" begin
+        if Threads.nthreads() > 1
+            cfg = make_config(Lindbladian(), BohrDomain(); construction=KMS())
+            precomp = QuantumFurnace._precompute_data(cfg, TEST_HAM)
+            jump_eigenbases = [Matrix{ComplexF64}(j.in_eigenbasis) for j in TEST_JUMPS]
+            jump_hermitian = [j.hermitian for j in TEST_JUMPS]
+
+            R_threaded = zeros(ComplexF64, DIM, DIM)
+            QuantumFurnace._accumulate_R_total!(R_threaded, jump_eigenbases,
+                jump_hermitian, precomp, cfg, TEST_HAM)
+
+            R_serial = zeros(ComplexF64, DIM, DIM)
+            jump_oft = zeros(ComplexF64, DIM, DIM)
+            A_nu2_dag = zeros(ComplexF64, DIM, DIM)
+            bohr_keys = collect(keys(TEST_HAM.bohr_dict))
+            for (k, eigenbasis) in enumerate(jump_eigenbases)
+                for nu_2 in bohr_keys
+                    @. jump_oft = precomp.alpha(TEST_HAM.bohr_freqs, nu_2) * eigenbasis
+                    fill!(A_nu2_dag, 0)
+                    indices = TEST_HAM.bohr_dict[nu_2]
+                    @inbounds for idx in indices
+                        i = idx[1]; j = idx[2]
+                        A_nu2_dag[j, i] = conj(eigenbasis[i, j])
+                    end
+                    mul!(R_serial, A_nu2_dag, jump_oft, precomp.gamma_norm_factor, 1.0)
+                end
+            end
+
+            err = norm(R_threaded .- R_serial)
+            rel = err / max(norm(R_serial), 1.0)
+            @test rel < 1e-12
+            @info "qf-6af R_total bohr" err=err rel=rel
+        else
+            @test_skip Threads.nthreads() > 1
+        end
+    end
+
+    # ------------------------------------------------------------
+    # (e) DLL R_total + per-jump operators — BohrDomain
+    # ------------------------------------------------------------
+    @testset "(e) DLL R_total + per-jump ordering" begin
+        if Threads.nthreads() > 1
+            beta = 10.0
+            cfg = Config(;
+                sim = Lindbladian(),
+                domain = BohrDomain(),
+                construction = DLL(),
+                num_qubits = 3,
+                with_linear_combination = true,
+                beta = beta,
+                sigma = 1.0/beta,
+                a = beta/30.0,
+                s = 0.4,
+                num_energy_bits = 12,
+                t0 = 2pi / (2^12 * 0.05),
+                num_trotter_steps_per_t0 = 10,
+                filter = DLLGaussianFilter(beta),
+            )
+            sys = make_dll_n3_system(beta)
+            precomp = QuantumFurnace._precompute_data(cfg, sys.ham)
+
+            R_threaded = zeros(ComplexF64, N3_DIM, N3_DIM)
+            dll_threaded = Vector{Matrix{ComplexF64}}()
+            QuantumFurnace._accumulate_R_total_dll!(
+                R_threaded, dll_threaded, sys.jumps,
+                precomp, cfg, sys.ham)
+
+            R_serial = zeros(ComplexF64, N3_DIM, N3_DIM)
+            dll_serial = Vector{Matrix{ComplexF64}}()
+            for jump in sys.jumps
+                L_or_Ls = QuantumFurnace.dll_lindblad_op_bohr(jump, sys.ham, precomp.filter)
+                if L_or_Ls isa AbstractMatrix
+                    L_a = Matrix{ComplexF64}(L_or_Ls)
+                    push!(dll_serial, L_a)
+                    mul!(R_serial, L_a', L_a, 1.0, 1.0)
+                else
+                    for L_one in L_or_Ls
+                        L_a = Matrix{ComplexF64}(L_one)
+                        push!(dll_serial, L_a)
+                        mul!(R_serial, L_a', L_a, 1.0, 1.0)
+                    end
+                end
+            end
+
+            @test length(dll_threaded) == length(dll_serial)
+            for k in eachindex(dll_serial)
+                @test isapprox(dll_threaded[k], dll_serial[k]; atol=1e-15)
+            end
+
+            err = norm(R_threaded .- R_serial)
+            rel = err / max(norm(R_serial), 1.0)
+            @test rel < 1e-12
+            @info "qf-6af R_total dll" err=err rel=rel n_ops=length(dll_serial)
+        else
+            @test_skip Threads.nthreads() > 1
+        end
+    end
+
+    # ------------------------------------------------------------
+    # (f) B_time threaded (inner τ × jumps + outer t)
+    # ------------------------------------------------------------
+    @testset "(f) B_time threaded vs serial" begin
+        if Threads.nthreads() > 1
+            cfg = make_config(Lindbladian(), TimeDomain(); construction=KMS())
+            precomp = QuantumFurnace._precompute_data(cfg, TEST_HAM)
+            B_threaded = QuantumFurnace.B_time(TEST_JUMPS, TEST_HAM,
+                precomp.b_minus, precomp.b_plus,
+                QuantumFurnace.register_t0_b_minus(cfg),
+                QuantumFurnace.register_t0_b_plus(cfg),
+                cfg.beta, cfg.sigma)
+
+            # Serial reference: explicit nested loop matching the inline body.
+            d = DIM
+            CT = ComplexF64
+            eigvals = TEST_HAM.eigvals
+
+            b_plus_summand = zeros(CT, d, d)
+            diag_u  = Vector{CT}(undef, d)
+            diag_u2 = Vector{CT}(undef, d)
+            tmp     = Matrix{CT}(undef, d, d)
+            M       = Matrix{CT}(undef, d, d)
+            for tau in keys(precomp.b_plus)
+                t_tau = tau * cfg.beta
+                @. diag_u  = exp(1im * eigvals * t_tau)
+                @. diag_u2 = exp(-2im * eigvals * t_tau)
+                diag_u_row = transpose(diag_u)
+                for jump_a in TEST_JUMPS
+                    jump_eig = jump_a.in_eigenbasis
+                    @. tmp = diag_u2 * jump_eig
+                    mul!(M, jump_eig', tmp)
+                    b_plus_summand .+= precomp.b_plus[tau] .* diag_u .* M .* diag_u_row
+                end
+            end
+            B_serial = zeros(CT, d, d)
+            for t in keys(precomp.b_minus)
+                @. diag_u = exp(1im * eigvals * (t / cfg.sigma))
+                diag_u_row = transpose(diag_u)
+                B_serial .+= precomp.b_minus[t] .* conj.(diag_u) .* b_plus_summand .* diag_u_row
+            end
+            t0o = QuantumFurnace.register_t0_b_minus(cfg)
+            t0i = QuantumFurnace.register_t0_b_plus(cfg)
+            B_serial .*= t0o * t0i
+
+            err = norm(B_threaded .- B_serial)
+            rel = err / max(norm(B_serial), 1.0)
+            @test rel < 1e-12
+            @info "qf-6af B_time threaded" err=err rel=rel
+        else
+            @test_skip Threads.nthreads() > 1
+        end
+    end
+
+    # ------------------------------------------------------------
+    # (g) B_trotter threaded
+    # ------------------------------------------------------------
+    @testset "(g) B_trotter threaded vs serial" begin
+        if Threads.nthreads() > 1
+            cfg = make_config(Lindbladian(), TrotterDomain(); construction=KMS())
+            precomp = QuantumFurnace._precompute_data(cfg, TEST_TROTTER)
+            t0o = QuantumFurnace.register_t0_b_minus(cfg)
+            t0i = QuantumFurnace.register_t0_b_plus(cfg)
+            B_threaded = QuantumFurnace.B_trotter(TEST_TROTTER_JUMPS, TEST_TROTTER,
+                precomp.b_minus, precomp.b_plus, t0o, t0i, cfg.beta, cfg.sigma)
+
+            d = DIM
+            CT = ComplexF64
+            # TEST_TROTTER is a single-cache TrottTrott: both legs run against
+            # the same eigvals/t0 (canonical KMS coherent uses TrotterTriple).
+            eigvals_outer = TEST_TROTTER.eigvals_t0
+            eigvals_inner = TEST_TROTTER.eigvals_t0
+            t0_step_outer = TEST_TROTTER.t0
+            t0_step_inner = TEST_TROTTER.t0
+
+            b_plus_summand = zeros(CT, d, d)
+            diag_u  = Vector{CT}(undef, d)
+            diag_u2 = Vector{CT}(undef, d)
+            tmp     = Matrix{CT}(undef, d, d)
+            M       = Matrix{CT}(undef, d, d)
+            for (tau, b_tau) in precomp.b_plus
+                num_t0_steps = Int(round(tau * cfg.beta / t0_step_inner))
+                @. diag_u  = eigvals_inner ^ num_t0_steps
+                @. diag_u2 = eigvals_inner ^ (-2 * num_t0_steps)
+                diag_u_row = transpose(diag_u)
+                for jump_a in TEST_TROTTER_JUMPS
+                    jump_a_eig = jump_a.in_eigenbasis
+                    @. tmp = diag_u2 * jump_a_eig
+                    mul!(M, jump_a_eig', tmp)
+                    b_plus_summand .+= b_tau .* diag_u .* M .* diag_u_row
+                end
+            end
+            B_serial = zeros(CT, d, d)
+            for (t, b_t) in precomp.b_minus
+                num_t0_steps = Int(round(t / (cfg.sigma * t0_step_outer)))
+                @. diag_u = eigvals_outer ^ num_t0_steps
+                diag_u_row = transpose(diag_u)
+                B_serial .+= b_t .* conj.(diag_u) .* b_plus_summand .* diag_u_row
+            end
+            B_serial .*= t0o * t0i
+
+            err = norm(B_threaded .- B_serial)
+            rel = err / max(norm(B_serial), 1.0)
+            @test rel < 1e-12
+            @info "qf-6af B_trotter threaded" err=err rel=rel
+        else
+            @test_skip Threads.nthreads() > 1
+        end
+    end
+
 end

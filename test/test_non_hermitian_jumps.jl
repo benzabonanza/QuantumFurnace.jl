@@ -91,12 +91,17 @@
     # tail. 14 bits at w0=0.1 covers β=1 cleanly; β≥5 saturates earlier.
     _NUM_ENERGY_BITS = 14
     _W0 = 0.1
-    _T0 = 2pi / (2^_NUM_ENERGY_BITS * _W0)
     _NUM_TROTTER_STEPS_PER_T0 = 10
 
-    function _nh_config(domain; beta::Real)
+    function _nh_config(
+        domain;
+        sim = Lindbladian(),
+        beta::Real,
+        num_energy_bits::Int = _NUM_ENERGY_BITS,
+        w0::Real = _W0,
+    )
         Config(;
-            sim = Lindbladian(),
+            sim = sim,
             domain = domain,
             construction = KMS(),
             num_qubits = 3,
@@ -105,11 +110,113 @@
             sigma = 1.0 / Float64(beta),
             a = beta / 30.0,
             s = 0.4,
-            num_energy_bits = _NUM_ENERGY_BITS,
-            w0 = _W0,
-            t0 = _T0,
+            num_energy_bits = num_energy_bits,
+            w0 = Float64(w0),
+            t0 = 2pi / (2^num_energy_bits * Float64(w0)),
             num_trotter_steps_per_t0 = _NUM_TROTTER_STEPS_PER_T0,
         )
+    end
+
+    function _signed_serial_R(
+        jump::JumpOp,
+        hamiltonian::HamHam,
+        config::Config{Thermalize, EnergyDomain},
+        precomputed_data,
+    )
+        dim = size(hamiltonian.data, 1)
+        R = zeros(ComplexF64, dim, dim)
+        jump_oft = similar(R)
+        LdagL = similar(R)
+        prefactor = precomputed_data.oft_domain_prefactor *
+            precomputed_data.gamma_norm_factor
+        inv_4sigma2 = 1.0 / (4 * config.sigma^2)
+
+        for w in precomputed_data.energy_labels
+            QuantumFurnace.oft!(
+                jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs,
+                w, inv_4sigma2,
+            )
+            mul!(LdagL, jump_oft', jump_oft)
+            R .+= (prefactor * precomputed_data.transition(w)) .* LdagL
+        end
+        return (R + R') / 2
+    end
+
+    function _signed_serial_R(
+        jump::JumpOp,
+        ham_or_trott::Union{HamHam, AbstractTrotter},
+        config::Config{Thermalize, D},
+        precomputed_data,
+    ) where {D<:Union{TimeDomain, TrotterDomain}}
+        dim = size(jump.in_eigenbasis, 1)
+        R = zeros(ComplexF64, dim, dim)
+        jump_oft = similar(R)
+        LdagL = similar(R)
+        prefactor = precomputed_data.oft_domain_prefactor *
+            precomputed_data.gamma_norm_factor
+
+        for w in precomputed_data.energy_labels
+            nufft_prefactor = QuantumFurnace._prefactor_view(
+                precomputed_data.oft_nufft_prefactors, w,
+            )
+            @. jump_oft = jump.in_eigenbasis * nufft_prefactor
+            mul!(LdagL, jump_oft', jump_oft)
+            R .+= (prefactor * precomputed_data.transition(w)) .* LdagL
+        end
+        return (R + R') / 2
+    end
+
+    @testset "Threaded per-jump R preserves signed frequencies" begin
+        if Threads.nthreads() > 1
+            beta = 5.0
+            ham = _load_n3_ham(beta)
+
+            for domain in (EnergyDomain(), TimeDomain(), TrotterDomain())
+                config = _nh_config(
+                    domain; sim=Thermalize(), beta=beta,
+                    num_energy_bits=8, w0=0.1,
+                )
+                trotter = domain isa TrotterDomain ?
+                    make_trotter_for_config(ham, config) : nothing
+                ham_or_trott = trotter === nothing ? ham : trotter
+                jump = first(nh_pair_jumps(
+                    ham; basis=trotter === nothing ? ham.eigvecs : trotter.eigvecs,
+                ))
+                precomputed_data = QuantumFurnace._precompute_data(config, ham_or_trott)
+                @test length(precomputed_data.energy_labels) >=
+                    QuantumFurnace.OMEGA_THREAD_THRESHOLD
+
+                scratch = QuantumFurnace.ThermalizeScratch(ComplexF64, size(ham.data, 1))
+                R_threaded = copy(QuantumFurnace._precompute_R(
+                    [jump], ham_or_trott, config, precomputed_data, scratch,
+                ))
+                R_serial = _signed_serial_R(
+                    jump, ham_or_trott, config, precomputed_data,
+                )
+                relative_error = norm(R_threaded - R_serial) / norm(R_serial)
+                @test relative_error < 1e-12
+                @info "non-Hermitian per-jump R threaded parity" domain relative_error
+            end
+        else
+            @test_skip Threads.nthreads() > 1
+        end
+    end
+
+    @testset "EnergyDomain signed-frequency refinement approaches Bohr" begin
+        β = 5.0
+        ham = _load_n3_ham(β)
+        jumps = nh_pair_jumps(ham)
+        L_bohr = Matrix{ComplexF64}(construct_lindbladian(
+            jumps, _nh_config(BohrDomain(); beta=β), ham))
+        errors = Float64[]
+        for w0 in (0.4, 0.2, 0.1)
+            cfg = _nh_config(EnergyDomain(); beta=β, num_energy_bits=8, w0=w0)
+            L_energy = Matrix{ComplexF64}(construct_lindbladian(jumps, cfg, ham))
+            push!(errors, opnorm(L_energy - L_bohr))
+        end
+        @test all(diff(errors) .< 0)
+        @test errors[end] <= 1e-9
+        @info "non-Hermitian Energy→Bohr refinement" w0=(0.4, 0.2, 0.1) errors
     end
 
     """

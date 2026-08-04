@@ -22,6 +22,71 @@ function _measure_matvec_allocs(ws, rho, config, ham)
     return allocs_fwd, allocs_adj
 end
 
+function _b_bohr_reference(ham::HamHam, jumps::Vector{<:JumpOp}, cfg::Config)
+    dim = size(ham.data, 1)
+    B = zeros(ComplexF64, dim, dim)
+    f = QuantumFurnace._pick_f(cfg)
+    for nu_2 in keys(ham.bohr_dict), idx in ham.bohr_dict[nu_2]
+        i, j = Tuple(idx)
+        for jump in jumps
+            in_eb = jump.in_eigenbasis
+            val = conj(in_eb[i, j])
+            for col in 1:dim
+                B[j, col] += val * f(ham.bohr_freqs[i, col], nu_2) * in_eb[i, col]
+            end
+        end
+    end
+    return B
+end
+
+function _make_degenerate_bohr_ham(beta_alg::Real)
+    eigvals = [0.0, 1.0, 1.0, 2.0]
+    matrix = diagm(ComplexF64.(eigvals))
+    bohr_freqs = eigvals .- transpose(eigvals)
+    gibbs_weights = exp.(-beta_alg .* eigvals)
+    gibbs = Hermitian(diagm(ComplexF64.(gibbs_weights ./ sum(gibbs_weights))))
+    return HamHam{Float64}(
+        matrix,
+        bohr_freqs,
+        create_bohr_dict(bohr_freqs),
+        Vector{Vector{Matrix{ComplexF64}}}(),
+        Float64[],
+        nothing,
+        nothing,
+        eigvals,
+        Matrix{ComplexF64}(I, 4, 4),
+        1.0,
+        0.0,
+        1.0,
+        true,
+        gibbs,
+    )
+end
+
+function _shuffle_bohr_rows(ham::HamHam{T}; seed::Int=7) where {T}
+    rng = MersenneTwister(seed)
+    shuffled = Dict{T, Vector{CartesianIndex{2}}}()
+    for (nu, indices) in ham.bohr_dict
+        shuffled[nu] = shuffle(rng, copy(indices))
+    end
+    return HamHam{T}(
+        ham.data,
+        ham.bohr_freqs,
+        shuffled,
+        ham.base_terms,
+        ham.base_coeffs,
+        ham.disordering_terms,
+        ham.disordering_coeffs,
+        ham.eigvals,
+        ham.eigvecs,
+        ham.nu_min,
+        ham.shift,
+        ham.rescaling_factor,
+        ham.periodic,
+        ham.gibbs,
+    )
+end
+
 # ============================================================================
 # Round-trip correctness and allocation tests for Krylov matvec
 # Phase 27: Core Matvec Infrastructure
@@ -35,7 +100,7 @@ end
     @testset "Workspace construction" begin
         config_kms = make_config(Lindbladian(),EnergyDomain(); construction=KMS())
         ws = Workspace(config_kms, TEST_HAM, TEST_JUMPS)
-        @test ws.B_total !== nothing
+        @test ws.G_left != ws.G_right
         @test size(ws.scratch.sandwich_tmp) == (DIM, DIM)
         @test size(ws.scratch.sandwich_out) == (DIM, DIM)
         @test size(ws.scratch.rho_out) == (DIM, DIM)
@@ -43,7 +108,7 @@ end
 
         config_gns = make_config(Lindbladian(), EnergyDomain(); construction=GNS())
         ws_gns = Workspace(config_gns, TEST_HAM, TEST_JUMPS)
-        @test ws_gns.B_total === nothing
+        @test ws_gns.G_left == ws_gns.G_right
     end
 
     # ========================================================================
@@ -595,4 +660,66 @@ end
         @info "include_coherent=false ($dname)" max_fwd max_adj
     end
 
+    @testset "B_bohr row-cache correctness" begin
+        cfg = make_config(Lindbladian(), BohrDomain(); construction=KMS())
+        B = B_bohr(TEST_HAM, TEST_JUMPS, cfg)
+        B_ref = _b_bohr_reference(TEST_HAM, TEST_JUMPS, cfg)
+        @test norm(B - B_ref) / max(norm(B_ref), 1.0) < 1e-12
+
+        shuffled_ham = _shuffle_bohr_rows(TEST_HAM)
+        B_shuffled = B_bohr(shuffled_ham, TEST_JUMPS, cfg)
+        B_shuffled_ref = _b_bohr_reference(shuffled_ham, TEST_JUMPS, cfg)
+        @test norm(B_shuffled - B_shuffled_ref) / max(norm(B_shuffled_ref), 1.0) < 1e-12
+        @test norm(B_shuffled - B) / max(norm(B), 1.0) < 1e-12
+
+        beta_alg = 5.0
+        ham_deg = _make_degenerate_bohr_ham(beta_alg)
+        positive_zero = Set(ham_deg.bohr_dict[0.0])
+        negative_zero = Set(ham_deg.bohr_dict[-0.0])
+        @test positive_zero == Set(vcat(
+            CartesianIndex{2}.(1:4, 1:4),
+            [CartesianIndex(2, 3)],
+        ))
+        @test negative_zero == Set([CartesianIndex(3, 2)])
+
+        jumps_deg = JumpOp[]
+        for site in 1:2
+            op = Matrix(pad_term([X], 2, site)) / sqrt(2)
+            push!(jumps_deg, JumpOp(op, op, false, true))
+        end
+        cfg_deg = Config(;
+            sim=Lindbladian(),
+            domain=BohrDomain(),
+            construction=KMS(),
+            num_qubits=2,
+            with_linear_combination=true,
+            beta=beta_alg,
+            sigma=1 / beta_alg,
+            a=beta_alg / 30,
+            s=0.4,
+            num_energy_bits=8,
+            w0=0.05,
+        )
+        B_deg = B_bohr(ham_deg, jumps_deg, cfg_deg)
+        @test norm(B_deg - _b_bohr_reference(ham_deg, jumps_deg, cfg_deg)) /
+              max(norm(B_deg), 1.0) < 1e-12
+
+        cfg_gauss = Config(;
+            sim=Lindbladian(),
+            domain=BohrDomain(),
+            construction=KMS(),
+            num_qubits=NUM_QUBITS,
+            with_linear_combination=false,
+            beta=BETA_ALG,
+            sigma=SIGMA,
+            gaussian_parameters=(BETA_ALG * (SIGMA^2 + 0.5^2) / 2, 0.5),
+            num_energy_bits=NUM_ENERGY_BITS,
+            w0=W0,
+        )
+        B_gauss = B_bohr(TEST_HAM, TEST_JUMPS, cfg_gauss)
+        @test norm(B_gauss - _b_bohr_reference(TEST_HAM, TEST_JUMPS, cfg_gauss)) /
+              max(norm(B_gauss), 1.0) < 1e-12
+    end
+
 end  # @testset "Krylov Matvec"
+#

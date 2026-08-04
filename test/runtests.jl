@@ -30,7 +30,6 @@ const SANDBOX_FILES = String[
     "test_hamiltonian.jl",
     "test_build_hamiltonian_extra.jl",
     "test_boundary_conditions.jl",
-    "test_compilation.jl",
     "test_trotter_caches.jl",
     "test_cptp.jl",
     "test_dm_detailed_balance.jl",
@@ -86,9 +85,6 @@ const SANDBOX_FILES = String[
     "test_lindblad_action_sandbox.jl",
     "test_predict_sandbox.jl",
     "test_faithful_apply_delta_channel_sandbox.jl",
-    # qf-0fv: adversarial gating test for predict_*_trajectory's
-    # compute_true_gap kwarg. n=3 only, ~12s, ~50 MB.
-    "test_qf_0fv_verifier.jl",
 ]
 
 # Whole-file NO_SANDBOX test list. Heavy files that don't fit the cumulative

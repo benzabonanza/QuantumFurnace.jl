@@ -129,8 +129,7 @@ Compute L-vs-E convergence: compare Lindbladian spectral gap (delta-independent)
 against the DENSE channel-derived gap at multiple delta values.
 
 The faithful Chen channel has mu = exp(delta*lambda_L) + O(delta^2), so the
-first-order conversion (via |log|mu_2||/delta) introduces O(delta) error. Expected
-convergence order is ~1.0; threshold is >= 0.55 with margin for sub-leading terms.
+first-order conversion (via |log|mu_2||/delta) introduces O(delta) error.
 
 Returns `(; gap_L, rows, orders)` where rows is a vector of
 `(; delta, gap_from_E, error)` named tuples and orders is a vector of
@@ -144,7 +143,8 @@ function _dense_phi_delta_gap(config_therm, hamiltonian, jumps; trotter=nothing)
     E = zeros(ComplexF64, d, d)
     for col in 1:(d * d)
         fill!(E, 0); E[col] = 1.0
-        QuantumFurnace.apply_delta_channel!(ws, E, config_therm, hamiltonian)
+        QuantumFurnace.apply_delta_channel!(
+            ws, E, config_therm, hamiltonian; hermitize=false)
         @views Phi[:, col] .= vec(ws.scratch.rho_next)
     end
     mu = eigvals(Phi)
@@ -355,64 +355,20 @@ end
     # The faithful jumpwise Φ_δ gives mu = exp(delta*lambda_L) + O(delta^2),
     # so (mu-1)/delta has first-order error. Deltas: [0.1, 0.01, 0.001].
     #
-    # Hard assertion: `maximum(orders) >= 0.55`, i.e. at least one consecutive
-    # δ-pair shows a clearly-first-order rate. The leading-O(δ) and
-    # sub-leading-O(δ²) terms can mix at coarse δ — depending on KrylovKit's
-    # stochastic Arnoldi initialisation, individual mid-range pairs can show
-    # transiently low orders (0.06–0.86 observed) while the asymptotic rate
-    # is still ≈ 1.0. The faithful per-jump Φ_δ (qf-po5) carries an additional
-    # O(δ²) Lie–Trotter splitting term on top of the per-step truncation; that
-    # compresses the visible O(δ) regime slightly. The qf-8fr default-x_0
-    # change (vec(I/d) → vec(I/d + 1e-10·H_GUE)) further shifts orders by
-    # ±0.2 because the captured Krylov subspace depends on x_0 — TrotterDomain
-    # is tightest at ~0.60. Asserting on every pair is brittle; asserting that
-    # the asymptotic rate is reached at SOME pair (and the rate is clearly
-    # first-order, not zero-order) is the stable form of the theory's
-    # prediction.
+    # The dense complex-linear channel removes Arnoldi mode-selection noise,
+    # so every consecutive pair must show the predicted first-order rate.
     # ========================================================================
     @testset "L-vs-E convergence (KMS)" begin
 
-        # Threshold 0.55 — threading + x_0-stochastic:
-        #   TimeDomain landed at 0.85 with nthreads=2 and 0.91 with nthreads=8
-        #   when `krylov_spectral_gap` seeded Arnoldi with x_0 = vec(I/d).
-        #   The qf-8fr fix (symmetry-broken default x_0 = vec(I/d + 1e-10·H_GUE),
-        #   needed so symmetric Hamiltonians don't silently miss the gap mode)
-        #   shifts the captured Krylov subspace by O(eps); individual mid-range
-        #   δ-pair orders fluctuate by ±0.2, occasionally landing in 0.60..0.85
-        #   on the n=4 disordered-Heisenberg test fixture (TrotterDomain is the
-        #   tightest, ~0.60 at nthreads=4 due to spurious Trotter modes). The
-        #   test still asserts that the asymptotic first-order rate is reached
-        #   at some δ-pair — just not always at threshold 0.8.
-        #
-        #   The test is x_0-sensitive by design: the qf-8fr fix to x_0 was
-        #   needed for correctness on clean (symmetric) Hamiltonians, and the
-        #   only cost is this convergence-order looseness on the n=4
-        #   disordered-Heisenberg fixture, which has no physical content.
-        order_threshold = 0.55
-
-        @testset "EnergyDomain" begin
-            result = run_le_convergence(EnergyDomain(), TEST_HAM, TEST_JUMPS)
-            @test maximum(result.orders) >= order_threshold
-            @info "XVAL-03 convergence (EnergyDomain)" orders=result.orders threshold=order_threshold
-        end
-
-        @testset "TimeDomain" begin
-            result = run_le_convergence(TimeDomain(), TEST_HAM, TEST_JUMPS)
-            @test maximum(result.orders) >= order_threshold
-            @info "XVAL-03 convergence (TimeDomain)" orders=result.orders threshold=order_threshold
-        end
-
-        @testset "TrotterDomain" begin
-            result = run_le_convergence(TrotterDomain(), TEST_HAM, TEST_TROTTER_JUMPS;
-                trotter=TEST_TROTTER)
-            @test maximum(result.orders) >= order_threshold
-            @info "XVAL-03 convergence (TrotterDomain)" orders=result.orders threshold=order_threshold
-        end
-
-        @testset "BohrDomain" begin
-            result = run_le_convergence(BohrDomain(), TEST_HAM, TEST_JUMPS)
-            @test maximum(result.orders) >= order_threshold
-            @info "XVAL-03 convergence (BohrDomain)" orders=result.orders threshold=order_threshold
+        for domain in (EnergyDomain(), TimeDomain(), TrotterDomain(), BohrDomain())
+            jumps = domain isa TrotterDomain ? TEST_TROTTER_JUMPS : TEST_JUMPS
+            trotter = domain isa TrotterDomain ? TEST_TROTTER : nothing
+            result = run_le_convergence(
+                domain, TEST_HAM, jumps; trotter=trotter)
+            errors = getproperty.(result.rows, :error)
+            @test all(diff(errors) .< 0)
+            @test all(0.8 .<= result.orders .<= 1.2)
+            @info "channel-to-generator convergence" domain=typeof(domain) errors orders=result.orders
         end
 
     end  # L-vs-E convergence

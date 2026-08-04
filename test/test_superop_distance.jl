@@ -32,10 +32,7 @@ using QuantumFurnace: _jumps_in_basis, build_dense_superoperator, trace_distance
     rho_plus(m) = (psi = ones(ComplexF64, 2^m) ./ sqrt(2.0^m); psi * psi')
     param_table = joinpath(dirname(@__DIR__), "scripts", "output", "channel_param_table.bson")
 
-    if !isfile(param_table)
-        @warn "Skipping superop_distance tests: channel parameter table missing" param_table
-        @test_skip true
-    else
+    isfile(param_table) || error("missing required channel parameter table: $param_table")
         n = 3
         d = N3_DIM
         ham = N3_HAM                       # β_alg = BETA = 10
@@ -48,7 +45,7 @@ using QuantumFurnace: _jumps_in_basis, build_dense_superoperator, trace_distance
         # Channel arm — canonical TrotterTriple, works in trotter.eigvecs (= D-leg basis).
         cfg_C = _build_channel_config(row, n, β, TrotterDomain(), KMS())
         trotter = make_trotter_for_config(ham, cfg_C)
-        jumps_C = _jumps_in_basis(ham, n, trotter.eigvecs)
+        jumps_C = _jumps_in_basis(n, trotter.eigvecs)
         armC = channel_arm(cfg_C, ham, jumps_C, trotter; label = "Φ_δ")
 
         # Ideal L arm — same (β,σ,s,a) generator, near-Bohr r_D, works in ham.eigvecs.
@@ -64,7 +61,7 @@ using QuantumFurnace: _jumps_in_basis, build_dense_superoperator, trace_distance
             num_energy_bits_D = r_D, w0_D = w0_D, t0_D = t0_D,
             num_trotter_steps_per_t0 = 10, filter = nothing,
         )
-        jumps_L = _jumps_in_basis(ham, n, ham.eigvecs)
+        jumps_L = _jumps_in_basis(n, ham.eigvecs)
         armL = lindbladian_arm(cfg_L, ham, jumps_L; label = "e^{δL}")
 
         rho_0 = rho_plus(n)
@@ -102,15 +99,9 @@ using QuantumFurnace: _jumps_in_basis, build_dense_superoperator, trace_distance
 
                 # The METRIC is the load-bearing check.
                 T_dense = trace_distance_nh(Matrix(rhoC), Matrix(rhoL))
-                # 1e-7 (not a register-controllable floor): this is float accumulation
-                # of the manual Phi^k / exp(Lt) iteration vs the engine's exact
-                # propagation. On the seed-46 draw the worst k accumulates ~4e-8
-                # (was <1e-8 on the prior draw); a basis/metric bug would be O(1).
-                @test abs(T_dense - res.trace_distances[i]) < 1e-7
-                # Per-arm trajectory (common basis); 1e-6 absorbs threaded-reduction
-                # divergence between matrix-free matvec and dense matmul iterated k×.
-                @test maximum(abs.(res.states[1][i] .- rhoC)) < 1e-6
-                @test maximum(abs.(res.states[2][i] .- rhoL)) < 1e-6
+                @test abs(T_dense - res.trace_distances[i]) < 1e-9
+                @test maximum(abs.(res.states[1][i] .- rhoC)) < 1e-9
+                @test maximum(abs.(res.states[2][i] .- rhoL)) < 1e-9
             end
             @info "(a) dense cross-check" max_T=res.max_distance per_step=res.per_step_distance matvecs=res.matvecs
         end
@@ -125,10 +116,9 @@ using QuantumFurnace: _jumps_in_basis, build_dense_superoperator, trace_distance
             pr = predict_channel_trajectory(cfg_C, ham, jumps_C, rho_init_trotter, k_grid;
                 krylovdim = 40, trotter = trotter)
 
-            # 1e-5 (fixture-dependent): the residual is the implemented channel's
-            # O(δ) trajectory/fixed-point deviation vs the exact-iteration reference,
-            # NOT spectral truncation — krylovdim 40→60 leaves it unchanged at
-            # 3.1e-6 on the seed-46 draw. A basis bug would be O(1).
+            # This compares exact channel iteration with a finite spectral
+            # reconstruction.  Increasing krylovdim from 40 to 60 leaves the
+            # fixture's 3.1e-6 discrepancy unchanged; a basis error is O(1).
             @test maximum(abs.(T_chan_gibbs .- pr.distances)) < 1e-5
             @info "(b) unitary-invariance basis check" max_dev=maximum(abs.(T_chan_gibbs .- pr.distances))
         end
@@ -183,8 +173,8 @@ using QuantumFurnace: _jumps_in_basis, build_dense_superoperator, trace_distance
 
         @testset "(h) robust arm_fixed_point + fixed_point_gibbs_distance (qf-e4z.48)" begin
             # (h1) DENSE = exact ground truth: kind-aware (μ≈1 for the channel), and the
-            # fixed point is the Hermitian eigenvector (untouched by the spurious μ=0
-            # kernel of the ℝ-linear matvec). Reference-free residual certifies it.
+            # fixed point is the Hermitian eigenvector of the full complex-linear
+            # channel. A reference-free residual certifies it.
             fpd = arm_fixed_point(armC; method = :dense)
             @test fpd.method === :dense
             @test abs(abs(fpd.eigval) - 1.0) < 1e-6
@@ -405,7 +395,7 @@ using QuantumFurnace: _jumps_in_basis, build_dense_superoperator, trace_distance
                 jump_selection = row.jump_selection,
             )
             trotter_lo = make_trotter_for_config(ham, cfg_C_lo)
-            jumps_C_lo = _jumps_in_basis(ham, n, trotter_lo.eigvecs)
+            jumps_C_lo = _jumps_in_basis(n, trotter_lo.eigvecs)
             armC_lo = channel_arm(cfg_C_lo, ham, jumps_C_lo, trotter_lo; label = "Φ_δ=1e-4")
             VC_lo = Matrix{ComplexF64}(trotter_lo.eigvecs)
 
@@ -420,5 +410,4 @@ using QuantumFurnace: _jumps_in_basis, build_dense_superoperator, trace_distance
             @test trace_distance_nh(fp_lo.sigma_B, gibbs_common) < 1e-6   # ideal-L fp = Gibbs
             @info "(g) small-δ fixed point" δ=δ_lo dev_vs_dense=dev
         end
-    end
 end

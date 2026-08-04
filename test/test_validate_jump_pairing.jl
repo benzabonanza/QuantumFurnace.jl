@@ -86,11 +86,14 @@ required, so this file is fast.
         @test validate_jump_pairing(jumps) === nothing
     end
 
-    @testset "(A, A, A†) with A non-Hermitian: both As find the same A†" begin
+    @testset "adjoint multiplicities must balance" begin
         A = sigma_plus_site1
         Adag = A'
-        jumps = JumpOp[_mkjump(A), _mkjump(A), _mkjump(Adag)]
-        @test validate_jump_pairing(jumps) === nothing
+        unbalanced = JumpOp[_mkjump(A), _mkjump(A), _mkjump(Adag)]
+        @test_throws ArgumentError validate_jump_pairing(unbalanced)
+
+        balanced = JumpOp[_mkjump(A), _mkjump(A), _mkjump(Adag), _mkjump(Adag)]
+        @test validate_jump_pairing(balanced) === nothing
     end
 
     @testset "atol behaviour" begin
@@ -130,26 +133,29 @@ required, so this file is fast.
         @test_throws ArgumentError validate_jump_pairing(jumps)
     end
 
-    @testset "mixed flags: NH partner marked hermitian=true is still found" begin
-        # validate_jump_pairing only checks `hermitian` on the candidate's source,
-        # not on the partner. A mismarked partner is accepted as long as data ≈ A†.
+    @testset "mismarked non-Hermitian partner is rejected" begin
         A = sigma_plus_site1
         jumps = JumpOp[
             _mkjump(A; hermitian=false),
-            _mkjump(A'; hermitian=true),  # mismarked partner
+            _mkjump(A'; hermitian=true),
         ]
-        @test validate_jump_pairing(jumps) === nothing
+        @test_throws ArgumentError validate_jump_pairing(jumps)
     end
 
-    @testset "Hermitian flag bypasses inspection regardless of data" begin
-        # If a jump claims hermitian=true but A != A†, validate skips it.
-        # This is by design — the validator trusts the user's `hermitian` flag.
-        # Other code paths (production CKG) rely on this flag for fast paths,
-        # so we only police non-Hermitian-flagged jumps here.
+    @testset "Hermitian flag is validated in both stored bases" begin
         bogus_herm = ComplexF64[0 1; 0 0]  # not actually Hermitian
-        @test validate_jump_pairing(JumpOp[
+        @test_throws ArgumentError validate_jump_pairing(JumpOp[
             _mkjump(bogus_herm; hermitian=true),
-        ]) === nothing
+        ])
+
+        stale_basis = JumpOp(pauli_x, bogus_herm, false, true)
+        @test_throws ArgumentError validate_jump_pairing(JumpOp[stale_basis])
+    end
+
+    @testset "paired eigenbasis data must also be adjoints" begin
+        A = _mkjump(sigma_plus)
+        stale_partner = JumpOp(sigma_minus, sigma_plus, false, false)
+        @test_throws ArgumentError validate_jump_pairing(JumpOp[A, stale_partner])
     end
 
     @testset "informative error message includes index of unpaired jump" begin

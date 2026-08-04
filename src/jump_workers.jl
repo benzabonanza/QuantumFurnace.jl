@@ -1,12 +1,11 @@
-#* Liouvillian (vectorized) jump contributions ------------------------------------------------------------------------------
 """
-    Accumulate the Liouvillian contribution of a single jump operator in-place.
+    _jump_contribution!(L_target, jump, hamiltonian, config, precomputed_data, ws;
+                        coherent_term=nothing)
 
-    This avoids allocating a full `dim^2 x dim^2` matrix per jump. Call with a
-    preallocated `L_target` (dense) and a `Workspace{Lindbladian}`.
+Accumulate one jump's dense vectorized Liouvillian contribution in place.
 
-    If `with_coherent(config.construction)==true`, pass `coherent_term` already scaled by
-    `gamma_norm_factor` to avoid modifying cached matrices.
+Pass `coherent_term` already scaled by `gamma_norm_factor` so cached matrices
+remain unchanged.
 """
 function _jump_contribution!(
     L_target::AbstractMatrix{<:Complex},
@@ -14,7 +13,7 @@ function _jump_contribution!(
     hamiltonian::HamHam,
     config::Config{Lindbladian, BohrDomain},
     precomputed_data,
-    ws::Workspace{Lindbladian};
+    ws::DenseLindbladianWorkspace;
     coherent_term::Union{Nothing, AbstractMatrix{<:Complex}} = nothing,
     )
     dim = size(hamiltonian.data, 1)
@@ -50,7 +49,7 @@ function _jump_contribution!(
     hamiltonian::HamHam,
     config::Config{Lindbladian, EnergyDomain},
     precomputed_data,
-    ws::Workspace{Lindbladian};
+    ws::DenseLindbladianWorkspace;
     coherent_term::Union{Nothing, AbstractMatrix{<:Complex}} = nothing,
     )
 
@@ -96,19 +95,10 @@ end
         coherent_term=nothing,
     )
 
-DLL Bohr-domain Liouvillian contribution (Ding–Li–Lin 2024, Eqs. 3.4 / 3.8).
-Builds the single Lindblad operator `L_a = Σ_ν freq_kernel(filter, ν) A^a_ν`
-once via `dll_lindblad_op_bohr` and accumulates the dissipator
-`L_a ρ L_a† − (1/2){L_a† L_a, ρ}` into `L_target` with no outer ω-loop and
-no γ(ω) prefactor.
+Accumulate one DLL Bohr-domain dissipator.
 
-For multi-channel DLL filters (qf-7go.1), `dll_lindblad_op_bohr` returns a
-length-`k` vector of per-channel operators; this loop sums the per-channel
-dissipators (no cross terms in the multi-channel α).
-
-The optional `coherent_term` plumbing matches the CKG signature; the actual
-DLL coherent operator (G in Eq. 3.8) is built in DLL-3, so callers currently
-pass `coherent_term=nothing`.
+Multi-channel filters contribute one dissipator per channel; their operators
+must not be summed before forming sandwiches because that would add cross terms.
 """
 function _jump_contribution!(
     L_target::AbstractMatrix{<:Complex},
@@ -116,7 +106,7 @@ function _jump_contribution!(
     hamiltonian::HamHam,
     config::Config{Lindbladian, BohrDomain, DLL},
     precomputed_data,
-    ws::Workspace{Lindbladian};
+    ws::DenseLindbladianWorkspace;
     coherent_term::Union{Nothing, AbstractMatrix{<:Complex}} = nothing,
     )
     (; filter) = precomputed_data
@@ -135,14 +125,14 @@ end
     jump::JumpOp,
     hamiltonian::HamHam,
     filter::AbstractFilter,
-    ws::Workspace{Lindbladian},
+    ws::DenseLindbladianWorkspace,
 )
     L_a = dll_lindblad_op_bohr(jump, hamiltonian, filter)
     _vectorize_liouv_diss_and_add!(L_target, L_a, 1.0, ws)
     return L_target
 end
 
-# Multi-channel DLL filter (qf-7go.1): see `src/dll_multichannel.jl` for the
+# See `dll_multichannel.jl` for the multi-channel overload.
 # `_accumulate_dll_bohr_dissipator!(::DLLMultiChannelFilter, ...)` overload.
 
 """
@@ -152,24 +142,11 @@ end
         coherent_term=nothing,
     )
 
-DLL Time-domain Liouvillian contribution (Ding–Li–Lin 2024, Eqs. 3.4 / 3.8 /
-3.13). The single Lindblad operator on the simulator's truncated time grid is
+Accumulate one DLL time-domain dissipator from precomputed zero-frequency
+NUFFT slices.
 
-    L_a[i, j] = A_eb[i, j] · τ · Σ_m time_kernel(filter, t_m) · cis((λ_i − λ_j) · t_m)
-
-The DFT factor `Σ_m … cis((λ_i − λ_j) · t_m)` is precomputed once per
-Liouvillian build via FINUFFT in `_precompute_data`
-(`oft_nufft_at_zero_list`), collapsing the per-jump cost to a single
-elementwise multiply. Same Riemann sum, same Eq. 3.15 quadrature error
-structure as the explicit `dll_lindblad_op_time`; only the DFT is now
-`O(Nt log Nt + n² log(1/ε))`.
-
-For multi-channel DLL filters (qf-7go.1) the list has one prefactor matrix
-per channel; the dissipator sums `Σ_ℓ L^(ℓ) ρ (L^(ℓ))† − …` with no cross
-terms.
-
-The optional `coherent_term` plumbing matches the CKG signature; DLL coherent
-`G` is wired through `_precompute_coherent_B`.
+Each slice represents one channel's trapezoidal Fourier sum, so multi-channel
+dissipators are accumulated without cross terms.
 """
 function _jump_contribution!(
     L_target::AbstractMatrix{<:Complex},
@@ -177,7 +154,7 @@ function _jump_contribution!(
     hamiltonian::HamHam,
     config::Config{Lindbladian, TimeDomain, DLL},
     precomputed_data,
-    ws::Workspace{Lindbladian};
+    ws::DenseLindbladianWorkspace;
     coherent_term::Union{Nothing, AbstractMatrix{<:Complex}} = nothing,
     )
     (; t0, oft_nufft_at_zero_list) = precomputed_data
@@ -200,7 +177,7 @@ function _jump_contribution!(
     ham_or_trott::Union{HamHam, AbstractTrotter},
     config::Config{Lindbladian, D},
     precomputed_data,
-    ws::Workspace{Lindbladian};
+    ws::DenseLindbladianWorkspace;
     coherent_term::Union{Nothing, AbstractMatrix{<:Complex}} = nothing,
     ) where {D<:Union{TimeDomain, TrotterDomain}}
 
@@ -240,13 +217,10 @@ function _jump_contribution!(
     return L_target
 end
 
-#* Algorithmic jump contributions -------------------------------------------------------------------------------------------
-
 """
     _apply_coherent_unitary!(evolving_dm, U_B, scratch) -> nothing
 
-Apply coherent unitary evolution: rho -> U_B * rho * U_B'.
-No-op if U_B is nothing.
+Apply `rho -> U_B * rho * U_B'`, or do nothing when `U_B` is `nothing`.
 """
 @inline function _apply_coherent_unitary!(
     evolving_dm::Matrix{<:Complex},
@@ -260,8 +234,7 @@ No-op if U_B is nothing.
     return nothing
 end
 
-# HS-adjoint of `_apply_coherent_unitary!`: the dual of ρ ↦ U ρ U† is X ↦ U† X U.
-# Used by the adjoint channel `apply_adjoint_delta_channel!` (qf-e4z.50).
+# The Hilbert--Schmidt adjoint maps $X -> U^dagger X U$.
 @inline function _apply_adjoint_coherent_unitary!(
     evolving_dm::Matrix{<:Complex},
     U_B::Union{Nothing,Matrix{<:Complex}},
@@ -274,319 +247,15 @@ end
     return nothing
 end
 
-"""
-    _finalize_kraus_step!(evolving_dm, delta, scratch) -> evolving_dm
-
-Apply the CPTP weak-measurement channel after R and rho_jump have been accumulated.
-
-Implements Chen Eq. 3.2:
-  K0 = I - alpha * R,  alpha = 1 - sqrt(1 - delta)
-  S  = (2*alpha - delta)*R - alpha^2 * R^2  (residual, O(delta^2))
-  U_residual = sqrt_psd(S)  (eigendecomposition with clamped eigenvalues)
-  rho_next = K0 * rho * K0' + rho_jump + U_res * rho * U_res'
-
-Expects scratch.R (Hermitianized) and scratch.rho_jump to be pre-filled by the
-domain-specific dissipative accumulation loop.
-"""
-function _finalize_kraus_step!(
-    evolving_dm::Matrix{<:Complex},
-    delta::Real,
-    scratch::ThermalizeScratch{<:Complex},
-)
-    # Build CPTP channel from accumulated R (Chen Eq. 3.2)
-    (; K0, U_residual) = _build_cptp_channel(scratch.R, delta)
-
-    # rho_next = K0 * rho * K0' + rho_jump + U_res * rho * U_res'
-    mul!(scratch.sandwich_tmp, K0, evolving_dm)
-    mul!(scratch.rho_next, scratch.sandwich_tmp, K0')
-    scratch.rho_next .+= scratch.rho_jump
-
-    mul!(scratch.sandwich_tmp, U_residual, evolving_dm)
-    mul!(scratch.rho_next, scratch.sandwich_tmp, U_residual', 1.0, 1.0)
-
-    # Keep it a density matrix numerically
-    hermitianize!(scratch.rho_next)
-    copyto!(evolving_dm, scratch.rho_next)
-    return evolving_dm
-end
-
-function _jump_contribution!(
-    evolving_dm::Matrix{<:Complex},
-    jump::JumpOp,
-    hamiltonian::HamHam,
-    config::Config{Thermalize, BohrDomain},
-    precomputed_data,
-    scratch::ThermalizeScratch{<:Complex};
-    coherent_unitary_cache::Union{Nothing,Matrix{<:Complex}} = nothing,
-    jump_prob::Real = 1.0,
-    rescale_by_inv_prob::Bool = false
-    )
-
-    dim = size(evolving_dm, 1)
-    (; alpha, gamma_norm_factor) = precomputed_data
-
-    bohr_keys = hasproperty(precomputed_data, :bohr_keys) ? precomputed_data.bohr_keys : collect(keys(hamiltonian.bohr_dict))
-    bohr_is   = hasproperty(precomputed_data, :bohr_is)   ? precomputed_data.bohr_is   : nothing
-    bohr_js   = hasproperty(precomputed_data, :bohr_js)   ? precomputed_data.bohr_js   : nothing
-
-    jump_weight_scaling = rescale_by_inv_prob ? (gamma_norm_factor / jump_prob) : gamma_norm_factor
-    scaled_delta = config.delta * jump_weight_scaling
-
-    _apply_coherent_unitary!(evolving_dm, coherent_unitary_cache, scratch)
-
-    fill!(scratch.R, 0)
-    fill!(scratch.rho_jump, 0)
-
-    # qf-qmi.1: hoist the concrete-typed view of `jump.in_eigenbasis` (declared
-    # `Matrix{<:Complex}` UnionAll). Per-element accesses below would otherwise
-    # box the result and run dynamic dispatch in the inner index loop.
-    CT = eltype(scratch.jump_oft)
-    in_eb = jump.in_eigenbasis::Matrix{CT}
-
-    # For each fixed "right" Bohr label v2 build the composite
-    #   B_{v2} = \sum_{v1} alpha_{v1,v2} A_{v1}
-    # and accumulate
-    #   rho_jump += delta * B_{v2} rho A_{v2}dag
-    #   R        +=     A_{v2}dag B_{v2}
-    @inbounds for (k, nu_2) in pairs(bohr_keys)
-        # B_{v2}
-        @. scratch.jump_oft = alpha(hamiltonian.bohr_freqs, nu_2) * in_eb
-
-        # sandwich_tmp := rho A_{v2}dag without explicitly building A_{v2}dag.
-        # If (i,j) is in the v2 bucket, then (A_{v2}dag)_{j,i} = conj(A_{i,j}).
-        fill!(scratch.sandwich_tmp, 0)
-        if bohr_is !== nothing
-            is = bohr_is[k]
-            js = bohr_js[k]
-            @inbounds for t in eachindex(is)
-                i = is[t]
-                j = js[t]
-                v = conj(in_eb[i, j])
-                @inbounds for p in 1:dim
-                    scratch.sandwich_tmp[p, i] += evolving_dm[p, j] * v
-                end
-            end
-        else
-            indices = hamiltonian.bohr_dict[nu_2]
-            @inbounds for idx in indices
-                i = idx[1]
-                j = idx[2]
-                v = conj(in_eb[i, j])
-                @inbounds for p in 1:dim
-                    scratch.sandwich_tmp[p, i] += evolving_dm[p, j] * v
-                end
-            end
-        end
-
-        # rho_jump += delta * B_{v2} * (rho A_{v2}dag)
-        mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp, scaled_delta, 1.0)
-
-        # R += A_{v2}dag * B_{v2}  (no delta factor)
-        if bohr_is !== nothing
-            is = bohr_is[k]
-            js = bohr_js[k]
-            @inbounds for t in eachindex(is)
-                i = is[t]
-                j = js[t]
-                v = conj(in_eb[i, j]) * jump_weight_scaling
-                @inbounds for q in 1:dim
-                    scratch.R[j, q] += v * scratch.jump_oft[i, q]
-                end
-            end
-        else
-            indices = hamiltonian.bohr_dict[nu_2]
-            @inbounds for idx in indices
-                i = idx[1]
-                j = idx[2]
-                v = conj(in_eb[i, j]) * jump_weight_scaling
-                @inbounds for q in 1:dim
-                    scratch.R[j, q] += v * scratch.jump_oft[i, q]
-                end
-            end
-        end
-    end
-
-    # Hermitianize R (numerical)
-    hermitianize!(scratch.R)
-
-    # Apply R, K0, U_residual
-    _finalize_kraus_step!(evolving_dm, config.delta, scratch)
-    return evolving_dm
-end
-
-function _jump_contribution!(
-    evolving_dm::Matrix{<:Complex},
-    jump::JumpOp,
-    hamiltonian::HamHam,
-    config::Config{Thermalize, EnergyDomain},
-    precomputed_data,
-    scratch::ThermalizeScratch{<:Complex};
-    coherent_unitary_cache::Union{Nothing,Matrix{<:Complex}} = nothing,
-    jump_prob::Real = 1.0,
-    rescale_by_inv_prob::Bool = false
-    )
-
-    dim = size(evolving_dm, 1)
-    (; transition, gamma_norm_factor, energy_labels) = precomputed_data
-
-    jump_weight_scaling = rescale_by_inv_prob ? (gamma_norm_factor / jump_prob) : gamma_norm_factor
-
-    _apply_coherent_unitary!(evolving_dm, coherent_unitary_cache, scratch)
-
-    # --- Dissipative part ---
-    base_prefactor = precomputed_data.oft_domain_prefactor * jump_weight_scaling
-    inv_4sigma2 = 1.0 / (4 * config.sigma^2)
-
-    fill!(scratch.R, 0)
-    fill!(scratch.rho_jump, 0)
-
-    if jump.hermitian
-        @inbounds for w_raw in energy_labels
-            w_raw > 1e-12 && continue
-            w = abs(w_raw)
-
-            # Aw
-            oft!(scratch.jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
-
-            rate2_pos = base_prefactor * transition(w)
-
-            # R += rate^2 * (Aw_dag Aw)
-            mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)
-            @. scratch.R += rate2_pos * scratch.LdagL
-
-            # rho_jump += delta * rate^2 * (Aw rho Aw_dag)
-            mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft')  # rho Aw_dag
-            mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp, config.delta * rate2_pos, 1.0)
-
-            if w > 1e-12
-                rate2_neg = base_prefactor * transition(-w)
-
-                # Negative-frequency partner uses (Aw)_dag as Lindblad operator.
-                mul!(scratch.LdagL, scratch.jump_oft, scratch.jump_oft')
-                @. scratch.R += rate2_neg * scratch.LdagL
-
-                mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft)  # rho Aw
-                mul!(scratch.rho_jump, scratch.jump_oft', scratch.sandwich_tmp, config.delta * rate2_neg, 1.0)
-            end
-        end
-    else
-        @inbounds for w in energy_labels
-            oft!(scratch.jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
-
-            rate2 = base_prefactor * transition(w)
-
-            mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)
-            @. scratch.R += rate2 * scratch.LdagL
-
-            mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft')
-            mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp, config.delta * rate2, 1.0)
-        end
-    end
-
-    # Hermitianize R (numerical)
-    hermitianize!(scratch.R)
-
-    # Apply R, K0, U_residual
-    _finalize_kraus_step!(evolving_dm, config.delta, scratch)
-    return evolving_dm
-end
-
-function _jump_contribution!(
-    evolving_dm::Matrix{<:Complex},
-    jump::JumpOp,
-    ham_or_trott,              # HamHam or TrottTrott depending on domain
-    config::Config{Thermalize, D},
-    precomputed_data,
-    scratch::ThermalizeScratch{<:Complex};
-    coherent_unitary_cache::Union{Nothing,Matrix{<:Complex}} = nothing,
-    jump_prob::Real = 1.0,
-    rescale_by_inv_prob::Bool = false
-    ) where {D<:Union{TimeDomain, TrotterDomain}}
-
-    dim = size(evolving_dm, 1)
-    (; transition, gamma_norm_factor, energy_labels, oft_nufft_prefactors, b_minus, b_plus) = precomputed_data
-
-    jump_weight_scaling = rescale_by_inv_prob ? (gamma_norm_factor / jump_prob) : gamma_norm_factor
-
-    _apply_coherent_unitary!(evolving_dm, coherent_unitary_cache, scratch)
-
-    base_prefactor = precomputed_data.oft_domain_prefactor * jump_weight_scaling
-
-    fill!(scratch.R, 0)
-    fill!(scratch.rho_jump, 0)
-
-    if jump.hermitian
-        @inbounds for w_raw in energy_labels
-            w_raw > 1e-12 && continue
-            w = abs(w_raw)
-
-            nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
-            @. scratch.jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
-
-            rate2_pos = base_prefactor * transition(w)
-
-            mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)
-            @. scratch.R += rate2_pos * scratch.LdagL
-
-            mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft')
-            mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp, config.delta*rate2_pos, 1.0)
-
-            if w > 1e-12
-                rate2_neg = base_prefactor * transition(-w)
-
-                mul!(scratch.LdagL, scratch.jump_oft, scratch.jump_oft')
-                @. scratch.R += rate2_neg * scratch.LdagL
-
-                mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft)
-                mul!(scratch.rho_jump, scratch.jump_oft', scratch.sandwich_tmp, config.delta*rate2_neg, 1.0)
-            end
-        end
-    else
-        for w in energy_labels
-            nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
-            @. scratch.jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
-
-            rate2_pos = base_prefactor * transition(w)
-
-            mul!(scratch.LdagL, scratch.jump_oft', scratch.jump_oft)
-            @. scratch.R += rate2_pos * scratch.LdagL
-
-            mul!(scratch.sandwich_tmp, evolving_dm, scratch.jump_oft')
-            mul!(scratch.rho_jump, scratch.jump_oft, scratch.sandwich_tmp, config.delta*rate2_pos, 1.0)
-        end
-    end
-
-    # Hermitianize R
-    hermitianize!(scratch.R)
-
-    # Apply R, K0, U_residual
-    _finalize_kraus_step!(evolving_dm, config.delta, scratch)
-    return evolving_dm
-end
-
-#* Omega-loop threading infrastructure ---------------------------------------------------------------
 
 # Minimum number of frequency labels to enable omega-loop parallelism.
-# Below this threshold, serial execution is faster due to task spawn overhead.
-#
-# 2026-05-06 (qf-in3.4) — set by empirical sweep
-# (`scripts/scratch_omega_threading_threshold.jl`) at n ∈ {3, 4, 5},
-# nthreads=4, EnergyDomain & TimeDomain:
-#  - n=3 (dim=8): serial wins at N=5 by ~20%; thread wins from N=10.
-#  - n=4 (dim=16): thread wins from N=5 by 2×, climbing to 3.3× at N≥75.
-#  - n=5 (dim=32): thread wins from N=5 by 3.3×, climbing to 3.7× at N≥75.
-# The new value of 10 captures the n=3 crossover where overhead is largest
-# in absolute terms; n ≥ 4 is then strictly faster threaded. The threading
-# dispatch costs ~1 kB / matvec for `Threads.@spawn` Task objects, which is
-# accepted in exchange for the 2–3× wall-time speedup for n_labels ∈ [10, 49]
-# that the previous (folkloric) value of 50 was forfeiting.
+# Benchmarks on four Julia threads place the task-overhead crossover at ten.
 const OMEGA_THREAD_THRESHOLD = 10
 
 """
     _partition_range(range, n_chunks) -> Vector{UnitRange{Int}}
 
 Partition a range into approximately equal chunks for parallel execution.
-Same algorithm as _partition_trajectories in trajectories.jl.
 """
 function _partition_range(range::UnitRange{Int}, n_chunks::Int)
     len = length(range)
@@ -603,16 +272,13 @@ function _partition_range(range::UnitRange{Int}, n_chunks::Int)
     return chunks
 end
 
-#* Per-jump rho_jump-only accumulation (precomputed channel path) ----------------------------------------
-
 """
     _accumulate_rho_jump!(scratch, evolving_dm, jump, hamiltonian, config::Config{Thermalize, EnergyDomain},
                           precomputed_data; jump_weight_scaling)
 
-Accumulate rho_jump = delta * sum_w rate^2(w) * L_{a,w} * rho * L_{a,w}^dagger for EnergyDomain.
+Accumulate the energy-domain jump sandwich for a precomputed channel.
 
-Extracts ONLY the rho_jump accumulation from the EnergyDomain `_jump_contribution!`,
-with no R or LdagL computation. Used with precomputed K0/U_residual channels.
+Math: \$rho_jump = delta sum_omega rate(omega)^2 L_(a,omega) rho L_(a,omega)^dagger\$.
 """
 function _accumulate_rho_jump!(
     scratch::ThermalizeScratch{<:Complex},
@@ -740,9 +406,7 @@ end
     _accumulate_rho_jump!(scratch, evolving_dm, jump, hamiltonian, config::Config{Thermalize, BohrDomain},
                           precomputed_data; jump_weight_scaling)
 
-Accumulate rho_jump for BohrDomain. Iterates over Bohr frequency buckets, computing
-rho_jump += scaled_delta * B_{nu_2} * (rho * A_{nu_2}^dagger) for each bucket.
-No R accumulation.
+Accumulate the Bohr-domain jump sandwich without rebuilding the rate operator.
 """
 function _accumulate_rho_jump!(
     scratch::ThermalizeScratch{<:Complex},
@@ -771,7 +435,7 @@ function _accumulate_rho_jump!(
 
     fill!(scratch.rho_jump, 0)
 
-    # qf-qmi.1: concrete-typed view of jump.in_eigenbasis (see _jump_contribution!).
+    # Keep the hot-loop matrix view concretely typed.
     CT = eltype(scratch.jump_oft)
     in_eb = jump.in_eigenbasis::Matrix{CT}
 
@@ -811,10 +475,6 @@ function _accumulate_rho_jump!(
     return nothing
 end
 
-#* Threaded omega-loop variants (THREAD-01, THREAD-04) ---------------------------------------------------
-
-# --- EnergyDomain threaded variant ---
-
 function _accumulate_rho_jump_threaded_energy!(
     scratch::ThermalizeScratch{CT},
     evolving_dm::Matrix{CT},
@@ -842,8 +502,7 @@ function _accumulate_rho_jump_threaded_energy!(
     dim = size(evolving_dm, 1)
 
     # Per-task scratch: each needs rho_jump, jump_oft, sandwich_tmp.
-    # If a pool is supplied (qf-po5), reuse it; otherwise allocate fresh
-    # (backward-compat path used by run_thermalize today).
+    # Reuse a supplied thread-local pool; otherwise allocate one for this call.
     local_pool = if task_scratches === nothing
         [ThermalizeScratch(CT, dim) for _ in 1:length(chunks)]
     else
@@ -889,7 +548,7 @@ function _accumulate_rho_jump_chunk_energy!(
 
     @inbounds for li in label_indices
         w_raw = energy_labels[li]
-        w = abs(w_raw)
+        w = jump.hermitian ? abs(w_raw) : w_raw
 
         oft!(scratch.jump_oft, jump.in_eigenbasis, hamiltonian.bohr_freqs, w, inv_4sigma2)
 
@@ -906,8 +565,6 @@ function _accumulate_rho_jump_chunk_energy!(
 
     return nothing
 end
-
-# --- TimeDomain/TrotterDomain threaded variant ---
 
 function _accumulate_rho_jump_threaded_timetrot!(
     scratch::ThermalizeScratch{CT},
@@ -977,7 +634,7 @@ function _accumulate_rho_jump_chunk_timetrot!(
 
     @inbounds for li in label_indices
         w_raw = energy_labels[li]
-        w = abs(w_raw)
+        w = jump.hermitian ? abs(w_raw) : w_raw
 
         nufft_prefactor_matrix = _prefactor_view(oft_nufft_prefactors, w)
         @. scratch.jump_oft = jump.in_eigenbasis * nufft_prefactor_matrix
@@ -995,8 +652,6 @@ function _accumulate_rho_jump_chunk_timetrot!(
 
     return nothing
 end
-
-# --- BohrDomain threaded variant ---
 
 function _accumulate_rho_jump_threaded_bohr!(
     scratch::ThermalizeScratch{CT},
@@ -1064,7 +719,7 @@ function _accumulate_rho_jump_chunk_bohr!(
     (; alpha) = precomputed_data
     fill!(scratch.rho_jump, 0)
 
-    # qf-qmi.1: concrete-typed view of jump.in_eigenbasis (see _jump_contribution!).
+    # Keep the hot-loop matrix view concretely typed.
     in_eb = jump.in_eigenbasis::Matrix{CT}
 
     @inbounds for k in key_indices

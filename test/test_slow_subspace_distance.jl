@@ -17,29 +17,20 @@ using QuantumFurnace: _jumps_in_basis, build_dense_superoperator, trace_distance
 # gitignored, so the values are pinned here). β_alg = β_phys·rescaling is DERIVED at
 # runtime (never a bare β_alg), per the β_phys/β_alg convention.
 #
-# HERMITICITY (the crux, qf-e4z.45): the channel matvec `apply_delta_channel!` is
-# Hermiticity-PRESERVING and defensively hermitizes its output, hence is ℝ-LINEAR —
-# it acts faithfully only on HERMITIAN inputs. The function phase-fixes each retained
-# reference mode to Hermitian (the non-degenerate gap mode becomes exactly Hermitian
-# ⇒ K=1 is the robust deliverable) and reports `max_antiherm_frac`, which flags
-# (with a @warn) when num_slow_modes cuts a degenerate cluster (modes no phase can
-# Hermitize ⇒ the channel hermitization corrupts the result). K=1 is what we plot.
-#
-# NOTE on dense ground truth: a dense channel superoperator must be built on the
-# HERMITIAN operator basis. `build_dense_superoperator(armC.apply!, d)` feeds the
-# non-Hermitian E_ij basis through the hermitizing matvec, mapping E_ij/E_ji to
-# IDENTICAL columns ⇒ d(d−1)/2 spurious zero eigenvalues (an artifact; the true Φ_δ
-# has all |μ|≈1). The dense checks below build Φ_δ on the Hermitian basis, or apply
-# the channel directly to a Hermitian operator — both uncontaminated.
+# LINEARITY: `channel_arm` calls `apply_delta_channel!(...; hermitize=false)`, so
+# the channel is complex-linear and acts faithfully on arbitrary operator modes.
+# Phase-fixing retained reference modes is only a unitary modal gauge;
+# `max_antiherm_frac` describes whether individual modes are phase-Hermitian and
+# does not gate the projection. K=1 remains the independently validated
+# perturbative gap-shift scalar; K>1 is a fixed-biorthogonal-basis diagnostic.
 #
 # All checks are NUMERICAL (matrix-free == dense linear algebra ⇒ n=3 suffices):
-#   (a) TRUE channel spectrum (Herm basis) has all |μ|≈1 — no "killed modes".
+#   (a) Complex linearity holds and the channel spectrum has no killed modes.
 #   (b) K=1 DENSE ground truth — matrix-free ⟨L₂|M|R₂⟩ reproduces the dense PT shift
 #       (channel applied to the Hermitian gap eigenvector), AND the exact dense
 #       gap_Φ−gap_𝓛 to O(δ²); reduction K=1 ⇒ ε_slow = relative gap shift. Crosses
 #       the MISMATCHED bases (𝓛 in ham.eigvecs, Φ_δ in trotter.eigvecs).
-#   (c) PHASE-FIX + guard — K=1 has max_antiherm_frac≈0 (no warn); a K that cuts the
-#       degenerate cluster has max_antiherm_frac=O(1) and fires the @warn.
+#   (c) Large modal anti-Hermiticity is non-gating for complex-linear arms.
 #   (d) BASIS-ROTATION + self-pairing canaries ⇒ ε_slow = 0 (rotation-bug guard).
 #   (e) TWO-𝓛 quadrature smoke + controllability (error ↓ toward 1e-9 as r_D grows).
 #   (f) INPUT validation + include_stationary structure.
@@ -75,7 +66,7 @@ using QuantumFurnace: _jumps_in_basis, build_dense_superoperator, trace_distance
     )
     delta = 1e-3
     trotter = make_trotter_for_config(ham, cfg_C)
-    jumps_C = _jumps_in_basis(ham, n, trotter.eigvecs)
+    jumps_C = _jumps_in_basis(n, trotter.eigvecs)
     armC = channel_arm(cfg_C, ham, jumps_C, trotter; label = "Φ_δ")
 
     # --- ideal 𝓛 arm (EnergyDomain near-Bohr r_D=8, ham.eigvecs) ---
@@ -86,7 +77,7 @@ using QuantumFurnace: _jumps_in_basis, build_dense_superoperator, trace_distance
         num_qubits = n, with_linear_combination = true, beta = β_alg, beta_phys = β_phys,
         sigma = σ_alg, a = 0.0, s = 0.25,
         num_energy_bits_D = rD, w0_D = w, t0_D = t, num_trotter_steps_per_t0 = 10, filter = nothing))
-    jumps_L = _jumps_in_basis(ham, n, ham.eigvecs)
+    jumps_L = _jumps_in_basis(n, ham.eigvecs)
     armL = lindbladian_arm(mkL(8), ham, jumps_L; label = "ideal L")
 
     VL = Matrix{ComplexF64}(ham.eigvecs)
@@ -102,8 +93,18 @@ using QuantumFurnace: _jumps_in_basis, build_dense_superoperator, trace_distance
     Fl = eigen(Lsup')
     match_left(λ) = Fl.vectors[:, argmin(abs.(Fl.values .- conj(λ)))]
 
-    @testset "(a) TRUE channel spectrum (Hermitian basis): all |μ|≈1" begin
-        # d² orthonormal Hermitian basis ⇒ no E_ij/E_ji identical-column artifact.
+    @testset "(a) complex-linear channel spectrum: all |μ|≈1" begin
+        Xnh = zeros(ComplexF64, d, d); Xnh[1, 2] = 1; Xnh[3, 1] = -0.4im
+        Ynh = zeros(ComplexF64, d, d); Ynh[2, 4] = 0.7 + 0.2im; Ynh[4, 1] = -1
+        a = 0.3 + 0.8im
+        b = -0.6 + 0.1im
+        lhs = apply_common(armC, VC, a .* Xnh .+ b .* Ynh)
+        rhs = a .* apply_common(armC, VC, Xnh) .+
+            b .* apply_common(armC, VC, Ynh)
+        @test norm(lhs - rhs) < 1e-12
+
+        # Independent d²-dimensional representation in an orthonormal
+        # Hermitian basis; complex-linearity makes it equivalent to E_ij materialisation.
         B = Matrix{ComplexF64}[]
         for i in 1:d
             E = zeros(ComplexF64, d, d); E[i, i] = 1; push!(B, E)
@@ -121,12 +122,7 @@ using QuantumFurnace: _jumps_in_basis, build_dense_superoperator, trace_distance
         @test minimum(abs.(μ)) > 0.9                 # NO killed modes (true channel ≈ I+δG)
         @test count(<(0.5), abs.(μ)) == 0
         @test maximum(abs.(μ)) ≤ 1 + 1e-8            # CPTP contraction
-        # contrast: the contaminated E_ij build injects d(d−1)/2 = 28 spurious zeros
-        Phi_contam = let tmp = Matrix{ComplexF64}(undef, d, d)
-            build_dense_superoperator((out, X) -> (armC.apply!(tmp, VC' * X * VC); copyto!(out, VC * tmp * VC'); out), d)
-        end
-        @test count(<(0.5), abs.(eigvals(Phi_contam))) == d * (d - 1) ÷ 2
-        @info "(a) channel spectrum" min_abs_mu_true=minimum(abs.(μ)) contaminated_zeros=count(<(0.5), abs.(eigvals(Phi_contam)))
+        @info "(a) channel spectrum" min_abs_mu=minimum(abs.(μ))
     end
 
     @testset "(b) K=1 dense ground truth + reduction (mismatched bases)" begin
@@ -152,32 +148,36 @@ using QuantumFurnace: _jumps_in_basis, build_dense_superoperator, trace_distance
         # DECISIVE: matrix-free PT shift == dense PT shift (validates basis
         # reconciliation 𝓛(ham.eigvecs) ↔ Φ_δ(trotter.eigvecs) + contraction).
         @test abs(res.M[1, 1] - Δλ_PT_dense) < 1e-9
-        # First-order PT reproduces the exact dense gap shift to O(δ²).
-        @test abs(abs(Δλ_PT_dense) - abs(Δλ_exact)) / abs(Δλ_exact) < 1e-2
+        # Fixture-level agreement with an independently diagonalised dense
+        # channel generator; a one-point comparison is not an order claim.
+        @test abs(abs(Δλ_PT_dense) - abs(Δλ_exact)) / abs(Δλ_exact) < 1e-3
         # Reduction K=1: ε_slow = |M₁₁|, ε_slow_rel_gap = ε_slow/|λ₂| = rel gap shift.
         @test isapprox(res.eps_slow, abs(res.M[1, 1]); rtol = 1e-12)
         @test isapprox(res.eps_slow_rel_gap, res.eps_slow / res.gap_ref; rtol = 1e-12)
         @test isapprox(res.eps_slow_rel_gap, abs(Δλ_exact) / abs(λL[2]); rtol = 5e-2)
-        @test res.max_antiherm_frac < 1e-6           # gap mode is Hermitian ⇒ clean
+        @test res.max_antiherm_frac < 1e-10          # gap mode is Hermitian ⇒ clean
         @test res.ref_gen_residual < 1e-10           # ⟨L_j|G_ref|R_k⟩ = λ_k δ_jk
         @test res.converged
         @test res.gap_ref > 0
-        @test res.eps_slow < 1e-2                    # gap-mode mismatch is O(δ)
         @info "(b) K=1 deliverable" eps_slow=res.eps_slow rel_gap=res.eps_slow_rel_gap M11=res.M[1,1] densePT=Δλ_PT_dense exact=Δλ_exact
     end
 
-    @testset "(c) phase-fix robustness + cut-cluster guard" begin
-        # K=1: gap mode non-degenerate ⇒ Hermitian after phase-fix ⇒ no warning.
+    @testset "(c) modal anti-Hermiticity is non-gating" begin
         res1 = @test_logs slow_subspace_generator_distance(armL, armC, rho_0; num_slow_modes = 1, krylovdim = 64)
         @test res1.max_antiherm_frac < 1e-6
-        # A larger K cuts the near-degenerate slow cluster ⇒ non-Hermitian modes ⇒
-        # max_antiherm_frac = O(1) and a @warn fires (do NOT trust eps_slow there).
-        local res4
-        @test_logs (:warn,) match_mode = :any begin
-            res4 = slow_subspace_generator_distance(armL, armC, rho_0; num_slow_modes = 4, krylovdim = 64)
-        end
+
+        res4_self = @test_logs slow_subspace_generator_distance(
+            armL, armL, rho_0; num_slow_modes = 4, krylovdim = 64)
+        @test res4_self.max_antiherm_frac > 1e-3
+        @test res4_self.eps_slow < 1e-12
+        @test res4_self.ref_gen_residual < 1e-10
+
+        res4 = @test_logs slow_subspace_generator_distance(
+            armL, armC, rho_0; num_slow_modes = 4, krylovdim = 64)
         @test res4.max_antiherm_frac > 1e-3
-        @info "(c) guard" af1=res1.max_antiherm_frac af4=res4.max_antiherm_frac eps4=res4.eps_slow
+        @test isfinite(res4.eps_slow)
+        @test res4.ref_gen_residual < 1e-10
+        @info "(c) modal diagnostic" af1=res1.max_antiherm_frac af4=res4.max_antiherm_frac eps4=res4.eps_slow
     end
 
     @testset "(d) basis-rotation + self-pairing canaries ⇒ ε_slow = 0" begin
@@ -194,15 +194,15 @@ using QuantumFurnace: _jumps_in_basis, build_dense_superoperator, trace_distance
     end
 
     @testset "(e) two-𝓛 quadrature smoke + controllability" begin
-        armL4 = lindbladian_arm(mkL(4), ham, jumps_L; label = "L(r_D=4)")
+        armL5 = lindbladian_arm(mkL(5), ham, jumps_L; label = "L(r_D=5)")
         armL6 = lindbladian_arm(mkL(6), ham, jumps_L; label = "L(r_D=6)")
-        res4 = slow_subspace_generator_distance(armL, armL4, rho_0; num_slow_modes = 1, krylovdim = 64)
+        res5 = slow_subspace_generator_distance(armL, armL5, rho_0; num_slow_modes = 1, krylovdim = 64)
         res6 = slow_subspace_generator_distance(armL, armL6, rho_0; num_slow_modes = 1, krylovdim = 64)
-        @test isfinite(res4.eps_slow)
-        @test 1e-6 < res4.eps_slow < 1e-1          # small nonzero quadrature mismatch
-        @test res4.eps_slow > res6.eps_slow        # error ↓ toward 1e-9 as r_D grows
-        @test res4.max_antiherm_frac < 1e-6        # both 𝓛 arms ⇒ Hermitian gap mode
-        @info "(e) two-L quadrature" rD4=res4.eps_slow rD6=res6.eps_slow
+        @test isfinite(res5.eps_slow)
+        @test res5.eps_slow > res6.eps_slow
+        @test res6.eps_slow < 1e-9
+        @test res5.max_antiherm_frac < 1e-10       # both 𝓛 arms ⇒ Hermitian gap mode
+        @info "(e) two-L quadrature" rD5=res5.eps_slow rD6=res6.eps_slow
     end
 
     @testset "(f) input validation + include_stationary" begin
@@ -214,8 +214,15 @@ using QuantumFurnace: _jumps_in_basis, build_dense_superoperator, trace_distance
             num_slow_modes = 1, include_stationary = true, krylovdim = 64)
         @test size(res_st.M) == (2, 2)                       # steady + 1 slow
         @test res_st.include_stationary
-        @test abs(real(res_st.eigenvalues_ref[1])) < 1e-6    # steady eigenvalue ≈ 0
+        @test abs(res_st.eigenvalues_ref[1]) < 1e-10
         @test res_st.gap_ref > 0
+
+        decomp = QuantumFurnace._krylov_spectral_decomposition(
+            QuantumFurnace._arm_generator(armL),
+            Matrix{ComplexF64}(VL' * rho_0 * VL), d;
+            krylovdim=64, tol=1e-10, sort_mode=:lindbladian,
+        )
+        @test isapprox(dot(decomp.L_modes[1], decomp.R_modes[1]), 1; atol=1e-12)
     end
 
     @testset "(g) qf-dee #4: |λ₂−λ₃| neighbor-spacing PT-validity guard" begin

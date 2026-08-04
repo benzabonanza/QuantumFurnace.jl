@@ -238,7 +238,7 @@ using QuantumFurnace
         )
         β_phys = 0.5
         ham_ising = HamHam(raw; beta_phys=β_phys)
-        jumps_ising = QuantumFurnace._build_jump_set(ham_ising, n_ising)
+        jumps_ising = QuantumFurnace._jumps_in_basis(n_ising, ham_ising.eigvecs)
         β_alg = beta_alg(ham_ising, β_phys)
 
         σ = 1.0 / β_alg

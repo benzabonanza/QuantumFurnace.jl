@@ -1,14 +1,8 @@
 """
     load_hamiltonian(type, num_qubits; beta) -> HamHam{Float64}
 
-Load a pre-computed Hamiltonian from BSON and construct a fully-initialized HamHam{Float64}.
-
-The `beta` keyword is required -- it is used to compute bohr_freqs, bohr_dict, and gibbs
-via the `HamHam(NamedTuple, beta)` constructor.
-
-BSON files store legacy HamHam structs with `nothing` for bohr_freqs/bohr_dict/gibbs.
-This function uses `BSON.parse` to load the raw field data and reconstructs the HamHam
-with the new fully-initialized struct definition.
+Load a supported precomputed Hamiltonian and initialise its temperature-dependent
+Bohr data and Gibbs state at algorithmic inverse temperature `beta`.
 """
 function load_hamiltonian(type::String, num_qubits::Int; beta::Float64)
     type == "heis" || error("load_hamiltonian: only type=\"heis\" is supported " *
@@ -23,14 +17,7 @@ end
 """
     _load_hamiltonian_bson(path, beta) -> HamHam{Float64}
 
-Low-level BSON loader for the `heis_xxx_zzdisordered_periodic_n*` family
-produced by `hamiltonians/generate_hamiltonians.jl` (legacy fixtures) or by
-[`build_heis_1d`] / [`build_tfim_2d`] (current). The on-disk format is a
-NamedTuple-typed BSON
-where `raw[:hamiltonian]` is a NamedTuple with multi-term `disordering_terms`.
-
-Reconstructs via `HamHam(raw_nt, beta)`, which infers `T` from
-`eltype(raw.eigvals)` and recomputes `bohr_freqs`, `bohr_dict`, and `gibbs`.
+Load a NamedTuple-schema Hamiltonian BSON and construct `HamHam` at `beta`.
 """
 function _load_hamiltonian_bson(path::String, beta::Float64)
     return HamHam(_parse_hamiltonian_bson(path), beta)
@@ -39,18 +26,9 @@ end
 """
     _parse_hamiltonian_bson(path) -> NamedTuple
 
-Parse a Hamiltonian BSON file into the raw NamedTuple shape expected by
-`HamHam(::NamedTuple, beta)` / `HamHam(::NamedTuple; beta_phys=…)`, **without**
-constructing the HamHam wrapper. Only the NamedTuple-typed schema produced by
-[`build_heis_1d`] / [`build_tfim_2d`] (or the legacy fixtures with the same
-schema) is supported.
-
-The returned NamedTuple always carries `rescaling_factor`, so callers in
-β_phys-first mode can compute `β_alg = β_phys · rescaling_factor` before
-invoking the HamHam constructor. Extra fields on the on-disk NamedTuple
-beyond the canonical 11 (e.g. `typicality_distance` from legacy
-find_typical fixtures, or `seed`/`Lx`/`Ly`/etc. from the new builders) are
-silently dropped — `HamHam(raw, beta)` only consumes the canonical fields.
+Parse a supported Hamiltonian BSON into the canonical raw NamedTuple without
+constructing `HamHam`. The result retains `rescaling_factor` for physical-to-
+algorithmic temperature conversion and drops trailing metadata fields.
 """
 function _parse_hamiltonian_bson(path::String)
     raw = open(path) do io
@@ -63,7 +41,7 @@ function _parse_hamiltonian_bson(path::String)
                     last(type_name) == "NamedTuple"
     is_namedtuple ||
         error("Unrecognised Hamiltonian BSON schema (expected NamedTuple, got " *
-              "type=$type_name). The legacy `HamHam`-typed schema is no longer " *
+              "type=$type_name). The older `HamHam`-typed schema is no longer " *
               "supported; regenerate via `hamiltonians/generate_hamiltonians.jl`.")
     return _namedtuple_schema_to_raw(ham_raw)
 end
@@ -71,16 +49,8 @@ end
 """
     _namedtuple_schema_to_raw(ham_raw::Dict) -> NamedTuple
 
-Convert a `BSON.parse`-d NamedTuple-typed Hamiltonian into the NamedTuple
-shape expected by `HamHam(::NamedTuple, beta)`.
-
-`ham_raw` is the parsed `raw[:hamiltonian]` Dict — a `:tag => :struct` blob
-with `:data` a vector whose first 11 entries match the canonical NamedTuple
-field order: `(matrix, terms, base_coeffs, disordering_terms,
-disordering_coeffs, eigvals, eigvecs, nu_min, shift, rescaling_factor,
-periodic)`. Trailing fields (e.g. `typicality_distance` from legacy
-fixtures, or `seed` / `disorder_strength` / `Lx` / `Ly` / `J` / `h` from
-the current builders) are ignored.
+Convert parsed BSON data to the canonical eleven-field Hamiltonian NamedTuple.
+Trailing metadata fields are ignored.
 """
 function _namedtuple_schema_to_raw(ham_raw::Dict)
     cache = IdDict()
@@ -146,7 +116,7 @@ function _generate_filename(config::Config{Thermalize})
 end
 
 function _riemann_sum(f::Function, grid::Vector{Float64})
-    """Uniform grid, rectangle method"""
+    # Uniform-grid rectangle rule.
     d0 = grid[2] - grid[1]
     return d0 * sum(f, grid)
 end
@@ -173,38 +143,12 @@ type and can specialise on it.
 """
     make_trotter_for_config(hamiltonian, config) -> AbstractTrotter
 
-Build a Trotter cache consistent with the per-register grids of `config`.
-For `config.domain isa TrotterDomain`:
+Build the Trotter cache required by a `TrotterDomain` configuration.
 
-- **KMS coherent (`with_coherent(config.construction)`)** — returns a
-  qf-e4z.20 [`TrotterTriple`](@ref): three **independent** Strang
-  Trotterizations, one per coherent-term leg, sized by the per-leg
-  substep counts `register_M_X(config)` and the natural per-leg Trotter
-  step derived from the integration variables of the coherent integrals:
-
-  - `b_-(t/σ)` evolves under `exp(-iH·t/σ)` over the outer grid
-    `t = k · register_t0_b_minus(config)` — natural Trotter step
-    `t0_b_minus_evol = register_t0_b_minus(config) / config.sigma`.
-  - `b_+(τβ)` evolves under `exp(-iH·τβ)` over the inner grid
-    `τ = k · register_t0_b_plus(config)`  — natural Trotter step
-    `t0_b_plus_evol  = config.beta · register_t0_b_plus(config)`.
-
-  (For the project convention `σ = 1/β` the two scalings coincide; written
-  in general form so that any future runs with `σ ≠ 1/β` still yield exact
-  integer step counts in `B_trotter`.)
-
-  Per-leg M counts `(M_D, M_b_minus, M_b_plus)` are resolved via
-  `register_M_X(config)`. If the per-leg fields are unset, all three default
-  to the legacy `config.num_trotter_steps_per_t0`. The three legs have NO
-  commensurability constraint; each `δt₀_X = t0_X / M_X` is independent.
-
-- **GNS / no-coherent** — calls the single-cache constructor
-  `TrottTrott(ham, t0_D, M_user)`; there is no coherent term so only the
-  dissipative `V_D` cache is needed.
-
-Throws `ArgumentError` if `config.num_trotter_steps_per_t0` or
-`register_t0_D(config)` is `nothing` (the legacy default is the fallback
-for unset per-leg M's).
+Coherent constructions return a [`TrotterTriple`](@ref) with independent
+dissipative, outer-coherent, and inner-coherent Strang steps. Non-coherent
+constructions return a single [`TrottTrott`](@ref). Missing register times or
+substep counts raise `ArgumentError`.
 """
 function make_trotter_for_config(hamiltonian::HamHam, config::Config)
     config.domain isa TrotterDomain ||
@@ -214,15 +158,11 @@ function make_trotter_for_config(hamiltonian::HamHam, config::Config)
     t0_D === nothing &&
         throw(ArgumentError("make_trotter_for_config: register_t0_D(config) must be set."))
     if with_coherent(config.construction)
-        # Per-leg evolution steps:
-        #   b_-(t/σ): outer evolution per grid step = t0_grid_b_minus / σ.
-        #   b_+(τβ): inner evolution per grid step = β · t0_grid_b_plus.
+        # Math: $t_(b-) = t0_(b-) / sigma$ and $t_(b+) = beta t0_(b+)$.
         t0_bm_evol = register_t0_b_minus(config) / config.sigma
         t0_bp_evol = config.beta * register_t0_b_plus(config)
 
-        # Per-leg substep counts. If the per-leg field is unset, fall back
-        # to the legacy `num_trotter_steps_per_t0`. At least one of the
-        # legacy field / all per-leg fields must be provided.
+        # Accessors resolve per-leg values through the shared compatibility field.
         M_D  = register_M_D(config)
         M_bm = register_M_b_minus(config)
         M_bp = register_M_b_plus(config)
@@ -286,7 +226,7 @@ function validate_config!(config::Config)
         if s_val == 0.0 && a_val != 0.0
             push!(errors, "For linear combinations require (s = 0, a = 0) for kinky Metropolis or (s > 0) for smooth Metropolis; got (s=0, a=$(a_val)).")
         end
-        # Note: the (a=0, s != 0) case is supported in eta-regularized smooth Metro (Task 8).
+        # Smooth Metropolis with `a == 0` requires positive `eta` in time domains.
         if a_val == 0.0 && config.domain isa Union{TimeDomain, TrotterDomain} && with_coherent(config.construction) && (isnothing(config.eta) || config.eta <= 0.0)
             push!(errors, "For linear combinations in the KMS DB case with a=0 in TIME or TROTTER domain, eta must be > 0.")
         end
@@ -313,12 +253,12 @@ function validate_config!(config::Config)
         end
     end
 
-    # --- Jump-selection validation (qf-2vo) ---
+    # Jump-selection validation.
     if !(config.jump_selection in (:sweep, :random))
         push!(errors, "jump_selection must be :sweep or :random (got $(config.jump_selection)).")
     end
 
-    # --- DLL filter validation (DLL-1, qf-wmg) ---
+    # DLL filter validation.
     # All DLL filters carry a `beta` that must agree with Config.beta —
     # the filter's KMS factor `e^{-βν/4}` is locked to the simulator's β.
     if config.filter isa DLLGaussianFilter
@@ -337,8 +277,7 @@ function validate_config!(config::Config)
             push!(errors, "DLLMetropolisFilter.S must be > 0 (got $(config.filter.S)).")
         end
     end
-    # Multi-channel DLL filter (qf-7go.1): every channel must agree with
-    # Config.beta and pass its own per-type validation.
+    # Every DLL channel must use the configuration temperature.
     if config.filter isa DLLMultiChannelFilter
         beta_tol = 10 * eps(typeof(config.beta))
         if !isapprox(config.filter.beta, config.beta; atol=beta_tol)
@@ -376,8 +315,7 @@ function validate_config!(config::Config)
         if config.domain isa EnergyDomain
             push!(errors, "DLL construction is not supported in EnergyDomain (out of scope for DLL-2).")
         end
-        # TrotterDomain DLL is deferred until the time-grid quadrature is
-        # ported to the Trotter eigvals; see beads epic qf-3i8 notes 2026-04-30.
+        # Trotter-domain DLL needs a quadrature defined on Trotter eigenvalues.
         if config.domain isa TrotterDomain
             push!(errors, "DLL construction in TrotterDomain is deferred — not yet supported.")
         end
@@ -395,20 +333,11 @@ end
 """
     validate_config!(config::Config, ham::HamHam; atol=1e-12, rtol=1e-10)
 
-Two-argument validation: runs the 1-arg `validate_config!(config)` checks
-**and**, when `config.beta_phys` is set, enforces the relation
+Validate a configuration and its physical/algorithmic temperature pair.
 
-    config.beta == config.beta_phys · ham.rescaling_factor   (β_alg = β_phys · rescale)
-
-within the supplied tolerances. Throws `ArgumentError` on mismatch.
-
-Drivers that author at the *physical* temperature scale (the qf-6vr /
-β_phys-first contract) should set both `beta_phys = β_phys` and
-`beta = β_phys * ham.rescaling_factor` at construction and call this
-2-arg form once the HamHam is in hand, so the pair cannot drift apart.
-Callers that do not set `beta_phys` skip the consistency check; this
-matches the legacy contract where `cfg.beta` alone is the algorithm-side
-β_alg.
+When `config.beta_phys` is set, require `config.beta` to equal
+`config.beta_phys * ham.rescaling_factor` within `atol` and `rtol`. Otherwise
+only the one-argument validation runs. Throws `ArgumentError` on failure.
 """
 function validate_config!(config::Config, ham::HamHam; atol::Real = 1e-12, rtol::Real = 1e-10)
     validate_config!(config)
@@ -429,15 +358,8 @@ function _collect_config_errors!(errors::Vector{String}, config::Config{<:Any, B
     return # No specific checks
 end
 
-# ---------------------------------------------------------------------------
-# Per-register Fourier-relation helpers (qf-9z0).
-#
-# For a register `X ∈ {D, b_minus, b_plus}` we enforce
-#   `t0_X · w0_X ≈ 2π / 2^{r_X}`
-# whenever all three are required and non-`nothing` (after legacy fallback).
-# `_check_register_fourier!` writes one human-readable error per missing or
-# inconsistent field — keeping the message specific to the offending register.
-# ---------------------------------------------------------------------------
+# Validate each required register's Fourier relation independently.
+# Math: $t0_X w0_X approx 2 pi / 2^(r_X)$.
 
 function _check_register_fourier!(
     errors::Vector{String}, name::AbstractString, r, t0, w0;
@@ -617,6 +539,17 @@ function _print_press(config::Config{Thermalize})
     println("-----------------")
 end
 
+"""
+    pauli_string_to_matrix(paulistring) -> Vector{Matrix{ComplexF64}}
+
+Convert labels from `"I"`, `"X"`, `"Y"`, and `"Z"` to single-qubit matrices.
+
+# Arguments
+- `paulistring`: Ordered Pauli labels.
+
+# Returns
+One matrix per label; the Kronecker product is not formed.
+"""
 function pauli_string_to_matrix(paulistring::Vector{String})
     sigmax::Matrix{ComplexF64} = [0 1; 1 0]
     sigmay::Matrix{ComplexF64} = [0.0 -im; im 0.0]
@@ -630,18 +563,25 @@ function pauli_string_to_matrix(paulistring::Vector{String})
     return pauli_matrices
 end
 
+"""
+    expm_pauli_padded(pauli_list, coeff, num_qubits, position; periodic=true) -> Matrix
+
+Embed a Pauli string and return its exponential.
+
+# Arguments
+- `pauli_list`: Consecutive single-qubit Pauli factors.
+- `coeff`: Rotation coefficient.
+- `num_qubits`: Register size.
+- `position`: First site, using one-based indexing.
+
+# Keywords
+- `periodic`: Wrap the support across the boundary. For an absent open-boundary
+  term, return the identity.
+
+# Returns
+The dense unitary on the full register.
+"""
 function expm_pauli_padded(pauli_list::Vector{Matrix{ComplexF64}}, coeff::Float64, num_qubits::Int64, position::Int64; periodic::Bool=true)
-    """
-    Build `exp(i · coeff · P)` for a Pauli string `P = pauli_list[1] ⊗ … ⊗ pauli_list[end]` placed at
-    `position`. Closed-form `cos(coeff) I + i sin(coeff) P` holds because every Pauli string squares to I.
-
-    With `periodic=false` and a multi-site term whose support would wrap past `num_qubits`, the term
-    does not exist in the open-boundary Hamiltonian. We return `I` rather than `cos(coeff) I` — the
-    Pauli-squared identity breaks once `P = 0`, so the closed form is no longer valid; the right
-    multiplicative neutral element is the identity. This guarantees `_compute_U_group` and
-    `_trotterize2` produce the OBC Trotter without spurious phase factors at the boundary.
-    """
-
     term_length = length(pauli_list)
     last_position = position + term_length - 1
     if !periodic && last_position > num_qubits
@@ -649,10 +589,27 @@ function expm_pauli_padded(pauli_list::Vector{Matrix{ComplexF64}}, coeff::Float6
     end
 
     padded_term = pad_term(pauli_list, num_qubits, position; periodic=periodic)
+    # Math: $exp(i theta P) = cos(theta) I + i sin(theta) P$ because $P^2 = I$.
     expm = cos(coeff) * I(2^num_qubits) + 1im * sin(coeff) * padded_term
     return expm
 end
 
+"""
+    pad_term(terms, num_qubits, position; periodic=true) -> SparseMatrixCSC
+
+Embed consecutive local operators into a qubit register.
+
+# Arguments
+- `terms`: Ordered local factors.
+- `num_qubits`: Register size.
+- `position`: First site, using one-based indexing.
+
+# Keywords
+- `periodic`: Wrap the support; an absent open-boundary term returns zero.
+
+# Returns
+The sparse full-register operator.
+"""
 function pad_term(terms::Vector{Matrix{ComplexF64}}, num_qubits::Int64, position::Int; periodic::Bool = true)
     
     term_length = length(terms)

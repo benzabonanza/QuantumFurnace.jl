@@ -84,3 +84,21 @@ using LinearAlgebra
         end
     end
 end
+
+@testset "Density-matrix helper invariants" begin
+    rho = Hermitian(ComplexF64[0.75 0.0; 0.0 0.25])
+    sigma = Hermitian(ComplexF64[0.25 0.0; 0.0 0.75])
+    delta = rho - sigma
+
+    @test is_density_matrix(rho)
+    @test is_density_matrix(sigma)
+    @test trace_norm_h(Hermitian(delta)) ≈ trace_norm_nh(Matrix(delta)) atol=1e-15
+    @test trace_distance_h(rho, sigma) ≈ trace_norm_h(Hermitian(delta)) / 2 atol=1e-15
+    @test trace_distance_nh(Matrix(rho), Matrix(sigma)) ≈
+          trace_norm_nh(Matrix(delta)) / 2 atol=1e-15
+    @test fidelity(rho, rho) ≈ 1.0 atol=1e-15
+    @test fidelity(rho, sigma) ≈ 0.75 atol=1e-15
+
+    @test_throws ArgumentError is_density_matrix(Hermitian(ComplexF64[1.1 0.0; 0.0 -0.1]))
+    @test_throws ArgumentError fidelity(rho, Hermitian(ComplexF64[0.8 0.0; 0.0 0.8]))
+end
