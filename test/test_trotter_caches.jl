@@ -76,6 +76,35 @@ end
         @test compute_trotter_error(ham, trotter, t) ≈ norm(U_exact - U_trotter) atol=1e-12
     end
 
+    @testset "General Strang products reverse every noncommuting factor" begin
+        base_ham = HamHam(
+            Vector{Matrix{ComplexF64}}[[X], [Z]], [0.7, 1.1], 1, 1.0;
+            periodic=false)
+        disorder_ham = HamHam(
+            Vector{Vector{Matrix{ComplexF64}}}(), Float64[],
+            Vector{Matrix{ComplexF64}}[[X], [Z]], [[0.7], [1.1]], 1, 1.0;
+            periodic=false)
+        P = (X + Z) / sqrt(2)
+        two_site_ham = HamHam(
+            Vector{Matrix{ComplexF64}}[[X, X], [P, P]], [0.7, 1.1], 2, 1.0;
+            periodic=false)
+        Ms = (10, 20, 40, 80, 160, 320, 640, 1280)
+
+        for test_ham in (base_ham, disorder_ham, two_site_ham)
+            exact = exp(1im * Matrix(test_ham.data))
+            errors = [opnorm(QuantumFurnace._trotterize2(test_ham, 1.0, M) - exact)
+                for M in Ms]
+            ratios = errors[1:end-1] ./ errors[2:end]
+            @test issorted(errors; rev=true)
+            @test all(ratio -> 3.8 < ratio < 4.2, ratios)
+            @test errors[end] < 1e-9
+        end
+
+        grouped = group_hamiltonian_terms(two_site_ham)
+        @test grouped.commuting[1] == two_site_ham.base_terms[1:1]
+        @test grouped.noncommuting[1] == two_site_ham.base_terms[2:2]
+    end
+
     @testset "make_trotter_for_config returns single-cache TrottTrott for GNS" begin
         cfg_gns = make_config(Lindbladian(), TrotterDomain(); num_qubits=3, construction=GNS())
         trot_gns = make_trotter_for_config(N3_HAM, cfg_gns)

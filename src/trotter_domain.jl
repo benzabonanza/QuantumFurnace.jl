@@ -208,86 +208,54 @@ end
 
 function _trotterize2(hamiltonian::HamHam, t::Float64, num_trotter_steps::Int64)
     # Second-order Strang Trotterization for 1D one- and two-site terms.
-    # Math: $S_2(dt) = exp(A dt / 2) exp(B dt) exp(A dt / 2)$.
+    # Math: $S_2(dt) = prod_gamma exp(i H_gamma dt/2)$ followed by the
+    # same factors in reverse order.
     # Open boundaries omit wrapping terms; constructors reject 2D bond layouts.
     timestep::Float64 = t / num_trotter_steps
     num_qubits::Int64 = Int(log2(size(hamiltonian.data)[1]))
-    dim = 2^num_qubits
-    odd_system::Bool = (num_qubits % 2 == 1)
     periodic::Bool = hamiltonian.periodic
-    is_bdr_strange::Bool = (odd_system && periodic)
 
     U::Matrix{ComplexF64} = exp(im * t * Float64(hamiltonian.shift)) * I(2^num_qubits)  # Shift
 
-    groups = group_hamiltonian_terms(hamiltonian)
-
-    # Base terms
-    odd_sites = collect(1:2:(num_qubits - 1))
-    U_odd = _compute_U_group(groups.commuting[1], groups.commuting[2], odd_sites, num_qubits, timestep; periodic=periodic)
-
-    even_sites = collect(2:2:num_qubits)
-    U_even = _compute_U_group(groups.commuting[1], groups.commuting[2], even_sites, num_qubits, timestep; periodic=periodic)
-
-    U_odd_bdr = Matrix{ComplexF64}(I, dim, dim)
-    if is_bdr_strange  # Strange odd boundary — only present for PBC
-        odd_bdr_site = [num_qubits]
-        U_odd_bdr *= _compute_U_group(groups.commuting[1], groups.commuting[2], odd_bdr_site, num_qubits, timestep; periodic=periodic)
-    end
-
-    # 1-site terms in the Hamiltonian (with same coeffs on all sites). No BC issue.
-    U_1site_terms = I(2^num_qubits)
-    if length(groups.one_sites[1]) != 0
-        all_sites = collect(1:num_qubits)
-        U_1site_terms = _compute_U_group(groups.one_sites[1], groups.one_sites[2], all_sites, num_qubits, timestep; periodic=periodic)
+    half_step_factors = Matrix{ComplexF64}[]
+    for q in 1:num_qubits
+        for (term, coupling) in zip(hamiltonian.base_terms, hamiltonian.base_coeffs)
+            term_f64 = Vector{Matrix{ComplexF64}}(term)
+            push!(half_step_factors, expm_pauli_padded(
+                term_f64, timestep * Float64(coupling) / 2,
+                num_qubits, q; periodic=periodic))
+        end
     end
 
     # disordering part (per-site terms with different coeffs on each site, i.e. disordered)
-    U_disordering = Matrix{ComplexF64}(I, dim, dim)
     if hamiltonian.disordering_terms !== nothing
         for (term, term_coeffs) in zip(hamiltonian.disordering_terms, hamiltonian.disordering_coeffs)
             term_f64 = Vector{Matrix{ComplexF64}}(term)
             for q in 1:num_qubits
                 coeff_f64 = Float64(term_coeffs[q])
-                expm_disordering_pauli_term = expm_pauli_padded(term_f64,
-                        timestep * coeff_f64 / 2, num_qubits, q; periodic=periodic)
-                U_disordering *= expm_disordering_pauli_term
+                push!(half_step_factors, expm_pauli_padded(
+                    term_f64, timestep * coeff_f64 / 2,
+                    num_qubits, q; periodic=periodic))
             end
         end
     end
 
-    # 2-site terms in the Hamiltonian that do not commute with e.g. XX on site (1, 2)
-    sequence_2site_not_commuting = Matrix{ComplexF64}[]
-    if length(groups.noncommuting[1]) != 0
-        for (term, coupling) in zip(groups.noncommuting[1], groups.noncommuting[2])
-            for q in 1:num_qubits
-                term_f64 = Vector{Matrix{ComplexF64}}(term)
-                expm_pauli_term = expm_pauli_padded(term_f64, timestep * Float64(coupling) / 2, num_qubits, q; periodic=periodic)
-                push!(sequence_2site_not_commuting, expm_pauli_term)
-            end
-        end
-    end
-
-    # Assemble a delta step
-    left_unitary_sequence = Matrix{ComplexF64}[]
-    append!(left_unitary_sequence, [U_odd, U_even, U_odd_bdr, U_1site_terms, U_disordering], sequence_2site_not_commuting)
-    U_step = foldl(*, left_unitary_sequence) * foldl(*, reverse(left_unitary_sequence))
+    # Exact reversal is load-bearing when factors inside a logical group do not commute.
+    U_step = foldl(*, half_step_factors) * foldl(*, reverse(half_step_factors))
     for step in 1:num_trotter_steps
         U *= U_step
     end
     return U
 end
 
-function _does_term_differ_at_both_sites(term, list_to_compare_with)::Bool
-
-    if isempty(list_to_compare_with)
-        return true
-    else
-        ref_term = list_to_compare_with[1]
-        first_site_good::Bool = (term[1] != ref_term[1])
-        second_site_good::Bool = (term[2] != ref_term[2])
-        # return true if (diff, diff) or (same, same) for commutation
-        return !(xor(first_site_good, second_site_good))
+function _commutes_with_all_terms(term, reference_terms)::Bool
+    term_matrix = kron(term...)
+    for reference in reference_terms
+        reference_matrix = kron(reference...)
+        all(iszero, term_matrix * reference_matrix - reference_matrix * term_matrix) ||
+            return false
     end
+    return true
 end
 
 """
@@ -317,7 +285,7 @@ function group_hamiltonian_terms(hamiltonian::HamHam{T}) where {T<:AbstractFloat
             push!(list_of_1site_terms, term)
             push!(coeffs_1site, hamiltonian.base_coeffs[i])
         elseif length(term) == 2
-            if _does_term_differ_at_both_sites(term, list_of_kinda_commuting_2site_terms)
+            if _commutes_with_all_terms(term, list_of_kinda_commuting_2site_terms)
                 push!(list_of_kinda_commuting_2site_terms, term)
                 push!(coeffs_kinda_commuting_2site, hamiltonian.base_coeffs[i])
             else
