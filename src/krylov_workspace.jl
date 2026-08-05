@@ -44,9 +44,9 @@ function Workspace(
     hermitianize!(R_total)
 
     if B_total !== nothing
-        B_T = Matrix{CT}(transpose(B_total))
-        G_left  = Matrix{CT}(1im .* B_T .- 0.5 .* R_total)
-        G_right = Matrix{CT}(-1im .* B_T .- 0.5 .* R_total)
+        B = Matrix{CT}(B_total)
+        G_left  = Matrix{CT}(-1im .* B .- 0.5 .* R_total)
+        G_right = Matrix{CT}(1im .* B .- 0.5 .* R_total)
     else
         G_left  = Matrix{CT}(-0.5 .* R_total)
         G_right = Matrix{CT}(-0.5 .* R_total)
@@ -647,10 +647,9 @@ function Workspace(
     # Coherent G via dll_coherent_op_bohr (Hermitian by Theorem 10).
     G = Matrix{CT}(dll_coherent_op_bohr(jumps, hamiltonian, filter, config.beta))
 
-    # Match CKG sign convention: dense uses kron(B, I)·(-1im) + kron(I, B^T)·(+1im) = +i[B^T, ρ].
-    B_T = Matrix{CT}(transpose(G))
-    G_left  = Matrix{CT}( 1im .* B_T .- 0.5 .* R_total)
-    G_right = Matrix{CT}(-1im .* B_T .- 0.5 .* R_total)
+    # Schrödinger coherent action: -i[G,rho].
+    G_left  = Matrix{CT}(-1im .* G .- 0.5 .* R_total)
+    G_right = Matrix{CT}(1im .* G .- 0.5 .* R_total)
     jump_eigenbases = [Matrix{CT}(j.in_eigenbasis) for j in jumps]
     jump_hermitian  = [j.hermitian for j in jumps]
 

@@ -105,8 +105,9 @@ function _vectorize_liouvillian_coherent!(
     ws::DenseLindbladianWorkspace,
 )
     Id = ws.Id
-    _kron!(L_target, coherent_term, Id, -1im)
-    _kron!(L_target, Id, transpose(coherent_term), +1im)
+    # Math: vec(-i[B,rho]) = [-i(I tensor B) + i(B^T tensor I)] vec(rho).
+    _kron!(L_target, Id, coherent_term, -1im)
+    _kron!(L_target, transpose(coherent_term), Id, +1im)
     return L_target
 end
 
