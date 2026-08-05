@@ -44,7 +44,8 @@ end
 
 """
     _krylov_spectral_decomposition(forward_apply!, rho_0, dim; krylovdim,
-                                   tol, fwd_init, sort_mode)
+                                   tol, fwd_init, sort_mode,
+                                   assume_trace_preserving)
 
 Build a biorthogonal eigendecomposition in the Krylov subspace seeded by
 `vec(rho_0)` and project `rho_0 - rho_inf` onto its modes.
@@ -58,6 +59,8 @@ operator gap.
 # Returns
 A named tuple containing sorted eigenvalues, left and right modes, projection
 coefficients, normalized stationary state, matvec count, and breakdown status.
+When `assume_trace_preserving=false`, no stationary state is inserted: all
+captured modes, including the dominant one, retain their raw powers.
 """
 function _krylov_spectral_decomposition(
     forward_apply!::F1,
@@ -67,6 +70,7 @@ function _krylov_spectral_decomposition(
     tol::Real = 1e-10,
     fwd_init::Union{Nothing, AbstractVector} = nothing,
     sort_mode::Symbol = :lindbladian,
+    assume_trace_preserving::Bool = true,
 ) where {T<:Complex, F1}
 
     dim2 = dim * dim
@@ -101,17 +105,18 @@ function _krylov_spectral_decomposition(
     W_inv = inv(W)
     V = Matrix{T}(W_inv')  # so V' = W_inv ⇒ V' W = I
 
-    # Sort eigenvalues so the steady state lands at index 1.
-    # :lindbladian -> Re(lambda) ~ 0 is steady ⇒ sort by |Re(lambda)| ascending
-    # :channel     -> |mu| ~ 1 is steady ⇒ sort by |1 - mu| ascending
-    sort_key = if sort_mode === :lindbladian
-        v -> abs(real(v))
+    # Sort generator modes from the stationary rate. For a physical channel,
+    # select the captured stationary mode independently before ordering the
+    # remaining modes by their actual discrete decay factor |mu|. A raw GQSP
+    # surrogate retains pure decreasing-modulus order.
+    perm = if sort_mode === :lindbladian
+        sortperm(Λ; by = v -> abs(real(v)))
     elseif sort_mode === :channel
-        v -> abs(abs(v) - 1.0)
+        _channel_mode_permutation(
+            Λ; assume_trace_preserving=assume_trace_preserving)
     else
         throw(ArgumentError("sort_mode must be :lindbladian or :channel (got :$sort_mode)"))
     end
-    perm = sortperm(Λ; by = sort_key)
     Λ = Λ[perm]
     W = W[:, perm]
     V = V[:, perm]
@@ -122,26 +127,31 @@ function _krylov_spectral_decomposition(
     R_modes = [reshape(QW[:, i], dim, dim) for i in 1:m]
     L_modes = [reshape(QV[:, i], dim, dim) for i in 1:m]
 
-    # Steady state: hermitise R_modes[1], trace-normalise.
-    rho_inf = (R_modes[1] .+ R_modes[1]') ./ 2
-    tr_inf = real(tr(rho_inf))
-    if tr_inf == 0
-        error("steady-state mode has zero trace; cannot normalise")
+    rho_inf, c = if assume_trace_preserving
+        # Steady state: hermitise R_modes[1], trace-normalise.
+        rho_stationary = (R_modes[1] .+ R_modes[1]') ./ 2
+        tr_inf = real(tr(rho_stationary))
+        if tr_inf == 0
+            error("steady-state mode has zero trace; cannot normalise")
+        end
+        rho_stationary ./= tr_inf
+        R_modes[1] = rho_stationary
+        steady_overlap = dot(L_modes[1], R_modes[1])
+        abs(steady_overlap) > eps(real(zero(T))) ||
+            error("normalised steady-state mode is orthogonal to its left eigenvector")
+        L_modes[1] ./= conj(steady_overlap)
+
+        # Biorthogonal projection of rho_0-rho_inf. Trace preservation makes
+        # the stationary coefficient zero; remove its residual explicitly.
+        coeffs = (V') * (Q' * vec(rho_0 .- rho_stationary))
+        coeffs[1] = zero(T)
+        rho_stationary, coeffs
+    else
+        # The unscaled GQSP polynomial surrogate is generally not trace
+        # preserving and has no stationary eigenvalue at one. Reconstruct the
+        # raw linear map from every captured mode without normalising it.
+        zeros(T, dim, dim), (V') * (Q' * vec(rho_0))
     end
-    rho_inf ./= tr_inf
-    R_modes[1] = rho_inf
-    steady_overlap = dot(L_modes[1], R_modes[1])
-    abs(steady_overlap) > eps(real(zero(T))) ||
-        error("normalised steady-state mode is orthogonal to its left eigenvector")
-    L_modes[1] ./= conj(steady_overlap)
-
-    # Biorthogonal projection: c_i = <L_i, rho_0 - rho_inf>_HS.
-    # Using the lift QV: c = V' Q' vec(rho_0 - rho_inf).
-    delta_rho_vec = vec(rho_0 .- rho_inf)
-    c = (V') * (Q' * delta_rho_vec)
-
-    # Trace preservation makes the steady coefficient zero; remove round-off.
-    c[1] = zero(T)
 
     return (
         eigenvalues  = Complex{Float64}.(Λ),
@@ -151,6 +161,7 @@ function _krylov_spectral_decomposition(
         rho_inf      = rho_inf,
         matvec_count = matvec_count,
         converged    = !broke,
+        trace_preserving_assumed = assume_trace_preserving,
     )
 end
 
@@ -298,6 +309,11 @@ Reconstruct repeated applications of the implemented faithful channel.
 
 The forward map matches `run_thermalize` in deterministic `:sweep` mode and
 therefore includes finite-step, coherent-splitting, Fourier, and Trotter errors.
+With `with_gqsp=true`, it applies the raw unscaled Jacobi–Anger polynomial
+surrogate, not a certified postselected block or deterministic unitary
+completion. The raw state is not renormalised; `trace_values` and
+`trace_drift` report the resulting norm loss or gain. Its `spectral_gap` is
+`NaN` because a non-channel surrogate has no physical channel gap.
 
 # Arguments
 - `config`: Thermalization configuration with `jump_selection=:sweep`.
@@ -344,6 +360,9 @@ function predict_channel_trajectory(
         "predict_channel_trajectory requires config.jump_selection = :sweep " *
         "(got :$(config.jump_selection)). The :random selection runs a stochastic " *
         "process whose deterministic Φ_δ matvec is e^{δ𝓛} only in expectation."))
+    config.with_gqsp && compute_true_gap && throw(ArgumentError(
+        "compute_true_gap is unavailable for the unscaled GQSP polynomial " *
+        "surrogate because it is not a trace-preserving channel."))
 
     # Select the evolution basis used by the channel workspace.
     ham_or_trott = config.domain isa TrotterDomain ? begin
@@ -362,7 +381,9 @@ function predict_channel_trajectory(
     fwd! = let ws = ws, config = config, ham = hamiltonian
         (out::AbstractMatrix, x::AbstractMatrix) -> begin
             rho_in = Matrix{CT}(x)
-            apply_delta_channel!(ws, rho_in, config, ham)
+            # The spectral operator must remain complex-linear. Physical
+            # reconstructions are Hermitianised only after applying mu^k.
+            apply_delta_channel!(ws, rho_in, config, ham; hermitize=false)
             copyto!(out, ws.scratch.rho_next)
             return out
         end
@@ -372,6 +393,7 @@ function predict_channel_trajectory(
         fwd!, Matrix{CT}(rho_0), d;
         krylovdim=krylovdim, tol=tol,
         sort_mode=:channel,
+        assume_trace_preserving=!config.with_gqsp,
     )
 
     # Align the Gibbs reference with the basis in which the channel evolves.
@@ -389,6 +411,8 @@ function predict_channel_trajectory(
     t_grid = collect(k_grid) .* delta
     distances = Vector{Float64}(undef, n_k)
     states = save_states ? Vector{Matrix{CT}}(undef, n_k) : Matrix{CT}[]
+    trace_values = Vector{CT}(undef, n_k)
+    trace_drift = Vector{CT}(undef, n_k)
     rho_k = Matrix{CT}(undef, d, d)
     h = length(decomp.eigenvalues)
 
@@ -405,12 +429,20 @@ function predict_channel_trajectory(
         @inbounds for jj in 1:d, kc in 1:d
             rho_k[kc, jj] = (rho_k[kc, jj] + conj(rho_k[jj, kc])) / 2
         end
+        trace_values[j] = tr(rho_k)
+        trace_drift[j] = trace_values[j] - one(CT)
         distances[j] = sum(svdvals(rho_k .- sigma_beta)) / 2
         save_states && (states[j] = copy(rho_k))
     end
 
-    # Math: the state-coupled channel rate is $abs(log(abs(mu_2))) / delta$.
-    if compute_true_gap
+    # Math: a physical channel has rate $-log(abs(mu_2)) / delta$. The
+    # unscaled polynomial surrogate has no stationary mode at one and hence no
+    # channel-gap interpretation.
+    if config.with_gqsp
+        spectral_gap = NaN
+        total_matvecs = decomp.matvec_count
+        all_converged = decomp.converged
+    elseif compute_true_gap
         kdim_gp = krylovdim_gap_pass === nothing ? max(30, Int(krylovdim)÷2) : Int(krylovdim_gap_pass)
         # Reuse construction data, but keep the operator Arnoldi factorization independent.
         gap_res = krylov_spectral_gap(
@@ -424,14 +456,7 @@ function predict_channel_trajectory(
         total_matvecs = decomp.matvec_count + gap_res.matvec_count
         all_converged = decomp.converged && gap_res.converged >= 1
     else
-        # `abs` keeps tiny numerical `abs(mu)>1` drift from producing a negative gap.
-        spectral_gap = if length(decomp.eigenvalues) >= 2
-            mu2 = decomp.eigenvalues[2]
-            abs_mu2 = abs(mu2)
-            abs_mu2 > 0 ? abs(log(abs_mu2)) / delta : Inf
-        else
-            0.0
-        end
+        spectral_gap = _channel_spectral_gap(decomp.eigenvalues, delta)
         total_matvecs = decomp.matvec_count
         all_converged = decomp.converged
     end
@@ -452,5 +477,14 @@ function predict_channel_trajectory(
         sigma_beta     = sigma_beta,
         delta_used     = delta,
         k_grid         = collect(k_grid),
+        trace_values   = trace_values,
+        trace_drift    = trace_drift,
+        max_abs_trace_drift = maximum(abs, trace_drift; init=0.0),
+        trace_normalized = false,
+        trace_preserving_assumed = decomp.trace_preserving_assumed,
+        physical_channel = !config.with_gqsp,
+        raw_dominant_modulus = maximum(abs, decomp.eigenvalues; init=0.0),
+        channel_representation = config.with_gqsp ?
+            :unscaled_gqsp_polynomial_surrogate : :deterministic_cptp,
     )
 end

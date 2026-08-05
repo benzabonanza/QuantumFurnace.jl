@@ -82,6 +82,40 @@ function _channel_sweep_sidecar_path(output_dir::AbstractString, n::Integer,
     return joinpath(output_dir, fname)
 end
 
+# Keep the resource total and its interpretation coupled. Only an achieved
+# integer-step crossing is a physical total-to-mixing cost; all no-crossing
+# outcomes retain per-step diagnostics but expose no finite total.
+function _channel_sweep_cost_fields(
+    physical_channel::Bool,
+    tau_mix_source::Symbol,
+    sim_budget,
+)
+    if physical_channel && tau_mix_source === :extrapolated
+        return (
+            n_steps_total=sim_budget.n_steps,
+            total_ham_sim_time=sim_budget.total_time,
+            cost_interpretation=:physical_mixing_time,
+        )
+    end
+
+    cost_interpretation = if !physical_channel
+        sim_budget.cost_interpretation
+    elseif tau_mix_source === :floor
+        :unavailable_asymptotic_floor
+    elseif tau_mix_source === :certified_no_crossing
+        :unavailable_certified_no_crossing
+    elseif tau_mix_source === :horizon_exhausted
+        :unavailable_horizon_exhausted
+    else
+        :unavailable_no_certified_crossing
+    end
+    return (
+        n_steps_total=0,
+        total_ham_sim_time=NaN,
+        cost_interpretation,
+    )
+end
+
 """
     sweep_mixing_times(n_values, beta_values; kwargs...) -> Vector{NamedTuple}
 
@@ -592,14 +626,24 @@ Optional BSON sidecars make the sweep resumable.
 - `param_table_bson`, `family`, `hamiltonian_dir`: input selection.
 - `seeds`, `init_state`: cell seeds and initial-state family.
 - `krylovdim`, `k_grid_max_log`, `k_grid_length`: predictor controls.
+- `mixing_step_horizon`: hard cap for the chronological integer-step crossing
+  search. Exhaustion is reported explicitly; it is not converted to a gap
+  proxy.
 - `output_dir`, `skip_existing`: sidecar persistence controls.
 
 # Returns
 A vector of named tuples containing cell and parameter metadata, mixing source,
 gap and floor diagnostics, Krylov work, and simulation-time estimates.
 
-`tau_mix_source` is `:extrapolated`, `:floor`, or `:nan`; a floor result stores
-a conservative gap-bound proxy.
+`tau_mix_source` is `:extrapolated`, `:floor`, `:certified_no_crossing`,
+`:horizon_exhausted`, `:nan`, or `:nonphysical_surrogate`; `:extrapolated` is
+a legacy tag for the exact integer-step spectral crossing. Only that branch
+reports a total-to-mixing resource cost. The current `with_gqsp=true` path
+applies an unscaled polynomial surrogate, so its rows expose raw trace drift
+and per-step costs but report no physical gap, mixing time, or total-to-mixing
+cost. Those per-step numbers are labelled
+`:formal_unscaled_gqsp_surrogate`, since no contractive rescaling or
+complementary-polynomial circuit has been synthesized.
 
 `init_state=:maximally_mixed` can miss symmetry-odd slow modes. Use a
 symmetry-breaking state or an independent true-gap solve for symmetric models.
@@ -620,6 +664,7 @@ function sweep_channel_mixing(
     krylovdim::Integer = 30,
     k_grid_max_log::Real = 5,
     k_grid_length::Integer = 50,
+    mixing_step_horizon::Integer = 100_000,
     output_dir::Union{Nothing, AbstractString} = nothing,
     skip_existing::Bool = true,
     hamiltonian_dir::AbstractString = joinpath(dirname(@__DIR__), "hamiltonians"),
@@ -634,6 +679,9 @@ function sweep_channel_mixing(
         "k_grid_max_log must be > 0 (got $k_grid_max_log)"))
     k_grid_length >= 10 || throw(ArgumentError(
         "k_grid_length must be ≥ 10 (got $k_grid_length)"))
+    0 <= mixing_step_horizon < typemax(Int) || throw(ArgumentError(
+        "mixing_step_horizon must be a nonnegative integer below typemax(Int) " *
+        "(got $mixing_step_horizon)"))
 
     # Exactly one temperature grid is supplied; physical values are converted
     # per cell, while parameter-table lookup always uses `beta_alg`.
@@ -742,44 +790,55 @@ function sweep_channel_mixing(
             predict_res = predict_channel_trajectory(cfg, ham, jumps, rho_init, k_grid;
                 krylovdim=krylovdim, trotter=trotter)
 
-            # Map channel eigenvalues to continuous-time rates.
-            # Math: $lambda_i^eff = log(mu_i) / delta$.
-            delta_used = predict_res.delta_used
-            lambda_eff = log.(predict_res.eigenvalues) ./ delta_used
-            # Bisection upper bracket: take the larger of the trajectory's
-            # k_max·δ horizon and a generous gap-based estimate
-            # `5 · log(d/ε) / λ_gap`. The trajectory's k_max is set to
-            # observe the decay; the bisection needs to bracket τ_mix(ε)
-            # which can lie past the observation window when ε is near
-            # the channel's asymptotic floor.
             d_dim = size(ham.data, 1)
             gap_ch = predict_res.spectral_gap
-            t_upper_ch = if isfinite(gap_ch) && gap_ch > 0
-                max(predict_res.t[end], 5.0 * log(d_dim / ε_i) / gap_ch)
-            else
-                predict_res.t[end]
-            end
-            res_eig = eigenmode_mixing_time(
-                lambda_eff, predict_res.c, predict_res.R_modes,
-                predict_res.rho_inf, predict_res.sigma_beta, ε_i;
-                t_upper = t_upper_ch,
-            )
-            # Pass a FINITE τ to compute_simulation_time. The eigenmode helper
-            # returns Inf on :floor; substitute the conservative log(d/ε)/λ
-            # bound (which is what the prior `:gap` branch used).
-            tau_for_budget = let
-                if res_eig.source === :extrapolated &&
-                   isfinite(res_eig.mixing_time) && res_eig.mixing_time > 0
-                    res_eig.mixing_time
-                elseif isfinite(gap_ch) && gap_ch > 0
-                    log(d_dim / ε_i) / gap_ch
-                elseif isfinite(predict_res.t[end]) && predict_res.t[end] > 0
-                    predict_res.t[end]
+            if predict_res.physical_channel
+                # Integer-step search horizon: take the larger of k_max*delta
+                # and a generous gap-based estimate `5 log(d/epsilon)/gap`.
+                t_upper_ch = if isfinite(gap_ch) && gap_ch > 0
+                    max(predict_res.t[end], 5.0 * log(d_dim / ε_i) / gap_ch)
                 else
-                    1.0
+                    predict_res.t[end]
                 end
+                res_eig = eigenmode_mixing_time(
+                    predict_res, ε_i;
+                    t_upper=t_upper_ch,
+                    max_steps=mixing_step_horizon)
+                if res_eig.source === :extrapolated
+                    # Pass the exact integer count separately so floating
+                    # division cannot add a spurious channel step.
+                    sim_budget = compute_simulation_time(
+                        cfg, ham, res_eig.mixing_time;
+                        n_steps=res_eig.mixing_steps)
+                else
+                    # Preserve per-step diagnostics, but never price a floor,
+                    # failed certificate, or exhausted finite horizon as an
+                    # achievable total-to-mixing resource cost.
+                    diagnostic_horizon = max(predict_res.t[end], cfg.delta)
+                    sim_budget = compute_simulation_time(
+                        cfg, ham, diagnostic_horizon)
+                end
+            else
+                # The unscaled polynomial surrogate is not a quantum channel:
+                # retain its raw trajectory and per-step resource diagnostics,
+                # but do not manufacture a fixed point, gap, mixing time, or
+                # total-to-mixing cost.
+                res_eig = (
+                    mixing_time=NaN,
+                    mixing_steps=nothing,
+                    gap=NaN,
+                    floor_distance=NaN,
+                    source=:nonphysical_surrogate,
+                    crossing_kind=:not_applicable,
+                    search_horizon=0,
+                    horizon_capped=false,
+                    tail_bound=NaN,
+                    n_evals=0,
+                )
+                diagnostic_horizon = max(predict_res.t[end], cfg.delta)
+                sim_budget = compute_simulation_time(
+                    cfg, ham, diagnostic_horizon)
             end
-            sim_budget = compute_simulation_time(cfg, ham, tau_for_budget)
         catch err
             @warn "channel cell failed; recording NaN row" n=n_i β=β_i eps=ε_i filter=f_i err
             # `β_i`, `β_phys_i`, `rescale` may be undefined if parsing failed —
@@ -799,8 +858,16 @@ function sweep_channel_mixing(
                 with_gqsp=false, gqsp_degree=0,
                 tau_mix=NaN, tau_mix_source=:nan, lambda_gap_channel=NaN,
                 floor_distance=NaN,
+                crossing_kind=:unknown, mixing_steps=nothing,
+                mixing_search_horizon=0, mixing_horizon_capped=false,
+                mixing_tail_bound=NaN, mixing_n_exact_evals=0,
                 n_steps_to_target=0, k_max=k_max, t_max=NaN,
                 achieved_dist_at_kmax=NaN,
+                max_abs_trace_drift=NaN,
+                channel_representation=:unknown,
+                physical_channel=false,
+                interpretation_status=:failed,
+                cost_interpretation=:unavailable,
                 total_matvecs=0, all_converged_predict=false,
                 oft_time_per_step=NaN, b_per_be_per_step=NaN, b_time_per_step=NaN,
                 per_step_time=NaN, n_steps_total=0, total_ham_sim_time=NaN,
@@ -810,35 +877,28 @@ function sweep_channel_mixing(
             continue
         end
 
-        # Resolve τ_mix from the eigenmode helper output:
-        # - :extrapolated → bisection found a crossing; tau_mix is its result.
-        # - :floor → ε below the channel shift `‖ρ_∞ - σ_β‖_1 / 2`; tau_mix
-        #   is the conservative `log(d/ε) / λ` bound (matches the prior
-        #   `:gap` branch's value), so plotting tooling has a finite number
-        #   even when no crossing exists.
-        # - :nan → degenerate input (no slow mode captured); tau_mix = NaN.
+        # Resolve τ_mix from the eigenmode helper output. Only
+        # :extrapolated represents an achieved physical integer-step crossing.
+        # Certified no-crossing branches report Inf; exhausted/degenerate
+        # searches report NaN. None receives a total-to-mixing resource cost.
         tau_mix_source = res_eig.source
-        if tau_mix_source !== :extrapolated
-            # Loud surface for the :floor / :nan branches so the audit-retune
-            # cycle is never silently skipped. tau_mix and total_ham_sim_time
-            # in this branch encode a spectral-gap proxy — NOT an achievable
-            # mixing time. Retune δ (or r_b±) until the channel floor drops
-            # below ε on the next pass.
-            @warn "channel cell did not extrapolate τ_mix(ε); falling back to gap-bound proxy — tau_mix/total_ham_sim_time are NOT thesis-trustworthy until retune" n=n_i β=β_i ε=ε_i filter=f_i source=tau_mix_source floor_distance=res_eig.floor_distance δ_used=predict_res.delta_used
+        if tau_mix_source === :nonphysical_surrogate
+            @warn "unscaled GQSP polynomial surrogate is not a physical channel; reporting raw trace diagnostics without tau_mix, gap, or total cost" n=n_i β=β_i ε=ε_i filter=f_i max_abs_trace_drift=predict_res.max_abs_trace_drift
+        elseif tau_mix_source !== :extrapolated
+            @warn "channel cell has no certified mixing-time crossing within its integer-step search; no total-to-mixing cost is reported" n=n_i β=β_i ε=ε_i filter=f_i source=tau_mix_source floor_distance=res_eig.floor_distance search_horizon=res_eig.search_horizon horizon_capped=res_eig.horizon_capped δ_used=predict_res.delta_used
         end
         tau_mix = if tau_mix_source === :extrapolated
             res_eig.mixing_time
-        elseif tau_mix_source === :floor
-            (isfinite(predict_res.spectral_gap) && predict_res.spectral_gap > 0) ?
-                log(size(ham.data, 1) / ε_i) / predict_res.spectral_gap : NaN
+        elseif tau_mix_source in (:floor, :certified_no_crossing)
+            Inf
         else
             NaN
         end
-        # Actual k count to reach ε from the trajectory (for sanity-check tooling).
-        n_steps_to_target = let dists = predict_res.distances
-            idx = findfirst(d -> d <= ε_i, dists)
-            idx === nothing ? 0 : Int(predict_res.k_grid[idx])
-        end
+        # Exact integer crossing from the channel spectral reconstruction.
+        n_steps_to_target = res_eig.mixing_steps === nothing ?
+            0 : Int(res_eig.mixing_steps)
+        cost_fields = _channel_sweep_cost_fields(
+            predict_res.physical_channel, tau_mix_source, sim_budget)
 
         wall = time() - t0_run
         result = (
@@ -865,10 +925,21 @@ function sweep_channel_mixing(
             tau_mix_source          = tau_mix_source,
             lambda_gap_channel      = predict_res.spectral_gap,
             floor_distance          = res_eig.floor_distance,
+            crossing_kind           = res_eig.crossing_kind,
+            mixing_steps            = res_eig.mixing_steps,
+            mixing_search_horizon   = res_eig.search_horizon,
+            mixing_horizon_capped   = res_eig.horizon_capped,
+            mixing_tail_bound       = res_eig.tail_bound,
+            mixing_n_exact_evals    = res_eig.n_evals,
             n_steps_to_target       = n_steps_to_target,
             k_max                   = k_max,
             t_max                   = predict_res.t[end],
             achieved_dist_at_kmax   = predict_res.distances[end],
+            max_abs_trace_drift     = predict_res.max_abs_trace_drift,
+            channel_representation  = predict_res.channel_representation,
+            physical_channel        = predict_res.physical_channel,
+            interpretation_status   = predict_res.physical_channel ?
+                :physical_channel : :nonphysical_surrogate,
             total_matvecs           = predict_res.total_matvecs,
             all_converged_predict   = predict_res.all_converged,
             # Hamiltonian-simulation time
@@ -876,8 +947,9 @@ function sweep_channel_mixing(
             b_per_be_per_step       = sim_budget.b_per_be,
             b_time_per_step         = sim_budget.b_time,
             per_step_time           = sim_budget.per_step_time,
-            n_steps_total           = sim_budget.n_steps,
-            total_ham_sim_time      = sim_budget.total_time,
+            n_steps_total           = cost_fields.n_steps_total,
+            total_ham_sim_time      = cost_fields.total_ham_sim_time,
+            cost_interpretation     = cost_fields.cost_interpretation,
             # bookkeeping
             wall_time_seconds       = wall,
             init_state              = init_state,

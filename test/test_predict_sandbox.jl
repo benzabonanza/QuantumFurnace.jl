@@ -167,6 +167,19 @@ using QuantumFurnace
         @test max_abs_err < 1e-10
         @info "(b) predict_channel sandbox byte-identity" max_abs_err matvecs=res_kr.total_matvecs
 
+        # The deterministic weak-measurement construction is CPTP. These raw
+        # trace diagnostics witness that no hidden normalisation is needed.
+        @test res_kr.trace_preserving_assumed
+        @test res_kr.physical_channel
+        @test res_kr.channel_representation === :deterministic_cptp
+        @test !res_kr.trace_normalized
+        @test maximum(abs.(res_kr.trace_values .- 1)) < 1e-10
+        @test res_kr.max_abs_trace_drift < 1e-10
+        @test res_th.metadata[:trace_preserving_assumed]
+        @test res_th.metadata[:physical_channel]
+        @test res_th.metadata[:channel_representation] === :deterministic_cptp
+        @test res_th.metadata[:max_abs_trace_drift] < 1e-10
+
         # Final density matrix agrees too (within hermitisation noise).
         rho_th_final = res_th.final_dm
         @test maximum(abs.(res_kr.rho_final .- rho_th_final)) < 1e-9

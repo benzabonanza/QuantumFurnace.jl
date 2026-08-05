@@ -163,7 +163,11 @@ distance from the Gibbs state.
 
 # Returns
 A [`ThermalizeResults`](@ref) with the final state, saved distances and times,
-and metadata.
+and metadata. When `with_gqsp=true`, the coherent step is the raw, unscaled
+Jacobi–Anger polynomial surrogate rather than a certified GQSP unitary block.
+It is not guaranteed contractive. No trace renormalisation is applied; the
+metadata records `trace_values`, `trace_drift`, `final_trace`, and
+`max_abs_trace_drift`.
 """
 function run_thermalize(
     jumps::Vector{JumpOp},
@@ -233,6 +237,7 @@ function run_thermalize(
 
     convergence_cutoff = 1e-5
     trace_distances = [trace_distance_h(Hermitian(evolving_dm), gibbs)]
+    trace_values = Complex{T}[tr(evolving_dm)]
     recorded_steps = Int[0]
 
     old_blas = BLAS.get_num_threads()
@@ -262,6 +267,7 @@ function run_thermalize(
             if step % save_every == 0
                 dist = trace_distance_h(Hermitian(evolving_dm), gibbs)
                 push!(trace_distances, dist)
+                push!(trace_values, tr(evolving_dm))
                 push!(recorded_steps, step)
                 verbose && @printf("Dist to Gibbs: %s\n", dist)
                 if dist < convergence_cutoff
@@ -278,6 +284,19 @@ function run_thermalize(
     wall_time = time() - t_start
     metadata = _capture_metadata(wall_time_seconds=wall_time)
     metadata[:save_every] = save_every
+    metadata[:trace_values] = trace_values
+    metadata[:trace_drift] = trace_values .- one(Complex{T})
+    metadata[:final_trace] = tr(evolving_dm)
+    metadata[:final_trace_drift] = metadata[:final_trace] - one(Complex{T})
+    metadata[:max_abs_trace_drift] = max(
+        maximum(abs, metadata[:trace_drift]; init=zero(T)),
+        abs(metadata[:final_trace_drift]),
+    )
+    metadata[:trace_normalized] = false
+    metadata[:trace_preserving_assumed] = !config.with_gqsp
+    metadata[:physical_channel] = !config.with_gqsp
+    metadata[:channel_representation] = config.with_gqsp ?
+        :unscaled_gqsp_polynomial_surrogate : :deterministic_cptp
 
     return ThermalizeResults{T}(
         config,

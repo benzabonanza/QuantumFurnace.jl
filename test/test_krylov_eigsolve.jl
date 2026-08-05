@@ -109,7 +109,10 @@ using QuantumFurnace
         @test abs(real(result_liouv.eigenvalues[1])) <= abs(real(result_liouv.eigenvalues[2]))
         @info "Eigenvalue sorting" abs_Re_lambda1=abs(real(result_liouv.eigenvalues[1])) abs_Re_lambda2=abs(real(result_liouv.eigenvalues[2]))
 
-        # Channel path: verify eigenvalue conversion formula
+        # Channel path: the stationary mode is pinned first, remaining raw
+        # modes are ordered by decreasing |mu|, the reported gap is the exact
+        # discrete log-rate, and the legacy converted spectrum remains
+        # algebraically consistent.
         config_therm = make_config(Thermalize(),EnergyDomain();
             construction=KMS(), delta=0.01)
         result_chan = krylov_spectral_gap(config_therm, TEST_HAM, TEST_JUMPS;
@@ -117,6 +120,16 @@ using QuantumFurnace
         @test result_chan.channel_eigenvalues !== nothing
         @test result_chan.delta_used == config_therm.delta
         @test abs(abs(result_chan.channel_eigenvalues[1]) - 1.0) < 1e-10
+        @test argmin(abs.(result_chan.channel_eigenvalues .- 1)) == 1
+        @test issorted(abs.(result_chan.channel_eigenvalues[2:end]); rev=true)
+        mu2_abs = abs(result_chan.channel_eigenvalues[2])
+        expected_channel_gap = mu2_abs > 0 ?
+            -log(mu2_abs) / result_chan.delta_used : Inf
+        @test isapprox(result_chan.spectral_gap, expected_channel_gap;
+            atol=1e-12, rtol=1e-12)
+        @test result_chan.trace_preserving_assumed
+        @test result_chan.physical_channel
+        @test result_chan.channel_representation === :deterministic_cptp
 
         # Threshold rationale (atol=1e-10): conversion mu = 1 + delta * lambda_L is algebraically
         # exact (just arithmetic). Error is FP rounding only: O(eps * |mu|) ~ 1e-16.
@@ -125,6 +138,44 @@ using QuantumFurnace
         conversion_err = maximum(abs.(reconstructed_mu .- result_chan.channel_eigenvalues))
         @test isapprox(reconstructed_mu, result_chan.channel_eigenvalues; atol=1e-10)
         @info "Eigenvalue conversion consistency" max_conversion_error=conversion_err atol=1e-10
+    end
+
+    @testset "Channel ordering uses decreasing modulus" begin
+        # A generic complex-linear map with an amplifying mode distinguishes
+        # decreasing |mu| from the old distance-to-one ordering.
+        D = Diagonal(ComplexF64[1.0, 0.99, 1.02, 0.8im])
+        apply_diagonal!(out, X) =
+            (copyto!(out, reshape(D * vec(X), 2, 2)); out)
+        rho_seed = ComplexF64[1 2 + im; 3 - im 4]
+        decomp = QuantumFurnace._krylov_spectral_decomposition(
+            apply_diagonal!, rho_seed, 2;
+            krylovdim=4, sort_mode=:channel,
+            assume_trace_preserving=false)
+        @test issorted(abs.(decomp.eigenvalues); rev=true)
+        @test isapprox(abs(decomp.eigenvalues[1]), 1.02; atol=1e-12, rtol=0)
+        @test !decomp.trace_preserving_assumed
+    end
+
+    @testset "Periodic CPTP channel pins the stationary mode" begin
+        # Unitary bit-flip conjugation Phi(rho) = X*rho*X is CPTP and has a
+        # period-two mode mu=-1. Its orbit from this diagonal state spans the
+        # stationary I/2 component and exactly one alternating component.
+        bit_flip = ComplexF64[0 1; 1 0]
+        apply_bit_flip!(out, rho) =
+            (copyto!(out, bit_flip * rho * bit_flip); out)
+        rho_seed = ComplexF64[0.9 0; 0 0.1]
+        decomp = QuantumFurnace._krylov_spectral_decomposition(
+            apply_bit_flip!, rho_seed, 2;
+            krylovdim=4, sort_mode=:channel,
+            assume_trace_preserving=true)
+
+        @test isapprox(decomp.eigenvalues[1], 1; atol=1e-12, rtol=0)
+        @test isapprox(decomp.eigenvalues[2], -1; atol=1e-12, rtol=0)
+        @test isapprox(decomp.rho_inf, Matrix{ComplexF64}(I(2) / 2);
+            atol=1e-12, rtol=0)
+        @test isapprox(
+            QuantumFurnace._channel_spectral_gap(decomp.eigenvalues, 0.37),
+            0.0; atol=1e-12, rtol=0)
     end
 
     # ========================================================================

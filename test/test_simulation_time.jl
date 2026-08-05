@@ -27,7 +27,7 @@
             # inner coherent (b_+)
             14, 16384, 0.628, 2π/(16384*0.628),
             # GQSP
-            true, 2,
+            true, 2, :formal_unscaled_gqsp_surrogate,
             # physics
             10.0, 0.1, 0.01, :KMS, 4, 1.5, 10.0,
             # filter
@@ -47,6 +47,7 @@
         @test budget.N_bp == 16384
         @test budget.with_gqsp === true
         @test budget.gqsp_degree == 2
+        @test budget.cost_interpretation === :formal_unscaled_gqsp_surrogate
         @test budget.construction == :KMS
         @test budget.filter_type == :smooth_metropolis
         @test budget.T == 10.0
@@ -56,6 +57,7 @@
         @test occursin("SimulationTimeBudget", compact)
         @test occursin("r_D=12", compact)
         @test occursin("gqsp d=2", compact)
+        @test occursin("formal surrogate", compact)
 
         # Verbose show
         verbose = sprint(show, MIME"text/plain"(), budget)
@@ -65,6 +67,8 @@
         @test occursin("OFT time", verbose)
         @test occursin("B per BE", verbose)
         @test occursin("B time", verbose)
+        @test occursin("formal_unscaled_gqsp_surrogate", verbose)
+        @test occursin("not a synthesised GQSP circuit", verbose)
         @test occursin("Per step", verbose)
         @test occursin("Total", verbose)
     end
@@ -139,6 +143,34 @@
         # Default config: with_gqsp=false → b_time === b_per_be (no multiplier).
         @test budget.with_gqsp === false
         @test budget.b_time ≈ budget.b_per_be rtol=TOL_EXACT
+        @test budget.cost_interpretation === :physical_channel
+    end
+
+    @testset "compute_simulation_time — exact nonnegative step count" begin
+        config = make_config(Thermalize(), TimeDomain())
+
+        # The exact count owns both resource accounting and time metadata. This
+        # avoids ceil((k·δ)/δ) adding a step through floating-point roundoff.
+        k = 7
+        T_exact = k * config.delta
+        budget = compute_simulation_time(
+            config, TEST_HAM, T_exact; n_steps=k)
+        @test budget.n_steps == k
+        @test budget.T ≈ T_exact atol=0 rtol=8eps(Float64)
+        @test budget.total_time ≈ k * budget.per_step_time rtol=TOL_EXACT
+
+        zero = compute_simulation_time(
+            config, TEST_HAM, 0.0; n_steps=0)
+        @test zero.n_steps == 0
+        @test zero.T == 0.0
+        @test zero.total_time == 0.0
+
+        @test_throws ArgumentError compute_simulation_time(
+            config, TEST_HAM, 1.0; n_steps=k)
+        @test_throws ArgumentError compute_simulation_time(
+            config, TEST_HAM, 0.0)
+        @test_throws ArgumentError compute_simulation_time(
+            config, TEST_HAM, 0.0; n_steps=-1)
     end
 
     @testset "compute_simulation_time — GNS" begin
@@ -238,6 +270,12 @@
         @test b1.with_gqsp === true && b1.gqsp_degree == 1
         @test b2.with_gqsp === true && b2.gqsp_degree == 2
         @test b3.with_gqsp === true && b3.gqsp_degree == 3
+        @test b0.cost_interpretation === :physical_channel
+        @test all(b -> b.cost_interpretation ===
+                       :formal_unscaled_gqsp_surrogate, (b1, b2, b3))
+        @test occursin("formal surrogate", sprint(show, b1))
+        @test occursin("formal_unscaled_gqsp_surrogate",
+            sprint(show, MIME"text/plain"(), b1))
 
         # GNS path: with_gqsp is config-rejected (validate_config!), but if a budget were
         # computed for a GNS config, b_time stays 0 regardless of multiplier branch.
@@ -328,6 +366,7 @@
         @test cnt.n_qubits == NUM_QUBITS
         @test cnt.rescaling_factor == TEST_HAM.rescaling_factor
         @test cnt.T == 10.0
+        @test cnt.cost_interpretation === :physical_channel
     end
 
     @testset "count_trotter_steps — GNS has no coherent substeps" begin
@@ -361,6 +400,10 @@
             @test cnt.b_substeps_per_be == base.b_substeps_per_be
             # OFT leg blind to GQSP.
             @test cnt.oft_substeps_per_step == base.oft_substeps_per_step
+            @test cnt.cost_interpretation === :formal_unscaled_gqsp_surrogate
+            @test occursin("formal surrogate", sprint(show, cnt))
+            @test occursin("formal_unscaled_gqsp_surrogate",
+                sprint(show, MIME"text/plain"(), cnt))
         end
     end
 
@@ -450,6 +493,11 @@
         @test bgt.rxx_total == 20140.0
         @test bgt.f_ctrl1 == 3.0 && bgt.f_ctrl2 == 6.0
         @test bgt.hamiltonian == "heis1d_test"
+        @test bgt.steps.cost_interpretation ===
+            :formal_unscaled_gqsp_surrogate
+        @test occursin("formal unscaled-GQSP surrogate", sprint(show, bgt))
+        @test occursin("formal_unscaled_gqsp_surrogate",
+            sprint(show, MIME"text/plain"(), bgt))
 
         # Per-pass controlled count, hand-computed. OFT/pass = (N_D−1)·M_D =
         # 7·2 = 14, ×2 = 28/step; coherent b/step = 168. Blocks: fwd r_D=3,

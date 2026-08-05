@@ -85,6 +85,37 @@ using LinearAlgebra
     end
 end
 
+@testset "Weak-measurement rate contraction" begin
+    delta = 0.01
+    identity2 = Matrix{ComplexF64}(I, 2, 2)
+
+    # The residual is alpha^2 R(I-R), so a material violation of either
+    # spectral bound is not a CPTP channel and must not be clamped away.
+    @test_throws ArgumentError QuantumFurnace._build_cptp_channel(
+        Matrix{ComplexF64}(2I, 2, 2), delta)
+    @test_throws ArgumentError QuantumFurnace._build_cptp_channel(
+        ComplexF64[-1e-6 0; 0 0.5], delta)
+    @test_throws ArgumentError QuantumFurnace._build_cptp_channel(
+        ComplexF64[0.5 1e-4im; 0 0.5], delta)
+    @test_throws ArgumentError QuantumFurnace._build_cptp_channel(
+        ComplexF64[NaN 0; 0 0.5], delta)
+
+    # Explicitly bounded endpoint roundoff is cleaned up. Completeness stays
+    # at machine precision rather than hiding a material residual defect.
+    endpoint_roundoff = 2eps(Float64)
+    R_roundoff = Matrix(Diagonal(ComplexF64[
+        -endpoint_roundoff, 1 + endpoint_roundoff]))
+    built = QuantumFurnace._build_cptp_channel(R_roundoff, delta)
+    completeness = built.K0' * built.K0 + delta * R_roundoff +
+        built.U_residual' * built.U_residual
+    @test isapprox(completeness, identity2; atol=1e-14, rtol=0)
+
+    # Stable alpha evaluation retains the delta/2 small-step limit.
+    tiny_delta = 1e-14
+    tiny = QuantumFurnace._build_cptp_channel(0.5identity2, tiny_delta)
+    @test isapprox(tiny.alpha, tiny_delta / 2; rtol=1e-14, atol=0)
+end
+
 @testset "Density-matrix helper invariants" begin
     rho = Hermitian(ComplexF64[0.75 0.0; 0.0 0.25])
     sigma = Hermitian(ComplexF64[0.25 0.0; 0.0 0.75])

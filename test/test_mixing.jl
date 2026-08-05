@@ -537,7 +537,7 @@ using StableRNGs
         end
 
         # ---------------------------------------------------------------
-        # (d') NamedTuple convenience: Lindbladian + channel (μ→λ) + guards
+        # (d') NamedTuple convenience: continuous generator + discrete channel + guards
         # ---------------------------------------------------------------
         @testset "(d') eigenmode_mixing_time(traj::NamedTuple) — Lindbladian + channel" begin
             # Minimal 2-mode toy: steady |0><0| + one slow real mode. d(t) =
@@ -561,14 +561,123 @@ using StableRNGs
             resL = eigenmode_mixing_time(trajL, target)
             @test resL.mixing_time == ref.mixing_time
 
-            # Channel-shape NamedTuple: μ = e^{λδ}; convenience inverts λ=log(μ)/δ.
+            # Channel-shape NamedTuple: μ = e^{λδ}. The physical
+            # crossing is the first integer step, not a principal-log interpolation.
             δ     = 0.05
             μ     = ComplexF64[exp(0.0 * δ), exp(λ_slow * δ)]
             trajC = (t = Float64[], distances = Float64[], eigenvalues = μ, c = c,
                      R_modes = Rmodes, rho_inf = rho_inf, sigma_beta = sigma_beta,
                      delta_used = δ)
             resC = eigenmode_mixing_time(trajC, target)
-            @test isapprox(resC.mixing_time, ref.mixing_time; rtol = 1e-9)
+            expected_step = ceil(Int, ref.mixing_time / δ)
+            @test resC.crossing_kind === :integer_steps
+            @test resC.mixing_steps == expected_step
+            @test resC.mixing_time == expected_step * δ
+
+            # A negative mode makes the distinction explicit: its sign
+            # alternates under physical powers, and the first integer trace-
+            # distance crossing is k=5.
+            mu_negative = ComplexF64[1.0, -0.8]
+            negative_traj = merge(
+                trajC, (eigenvalues = mu_negative, delta_used = 1.0))
+            negative = eigenmode_mixing_time(negative_traj, 0.15)
+            @test negative.source === :extrapolated
+            @test negative.crossing_kind === :integer_steps
+            @test negative.mixing_steps == 5
+            @test negative.mixing_time == 5.0
+            @test negative.gap == -log(0.8)
+
+            # A valid unital Pauli channel can be nonmonotone relative to a
+            # Gibbs reference distinct from its fixed point. Here lambda_z=-0.8
+            # sends |0><0| exactly to sigma at k=1, then away again. A binary
+            # search over k=0:9 lands on the later k=7 crossing instead.
+            pauli_traj = (
+                t = Float64[],
+                distances = Float64[],
+                eigenvalues = ComplexF64[1.0, -0.8],
+                c = ComplexF64[0.0, 0.5],
+                R_modes = [Matrix{ComplexF64}(I, 2, 2) / 2,
+                           ComplexF64[1 0; 0 -1]],
+                rho_inf = Matrix{ComplexF64}(I, 2, 2) / 2,
+                sigma_beta = ComplexF64[0.1 0; 0 0.9],
+                delta_used = 1.0,
+            )
+            pauli_crossing = eigenmode_mixing_time(
+                pauli_traj, 0.5; k_upper=9)
+            @test pauli_crossing.source === :extrapolated
+            @test pauli_crossing.mixing_steps == 1
+            @test pauli_crossing.mixing_time == 1.0
+
+            # An asymptotic floor is not a no-crossing certificate: this
+            # alternating mode hits the distinct Gibbs reference at k=1 even
+            # though the limiting state remains 0.4 away from it.
+            transient_traj = merge(pauli_traj, (
+                c = ComplexF64[0.0, -0.5],
+                sigma_beta = ComplexF64[0.9 0; 0 0.1],
+            ))
+            transient = eigenmode_mixing_time(
+                transient_traj, 0.1; k_upper=2)
+            @test transient.floor_distance ≈ 0.4 atol=1e-14
+            @test transient.source === :extrapolated
+            @test transient.mixing_steps == 1
+            @test transient.mixing_time == 1.0
+
+            # The k=0 state is chronological too, and must be checked before
+            # classifying the same nonzero asymptotic floor.
+            initially_mixed = eigenmode_mixing_time(
+                merge(transient_traj, (c = ComplexF64[0.0, 0.4],)),
+                0.1; k_upper=0)
+            @test initially_mixed.floor_distance ≈ 0.4 atol=1e-14
+            @test initially_mixed.source === :extrapolated
+            @test initially_mixed.mixing_steps == 0
+            @test initially_mixed.mixing_time == 0.0
+
+            # A periodic CPTP channel has zero generator-equivalent gap, but a
+            # caller-supplied physical horizon can still contain a crossing.
+            periodic_traj = merge(pauli_traj, (
+                eigenvalues = ComplexF64[1.0, -1.0],
+                c = ComplexF64[0.0, 0.5],
+                sigma_beta = ComplexF64[0 0; 0 1],
+            ))
+            periodic = eigenmode_mixing_time(
+                periodic_traj, 1e-12; k_upper=1)
+            @test periodic.gap == 0.0
+            @test periodic.source === :extrapolated
+            @test periodic.mixing_steps == 1
+            @test periodic.mixing_time == 1.0
+
+            # A hard cap is explicit and does not masquerade as a floor. The
+            # dual witness certifies every alternating non-crossing step after
+            # one exact decomposition, so even a long chronological horizon
+            # remains cheap without weakening first-crossing correctness.
+            periodic_no_crossing = eigenmode_mixing_time(
+                merge(periodic_traj, (sigma_beta = pauli_traj.rho_inf,)),
+                0.1; k_upper=100_000, max_steps=5_000)
+            @test periodic_no_crossing.source === :horizon_exhausted
+            @test periodic_no_crossing.search_horizon == 5_000
+            @test periodic_no_crossing.horizon_capped
+            @test periodic_no_crossing.n_evals == 1
+
+            # A decaying tail can certify a genuine asymptotic floor after the
+            # finite scan. A nondecaying periodic tail receives the separate
+            # certified-no-crossing label rather than being called a floor.
+            certified_floor = eigenmode_mixing_time(
+                merge(transient_traj, (
+                    eigenvalues = ComplexF64[1.0, 0.5],
+                    c = ComplexF64[0.0, -0.5],
+                )), 0.1; k_upper=10)
+            @test certified_floor.source === :floor
+            @test certified_floor.mixing_time == Inf
+            @test certified_floor.tail_bound <
+                certified_floor.floor_distance - 0.1
+
+            certified_periodic = eigenmode_mixing_time(
+                merge(transient_traj, (
+                    eigenvalues = ComplexF64[1.0, -1.0],
+                    c = ComplexF64[0.0, -0.05],
+                )), 0.1; k_upper=10)
+            @test certified_periodic.source === :certified_no_crossing
+            @test certified_periodic.mixing_time == Inf
 
             # qf-3uj guards: the curve fit refuses both predictor NamedTuples…
             @test_throws ArgumentError estimate_mixing_time(trajL; target_epsilon = target)

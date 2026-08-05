@@ -1,5 +1,7 @@
 # Resource estimates for the OFT and coherent parts of the sampling channel.
-# Math: $t_total = ceil(T / delta) (2 t_OFT + t_B)$.
+# Math: $t_total = ceil(T / delta) (2 t_OFT + t_B)$. GQSP-labelled counts are
+# formal until the current unscaled polynomial is made contractive and its
+# complementary polynomial/circuit is synthesized.
 
 """
     SimulationTimeBudget
@@ -13,6 +15,9 @@ Hamiltonian-simulation time budget for a thermalisation run.
 - `per_step_time`, `n_steps`, `total_time`: combined cost, step count, and total.
 - `r_D`/`r_bm`/`r_bp` groups: independent dissipative and coherent registers.
 - `with_gqsp`, `gqsp_degree`: coherent implementation metadata.
+- `cost_interpretation`: `:physical_channel` for the implemented direct
+  coherent step, or `:formal_unscaled_gqsp_surrogate` when the query count
+  prices the current unsynthesised polynomial surrogate.
 - `beta`, `sigma`, `delta`, `construction`, `n_qubits`, `rescaling_factor`,
   `T`: physical and algorithmic metadata.
 - `filter_type`, `filter_params`: transition-filter metadata.
@@ -44,6 +49,7 @@ struct SimulationTimeBudget
     # GQSP info
     with_gqsp::Bool
     gqsp_degree::Int
+    cost_interpretation::Symbol
     # Physical parameters
     beta::Float64
     sigma::Float64
@@ -69,8 +75,12 @@ function _qpe_grid_info(r::Int, w0::Real)
     return (; N, t0, energy_range)
 end
 
+_channel_cost_interpretation(with_gqsp::Bool) = with_gqsp ?
+    :formal_unscaled_gqsp_surrogate : :physical_channel
+
 function Base.show(io::IO, b::SimulationTimeBudget)
-    print(io, "SimulationTimeBudget(r_D=$(b.r_D), total=$(b.total_time), n_steps=$(b.n_steps), $(b.construction)$(b.with_gqsp ? ", gqsp d=$(b.gqsp_degree)" : ""))")
+    gqsp = b.with_gqsp ? ", gqsp d=$(b.gqsp_degree), formal surrogate" : ""
+    print(io, "SimulationTimeBudget(r_D=$(b.r_D), total=$(b.total_time), n_steps=$(b.n_steps), $(b.construction)$gqsp)")
 end
 
 function Base.show(io::IO, ::MIME"text/plain", b::SimulationTimeBudget)
@@ -84,6 +94,9 @@ function Base.show(io::IO, ::MIME"text/plain", b::SimulationTimeBudget)
     fp = isempty(b.filter_params) ? "" : "($(join(["$k=$v" for (k,v) in b.filter_params], ", ")))"
     println(io, "  Filter: $(b.filter_type)$fp")
     println(io, "  GQSP: with_gqsp=$(b.with_gqsp), gqsp_degree=$(b.gqsp_degree)")
+    println(io, "  Cost interpretation: $(b.cost_interpretation)")
+    b.with_gqsp && println(io,
+        "  Warning: formal query count for the unscaled polynomial surrogate; not a synthesised GQSP circuit")
     println(io, "  T: $(b.T)")
     println(io, "  ─────────────────────────────────")
     println(io, "  OFT time:      $(b.oft_time)")
@@ -163,24 +176,36 @@ function _determine_filter_info(config::Config)
 end
 
 """
-    compute_simulation_time(config, ham, T) -> SimulationTimeBudget
+    compute_simulation_time(config, ham, T; n_steps=nothing) -> SimulationTimeBudget
 
 Compute the Hamiltonian-simulation time budget up to target time `T`.
 
 # Arguments
 - `config`: thermalisation configuration with independent register triples.
 - `ham`: Hamiltonian supplying the physical rescaling factor.
-- `T`: positive target evolution time.
+- `T`: target evolution time. It must be finite and positive when `n_steps` is
+  omitted, and must equal `n_steps * config.delta` when an exact count is
+  supplied (including `T = 0` for zero steps).
+
+# Keywords
+- `n_steps`: Exact nonnegative channel-step count. When omitted, use
+  `ceil(Int, T / config.delta)` for a general continuous target time. When
+  supplied, the budget records the exact effective time `n_steps * delta`.
 
 # Returns
 A [`SimulationTimeBudget`](@ref). OFT uses the dissipative register; the
 coherent term uses its outer and inner registers. With GQSP, the coherent
-cost is `2 * gqsp_degree * b_per_be`.
+cost is formally `2 * gqsp_degree * b_per_be`. The current `with_gqsp=true`
+simulator applies an unscaled polynomial without complementary synthesis, so
+this is labelled `:formal_unscaled_gqsp_surrogate`, not presented as the cost
+of a realizable postselected GQSP circuit.
 """
 function compute_simulation_time(
     config::Config{Thermalize, D},
     ham::HamHam,
     T::Real,
+    ;
+    n_steps::Union{Nothing, Integer}=nothing,
 ) where {D <: Union{TimeDomain, TrotterDomain}}
     delta = config.delta
     # OFT and the two coherent kernels use independent register triples.
@@ -190,7 +215,15 @@ function compute_simulation_time(
     delta !== nothing && delta > 0 || throw(ArgumentError("config.delta must be set and positive"))
     r_D !== nothing && r_D > 0 || throw(ArgumentError("dissipative register r_D must be set and positive"))
     w0_D !== nothing || throw(ArgumentError("dissipative register w0_D must be set"))
-    T > 0 || throw(ArgumentError("T must be positive"))
+    T_float = Float64(T)
+    isfinite(T_float) || throw(ArgumentError("T must be finite"))
+    if isnothing(n_steps)
+        T_float > 0 || throw(ArgumentError(
+            "T must be positive when n_steps is omitted"))
+    else
+        n_steps >= 0 || throw(ArgumentError(
+            "n_steps must be nonnegative when provided"))
+    end
 
     # Dissipative grid
     grid_D = _qpe_grid_info(r_D, w0_D)
@@ -239,8 +272,18 @@ function compute_simulation_time(
 
     # Assembly
     per_step_time = 2.0 * oft_time + b_time
-    n_steps = ceil(Int, T / delta)
-    total_time = Float64(n_steps) * per_step_time
+    step_count = isnothing(n_steps) ? ceil(Int, T_float / delta) : Int(n_steps)
+    effective_T = isnothing(n_steps) ? T_float : Float64(step_count) * Float64(delta)
+    isfinite(effective_T) || throw(ArgumentError(
+        "n_steps * config.delta must be finite"))
+    if n_steps !== nothing
+        time_tol = 8eps(Float64) * max(1.0, abs(effective_T))
+        isapprox(T_float, effective_T; atol=time_tol, rtol=8eps(Float64)) ||
+            throw(ArgumentError(
+                "T must agree with n_steps * config.delta when n_steps is provided " *
+                "(got T=$T_float, n_steps=$step_count, delta=$delta, expected T=$effective_T)"))
+    end
+    total_time = Float64(step_count) * per_step_time
 
     # Metadata
     n_qubits = config.num_qubits
@@ -248,13 +291,13 @@ function compute_simulation_time(
     filter_type, filter_params = _determine_filter_info(config)
 
     return SimulationTimeBudget(
-        oft_time, b_per_be, b_time, per_step_time, n_steps, total_time,
+        oft_time, b_per_be, b_time, per_step_time, step_count, total_time,
         Int(r_D), Int(N_D), Float64(w0_D), Float64(t0_D), grid_D.energy_range,
         Int(r_bm), Int(N_bm), Float64(w0_bm), Float64(t0_bm),
         Int(r_bp), Int(N_bp), Float64(w0_bp), Float64(t0_bp),
-        Bool(with_gqsp), Int(gqsp_degree),
+        Bool(with_gqsp), Int(gqsp_degree), _channel_cost_interpretation(with_gqsp),
         Float64(config.beta), Float64(config.sigma), Float64(delta),
-        construction_sym, n_qubits, Float64(ham.rescaling_factor), Float64(T),
+        construction_sym, n_qubits, Float64(ham.rescaling_factor), effective_T,
         filter_type, filter_params,
     )
 end
@@ -275,6 +318,9 @@ Plain substep counts are a lower bound until control overheads are applied.
 - `blocks_per_step`, `total_blocks`: contiguous ladder blocks used for
   transpiler-intercept corrections.
 - `r_*`, `N_*`, `t0_*`, `M_*`: independent register and Strang parameters.
+- `cost_interpretation`: `:physical_channel` or
+  `:formal_unscaled_gqsp_surrogate`, with the latter marking counts that assume
+  a GQSP query pattern but not a synthesized contractive polynomial.
 - Remaining fields record GQSP, construction, temperature, and system metadata.
 """
 struct TrotterStepBudget
@@ -310,6 +356,7 @@ struct TrotterStepBudget
     # GQSP info
     with_gqsp::Bool
     gqsp_degree::Int
+    cost_interpretation::Symbol
     # Physical parameters
     beta::Float64
     sigma::Float64
@@ -321,7 +368,8 @@ struct TrotterStepBudget
 end
 
 function Base.show(io::IO, b::TrotterStepBudget)
-    print(io, "TrotterStepBudget(total=$(b.total_substeps), per_step=$(b.substeps_per_step), n_steps=$(b.n_steps), $(b.construction)$(b.with_gqsp ? ", gqsp d=$(b.gqsp_degree)" : ""))")
+    gqsp = b.with_gqsp ? ", gqsp d=$(b.gqsp_degree), formal surrogate" : ""
+    print(io, "TrotterStepBudget(total=$(b.total_substeps), per_step=$(b.substeps_per_step), n_steps=$(b.n_steps), $(b.construction)$gqsp)")
 end
 
 function Base.show(io::IO, ::MIME"text/plain", b::TrotterStepBudget)
@@ -331,6 +379,9 @@ function Base.show(io::IO, ::MIME"text/plain", b::TrotterStepBudget)
     println(io, "  Inner coh.   (b_+): r=$(b.r_bp), N=$(b.N_bp), t0=$(b.t0_bp), M=$(b.M_bp)")
     println(io, "  Physics: β=$(b.beta), σ=$(b.sigma), δ=$(b.delta), n=$(b.n_qubits)")
     println(io, "  Construction: $(b.construction), GQSP: with_gqsp=$(b.with_gqsp), d=$(b.gqsp_degree)")
+    println(io, "  Cost interpretation: $(b.cost_interpretation)")
+    b.with_gqsp && println(io,
+        "  Warning: formal query count for the unscaled polynomial surrogate; not a synthesized GQSP circuit")
     println(io, "  T: $(b.T)")
     println(io, "  ─────────────────────────────────")
     println(io, "  OFT substeps/pass:   $(b.oft_substeps_per_pass)  (= (N_D−1)·M_D)")
@@ -350,7 +401,10 @@ Count second-order Strang substeps and contiguous ladder blocks up to time `T`.
 
 The configuration must provide each active leg's register and `M` value. The
 count uses full QPE ladders without transition-amplitude weighting or kernel
-truncation and returns a [`TrotterStepBudget`](@ref).
+truncation and returns a [`TrotterStepBudget`](@ref). For `with_gqsp=true`,
+the count prices the formal `2 * gqsp_degree` query pattern but is labelled as
+an unscaled-polynomial surrogate until contraction and complementary synthesis
+are implemented.
 """
 function count_trotter_steps(
     config::Config{Thermalize, D},
@@ -400,7 +454,8 @@ function count_trotter_steps(
     b_inner_substeps_per_be = coherent ? 4 * (N_bp - 1) * M_bp : 0
     b_substeps_per_be = b_outer_substeps_per_be + b_inner_substeps_per_be
 
-    # Math: $N_BE = 2 d$ for GQSP, one for a direct exponential, or zero.
+    # Formal query model: $N_BE = 2 d$ for the current unscaled GQSP
+    # polynomial surrogate, one for a direct exponential, or zero.
     n_be_queries = !coherent ? 0 : (config.with_gqsp ? 2 * config.gqsp_degree : 1)
     b_substeps_per_step = n_be_queries * b_substeps_per_be
 
@@ -425,6 +480,7 @@ function count_trotter_steps(
         Int(r_bm), Int(N_bm), t0_bm, Int(M_bm),
         Int(r_bp), Int(N_bp), t0_bp, Int(M_bp),
         Bool(config.with_gqsp), Int(config.gqsp_degree),
+        _channel_cost_interpretation(config.with_gqsp),
         Float64(config.beta), Float64(config.sigma), Float64(delta),
         construction_sym, config.num_qubits, Float64(ham.rescaling_factor), Float64(T),
     )
@@ -445,7 +501,9 @@ Native RXX gate-count estimate from an affine transpiler model.
 
 The estimate excludes state preparation, transition-weight rotations, and LCU
 PREP/SELECT beyond the counted block encodings. Generic-angle transpiler fits
-do not credit accidental angle simplifications.
+do not credit accidental angle simplifications. If `steps.with_gqsp` is true,
+the result is a formal count for the current unscaled polynomial surrogate,
+not a resource estimate for a synthesized postselected GQSP circuit.
 """
 struct RxxBudget
     rxx_total::Float64               # plain lower bound
@@ -462,7 +520,8 @@ struct RxxBudget
 end
 
 function Base.show(io::IO, b::RxxBudget)
-    print(io, "RxxBudget(rxx_total=$(b.rxx_total), controlled=$(b.rxx_total_controlled), $(b.hamiltonian) n=$(b.steps.n_qubits))")
+    suffix = b.steps.with_gqsp ? ", formal unscaled-GQSP surrogate" : ""
+    print(io, "RxxBudget(rxx_total=$(b.rxx_total), controlled=$(b.rxx_total_controlled), $(b.hamiltonian) n=$(b.steps.n_qubits)$suffix)")
 end
 
 function Base.show(io::IO, ::MIME"text/plain", b::RxxBudget)
@@ -471,9 +530,12 @@ function Base.show(io::IO, ::MIME"text/plain", b::RxxBudget)
     println(io, "  Substeps total:      $(b.steps.total_substeps)  (× slope = $(b.rxx_substep_part))")
     println(io, "  Blocks total:        $(b.steps.total_blocks)  (× intercept = $(b.rxx_boundary_part))")
     println(io, "  Control factors:     f1=$(b.f_ctrl1) (OFT fwd), f2=$(b.f_ctrl2) (OFT bwd + GQSP)")
+    println(io, "  Cost interpretation: $(b.steps.cost_interpretation)")
     println(io, "  ─────────────────────────────────")
     println(io, "  RXX total (plain):       $(b.rxx_total)   [lower bound]")
-    print(io,   "  RXX total (controlled):  $(b.rxx_total_controlled)   [defendable Ham-sim]")
+    controlled_label = b.steps.with_gqsp ?
+        "formal unscaled-GQSP surrogate" : "implemented Ham-sim model"
+    print(io,   "  RXX total (controlled):  $(b.rxx_total_controlled)   [$controlled_label]")
 end
 
 """
@@ -524,7 +586,9 @@ Estimate native RXX two-qubit gates up to time `T` from a measured cost table.
 
 `rxx_table` comes from [`load_rxx_table`](@ref); `hamiltonian` selects its
 family key. Returns an [`RxxBudget`](@ref) containing both the plain lower
-bound and the control-adjusted estimate.
+bound and the control-adjusted estimate. A `with_gqsp=true` configuration is
+explicitly labelled as a formal unscaled-polynomial surrogate through its
+underlying step budget.
 """
 function estimate_rxx_count(
     config::Config{Thermalize, D},

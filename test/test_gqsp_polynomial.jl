@@ -2,13 +2,14 @@
 Tests for the GQSP polynomial approximation `_gqsp_apply_polynomial` and the
 block-encoding-norm helper `_gqsp_block_encoding_alpha` (qf-63j.2).
 
-`_gqsp_apply_polynomial(B, α, δ, d)` computes the post-selected anc=|0⟩ block of
-the GQSP circuit at degree `d`, i.e. the Chebyshev expansion
+`_gqsp_apply_polynomial(B, α, δ, d)` computes the raw Jacobi–Anger
+Chebyshev truncation
 
     f_d(B/α) = J_0(δα) I + Σ_{k=1}^{d} 2 (-i)^k J_k(δα) T_k(B/α)
 
-obtained from qubitization + Jacobi-Anger truncation. To `O((δα)^{d+1})` this
-approximates `exp(-iδ B)`.
+obtained from qubitization + Jacobi-Anger truncation. To `O((δα)^{d+1})`
+this approximates `exp(-iδ B)`, but without contractive rescaling it is not
+a certified postselected GQSP block.
 
 Test plan:
 1. Closed forms at d=1 and d=2 vs hand-derived formulas.
@@ -90,6 +91,17 @@ end
                   2im * besselj(1, δ * α) .* (B ./ α)
             @test opnorm(f1 .- ref) < 1e-13
         end
+    end
+
+    @testset "Raw truncation is not automatically a postselected contraction" begin
+        # At the spectral endpoint x=1, the degree-one truncation has norm
+        # sqrt(J0(z)^2 + 4J1(z)^2) > 1. This pins the reason simulator
+        # metadata labels the current path a nonphysical polynomial surrogate.
+        z = 1e-2
+        raw = QuantumFurnace._gqsp_apply_polynomial(
+            Matrix{ComplexF64}(I, 2, 2), 1.0, z, 1)
+        @test opnorm(raw) > 1
+        @test opnorm(raw' * raw - I(2)) > 1e-6
     end
 
     @testset "d=2 closed form: (J_0+2J_2) I − 2i J_1 (B/α) − 4 J_2 (B/α)²" begin
@@ -197,10 +209,10 @@ end
     @test α2 ≈ 4 * α atol=1e-14
 end
 
-@testset "GQSP operator/circuit equivalence: f_d(B/α) ≈ [L_d(W)]_anc=0 (qf-63j.2)" begin
-    # The post-selected anc=|0⟩ block of the GQSP circuit applied to the qubitization
-    # walk W of B is, by qubitization + Jacobi-Anger, exactly the Chebyshev expansion
-    # f_d(B/α). This test verifies the implementation matches that identity.
+@testset "Jacobi–Anger operator/Laurent equivalence (qf-63j.2)" begin
+    # Applying the raw Laurent truncation L_d to the qubitization walk and
+    # extracting its ancilla block gives the Chebyshev expansion f_d(B/α).
+    # This is an algebraic identity, not a claim that L_d is itself unitary.
     rng = MersenneTwister(2026)
     n = 4
     Hraw = randn(rng, ComplexF64, n, n)

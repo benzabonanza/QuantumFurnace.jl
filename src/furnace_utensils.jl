@@ -227,34 +227,63 @@ function _select_b_plus_calculator(config::Config{<:Any, <:Any, KMS})
 end
 
 """
-    _build_cptp_channel(R, delta) -> (; K0, U_residual, alpha)
+    _build_cptp_channel(R, delta; atol=nothing, rtol=nothing) -> (; K0, U_residual, alpha)
 
 Construct the no-event and residual Kraus matrices from a rate operator.
 
 # Arguments
 - `R`: Hermitian rate operator.
 - `delta`: Channel step size.
+- `atol`, `rtol`: Optional roundoff tolerances for the contraction check.
 
 # Returns
-`(; K0, U_residual, alpha)`. Negative eigenvalues of the residual PSD matrix
-are clamped to zero before taking its square root.
+`(; K0, U_residual, alpha)`. The weak-measurement block encoding requires
+`0 <= R <= I`; violations beyond the stated roundoff tolerance are rejected.
 """
-function _build_cptp_channel(R::Matrix{T}, delta::Real) where {T<:Complex}
-    dim = size(R, 1)
-    alpha = 1 - sqrt(1 - delta)
+function _build_cptp_channel(
+    R::Matrix{T},
+    delta::Real;
+    atol::Union{Nothing, Real} = nothing,
+    rtol::Union{Nothing, Real} = nothing,
+) where {T<:Complex}
+    dim = LinearAlgebra.checksquare(R)
+    dim > 0 || throw(ArgumentError("Channel rate operator R must be nonempty."))
+    all(isfinite, R) || throw(ArgumentError(
+        "Channel rate operator R must contain only finite values."))
 
-    # Math: $K_0 = I - alpha R$, where $alpha = 1 - sqrt(1-delta)$.
-    K0 = Matrix{T}(I, dim, dim) .- alpha .* R
+    RT = typeof(real(zero(T)))
+    delta_value = RT(delta)
+    isfinite(delta_value) && zero(RT) < delta_value <= one(RT) ||
+        throw(ArgumentError("delta must be finite and satisfy 0 < delta <= 1 (got $delta)."))
 
-    # Math: $S = (2 alpha-delta)R - alpha^2 R^2$.
-    R2 = R * R
-    S = (2 * alpha - delta) .* R .- (alpha^2) .* R2
-    hermitianize!(S)
+    atol_value, rtol_value = _density_tolerances(R; atol=atol, rtol=rtol)
+    isapprox(R, adjoint(R); atol=atol_value, rtol=rtol_value) ||
+        throw(ArgumentError("Channel rate operator R must be Hermitian."))
 
-    # PSD guard: clamp negative eigenvalues to zero
-    eig = eigen(Hermitian(S))
-    eig.values .= max.(eig.values, 0.0)
-    U_residual = Matrix{T}(Diagonal(sqrt.(eig.values)) * eig.vectors')
+    # A unitary block encoding obeys R = sum_j L_j^dagger L_j <= I.  Check
+    # both sides of the spectral interval before permitting bounded roundoff
+    # cleanup; otherwise the residual alpha^2 R(I-R) is not positive.
+    R_h = Hermitian((R + adjoint(R)) / 2)
+    R_eigen = eigen(R_h)
+    lower_bounded = _clamp_psd_eigenvalues(
+        R_eigen.values, atol_value, rtol_value, "Channel rate operator R")
+    upper_slack = _clamp_psd_eigenvalues(
+        one(RT) .- lower_bounded, atol_value, rtol_value,
+        "Channel rate complement I - R")
+    bounded_values = one(RT) .- upper_slack
+    R_bounded = Matrix{T}(
+        R_eigen.vectors * Diagonal(bounded_values) * adjoint(R_eigen.vectors))
+
+    # Stable form of alpha = 1 - sqrt(1-delta), avoiding cancellation at
+    # small delta.  Since delta = 2alpha-alpha^2, the residual spectrum is
+    # exactly alpha^2 lambda(1-lambda) for lambda in spectrum(R).
+    alpha = delta_value / (one(RT) + sqrt(one(RT) - delta_value))
+    K0 = Matrix{T}(I, dim, dim) .- alpha .* R_bounded
+    residual_values = (alpha^2) .* bounded_values .* (one(RT) .- bounded_values)
+    residual_values = _clamp_psd_eigenvalues(
+        residual_values, atol_value, rtol_value, "Weak-measurement residual")
+    U_residual = Matrix{T}(
+        Diagonal(sqrt.(residual_values)) * adjoint(R_eigen.vectors))
 
     return (; K0, U_residual, alpha)
 end

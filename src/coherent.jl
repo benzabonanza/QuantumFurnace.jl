@@ -578,7 +578,10 @@ B_trotter(jumps::AbstractVector{<:JumpOp}, triple::TrotterTriple, b_minus, b_plu
 Return one coherent channel step from an already normalised Hermitian `B`.
 
 The exact branch evaluates `exp(-i delta_eff B)`; the GQSP branch evaluates a
-degree-`gqsp_degree` Jacobi–Anger polynomial of the block-encoded operator.
+degree-`gqsp_degree` Jacobi–Anger truncation of the block-encoded operator.
+This raw truncation is not rescaled to satisfy the GQSP unit-supremum condition
+and is therefore a polynomial surrogate, not a certified postselected block.
+Callers apply it without renormalising and must report trace loss or gain.
 """
 function _coherent_unitary_step(
     jump::JumpOp,
@@ -638,14 +641,16 @@ _gqsp_block_encoding_alpha(jump, b_minus, b_plus, t0_sim::Real, gamma_norm_facto
 """
     _gqsp_apply_polynomial(B::AbstractMatrix{<:Complex}, alpha::Real, delta::Real, d::Int)
 
-Evaluate the degree-`d` post-selected GQSP polynomial by Clenshaw recurrence.
+Evaluate the raw degree-`d` Jacobi–Anger polynomial by Clenshaw recurrence.
 
 Math: `f_d(B/alpha) = J_0(delta alpha) I +
 sum_(k=1)^d 2 (-i)^k J_k(delta alpha) T_k(B/alpha)`.
 
 # Returns
 A matrix approximating `exp(-i delta B)` with Bessel-tail error
-`O((delta alpha)^(d+1))`. The result is generally not Hermitian.
+`O((delta alpha)^(d+1))`. The truncation is generally neither Hermitian nor
+unitary and can have norm above one. Without contractive rescaling and a
+complementary polynomial it is not the postselected block of a GQSP unitary.
 """
 function _gqsp_apply_polynomial(
     B::AbstractMatrix{<:Complex},

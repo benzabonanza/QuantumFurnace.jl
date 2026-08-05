@@ -122,4 +122,42 @@ using Random: Xoshiro
         @test err_d2 < err_d1                                # strictly better
     end
 
+    @testset "Unscaled GQSP surrogate trace is raw and predictor matches direct evolution" begin
+        # Degree one is deliberately retained. Over 100 steps its small
+        # non-unitarity is visible, while a full Krylov basis reproduces the
+        # direct polynomial surrogate to roundoff.
+        cfg = _therm_cfg(TimeDomain(); with_gqsp=true, gqsp_degree=1,
+                         delta=1e-2, mixing_time=1.0)
+        d = size(N3_HAM.data, 1)
+        rho_0 = Matrix{ComplexF64}(I, d, d) / d
+        direct = run_thermalize(
+            N3_JUMPS, cfg, N3_HAM; initial_dm=copy(rho_0), save_every=100)
+        predicted = predict_channel_trajectory(
+            cfg, N3_HAM, N3_JUMPS, rho_0, [0, 100];
+            krylovdim=d^2, tol=1e-12)
+
+        @test direct.metadata[:channel_representation] ===
+            :unscaled_gqsp_polynomial_surrogate
+        @test !direct.metadata[:trace_preserving_assumed]
+        @test !direct.metadata[:physical_channel]
+        @test !direct.metadata[:trace_normalized]
+        @test direct.metadata[:max_abs_trace_drift] > 1e-7
+        @test direct.metadata[:final_trace] == tr(direct.final_dm)
+
+        @test predicted.channel_representation ===
+            :unscaled_gqsp_polynomial_surrogate
+        @test !predicted.trace_preserving_assumed
+        @test !predicted.physical_channel
+        @test !predicted.trace_normalized
+        @test isnan(predicted.spectral_gap)
+        @test predicted.max_abs_trace_drift > 1e-7
+        @test isapprox(predicted.trace_values[end], tr(direct.final_dm);
+            atol=1e-10, rtol=0)
+        @test opnorm(predicted.rho_final - direct.final_dm) < 1e-10
+        @test abs(predicted.trace_values[end] - 1) > 1e-7
+        @test_throws ArgumentError eigenmode_mixing_time(predicted, 1e-3)
+        @test_throws ArgumentError krylov_spectral_gap(
+            cfg, N3_HAM, N3_JUMPS; krylovdim=20, howmany=4)
+    end
+
 end

@@ -234,6 +234,30 @@ function apply_adjoint_delta_channel!(
     return sc.rho_next
 end
 
+# A physical trace-preserving channel has a stationary mode at mu = 1, but a
+# peripheral mode such as mu = -1 can tie it in modulus. Select stationarity
+# independently, then order only the remaining decay modes by decreasing |mu|.
+# Raw non-TP polynomial surrogates have no distinguished stationary mode.
+function _channel_mode_permutation(
+    eigenvalues::AbstractVector;
+    assume_trace_preserving::Bool,
+)
+    perm = sortperm(eigenvalues; by=abs, rev=true)
+    assume_trace_preserving || return perm
+    isempty(eigenvalues) && return perm
+
+    stationary_idx = argmin(abs.(eigenvalues .- one(eltype(eigenvalues))))
+    filter!(i -> i != stationary_idx, perm)
+    pushfirst!(perm, stationary_idx)
+    return perm
+end
+
+function _channel_spectral_gap(eigenvalues_sorted::AbstractVector, delta::Real)
+    length(eigenvalues_sorted) >= 2 || return 0.0
+    abs_mu2 = abs(eigenvalues_sorted[2])
+    return abs_mu2 > 0 ? -log(abs_mu2) / delta : Inf
+end
+
 # Operator diagnostics do not have state-dependent modal coefficients.
 function _operator_spectral_modes(eigenvalues_sorted::AbstractVector{<:Complex},
                                   vecs_sorted::AbstractVector, dim::Integer)
@@ -368,7 +392,6 @@ function krylov_spectral_gap(
     _check_krylov_memory(config.num_qubits, krylovdim)
     validate_config!(config, hamiltonian)
     validate_jump_pairing(jumps; allow_unpaired_nonhermitian=allow_unpaired_nonhermitian)
-
     # Dimensions
     dim = size(hamiltonian.data, 1)
 
@@ -433,8 +456,13 @@ end
 """
     krylov_spectral_gap(config::Config{Thermalize}, hamiltonian, jumps; kwargs...) -> NamedTuple
 
-Compute the faithful channel spectrum with `:LM` targeting and convert it to
-generator rates using `(mu - 1)/delta`.
+Compute the faithful channel spectrum with `:LM` targeting.
+
+The captured mode closest to `mu=1` is placed first; remaining modes are
+ordered by decreasing `abs(mu)`. The reported generator-equivalent gap is
+`-log(abs(mu_2)) / delta`; the `eigenvalues` field retains the legacy
+first-order conversion `(mu - 1) / delta` for diagnostics, while
+`channel_eigenvalues` contains the raw discrete spectrum.
 
 Direct Arnoldi on a non-normal channel can select a faster mode even after
 formal convergence. Prefer the Lindbladian overload when only the robust
@@ -472,6 +500,9 @@ function krylov_spectral_gap(
     _check_krylov_memory(config.num_qubits, krylovdim)
     validate_config!(config, hamiltonian)
     validate_jump_pairing(jumps; allow_unpaired_nonhermitian=allow_unpaired_nonhermitian)
+    config.with_gqsp && throw(ArgumentError(
+        "krylov_spectral_gap does not accept the unscaled GQSP polynomial " *
+        "surrogate: it has no trace-preserving fixed point or physical channel gap."))
 
     # Get delta from config
     delta = config.delta
@@ -487,7 +518,9 @@ function krylov_spectral_gap(
     # Build the faithful jumpwise channel matvec.
     function channel_matvec(v::AbstractVector)
         rho = reshape(v, dim, dim)
-        apply_delta_channel!(ws, rho, config, hamiltonian)
+        # Arnoldi acts on arbitrary complex operators. Hermitian projection is
+        # only real-linear and would therefore change the channel spectrum.
+        apply_delta_channel!(ws, rho, config, hamiltonian; hermitize=false)
         return copy(vec(ws.scratch.rho_next))  # KrylovKit must own each returned vector.
     end
 
@@ -503,11 +536,13 @@ function krylov_spectral_gap(
     # Store raw channel eigenvalues before conversion
     channel_eigenvalues_raw = Complex{Float64}.(vals)
 
-    # Convert channel eigenvalues to Lindbladian eigenvalues: lambda_L = (mu - 1) / delta
+    # Retain the legacy first-order converted spectrum for diagnostics.
     lindblad_eigenvalues = (vals .- 1) ./ delta
 
-    # Sort Lindbladian eigenvalues by |Re(lambda)| ascending (steady state first)
-    perm = sortperm(lindblad_eigenvalues; by=v -> abs(real(v)))
+    # A peripheral mode can tie the stationary mode in modulus. Pin the mode
+    # closest to mu=1 first, then sort the remaining decay modes by |mu|.
+    perm = _channel_mode_permutation(
+        channel_eigenvalues_raw; assume_trace_preserving=true)
 
     eigenvalues_sorted = lindblad_eigenvalues[perm]
     vecs_sorted = vecs[perm]
@@ -521,8 +556,8 @@ function krylov_spectral_gap(
     # Extract gap_mode (eigenvector 2): reshape only
     gap_mode = reshape(vecs_sorted[2], dim, dim)
 
-    # Spectral gap = abs(real(lambda_L_2))
-    spectral_gap = abs(real(eigenvalues_sorted[2]))
+    # If mu_2 = 0 the mode vanishes in one step, hence an infinite log-rate.
+    spectral_gap = _channel_spectral_gap(channel_eigenvalues_sorted, delta)
 
     # Residual norms (reorder to match sorted eigenvalues)
     normres = Float64.(info.normres[perm])
@@ -542,6 +577,9 @@ function krylov_spectral_gap(
         spectral_modes,
         channel_eigenvalues = channel_eigenvalues_sorted,
         delta_used = Float64(delta),
+        trace_preserving_assumed = true,
+        physical_channel = true,
+        channel_representation = :deterministic_cptp,
     )
 end
 
@@ -591,6 +629,11 @@ function run_krylov_spectrum(
     wall_time = time() - t_start
     metadata = _capture_metadata(wall_time_seconds=wall_time)
     metadata[:spectral_modes] = krylov_result.spectral_modes
+    if config isa Config{Thermalize}
+        metadata[:trace_preserving_assumed] = krylov_result.trace_preserving_assumed
+        metadata[:physical_channel] = krylov_result.physical_channel
+        metadata[:channel_representation] = krylov_result.channel_representation
+    end
 
     return KrylovSpectrumResults{Float64}(
         config,

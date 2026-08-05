@@ -105,8 +105,8 @@ end
 
 Dense channel operator gap: materialise the faithful Φ_δ as a d²×d² superoperator
 (column-by-column via `apply_delta_channel!`, the same kernel `run_thermalize`
-uses), take its second-largest-|μ| eigenvalue μ₂, and return the Lindbladian-unit
-gap `|log|μ₂||/δ` (the exact log-rate of |μ| under iteration). At n=4 (DIM=16) the
+uses), take its second-largest-|μ| non-stationary eigenvalue μ₂, and return the
+Lindbladian-unit gap `-log|μ₂|/δ` (the exact log-rate of |μ| under iteration). At n=4 (DIM=16) the
 d²×d² eigendecomposition is trivial and is the SAME ground-truth tier already used
 for the dense 𝓛 reference (`extract_leading_eigendata`).
 
@@ -116,7 +116,7 @@ NON-NORMAL Φ_δ is a fragile fallback: as δ→0 the μ-spectrum clusters tight
 and the Arnoldi locks onto the WRONG (faster) eigenmode, independent of krylovdim —
 on the build_heis_1d n=4 draw the channel-Arnoldi gap DIVERGES from the true gap as
 δ shrinks (rel err 6.8%→57% over δ∈[0.1,0.005]), giving spurious NEGATIVE convergence
-orders. The matrix-free trajectory Pass-1 |log|μ₂||/δ from ρ₀=|+⟩ is also unreliable
+orders. The matrix-free trajectory Pass-1 `-log|μ₂|/δ` from ρ₀=|+⟩ is also unreliable
 here (ρ₀ becomes near-orthogonal to the slow Φ_δ mode at small δ, cf. qf-e4z.40).
 Only the DENSE Φ_δ reliably tracks the slowest mode at every δ — and it shows the
 clean O(δ) convergence the theory predicts (orders ≈ [1.02, 1.0] for ALL four
@@ -129,7 +129,7 @@ Compute L-vs-E convergence: compare Lindbladian spectral gap (delta-independent)
 against the DENSE channel-derived gap at multiple delta values.
 
 The faithful Chen channel has mu = exp(delta*lambda_L) + O(delta^2), so the
-first-order conversion (via |log|mu_2||/delta) introduces O(delta) error.
+first-order conversion (via `-log|mu_2|/delta`) introduces O(delta) error.
 
 Returns `(; gap_L, rows, orders)` where rows is a vector of
 `(; delta, gap_from_E, error)` named tuples and orders is a vector of
@@ -148,9 +148,12 @@ function _dense_phi_delta_gap(config_therm, hamiltonian, jumps; trotter=nothing)
         @views Phi[:, col] .= vec(ws.scratch.rho_next)
     end
     mu = eigvals(Phi)
-    perm = sortperm(mu; by=abs, rev=true)   # |μ| descending; steady state μ≈1 first
-    mu2 = mu[perm[2]]
-    return abs(log(abs(mu2))) / delta       # Lindbladian-unit gap (log-rate of |μ|)
+    stationary_idx = argmin(abs.(mu .- 1))
+    nonstationary = collect(eachindex(mu))
+    filter!(i -> i != stationary_idx, nonstationary)
+    sort!(nonstationary; by=i -> abs(mu[i]), rev=true)
+    mu2 = mu[first(nonstationary)]
+    return -log(abs(mu2)) / delta           # Lindbladian-unit gap (log-rate of |μ|)
 end
 
 function run_le_convergence(domain, hamiltonian, jumps;
