@@ -160,10 +160,12 @@ end
 """
     _check_1d_trotter_compatible(ham; tol=1e-10)
 
-Check that `_trotterize2`'s 1D-chain reconstruction matches `ham.data`.
+Check that `_trotterize2`'s 1D-chain reconstruction matches `ham.data` up to
+the physically irrelevant scalar shift.
 Returns the operator-norm deviation and throws when it exceeds `tol`.
 """
 function _check_1d_trotter_compatible(ham::HamHam{T}; tol::Real=1e-10) where {T<:AbstractFloat}
+    isfinite(tol) && tol >= 0 || throw(ArgumentError("tol must be finite and >= 0."))
     n = Int(log2(size(ham.data, 1)))
     rescale = Float64(ham.rescaling_factor)
     # Reconstruct the 1D-chain Hamiltonian the way _trotterize2 sees it.
@@ -181,14 +183,23 @@ function _check_1d_trotter_compatible(ham::HamHam{T}; tol::Real=1e-10) where {T<
             periodic=ham.periodic,
         ))
     end
-    H_alg = H_phys ./ rescale .+ Float64(ham.shift) * Matrix{ComplexF64}(I, 2^n, 2^n)
-    err = opnorm(H_alg .- Matrix{ComplexF64}(ham.data))
-    if err > tol
+    # Scalar shifts produce only a global phase. Centre both representations
+    # before dividing so a large identity offset cannot cause cancellation.
+    H_phys_centered = copy(H_phys)
+    H_alg_centered = Matrix{ComplexF64}(ham.data)
+    physical_gauge = real(H_phys_centered[begin, begin])
+    algorithm_gauge = real(H_alg_centered[begin, begin])
+    @inbounds for i in axes(H_phys_centered, 1)
+        H_phys_centered[i, i] -= physical_gauge
+        H_alg_centered[i, i] -= algorithm_gauge
+    end
+    err = opnorm(H_phys_centered ./ rescale .- H_alg_centered)
+    if !(isfinite(err) && err <= tol)
         throw(ArgumentError(
             "_trotterize2 / TrottTrott expects a 1D-chain HamHam. The stored " *
             "`ham.data` deviates from `_construct_base_ham(...) + " *
             "_construct_disordering_terms(...)` (with `periodic = ham.periodic`) " *
-            "by ‖ΔH‖_op = $err > tol = $tol. This usually means a 2D HamHam " *
+            "with ‖ΔH‖_op = $err at tol = $tol. This usually means a 2D HamHam " *
             "from `find_*_2d_heisenberg` was passed; `_trotterize2` does not " *
             "yet model 2D lattice bond structure."))
     end

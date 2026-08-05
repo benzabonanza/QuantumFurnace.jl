@@ -30,14 +30,216 @@ end
 Return the diagonal eigenbasis state `\$rho_i = exp(-beta E_i) / Z\$`.
 """
 function _gibbs_in_eigen(eigvals::Vector{T}, beta::T) where {T<:AbstractFloat}
+    weights = _gibbs_weights(eigvals, beta)
     dim = length(eigvals)
     CT = Complex{T}
-    Z = sum(exp.(-beta .* eigvals))
     rho = zeros(CT, dim, dim)
     for i in 1:dim
-        rho[i, i] = CT(exp(-beta * eigvals[i]) / Z)
+        rho[i, i] = CT(weights[i])
     end
     return rho
+end
+
+"""Return normalised Gibbs weights after shifting the ground energy to zero."""
+function _gibbs_weights(eigvals::AbstractVector{T}, beta::Real) where {T<:AbstractFloat}
+    isempty(eigvals) && throw(ArgumentError("eigvals must be nonempty."))
+    all(isfinite, eigvals) || throw(ArgumentError("eigvals must be finite."))
+    beta_T = T(beta)
+    isfinite(beta_T) && beta_T > zero(T) ||
+        throw(ArgumentError("beta must be finite and > 0."))
+
+    shifted_energies = eigvals .- minimum(eigvals)
+    weights = exp.(-beta_T .* shifted_energies)
+    partition = sum(weights)
+    isfinite(partition) && partition > zero(T) ||
+        throw(ArgumentError("Gibbs partition function is not finite and positive."))
+    weights ./= partition
+    return weights
+end
+
+const _FULL_RAW_SPECTRAL_VALIDATION_MAX_DIM = 128
+
+function _validate_local_terms(
+    terms::AbstractVector,
+    num_qubits::Int;
+    max_support::Int = num_qubits,
+    require_support_fits::Bool = true,
+    require_involution::Bool = false,
+)
+    num_qubits > 0 || throw(ArgumentError("num_qubits must be > 0."))
+    for term in terms
+        term isa AbstractVector || throw(ArgumentError(
+            "Each Hamiltonian term must be a vector of local factors."))
+        isempty(term) && throw(ArgumentError("Hamiltonian terms must have nonempty support."))
+        length(term) <= max_support || throw(ArgumentError(
+            "Hamiltonian term support $(length(term)) exceeds the supported maximum $max_support."))
+        if require_support_fits && length(term) > num_qubits
+            throw(ArgumentError(
+                "Hamiltonian term support $(length(term)) exceeds num_qubits=$num_qubits."))
+        end
+        for factor in term
+            factor isa AbstractMatrix{<:Number} || throw(ArgumentError(
+                "Each local Hamiltonian factor must be a numeric matrix."))
+            size(factor) == (2, 2) || throw(ArgumentError(
+                "Each local Hamiltonian factor must be 2 x 2, got $(size(factor))."))
+            all(isfinite, factor) || throw(ArgumentError(
+                "Local Hamiltonian factors must contain only finite values."))
+            ishermitian(factor) || throw(ArgumentError(
+                "Local Hamiltonian factors must be Hermitian."))
+            if require_involution
+                involution_tolerance = 100 * eps(Float64)
+                isapprox(adjoint(factor) * factor, I;
+                    atol=involution_tolerance, rtol=involution_tolerance) ||
+                    throw(ArgumentError(
+                        "Builder-supplied local factors must be Hermitian involutions."))
+            end
+        end
+    end
+    return nothing
+end
+
+function _validate_raw_hamiltonian(
+    raw::NamedTuple;
+    atol::Union{Nothing, Real} = nothing,
+    rtol::Union{Nothing, Real} = nothing,
+    spectral_validation::Symbol = :auto,
+    full_spectral_max_dim::Int = _FULL_RAW_SPECTRAL_VALIDATION_MAX_DIM,
+)
+    spectral_validation in (:auto, :full, :probed) || throw(ArgumentError(
+        "spectral_validation must be :auto, :full, or :probed."))
+    full_spectral_max_dim >= 0 || throw(ArgumentError(
+        "full_spectral_max_dim must be >= 0."))
+    required = (
+        :matrix, :terms, :base_coeffs, :eigvals, :eigvecs, :nu_min,
+        :shift, :rescaling_factor, :periodic,
+    )
+    missing = filter(name -> !haskey(raw, name), required)
+    isempty(missing) || throw(ArgumentError(
+        "raw Hamiltonian is missing required fields: $(join(string.(missing), ", "))."))
+
+    matrix = raw.matrix
+    eigvals = raw.eigvals
+    eigvecs = raw.eigvecs
+    matrix isa AbstractMatrix || throw(ArgumentError("raw.matrix must be a matrix."))
+    eigvals isa AbstractVector || throw(ArgumentError("raw.eigvals must be a vector."))
+    eigvecs isa AbstractMatrix || throw(ArgumentError("raw.eigvecs must be a matrix."))
+    eltype(matrix) <: Number || throw(ArgumentError("raw.matrix must be numeric."))
+    eltype(eigvecs) <: Number || throw(ArgumentError("raw.eigvecs must be numeric."))
+    T = eltype(eigvals)
+    T <: AbstractFloat || throw(ArgumentError(
+        "raw.eigvals must have an AbstractFloat element type, got $T."))
+
+    dim = size(matrix, 1)
+    size(matrix, 2) == dim || throw(ArgumentError("raw.matrix must be square."))
+    dim >= 2 && ispow2(dim) || throw(ArgumentError(
+        "raw.matrix dimension must be a positive-qubit power of two, got $dim."))
+    length(eigvals) == dim || throw(ArgumentError(
+        "raw.eigvals length $(length(eigvals)) does not match matrix dimension $dim."))
+    size(eigvecs) == (dim, dim) || throw(ArgumentError(
+        "raw.eigvecs must have size ($dim, $dim), got $(size(eigvecs))."))
+    default_tolerance = T(10 * dim) * eps(T)
+    atol = isnothing(atol) ? default_tolerance : T(atol)
+    rtol = isnothing(rtol) ? default_tolerance : T(rtol)
+    isfinite(atol) && atol >= 0 || throw(ArgumentError("atol must be finite and >= 0."))
+    isfinite(rtol) && rtol >= 0 || throw(ArgumentError("rtol must be finite and >= 0."))
+
+    all(isfinite, matrix) || throw(ArgumentError("raw.matrix must contain only finite values."))
+    all(isfinite, eigvals) || throw(ArgumentError("raw.eigvals must contain only finite values."))
+    all(isfinite, eigvecs) || throw(ArgumentError("raw.eigvecs must contain only finite values."))
+    hermiticity_error = norm(matrix - adjoint(matrix)) / max(norm(matrix), one(T))
+    hermiticity_error <= atol + rtol ||
+        throw(ArgumentError("raw.matrix must be Hermitian."))
+    issorted(eigvals) || throw(ArgumentError("raw.eigvals must be sorted in nondecreasing order."))
+
+    width = last(eigvals) - first(eigvals)
+    isfinite(width) && width > zero(T) || throw(ArgumentError(
+        "raw.eigvals must have positive finite spectral width."))
+    window_tolerance = T(atol) + T(rtol) * max(abs(first(eigvals)), abs(last(eigvals)), one(T))
+    first(eigvals) >= -window_tolerance || throw(ArgumentError(
+        "raw.eigvals must lie above the algorithmic lower bound 0."))
+    last(eigvals) <= T(0.45) + window_tolerance || throw(ArgumentError(
+        "raw.eigvals must lie below the algorithmic upper bound 0.45."))
+    raw.rescaling_factor isa Real && isfinite(raw.rescaling_factor) &&
+        raw.rescaling_factor > 0 ||
+        throw(ArgumentError("raw.rescaling_factor must be finite and > 0."))
+    raw.shift isa Real && isfinite(raw.shift) ||
+        throw(ArgumentError("raw.shift must be finite and real."))
+    raw.periodic isa Bool || throw(ArgumentError("raw.periodic must be Bool."))
+
+    expected_nu_min = minimum(diff(eigvals))
+    nu_tolerance = atol + rtol * max(abs(expected_nu_min), one(T))
+    raw.nu_min isa Real && isfinite(raw.nu_min) &&
+        abs(raw.nu_min - expected_nu_min) <= nu_tolerance ||
+        throw(ArgumentError(
+            "raw.nu_min=$(raw.nu_min) is inconsistent with the cached spectrum " *
+            "(expected $expected_nu_min)."))
+
+    raw.terms isa AbstractVector || throw(ArgumentError("raw.terms must be a vector."))
+    raw.base_coeffs isa AbstractVector || throw(ArgumentError(
+        "raw.base_coeffs must be a vector."))
+    length(raw.terms) == length(raw.base_coeffs) || throw(ArgumentError(
+        "raw.terms and raw.base_coeffs must have the same length."))
+    all(value -> value isa Real && isfinite(value), raw.base_coeffs) ||
+        throw(ArgumentError("raw.base_coeffs must contain only finite real values."))
+    num_qubits = trailing_zeros(dim)
+    _validate_local_terms(raw.terms, num_qubits;
+        max_support=max(num_qubits, 2), require_support_fits=false)
+    has_disordering_terms = haskey(raw, :disordering_terms) && raw.disordering_terms !== nothing
+    has_disordering_coeffs = haskey(raw, :disordering_coeffs) && raw.disordering_coeffs !== nothing
+    has_disordering_terms == has_disordering_coeffs || throw(ArgumentError(
+        "raw.disordering_terms and raw.disordering_coeffs must either both be present or both be nothing."))
+    if has_disordering_terms
+        raw.disordering_terms isa AbstractVector || throw(ArgumentError(
+            "raw.disordering_terms must be a vector when present."))
+        raw.disordering_coeffs isa AbstractVector || throw(ArgumentError(
+            "raw.disordering_coeffs must be a vector when present."))
+        length(raw.disordering_terms) == length(raw.disordering_coeffs) ||
+            throw(ArgumentError(
+                "raw.disordering_terms and raw.disordering_coeffs must have the same length."))
+        _validate_local_terms(raw.disordering_terms, num_qubits;
+            max_support=max(num_qubits, 2), require_support_fits=false)
+        for coeffs in raw.disordering_coeffs
+            coeffs isa AbstractVector || throw(ArgumentError(
+                "Each raw disordering coefficient entry must be a vector."))
+            length(coeffs) == num_qubits || throw(ArgumentError(
+                "Each raw disordering coefficient vector must have length $num_qubits."))
+            all(value -> value isa Real && isfinite(value), coeffs) || throw(ArgumentError(
+                "raw.disordering_coeffs must contain only finite real values."))
+        end
+    end
+
+    use_full_spectral_validation = spectral_validation == :full ||
+        (spectral_validation == :auto && dim <= full_spectral_max_dim)
+    if use_full_spectral_validation
+        gram = adjoint(eigvecs) * eigvecs
+        unitarity_error = norm(gram - I, Inf)
+        unitarity_error <= max(atol, rtol) ||
+            throw(ArgumentError("raw.eigvecs must be unitary."))
+        residual = matrix * eigvecs - eigvecs * Diagonal(eigvals)
+        eigenpair_error = maximum(j -> norm(@view(residual[:, j])), axes(residual, 2))
+        eigenpair_error <= max(atol, rtol) || throw(ArgumentError(
+            "raw eigvals/eigvecs are inconsistent with raw.matrix."))
+    else
+        # This O(d^2) mode is an integrity probe for large trusted caches, not a
+        # global certificate of V'V=I and HV=VD. Use `:full` for untrusted data.
+        inv_sqrt_dim = inv(sqrt(T(dim)))
+        probes = (
+            fill(Complex{T}(inv_sqrt_dim), dim),
+            Complex{T}.((collect(T, 1:dim) .- T(dim + 1) / 2)) |> normalize,
+        )
+        for probe in probes
+            unitary_residual = adjoint(eigvecs) * (eigvecs * probe) - probe
+            norm(unitary_residual) / norm(probe) <= max(atol, rtol) ||
+                throw(ArgumentError("raw.eigvecs failed the large-fixture unitarity probe."))
+
+            lhs = matrix * (eigvecs * probe)
+            rhs = eigvecs * (eigvals .* probe)
+            residual_scale = max(norm(lhs), norm(rhs), one(T))
+            norm(lhs - rhs) / residual_scale <= max(atol, rtol) || throw(ArgumentError(
+                "raw eigvals/eigvecs failed the large-fixture eigenpair probe."))
+        end
+    end
+    return nothing
 end
 
 function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64},
@@ -50,12 +252,11 @@ function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float6
             "Expected $(Complex{T}) term data, got ComplexF64. " *
             "Reconstruct with $(Complex{T}) inputs or use default Float64 precision."))
     end
+    isfinite(beta) && beta > 0 || throw(ArgumentError("beta must be finite and > 0."))
 
     hamiltonian_matrix = _construct_base_ham(terms, coeffs, num_qubits; periodic=periodic)
 
-    rescaling_factor, shift = _rescaling_and_shift_factors(hamiltonian_matrix)
-    rescaled_hamiltonian::Hermitian{ComplexF64, Matrix{ComplexF64}} = hamiltonian_matrix / rescaling_factor +
-                                                                                    shift * I(2^num_qubits)
+    rescaled_hamiltonian, rescaling_factor, shift = _rescale_hamiltonian(hamiltonian_matrix)
 
     rescaled_eigvals, rescaled_eigvecs = eigen(rescaled_hamiltonian)
     rescaled_base_coeffs = coeffs / rescaling_factor
@@ -98,6 +299,7 @@ function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float6
             "Expected $(Complex{T}) term data, got ComplexF64. " *
             "Reconstruct with $(Complex{T}) inputs or use default Float64 precision."))
     end
+    isfinite(beta) && beta > 0 || throw(ArgumentError("beta must be finite and > 0."))
 
     if length(disordering_terms) != length(disordering_coeffs)
         throw(ArgumentError("Number of disordering terms must match number of coefficient vectors"))
@@ -108,9 +310,7 @@ function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float6
         periodic=periodic)
     disordered_ham = base_hamiltonian + disordering_hamiltonian
 
-    rescaling_factor, shift = _rescaling_and_shift_factors(disordered_ham)
-    rescaled_hamiltonian::Hermitian{ComplexF64, Matrix{ComplexF64}} = disordered_ham / rescaling_factor +
-                                                                                    shift * I(2^num_qubits)
+    rescaled_hamiltonian, rescaling_factor, shift = _rescale_hamiltonian(disordered_ham)
 
     rescaled_eigvals, rescaled_eigvecs = eigen(rescaled_hamiltonian)
     rescaled_base_coeffs = coeffs / rescaling_factor
@@ -155,23 +355,29 @@ function HamHam(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float6
 end
 
 """
-    HamHam(raw::NamedTuple, beta) -> HamHam{T}
+    HamHam(raw::NamedTuple, beta; spectral_validation=:auto) -> HamHam{T}
 
 Construct a fully initialised Hamiltonian from builder output.
 
 # Arguments
 - `raw`: Named tuple returned by `build_heis_1d` or `build_tfim_2d`.
 - `beta`: Algorithm-side inverse temperature for the rescaled spectrum.
+- `spectral_validation`: `:full` checks `V'V` and `HV=V*Diagonal(E)`;
+  `:probed` is an `O(d^2)` integrity check for trusted caches; `:auto` uses
+  `:full` through dimension 128 and `:probed` above it.
 
 # Returns
 A `HamHam` with derived Bohr data and Gibbs state.
 """
-function HamHam(raw::NamedTuple, beta::Real)
+function HamHam(raw::NamedTuple, beta::Real; spectral_validation::Symbol = :auto)
+    _validate_raw_hamiltonian(raw; spectral_validation=spectral_validation)
     T = eltype(raw.eigvals)
     beta_T = T(beta)
-    bohr_freqs = raw.eigvals .- transpose(raw.eigvals)
+    eigvals = Vector{T}(raw.eigvals)
+    eigvecs = Matrix{Complex{T}}(raw.eigvecs)
+    bohr_freqs = eigvals .- transpose(eigvals)
     bohr_dict = create_bohr_dict(bohr_freqs)
-    gibbs = Hermitian(_gibbs_in_eigen(raw.eigvals, beta_T))
+    gibbs = Hermitian(_gibbs_in_eigen(eigvals, beta_T))
 
     # Accept scalar and multi-term disorder schemas.
     dis_terms, dis_coeffs = _unpack_disordering_fields(raw, T)
@@ -184,8 +390,8 @@ function HamHam(raw::NamedTuple, beta::Real)
         Vector{T}(raw.base_coeffs),
         dis_terms,
         dis_coeffs,
-        Vector{T}(raw.eigvals),
-        Matrix{Complex{T}}(raw.eigvecs),
+        eigvals,
+        eigvecs,
         T(raw.nu_min),
         T(raw.shift),
         T(raw.rescaling_factor),
@@ -202,9 +408,13 @@ Construct a Hamiltonian at physical inverse temperature `beta_phys`.
 The constructor sets `\$beta_alg = beta_phys dot raw.rescaling_factor\$` before
 forming the Gibbs state. The positional constructor instead accepts `beta_alg`.
 """
-function HamHam(raw::NamedTuple; beta_phys::Real)
+function HamHam(
+    raw::NamedTuple;
+    beta_phys::Real,
+    spectral_validation::Symbol = :auto,
+)
     rescale = raw.rescaling_factor
-    return HamHam(raw, beta_phys * rescale)
+    return HamHam(raw, beta_phys * rescale; spectral_validation=spectral_validation)
 end
 
 """
@@ -259,6 +469,16 @@ function build_heis_1d(num_qubits::Int, coeffs::Vector{Float64};
         disordering_terms::Vector{Vector{Matrix{ComplexF64}}}=Vector{Matrix{ComplexF64}}[[Z], [Z, Z]],
         disorder_strength::Float64=0.1)
 
+    num_qubits >= 2 || throw(ArgumentError(
+        "build_heis_1d requires at least two qubits, got $num_qubits."))
+    length(coeffs) == 3 || throw(ArgumentError(
+        "build_heis_1d requires exactly [J_x, J_y, J_z], got $(length(coeffs)) coefficients."))
+    all(isfinite, coeffs) || throw(ArgumentError("Heisenberg couplings must be finite."))
+    isfinite(disorder_strength) && disorder_strength >= 0 || throw(ArgumentError(
+        "disorder_strength must be finite and >= 0."))
+    _validate_local_terms(disordering_terms, num_qubits;
+        max_support=2, require_involution=true)
+
     base_terms = Vector{Matrix{ComplexF64}}[[X, X], [Y, Y], [Z, Z]]
     base_hamiltonian = _construct_base_ham(base_terms, coeffs, num_qubits; periodic=periodic)
 
@@ -272,8 +492,8 @@ function build_heis_1d(num_qubits::Int, coeffs::Vector{Float64};
         periodic=periodic)
 
     total_ham = Hermitian(Matrix(base_hamiltonian) + Matrix(disordering_ham))
-    rescaling_factor, shift = _rescaling_and_shift_factors(total_ham)
-    rescaled_ham = (Matrix(total_ham) ./ rescaling_factor) + shift * I(2^num_qubits)
+    rescaled_hamiltonian, rescaling_factor, shift = _rescale_hamiltonian(total_ham)
+    rescaled_ham = Matrix(rescaled_hamiltonian)
     rescaled_eigvals, rescaled_eigvecs = eigen(Hermitian(rescaled_ham))
     nu_min = minimum(diff(rescaled_eigvals))
 
@@ -330,8 +550,14 @@ function build_tfim_2d(Lx::Int, Ly::Int;
     if Lx < 1 || Ly < 1
         throw(ArgumentError("Lx and Ly must be at least 1; got Lx=$Lx, Ly=$Ly"))
     end
+    isfinite(J) || throw(ArgumentError("J must be finite."))
+    isfinite(h) || throw(ArgumentError("h must be finite."))
+    isfinite(disorder_strength) && disorder_strength >= 0 || throw(ArgumentError(
+        "disorder_strength must be finite and >= 0."))
 
     num_qubits = Lx * Ly
+    _validate_local_terms(disordering_terms, num_qubits;
+        max_support=2, require_support_fits=false, require_involution=true)
     H_bond = _construct_2d_heisenberg_base(Lx, Ly,
         Vector{Matrix{ComplexF64}}[[Z, Z]], [-J];
         periodic_x=periodic_x, periodic_y=periodic_y)
@@ -352,8 +578,8 @@ function build_tfim_2d(Lx::Int, Ly::Int;
         periodic_x=periodic_x, periodic_y=periodic_y)
 
     total_ham = Hermitian(Matrix(base_clean) + Matrix(disordering_ham))
-    rescaling_factor, shift = _rescaling_and_shift_factors(total_ham)
-    rescaled_ham = (Matrix(total_ham) ./ rescaling_factor) + shift * I(2^num_qubits)
+    rescaled_hamiltonian, rescaling_factor, shift = _rescale_hamiltonian(total_ham)
+    rescaled_ham = Matrix(rescaled_hamiltonian)
     rescaled_eigvals, rescaled_eigvecs = eigen(Hermitian(rescaled_ham))
     nu_min = minimum(diff(rescaled_eigvals))
 
@@ -380,9 +606,11 @@ end
 function _construct_base_ham(terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64},
     num_qubits::Int64; periodic::Bool = true)
 
+    _validate_local_terms(terms, num_qubits)
     if length(terms) != length(coeffs)
         throw(ArgumentError("The number of terms and coefficients must be equal"))
     end
+    all(isfinite, coeffs) || throw(ArgumentError("Hamiltonian coefficients must be finite."))
 
     hamiltonian::SparseMatrixCSC{ComplexF64} = spzeros(2^num_qubits, 2^num_qubits)
     for (i, term) in enumerate(terms)
@@ -443,11 +671,17 @@ function _construct_2d_heisenberg_base(Lx::Int64, Ly::Int64,
     terms::Vector{Vector{Matrix{ComplexF64}}}, coeffs::Vector{Float64};
     periodic_x::Bool = true, periodic_y::Bool = true)
 
+    Lx > 0 && Ly > 0 || throw(ArgumentError(
+        "Lx and Ly must be > 0, got Lx=$Lx, Ly=$Ly."))
+    num_qubits = Lx * Ly
+    _validate_local_terms(terms, num_qubits; max_support=2, require_support_fits=false)
+    all(length(term) == 2 for term in terms) || throw(ArgumentError(
+        "Nearest-neighbour base terms must act on exactly two sites."))
     if length(terms) != length(coeffs)
         throw(ArgumentError("The number of terms and coefficients must be equal"))
     end
+    all(isfinite, coeffs) || throw(ArgumentError("Hamiltonian coefficients must be finite."))
 
-    num_qubits = Lx * Ly
     site_index(i, j) = (i - 1) * Ly + (j - 1) + 1
 
     hamiltonian::SparseMatrixCSC{ComplexF64} = spzeros(2^num_qubits, 2^num_qubits)
@@ -488,11 +722,16 @@ Build site and nearest-neighbour disorder on a 1D chain.
 function _construct_disordering_terms(terms::Vector{Vector{Matrix{ComplexF64}}},
     coeffs::Vector{Vector{Float64}}, num_qubits::Int64; periodic::Bool=true)
 
+    _validate_local_terms(terms, num_qubits)
+    length(terms) == length(coeffs) || throw(ArgumentError(
+        "The number of disordering terms and coefficient vectors must be equal."))
     disordering_hamiltonian::SparseMatrixCSC{ComplexF64} = spzeros(2^num_qubits, 2^num_qubits)
     for (term, term_coeffs) in zip(terms, coeffs)
         if length(term_coeffs) != num_qubits
             throw(ArgumentError("Each disordering coefficient vector must have length num_qubits ($num_qubits), got $(length(term_coeffs))"))
         end
+        all(isfinite, term_coeffs) || throw(ArgumentError(
+            "Disordering coefficients must contain only finite values."))
         for q in 1:num_qubits
             disordering_hamiltonian += term_coeffs[q] * pad_term(term, num_qubits, q; periodic=periodic)
         end
@@ -515,7 +754,12 @@ function _construct_disordering_terms_2d(Lx::Int64, Ly::Int64,
     coeffs::Vector{Vector{Float64}};
     periodic_x::Bool=true, periodic_y::Bool=true)
 
+    Lx > 0 && Ly > 0 || throw(ArgumentError(
+        "Lx and Ly must be > 0, got Lx=$Lx, Ly=$Ly."))
     num_qubits = Lx * Ly
+    _validate_local_terms(terms, num_qubits; max_support=2, require_support_fits=false)
+    length(terms) == length(coeffs) || throw(ArgumentError(
+        "The number of disordering terms and coefficient vectors must be equal."))
     site_index(i, j) = (i - 1) * Ly + (j - 1) + 1
 
     disordering_hamiltonian::SparseMatrixCSC{ComplexF64} = spzeros(2^num_qubits, 2^num_qubits)
@@ -523,6 +767,8 @@ function _construct_disordering_terms_2d(Lx::Int64, Ly::Int64,
         if length(term_coeffs) != num_qubits
             throw(ArgumentError("Each disordering coefficient vector must have length num_qubits ($num_qubits), got $(length(term_coeffs))"))
         end
+        all(isfinite, term_coeffs) || throw(ArgumentError(
+            "Disordering coefficients must contain only finite values."))
         if length(term) == 1
             # Site-local term.
             for i in 1:Lx, j in 1:Ly
@@ -560,15 +806,50 @@ function _construct_disordering_terms_2d(Lx::Int64, Ly::Int64,
     return Hermitian(Matrix(disordering_hamiltonian))
 end
 
-"""Return affine factors that map a Hamiltonian spectrum to `[0, 0.45]`."""
-function _rescaling_and_shift_factors(hamiltonian::Hermitian)
+function _rescaling_data(hamiltonian::Hermitian)
+    size(hamiltonian, 1) == size(hamiltonian, 2) ||
+        throw(ArgumentError("Hamiltonian must be square."))
+    all(isfinite, hamiltonian) || throw(ArgumentError(
+        "Hamiltonian must contain only finite values."))
 
-    eps = 0.1  # Keep the upper endpoint below the algorithmic wrap at 0.5.
-    eigenergies = eigvals(hamiltonian)
+    # Remove a representable scalar gauge before diagonalising. Otherwise a
+    # large identity offset can erase a smaller off-diagonal spectral width.
+    scalar_gauge = real(hamiltonian[begin, begin])
+    centered = Matrix(hamiltonian)
+    @inbounds for i in axes(centered, 1)
+        centered[i, i] -= scalar_gauge
+    end
+    centered_hamiltonian = Hermitian(centered)
+
+    margin = 0.1  # Keep the upper endpoint below the algorithmic wrap at 0.5.
+    eigenergies = eigvals(centered_hamiltonian)
     smallest_eigval = minimum(eigenergies)
     largest_eigval = maximum(eigenergies)
+    spectral_width = largest_eigval - smallest_eigval
+    isfinite(spectral_width) && spectral_width > 0 || throw(ArgumentError(
+        "Hamiltonian must have positive finite spectral width before rescaling."))
 
-    rescaling_factor = (largest_eigval - smallest_eigval) * (2 / (1 - eps))
-    shift = - (largest_eigval - smallest_eigval * eps) / (2 * (largest_eigval - smallest_eigval)) + 0.5
+    rescaling_factor = spectral_width * (2 / (1 - margin))
+    shift = -scalar_gauge / rescaling_factor - smallest_eigval / rescaling_factor
+    isfinite(rescaling_factor) && rescaling_factor > 0 || throw(ArgumentError(
+        "Hamiltonian rescaling factor must be finite and > 0."))
+    isfinite(shift) || throw(ArgumentError("Hamiltonian shift must be finite."))
+    return centered_hamiltonian, smallest_eigval, rescaling_factor, shift
+end
+
+"""Return affine factors that map a Hamiltonian spectrum to `[0, 0.45]`."""
+function _rescaling_and_shift_factors(hamiltonian::Hermitian)
+    _, _, rescaling_factor, shift = _rescaling_data(hamiltonian)
     return rescaling_factor, shift
+end
+
+"""Shift before division to rescale a Hamiltonian without scalar-offset cancellation."""
+function _rescale_hamiltonian(hamiltonian::Hermitian)
+    centered, smallest_eigval, rescaling_factor, shift = _rescaling_data(hamiltonian)
+    rescaled = Matrix(centered)
+    @inbounds for i in axes(rescaled, 1)
+        rescaled[i, i] -= smallest_eigval
+    end
+    rescaled ./= rescaling_factor
+    return Hermitian(rescaled), rescaling_factor, shift
 end

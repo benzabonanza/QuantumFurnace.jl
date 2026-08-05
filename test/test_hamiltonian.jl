@@ -156,6 +156,195 @@ using Statistics: median
     @testset "build_tfim_2d: argument validation" begin
         @test_throws ArgumentError build_tfim_2d(0, 2; seed=1)
         @test_throws ArgumentError build_tfim_2d(2, 0; seed=1)
+        @test_throws ArgumentError build_tfim_2d(2, 2; J=NaN, seed=1)
+        @test_throws ArgumentError build_tfim_2d(2, 2; h=Inf, seed=1)
+        @test_throws ArgumentError build_tfim_2d(2, 2; disorder_strength=-0.1, seed=1)
+        @test_throws ArgumentError build_tfim_2d(2, 2; seed=1,
+            disordering_terms=Vector{Matrix{ComplexF64}}[[X, Y, Z]])
+
+        one_site = build_tfim_2d(1, 1; seed=1, disorder_strength=0.0)
+        one_by_two = build_tfim_2d(1, 2; seed=1, disorder_strength=0.0)
+        @test size(one_site.matrix) == (2, 2)
+        @test size(one_by_two.matrix) == (4, 4)
+        @test HamHam(one_site, 1.0) isa HamHam
+    end
+
+    @testset "build_heis_1d: argument validation" begin
+        @test_throws ArgumentError build_heis_1d(0, [1.0, 1.0, 1.0]; seed=1)
+        @test_throws ArgumentError build_heis_1d(1, [1.0, 1.0, 1.0]; seed=1)
+        @test_throws ArgumentError build_heis_1d(3, [1.0, 1.0]; seed=1)
+        @test_throws ArgumentError build_heis_1d(3, [1.0, NaN, 1.0]; seed=1)
+        @test_throws ArgumentError build_heis_1d(3, [1.0, 1.0, 1.0];
+            seed=1, disorder_strength=-0.1)
+        @test_throws ArgumentError build_heis_1d(3, [1.0, 1.0, 1.0]; seed=1,
+            disordering_terms=Vector{Matrix{ComplexF64}}[[X, Y, Z]])
+        noninvolution = ComplexF64[1.0 0.0; 0.0 2.0]
+        @test_throws ArgumentError build_heis_1d(3, [1.0, 1.0, 1.0]; seed=1,
+            disordering_terms=Vector{Matrix{ComplexF64}}[[noninvolution]])
+        near_noninvolution = ComplexF64[1.0 0.0; 0.0 1.0 + 1e-10]
+        @test_throws ArgumentError build_heis_1d(3, [1.0, 1.0, 1.0]; seed=1,
+            disordering_terms=Vector{Matrix{ComplexF64}}[[near_noninvolution]])
+    end
+
+    @testset "Stable Gibbs weights and raw Hamiltonian validation" begin
+        shifted_weights = QuantumFurnace._gibbs_weights([1000.0, 1001.0], 1000.0)
+        @test all(isfinite, shifted_weights)
+        @test isapprox(sum(shifted_weights), 1.0; atol=1e-15, rtol=0)
+        @test shifted_weights[1] == 1.0
+        @test shifted_weights[2] == 0.0
+        degenerate_weights = QuantumFurnace._gibbs_weights([-2.0, -2.0, 3.0], 1.0e308)
+        @test degenerate_weights == [0.5, 0.5, 0.0]
+        hot_weights = QuantumFurnace._gibbs_weights([-2.0, -2.0, 3.0], eps(Float64))
+        @test isapprox(hot_weights, fill(1 / 3, 3); atol=1e-15, rtol=0)
+        @test_throws ArgumentError QuantumFurnace._gibbs_weights([0.0, 1.0], 0.0)
+        @test_throws ArgumentError QuantumFurnace._gibbs_weights([0.0, 1.0], Inf)
+
+        constant_h = Hermitian(Matrix{ComplexF64}(2.0I, 2, 2))
+        @test_throws ArgumentError QuantumFurnace._rescaling_and_shift_factors(constant_h)
+        @test_throws ArgumentError HamHam(Vector{Vector{Matrix{ComplexF64}}}(),
+            Float64[], 1, 1.0)
+
+        identity_2 = Matrix{ComplexF64}(I, 2, 2)
+        offset_ham = HamHam(
+            Vector{Matrix{ComplexF64}}[[identity_2], [Z]], [1.0e15, 1.0], 1, 1.0)
+        @test isapprox(first(offset_ham.eigvals), 0.0; atol=1e-15, rtol=0)
+        @test isapprox(last(offset_ham.eigvals), 0.45; atol=1e-15, rtol=0)
+        @test QuantumFurnace._check_1d_trotter_compatible(offset_ham) < 1e-12
+
+        offset_x = Hermitian(ComplexF64[1.0e16 1.0; 1.0 1.0e16])
+        rescaled_x, rescaling_x, _ = QuantumFurnace._rescale_hamiltonian(offset_x)
+        @test isapprox(rescaling_x, 2 / 0.45; atol=1e-14, rtol=0)
+        @test isapprox(Matrix(rescaled_x), 0.225 .* ComplexF64[1 1; 1 1];
+            atol=1e-15, rtol=0)
+        @test isapprox(LinearAlgebra.eigvals(rescaled_x), [0.0, 0.45];
+            atol=1e-15, rtol=0)
+
+        huge_offset_ham = HamHam(
+            Vector{Matrix{ComplexF64}}[[identity_2], [X]], [1.0e308, 1.0], 1, 1.0)
+        @test isfinite(QuantumFurnace._check_1d_trotter_compatible(huge_offset_ham))
+        @test_throws ArgumentError QuantumFurnace._check_1d_trotter_compatible(
+            huge_offset_ham; tol=Inf)
+
+        eigvals = [0.1, 0.4]
+        raw = (
+            matrix=ComplexF64[0.1 0.0; 0.0 0.4],
+            terms=Vector{Vector{Matrix{ComplexF64}}}(),
+            base_coeffs=Float64[],
+            disordering_terms=nothing,
+            disordering_coeffs=nothing,
+            eigvals=eigvals,
+            eigvecs=Matrix{ComplexF64}(I, 2, 2),
+            nu_min=0.3,
+            shift=0.2,
+            rescaling_factor=2.0,
+            periodic=false,
+        )
+        ham = HamHam(raw, 1.0e5)
+        @test all(isfinite, ham.gibbs)
+        @test isapprox(tr(ham.gibbs), 1.0; atol=1e-15, rtol=0)
+        @test ham.gibbs[1, 1] == 1.0
+        @test QuantumFurnace._validate_raw_hamiltonian(
+            raw; full_spectral_max_dim=1) === nothing
+        @test QuantumFurnace._validate_raw_hamiltonian(
+            raw; spectral_validation=:full) === nothing
+        @test_throws ArgumentError QuantumFurnace._validate_raw_hamiltonian(
+            raw; spectral_validation=:unknown)
+
+        raw32 = (
+            matrix=ComplexF32[0.1 0.0; 0.0 0.4],
+            terms=Vector{Vector{Matrix{ComplexF32}}}(),
+            base_coeffs=Float32[],
+            disordering_terms=nothing,
+            disordering_coeffs=nothing,
+            eigvals=Float32[0.1, 0.4],
+            eigvecs=Matrix{ComplexF32}(I, 2, 2),
+            nu_min=0.3f0,
+            shift=0.2f0,
+            rescaling_factor=2.0f0,
+            periodic=false,
+        )
+        @test HamHam(raw32, 1.0f0) isa HamHam{Float32}
+
+        dim32 = 128
+        eigvals32 = collect(range(0.0f0, 0.45f0; length=dim32))
+        eigvecs32 = Matrix{ComplexF32}(I, dim32, dim32)
+        raw32_large = (
+            matrix=Matrix(Diagonal(ComplexF32.(eigvals32))),
+            terms=Vector{Vector{Matrix{ComplexF32}}}(),
+            base_coeffs=Float32[],
+            disordering_terms=nothing,
+            disordering_coeffs=nothing,
+            eigvals=eigvals32,
+            eigvecs=eigvecs32,
+            nu_min=minimum(diff(eigvals32)),
+            shift=0.0f0,
+            rescaling_factor=1.0f0,
+            periodic=false,
+        )
+        @test QuantumFurnace._validate_raw_hamiltonian(
+            raw32_large; spectral_validation=:full) === nothing
+        ham32_large = HamHam(raw32_large, 1.0f6; spectral_validation=:full)
+        @test is_density_matrix(gibbs_state(ham32_large, 1.0f6))
+
+        scaled_eigvecs32 = copy(eigvecs32)
+        scaled_eigvecs32[:, 1] .*= 1.0008f0
+        @test_throws ArgumentError QuantumFurnace._validate_raw_hamiltonian(
+            merge(raw32_large, (eigvecs=scaled_eigvecs32,)); spectral_validation=:full)
+
+        rotated_eigvecs32 = copy(eigvecs32)
+        theta32 = 6.0f-4
+        rotated_eigvecs32[:, [1, end]] .= rotated_eigvecs32[:, [1, end]] *
+            Float32[cos(theta32) -sin(theta32); sin(theta32) cos(theta32)]
+        @test_throws ArgumentError QuantumFurnace._validate_raw_hamiltonian(
+            merge(raw32_large, (eigvecs=rotated_eigvecs32,)); spectral_validation=:full)
+
+        rng32 = MersenneTwister(20260805)
+        delocalized_eigvecs32 = Matrix(qr(randn(rng32, ComplexF32, dim32, dim32)).Q)
+        delocalized_matrix32 = Matrix(Hermitian(
+            delocalized_eigvecs32 * Diagonal(eigvals32) * delocalized_eigvecs32'))
+        raw32_delocalized = merge(raw32_large, (
+            matrix=delocalized_matrix32,
+            eigvecs=delocalized_eigvecs32,
+        ))
+        @test QuantumFurnace._validate_raw_hamiltonian(
+            raw32_delocalized; spectral_validation=:full) === nothing
+
+        corrupted_delocalized32 = copy(delocalized_eigvecs32)
+        theta_delocalized32 = 1.5f-3
+        corrupted_delocalized32[:, [1, end]] .=
+            corrupted_delocalized32[:, [1, end]] *
+            Float32[
+                cos(theta_delocalized32) -sin(theta_delocalized32)
+                sin(theta_delocalized32) cos(theta_delocalized32)
+            ]
+        @test_throws ArgumentError QuantumFurnace._validate_raw_hamiltonian(
+            merge(raw32_delocalized, (eigvecs=corrupted_delocalized32,));
+            spectral_validation=:full)
+
+        @test_throws ArgumentError HamHam(merge(raw, (matrix=zeros(ComplexF64, 2, 3),)), 1.0)
+        @test_throws ArgumentError HamHam(merge(raw, (
+            matrix=ComplexF64[0.1 0.2im; 0.0 0.4],)), 1.0)
+        @test_throws ArgumentError HamHam(merge(raw, (eigvals=reverse(eigvals),)), 1.0)
+        @test_throws ArgumentError HamHam(merge(raw, (
+            eigvecs=ComplexF64[2.0 0.0; 0.0 1.0],)), 1.0)
+        @test_throws ArgumentError HamHam(merge(raw, (
+            matrix=ComplexF64[0.1 0.0; 0.0 0.41],)), 1.0)
+        @test_throws ArgumentError HamHam(merge(raw, (nu_min=0.2,)), 1.0)
+        @test_throws ArgumentError HamHam(merge(raw, (rescaling_factor=0.0,)), 1.0)
+        @test_throws ArgumentError HamHam(merge(raw, (shift=NaN,)), 1.0)
+        @test_throws ArgumentError HamHam(merge(raw, (disordering_coeffs=[[0.1]],)), 1.0)
+        @test_throws ArgumentError HamHam(merge(raw, (
+            matrix=ComplexF64[-0.1 0.0; 0.0 0.4],
+            eigvals=[-0.1, 0.4], nu_min=0.5,)), 1.0)
+        @test_throws ArgumentError HamHam(merge(raw, (
+            matrix=ComplexF64[0.1 0.0; 0.0 0.6],
+            eigvals=[0.1, 0.6], nu_min=0.5,)), 1.0)
+        @test_throws ArgumentError HamHam(merge(raw, (
+            terms=Vector{Matrix{ComplexF64}}[[Z]], base_coeffs=[NaN],)), 1.0)
+        @test_throws ArgumentError HamHam(merge(raw, (
+            disordering_terms=Vector{Matrix{ComplexF64}}[[Z]],
+            disordering_coeffs=[[0.1, 0.2]],)), 1.0)
+        @test_throws ArgumentError HamHam(raw, 0.0)
     end
 
 

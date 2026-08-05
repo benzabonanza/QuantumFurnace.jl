@@ -731,9 +731,10 @@ end
 
 # σ^{±1/4} diagonal (Hamiltonian eigenbasis) from a Gibbs spectrum exp(-β_alg E)/Z.
 function _gibbs_quarter_powers(hamiltonian::HamHam, beta_alg::Real)
-    g = exp.(-float(beta_alg) .* hamiltonian.eigvals)
-    g ./= sum(g)
-    powers = gibbs_fractional_powers(Hermitian(Matrix(Diagonal(ComplexF64.(g)))))
+    T = eltype(hamiltonian.eigvals)
+    g = _gibbs_weights(hamiltonian.eigvals, beta_alg)
+    powers = gibbs_fractional_powers(
+        Hermitian(Matrix(Diagonal(Complex{T}.(g)))))
     return powers.sigma_quarter, powers.sigma_inv_quarter
 end
 

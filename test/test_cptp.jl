@@ -101,4 +101,51 @@ end
 
     @test_throws ArgumentError is_density_matrix(Hermitian(ComplexF64[1.1 0.0; 0.0 -0.1]))
     @test_throws ArgumentError fidelity(rho, Hermitian(ComplexF64[0.8 0.0; 0.0 0.8]))
+
+    rho_roundoff = ComplexF64[1.0 + 1e-14 0.0; 0.0 -1e-14]
+    pure = ComplexF64[1.0 0.0; 0.0 0.0]
+    pure_orthogonal = ComplexF64[0.0 0.0; 0.0 1.0]
+    @test is_density_matrix(rho_roundoff; atol=2e-14, rtol=0)
+    @test fidelity(rho_roundoff, pure; atol=2e-14, rtol=0) ≈ 1.0 atol=1e-15
+    @test fidelity(pure, pure) ≈ 1.0 atol=1e-15
+    @test fidelity(pure, pure_orthogonal) ≈ 0.0 atol=1e-15
+
+    dim_roundoff = 128
+    negative_roundoff = 2e-15
+    spectrum_roundoff = fill(-negative_roundoff, dim_roundoff)
+    spectrum_roundoff[1] = 1 + (dim_roundoff - 1) * negative_roundoff
+    rho_high_dim_roundoff = Matrix(Diagonal(ComplexF64.(spectrum_roundoff)))
+    @test is_density_matrix(rho_high_dim_roundoff)
+    @test fidelity(rho_high_dim_roundoff, rho_high_dim_roundoff) ≈ 1.0 atol=1e-14
+
+    cumulative_negative = 5e-13
+    invalid_spectrum = fill(-cumulative_negative, dim_roundoff)
+    invalid_spectrum[1] = 1 + (dim_roundoff - 1) * cumulative_negative
+    rho_cumulative_negative = Matrix(Diagonal(ComplexF64.(invalid_spectrum)))
+    @test_throws ArgumentError is_density_matrix(rho_cumulative_negative)
+    @test_throws ArgumentError fidelity(rho_cumulative_negative, rho_cumulative_negative)
+
+    theta = 0.4
+    rotation = ComplexF64[cos(theta) -sin(theta); sin(theta) cos(theta)]
+    rho_near_singular = ComplexF64[1.0 - 1e-16 0.0; 0.0 1e-16]
+    sigma_near_singular = rotation * rho_near_singular * rotation'
+    fidelity_forward = fidelity(rho_near_singular, sigma_near_singular)
+    fidelity_reverse = fidelity(sigma_near_singular, rho_near_singular)
+    fidelity_analytic = real(tr(rho_near_singular * sigma_near_singular)) +
+        2sqrt(real(det(rho_near_singular) * det(sigma_near_singular)))
+    @test isapprox(fidelity_forward, fidelity_reverse; atol=1e-14, rtol=0)
+    @test isapprox(fidelity_forward, fidelity_analytic; atol=1e-12, rtol=0)
+    @test isapprox(fidelity_reverse, fidelity_analytic; atol=1e-12, rtol=0)
+    @test 0.0 <= fidelity_forward <= 1.0
+
+    @test_throws ArgumentError is_density_matrix(ones(ComplexF64, 2, 3))
+    @test_throws ArgumentError is_density_matrix(ComplexF64[0.5 0.1; 0.0 0.5])
+    @test_throws ArgumentError is_density_matrix(ComplexF64[0.6 0.0; 0.0 0.6])
+    @test_throws ArgumentError is_density_matrix(ComplexF64[NaN 0.0; 0.0 NaN])
+    @test_throws ArgumentError is_density_matrix(
+        ComplexF64[1.0 + 1e-6 0.0; 0.0 -1e-6]; atol=2e-14, rtol=0)
+    @test_throws ArgumentError fidelity(rho, ones(ComplexF64, 3, 3) / 3)
+    @test_throws ArgumentError fidelity(rho, ComplexF64[0.5 0.1; 0.0 0.5])
+    @test_throws ArgumentError fidelity(
+        ComplexF64[NaN 0.0; 0.0 NaN], pure; validate=false)
 end

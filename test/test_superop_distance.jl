@@ -64,6 +64,16 @@ using QuantumFurnace: _jumps_in_basis, build_dense_superoperator, trace_distance
         jumps_L = _jumps_in_basis(n, ham.eigvecs)
         armL = lindbladian_arm(cfg_L, ham, jumps_L; label = "e^{δL}")
 
+        @testset "stable Gibbs quarter powers" begin
+            sigma_quarter, sigma_inv_quarter =
+                QuantumFurnace._gibbs_quarter_powers(ham, β)
+            weights = real.(diag(ham.gibbs))
+            @test isapprox(sigma_quarter, weights .^ 0.25;
+                atol=1e-14, rtol=0)
+            @test isapprox(sigma_inv_quarter, weights .^ -0.25;
+                atol=1e-12, rtol=0)
+        end
+
         @testset "workspace provenance guards" begin
             stale_L = Workspace(cfg_L, ham, jumps_L)
             changed_L = copy(jumps_L)

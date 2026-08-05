@@ -134,60 +134,123 @@ function trace_norm_nh(rho::Union{Matrix{<:Real}, Matrix{<:Complex}})
 end
 
 """
-    fidelity(rho, sigma; validate=true) -> Real
+    fidelity(rho, sigma; validate=true, atol=nothing, rtol=nothing) -> Real
 
 Return the squared quantum-state fidelity, optionally validating both inputs.
 """
-function fidelity(rho::Union{Hermitian{<:Real}, Hermitian{<:Complex}}, 
-    sigma::Union{Hermitian{<:Real}, Hermitian{<:Complex}}; validate::Bool = true)
-
-    if validate && (!is_density_matrix(rho) || !is_density_matrix(sigma))
-        throw(ArgumentError("Input matrices are not density matrices"))
+function fidelity(
+    rho::AbstractMatrix{<:Number},
+    sigma::AbstractMatrix{<:Number};
+    validate::Bool = true,
+    atol::Union{Nothing, Real} = nothing,
+    rtol::Union{Nothing, Real} = nothing,
+)
+    size(rho, 1) == size(rho, 2) || throw(ArgumentError("rho must be square."))
+    size(sigma, 1) == size(sigma, 2) || throw(ArgumentError("sigma must be square."))
+    size(rho, 1) > 0 || throw(ArgumentError("rho and sigma must be nonempty."))
+    size(rho) == size(sigma) || throw(ArgumentError(
+        "rho and sigma must have the same dimensions."))
+    all(isfinite, rho) || throw(ArgumentError("rho must contain only finite values."))
+    all(isfinite, sigma) || throw(ArgumentError("sigma must contain only finite values."))
+    atol_value, rtol_value = _density_tolerances(rho, sigma; atol=atol, rtol=rtol)
+    isapprox(rho, adjoint(rho); atol=atol_value, rtol=rtol_value) ||
+        throw(ArgumentError("rho must be Hermitian."))
+    isapprox(sigma, adjoint(sigma); atol=atol_value, rtol=rtol_value) ||
+        throw(ArgumentError("sigma must be Hermitian."))
+    if validate
+        is_density_matrix(rho; atol=atol_value, rtol=rtol_value)
+        is_density_matrix(sigma; atol=atol_value, rtol=rtol_value)
     end
 
-    eig_vals = real(eigvals(rho * sigma))
-    return real(sum(sqrt.(eig_vals[eig_vals.>0])))^2
+    rho_matrix = Matrix(rho)
+    sigma_matrix = Matrix(sigma)
+    rho_h = Hermitian((rho_matrix + adjoint(rho_matrix)) / 2)
+    sigma_h = Hermitian((sigma_matrix + adjoint(sigma_matrix)) / 2)
+    rho_eigen = eigen(rho_h)
+    rho_values = _clamp_psd_eigenvalues(
+        rho_eigen.values, atol_value, rtol_value, "rho")
+    sigma_eigen = eigen(sigma_h)
+    sigma_values = _clamp_psd_eigenvalues(
+        sigma_eigen.values, atol_value, rtol_value, "sigma")
+    if validate
+        rho_values ./= sum(rho_values)
+        sigma_values ./= sum(sigma_values)
+    end
+    sqrt_rho = rho_eigen.vectors * Diagonal(sqrt.(rho_values)) * adjoint(rho_eigen.vectors)
+    sqrt_sigma = sigma_eigen.vectors * Diagonal(sqrt.(sigma_values)) * adjoint(sigma_eigen.vectors)
+    result = real(sum(svdvals(sqrt_rho * sqrt_sigma))^2)
+
+    if validate
+        bound_tolerance = atol_value + rtol_value
+        result <= 1 + bound_tolerance || throw(ArgumentError(
+            "Computed fidelity exceeds one beyond numerical tolerance: $result."))
+        return clamp(result, zero(result), one(result))
+    end
+    return result
 end
 
 """
-    is_density_matrix(rho) -> true
+    is_density_matrix(rho; atol=nothing, rtol=nothing) -> true
 
 Validate Hermiticity, positive semidefiniteness, and unit trace.
 
 Throws `ArgumentError` when an invariant fails.
 """
-function is_density_matrix(rho::Union{Hermitian{<:Real}, Hermitian{<:Complex}})
-    if !isapprox(rho, rho')
-        throw(ArgumentError("Input matrix is not Hermitian"))
-    end
+function is_density_matrix(
+    rho::AbstractMatrix{<:Number};
+    atol::Union{Nothing, Real} = nothing,
+    rtol::Union{Nothing, Real} = nothing,
+)
+    size(rho, 1) == size(rho, 2) || throw(ArgumentError("Density matrix must be square."))
+    size(rho, 1) > 0 || throw(ArgumentError("Density matrix must be nonempty."))
+    all(isfinite, rho) || throw(ArgumentError("Density matrix must contain only finite values."))
+    atol_value, rtol_value = _density_tolerances(rho; atol=atol, rtol=rtol)
+    isapprox(rho, adjoint(rho); atol=atol_value, rtol=rtol_value) ||
+        throw(ArgumentError("Density matrix must be Hermitian."))
 
-    eig_vals = real(round.(eigvals(rho), digits=15))
-    if any(eig_vals .< 0)
-        throw(ArgumentError("Input matrix has negative eigenvalues"))
-    end
+    trace_value = tr(rho)
+    isfinite(trace_value) && isapprox(trace_value, one(real(trace_value));
+        atol=atol_value, rtol=rtol_value) ||
+        throw(ArgumentError("Density matrix must have unit trace."))
 
-    if !isapprox(sum(eig_vals), 1.0)
-        throw(ArgumentError("Input matrix has got trace different from 1"))
-    end
-
+    rho_matrix = Matrix(rho)
+    rho_h = Hermitian((rho_matrix + adjoint(rho_matrix)) / 2)
+    _clamp_psd_eigenvalues(eigvals(rho_h), atol_value, rtol_value, "Density matrix")
     return true
 end
 
-function is_density_matrix(rho::Hermitian{Complex{T}, Matrix{Complex{T}}}) where {T<:AbstractFloat}
-    if !isapprox(rho, rho')
-        throw(ArgumentError("Input matrix is not Hermitian"))
-    end
+function _density_tolerances(
+    matrices::AbstractMatrix{<:Number}...;
+    atol::Union{Nothing, Real},
+    rtol::Union{Nothing, Real},
+)
+    RT = promote_type((typeof(float(real(zero(eltype(matrix))))) for matrix in matrices)...)
+    dim = maximum(max(size(matrix)...) for matrix in matrices)
+    default_tolerance = RT(10 * dim) * eps(RT)
+    atol_value = isnothing(atol) ? default_tolerance : RT(atol)
+    rtol_value = isnothing(rtol) ? default_tolerance : RT(rtol)
+    isfinite(atol_value) && atol_value >= 0 || throw(ArgumentError(
+        "atol must be finite and >= 0."))
+    isfinite(rtol_value) && rtol_value >= 0 || throw(ArgumentError(
+        "rtol must be finite and >= 0."))
+    return atol_value, rtol_value
+end
 
-    eig_vals = real(round.(eigvals(rho), digits=13))
-    if any(eig_vals .< 0)
-        throw(ArgumentError("Input matrix has negative eigenvalues"))
-    end
-
-    if !isapprox(sum(eig_vals), 1.0)
-        throw(ArgumentError("Input matrix has got trace different from 1"))
-    end
-
-    return true
+function _clamp_psd_eigenvalues(
+    values::AbstractVector{T},
+    atol::Real,
+    rtol::Real,
+    label::AbstractString,
+) where {T<:Real}
+    all(isfinite, values) || throw(ArgumentError("$label has non-finite eigenvalues."))
+    scale = max(maximum(abs, values), one(T))
+    tolerance = T(atol) + T(rtol) * scale
+    minimum(values) >= -tolerance || throw(ArgumentError(
+        "$label has a negative eigenvalue below tolerance: $(minimum(values))."))
+    negative_mass = sum(value -> max(-value, zero(T)), values)
+    negative_mass <= tolerance || throw(ArgumentError(
+        "$label has cumulative negative spectral weight above tolerance: $negative_mass."))
+    return max.(values, zero(T))
 end
 
 """
@@ -197,10 +260,10 @@ Return `\$rho_beta = exp(-beta H) / Z\$` in the computational basis.
 """
 function gibbs_state(hamiltonian::HamHam{T}, beta::Real) where {T<:AbstractFloat}
     CT = Complex{T}
-    Z = sum(exp.(-beta * hamiltonian.eigvals))
-    rho = sum([exp(-beta * hamiltonian.eigvals[i]) * hamiltonian.eigvecs[:, i] * hamiltonian.eigvecs[:, i]'
+    weights = _gibbs_weights(hamiltonian.eigvals, beta)
+    rho = sum([weights[i] * hamiltonian.eigvecs[:, i] * hamiltonian.eigvecs[:, i]'
                                                                                     for i in 1:length(hamiltonian.eigvals)])
-    return Matrix{CT}(rho / Z)
+    return Matrix{CT}(rho)
 end
 
 """
@@ -209,12 +272,7 @@ end
 Return `\$rho_beta = exp(-beta H) / Z\$` in the Hamiltonian eigenbasis.
 """
 function gibbs_state_in_eigen(hamiltonian::HamHam{T}, beta::Real) where {T<:AbstractFloat}
-    CT = Complex{T}
-    eigvecs_in_eigen = I(size(hamiltonian.data)[1])
-    Z = sum(exp.(-beta * hamiltonian.eigvals))
-    rho = sum([exp(-beta * hamiltonian.eigvals[i]) * eigvecs_in_eigen[:, i] * eigvecs_in_eigen[:, i]'
-                                                                                    for i in 1:length(hamiltonian.eigvals)])
-    return Matrix{CT}(rho / Z)
+    return _gibbs_in_eigen(hamiltonian.eigvals, T(beta))
 end
 
 """Return a random `num_qubits`-qubit density matrix from a Ginibre draw."""

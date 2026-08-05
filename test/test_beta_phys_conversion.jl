@@ -106,9 +106,9 @@ const _BPC_HAM_ALG10 = QuantumFurnace._load_hamiltonian_bson(_BPC_HAM_PATH, 10.0
     @testset "(f) Lindbladian built via β_phys fixes the physical Gibbs state" begin
         # The hams cached on disk hold the *rescaled* spectrum so the simulator
         # stays inside [0, 0.45]; the un-rescaled (physical) Hamiltonian is
-        #   H_phys = ham.rescaling_factor · H_alg + ham.shift · I
+        #   H_phys = ham.rescaling_factor · (H_alg - ham.shift · I)
         # so its spectrum is
-        #   eigvals_phys = rescaling_factor · eigvals_alg + shift.
+        #   eigvals_phys = rescaling_factor · (eigvals_alg - shift).
         # The Gibbs state lives in the eigenbasis (shared between H_phys and
         # H_alg — the global shift commutes and the rescale is positive), and
         # in eigenbasis coordinates it reads
@@ -129,8 +129,8 @@ const _BPC_HAM_ALG10 = QuantumFurnace._load_hamiltonian_bson(_BPC_HAM_PATH, 10.0
         β_alg   = β_phys * rescale
 
         # ρ_phys directly from the un-rescaled Hamiltonian (in eigenbasis).
-        eigvals_phys = rescale .* ham_alg.eigvals .+ shift
-        w_phys = exp.(-β_phys .* eigvals_phys)
+        eigvals_phys = rescale .* (ham_alg.eigvals .- shift)
+        w_phys = exp.(-β_phys .* (eigvals_phys .- minimum(eigvals_phys)))
         w_phys ./= sum(w_phys)
         ρ_phys_eigen = Diagonal(w_phys)
 
