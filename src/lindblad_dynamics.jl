@@ -238,7 +238,7 @@ function integrate_to_gibbs(
 
     # validate_config! is invoked by run_lindblad/run_thermalize; we call it
     # explicitly here since this entry point bypasses those.
-    validate_config!(config)
+    validate_config!(config, hamiltonian)
     validate_jump_pairing(jumps; allow_unpaired_nonhermitian=allow_unpaired_nonhermitian)
 
     # Build the L_apply!(out, in) closure: matrix-free for both KMS and DLL.

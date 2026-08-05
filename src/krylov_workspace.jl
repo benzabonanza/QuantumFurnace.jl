@@ -11,9 +11,12 @@ function Workspace(
     jumps::Vector{JumpOp};
     trotter::Union{AbstractTrotter, Nothing}=nothing,
 )
+    validate_config!(config, hamiltonian)
+
     # Determine ham_or_trott (mirrors construct_lindbladian in furnace.jl)
     ham_or_trott = if config.domain isa TrotterDomain
         trotter === nothing && error("A Trotter object must be provided for the TrotterDomain")
+        _validate_trotter_cache!(config, hamiltonian, trotter)
         trotter
     else
         hamiltonian
@@ -76,12 +79,12 @@ function Workspace(
     C = typeof(config.construction)
 
     return Workspace{KrylovSpectrum, D, C, T}(
-        jump_eigenbases, jump_hermitian, jumps,
+        jump_eigenbases, jump_hermitian, copy(jumps),
         nothing,  # dll_lindblads (CKG/GNS path; populated by DLL specialised constructor)
         G_left, G_right,
         pd_transition, pd_gnf, pd_el, pd_odp, pd_nufft,
         pd_alpha, pd_bkeys, pd_bis, pd_bjs, pd_bminus, pd_bplus,
-        nothing, nothing, nothing, nothing,  # per-jump channel state
+        ham_or_trott, nothing, nothing, nothing,  # source provenance; no channel matrices
         sc,
         config,   # Cached to validate predictor workspace reuse.
     )
@@ -624,6 +627,7 @@ function Workspace(
     jumps::Vector{JumpOp};
     trotter::Union{AbstractTrotter, Nothing}=nothing,
 )
+    validate_config!(config, hamiltonian)
     @assert trotter === nothing  "DLL BohrDomain does not use Trotter"
 
     precomputed_data = _precompute_data(config, hamiltonian)
@@ -656,12 +660,12 @@ function Workspace(
     sc = KrylovScratch(CT, dim; with_channel_rho_jump=false)
 
     return Workspace{KrylovSpectrum, BohrDomain, DLL, T}(
-        jump_eigenbases, jump_hermitian, jumps,
+        jump_eigenbases, jump_hermitian, copy(jumps),
         dll_lindblads,
         G_left, G_right,
         nothing, nothing, nothing, nothing, nothing,  # transition/gnf/energy_labels/odp/nufft
         nothing, nothing, nothing, nothing, nothing, nothing,  # bohr_alpha/bohr_keys/bohr_is/bohr_js/b_minus/b_plus
-        nothing, nothing, nothing, nothing,  # per-jump channel state
+        hamiltonian, nothing, nothing, nothing,  # source provenance; no channel matrices
         sc,
         config,   # Cached to validate predictor workspace reuse.
     )
@@ -684,9 +688,14 @@ function Workspace(
     jumps::Vector{JumpOp};
     trotter::Union{AbstractTrotter, Nothing}=nothing,
 )
+    validate_config!(config, hamiltonian)
+    isempty(jumps) && throw(ArgumentError(
+        "Workspace(::Config{Thermalize}, ...) requires at least one jump operator."))
+
     # Determine ham_or_trott
     ham_or_trott = if config.domain isa TrotterDomain
         trotter === nothing && error("A Trotter object must be provided for the TrotterDomain")
+        _validate_trotter_cache!(config, hamiltonian, trotter)
         trotter
     else
         hamiltonian
@@ -751,7 +760,7 @@ function Workspace(
     D = typeof(config.domain)
     C = typeof(config.construction)
     return Workspace{KrylovSpectrum, D, C, T}(
-        jump_eigenbases, jump_hermitian, jumps,
+        jump_eigenbases, jump_hermitian, copy(jumps),
         nothing,  # dll_lindblads (Thermalize path)
         nothing, nothing,  # G_left/G_right: only used by the Lindbladian matvec
         pd_transition, pd_gnf, pd_el, pd_odp, pd_nufft,

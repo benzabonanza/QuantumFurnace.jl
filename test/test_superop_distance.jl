@@ -64,6 +64,28 @@ using QuantumFurnace: _jumps_in_basis, build_dense_superoperator, trace_distance
         jumps_L = _jumps_in_basis(n, ham.eigvecs)
         armL = lindbladian_arm(cfg_L, ham, jumps_L; label = "e^{δL}")
 
+        @testset "workspace provenance guards" begin
+            stale_L = Workspace(cfg_L, ham, jumps_L)
+            changed_L = copy(jumps_L)
+            jL = changed_L[1]
+            changed_L[1] = JumpOp(2 .* jL.data, 2 .* jL.in_eigenbasis,
+                                  jL.orthogonal, jL.hermitian)
+            @test_throws ArgumentError lindbladian_arm(
+                cfg_L, ham, changed_L; workspace=stale_L)
+            @test_throws ArgumentError lindbladian_discriminant_antiherm_norm(
+                cfg_L, ham, changed_L; workspace=stale_L)
+
+            stale_C = Workspace(cfg_C, ham, jumps_C; trotter=trotter)
+            changed_C = copy(jumps_C)
+            jC = changed_C[1]
+            changed_C[1] = JumpOp(2 .* jC.data, 2 .* jC.in_eigenbasis,
+                                  jC.orthogonal, jC.hermitian)
+            @test_throws ArgumentError channel_arm(
+                cfg_C, ham, changed_C, trotter; workspace=stale_C)
+            @test_throws ArgumentError channel_discriminant_antiherm_norm(
+                cfg_C, ham, changed_C, trotter; workspace=stale_C)
+        end
+
         rho_0 = rho_plus(n)
         k_grid = [0, 1, 2, 5, 10, 20]
         t_grid = float.(k_grid) .* delta

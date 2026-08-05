@@ -257,7 +257,7 @@ using QuantumFurnace
         @test_throws AssertionError predict_lindbladian_trajectory(
             cfg_L, N3_HAM, N3_JUMPS, rho_wrong, t_grid;
             krylovdim=20, workspace=ws_L)
-        @test_throws AssertionError predict_lindbladian_trajectory(
+        @test_throws ArgumentError predict_lindbladian_trajectory(
             cfg_L, N3_HAM, N3_JUMPS[1:end-1], rho_0, t_grid;
             krylovdim=20, workspace=ws_L)
     end

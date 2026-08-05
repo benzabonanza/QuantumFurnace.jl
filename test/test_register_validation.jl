@@ -67,6 +67,36 @@ const _LEGACY_KMS_KW = (
         @test validate_config!(cfg) === nothing
     end
 
+    @testset "Common physical parameter domain" begin
+        make_cfg(; kwargs...) = Config(; merge(_LEGACY_KMS_KW, (; kwargs...))...)
+        for bad in (
+            make_cfg(num_qubits = 0),
+            make_cfg(beta = 0.0),
+            make_cfg(beta = -1.0),
+            make_cfg(beta = Inf),
+            make_cfg(sigma = 0.0),
+            make_cfg(sigma = -0.1),
+            make_cfg(a = nothing),
+            make_cfg(s = nothing),
+            make_cfg(a = -0.1),
+            make_cfg(s = -0.1),
+            make_cfg(a = NaN),
+            make_cfg(s = NaN),
+        )
+            @test_throws ArgumentError validate_config!(bad)
+        end
+
+        make_thermal(; kwargs...) = Config(; merge(
+            _LEGACY_KMS_KW,
+            (; sim = Thermalize(), mixing_time = 1.0, delta = 0.1),
+            (; kwargs...),
+        )...)
+        @test validate_config!(make_thermal()) === nothing
+        @test_throws ArgumentError validate_config!(make_thermal(mixing_time = -1.0))
+        @test_throws ArgumentError validate_config!(make_thermal(delta = 0.0))
+        @test_throws ArgumentError validate_config!(make_thermal(delta = 1.01))
+    end
+
     @testset "Independent triples KMS TimeDomain validates" begin
         N_D = 12; w0_D = 0.05; t0_D = 2π / (2^N_D * w0_D)
         N_bm = 10; w0_bm = 0.2; t0_bm = 2π / (2^N_bm * w0_bm)
@@ -152,5 +182,18 @@ const _LEGACY_KMS_KW = (
             num_trotter_steps_per_t0 = 10,
         )
         @test validate_config!(cfg) === nothing
+
+        cfg_per_leg_M = Config(;
+            sim = Lindbladian(), domain = TrotterDomain(), construction = KMS(),
+            num_qubits = 3, with_linear_combination = true, beta = 10.0, sigma = 0.1,
+            a = 10.0 / 30.0, s = 0.4,
+            num_energy_bits_D = 12, t0_D = 2π / (2^12 * 0.05), w0_D = 0.05,
+            num_energy_bits_b_minus = 12, t0_b_minus = 2π / (2^12 * 0.05), w0_b_minus = 0.05,
+            num_energy_bits_b_plus = 12, t0_b_plus = 2π / (2^12 * 0.05), w0_b_plus = 0.05,
+            num_trotter_steps_per_t0_D = 4,
+            num_trotter_steps_per_t0_b_minus = 5,
+            num_trotter_steps_per_t0_b_plus = 6,
+        )
+        @test validate_config!(cfg_per_leg_M) === nothing
     end
 end

@@ -244,6 +244,20 @@ const _BPC_HAM_ALG10 = QuantumFurnace._load_hamiltonian_bson(_BPC_HAM_PATH, 10.0
         rescale = _BPC_HAM_ALG10.rescaling_factor
         β_phys_val = 1.0
         β_alg_val = β_phys_val * rescale
+        raw = (
+            matrix = Matrix(_BPC_HAM_ALG10.data),
+            terms = _BPC_HAM_ALG10.base_terms,
+            base_coeffs = _BPC_HAM_ALG10.base_coeffs,
+            disordering_terms = _BPC_HAM_ALG10.disordering_terms,
+            disordering_coeffs = _BPC_HAM_ALG10.disordering_coeffs,
+            eigvals = _BPC_HAM_ALG10.eigvals,
+            eigvecs = _BPC_HAM_ALG10.eigvecs,
+            nu_min = _BPC_HAM_ALG10.nu_min,
+            shift = _BPC_HAM_ALG10.shift,
+            rescaling_factor = rescale,
+            periodic = _BPC_HAM_ALG10.periodic,
+        )
+        ham_matched = HamHam(raw, β_alg_val)
 
         # Consistent — must succeed
         cfg_ok = Config(
@@ -252,7 +266,7 @@ const _BPC_HAM_ALG10 = QuantumFurnace._load_hamiltonian_bson(_BPC_HAM_PATH, 10.0
             beta = β_alg_val, beta_phys = β_phys_val,
             sigma = 1.0 / β_alg_val, a = 0.0, s = 0.25,
         )
-        @test validate_config!(cfg_ok, _BPC_HAM_ALG10) === nothing
+        @test validate_config!(cfg_ok, ham_matched) === nothing
 
         # Inconsistent: β_alg differs from β_phys * rescale by > tolerance
         cfg_bad = Config(
@@ -262,15 +276,23 @@ const _BPC_HAM_ALG10 = QuantumFurnace._load_hamiltonian_bson(_BPC_HAM_PATH, 10.0
             beta_phys = β_phys_val,
             sigma = 1.0 / β_alg_val, a = 0.0, s = 0.25,
         )
-        @test_throws ArgumentError validate_config!(cfg_bad, _BPC_HAM_ALG10)
+        @test_throws ArgumentError validate_config!(cfg_bad, ham_matched)
 
-        # β_phys = nothing — skip the check (legacy-compatible path)
+        # beta_phys = nothing still checks the cached Gibbs temperature.
         cfg_legacy = Config(
             sim = Lindbladian(), domain = BohrDomain(), construction = KMS(),
             num_qubits = 3, with_linear_combination = true,
             beta = β_alg_val,
             sigma = 1.0 / β_alg_val, a = 0.0, s = 0.25,
         )
-        @test validate_config!(cfg_legacy, _BPC_HAM_ALG10) === nothing
+        @test validate_config!(cfg_legacy, ham_matched) === nothing
+        @test_throws ArgumentError validate_config!(cfg_legacy, _BPC_HAM_ALG10)
+
+        cfg_wrong_n = Config(
+            sim = Lindbladian(), domain = BohrDomain(), construction = KMS(),
+            num_qubits = 2, with_linear_combination = true,
+            beta = β_alg_val, sigma = 1.0 / β_alg_val, a = 0.0, s = 0.25,
+        )
+        @test_throws ArgumentError validate_config!(cfg_wrong_n, ham_matched)
     end
 end

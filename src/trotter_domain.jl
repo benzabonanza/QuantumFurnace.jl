@@ -16,6 +16,7 @@ Single-cache Strang Trotter data at duration `t0`.
 - `num_trotter_steps_per_t0`: elementary Strang substeps per cached step.
 - `eigvals_t0`, `eigvecs`: cached step eigendecomposition.
 - `bohr_freqs`: quasi-Bohr frequencies at scale `t0`.
+- `source_hamiltonian`: exact Hamiltonian object used to build the cache.
 """
 struct TrottTrott{T<:AbstractFloat} <: AbstractTrotter{T}
     t0::T
@@ -23,6 +24,7 @@ struct TrottTrott{T<:AbstractFloat} <: AbstractTrotter{T}
     eigvals_t0::Vector{Complex{T}}
     eigvecs::Matrix{Complex{T}}
     bohr_freqs::Matrix{T}
+    source_hamiltonian::HamHam{T}
 end
 
 """
@@ -45,6 +47,7 @@ function TrottTrott(hamiltonian::HamHam{T}, t::Real, num_trotter_steps::Int64) w
         Vector{Complex{T}}(trottU_eigvals),
         Matrix{Complex{T}}(trottU_eigvecs),
         Matrix{T}(bfreqs),
+        hamiltonian,
         )
 end
 
@@ -123,7 +126,8 @@ function Base.getproperty(t::TrotterTriple, s::Symbol)
        s === :R_bm_in_D || s === :R_bp_in_D || s === :R_bm_in_bp
         return getfield(t, s)
     elseif s === :t0 || s === :eigvecs || s === :bohr_freqs ||
-           s === :eigvals_t0 || s === :num_trotter_steps_per_t0
+           s === :eigvals_t0 || s === :num_trotter_steps_per_t0 ||
+           s === :source_hamiltonian
         return getproperty(getfield(t, :D), s)
     else
         return getfield(t, s)  # falls through and Julia raises on unknown.
@@ -133,7 +137,8 @@ end
 function Base.propertynames(::TrotterTriple, private::Bool=false)
     return (:D, :b_minus, :b_plus,
             :R_bm_in_D, :R_bp_in_D, :R_bm_in_bp,
-            :t0, :eigvecs, :bohr_freqs, :eigvals_t0, :num_trotter_steps_per_t0)
+            :t0, :eigvecs, :bohr_freqs, :eigvals_t0,
+            :num_trotter_steps_per_t0, :source_hamiltonian)
 end
 
 """

@@ -189,7 +189,7 @@ using QuantumFurnace
 
         # -- (a) Lindbladian: workspace= reuse is bit-identical to fresh build --
         @testset "(a) Lindbladian reuse byte-equality" begin
-            cfg = make_config(Lindbladian(), EnergyDomain(); construction=KMS())
+            cfg = make_config(Lindbladian(), EnergyDomain(); num_qubits=3, construction=KMS())
             r_fresh = krylov_spectral_gap(cfg, N3_HAM, N3_JUMPS;
                                           krylovdim=30, howmany=4)
             ws = Workspace(cfg, N3_HAM, N3_JUMPS)
@@ -198,8 +198,11 @@ using QuantumFurnace
             # Reuse a second time on the SAME ws — no scratch contamination.
             r_reuse2 = krylov_spectral_gap(cfg, N3_HAM, N3_JUMPS;
                                            krylovdim=30, howmany=4, workspace=ws)
+            r_copy = krylov_spectral_gap(cfg, N3_HAM, copy(N3_JUMPS);
+                                         krylovdim=30, howmany=4, workspace=ws)
             @test r_fresh.spectral_gap == r_reuse1.spectral_gap
             @test r_reuse1.spectral_gap == r_reuse2.spectral_gap
+            @test r_reuse2.spectral_gap == r_copy.spectral_gap
             @test r_fresh.eigenvalues == r_reuse1.eigenvalues
             @test r_fresh.fixed_point == r_reuse1.fixed_point
             @test r_fresh.gap_mode == r_reuse1.gap_mode
@@ -211,7 +214,7 @@ using QuantumFurnace
         # -- (a') Channel: workspace= reuse is bit-identical to fresh build --
         @testset "(a') Channel reuse byte-equality" begin
             cfg_ch = make_config(Thermalize(), EnergyDomain();
-                                 construction=KMS(), delta=0.01)
+                                 num_qubits=3, construction=KMS(), delta=0.01)
             rc_fresh = krylov_spectral_gap(cfg_ch, N3_HAM, N3_JUMPS;
                                            krylovdim=30, howmany=4)
             ws_ch = Workspace(cfg_ch, N3_HAM, N3_JUMPS)
@@ -232,11 +235,11 @@ using QuantumFurnace
         #        these would throw. This is the "no double-build" witness: the
         #        forwarded ws is on the live path.
         @testset "(b) reuse guards (workspace is consulted)" begin
-            cfg = make_config(Lindbladian(), EnergyDomain(); construction=KMS())
+            cfg = make_config(Lindbladian(), EnergyDomain(); num_qubits=3, construction=KMS())
             cfg_ch = make_config(Thermalize(), EnergyDomain();
-                                 construction=KMS(), delta=0.01)
+                                 num_qubits=3, construction=KMS(), delta=0.01)
             cfg_ch2 = make_config(Thermalize(), EnergyDomain();
-                                  construction=KMS(), delta=0.02)  # δ differs
+                                  num_qubits=3, construction=KMS(), delta=0.02)  # delta differs
 
             ws_L  = Workspace(cfg, N3_HAM, N3_JUMPS)
             ws_ch = Workspace(cfg_ch, N3_HAM, N3_JUMPS)
@@ -251,6 +254,38 @@ using QuantumFurnace
             # Cross-simulation: Lindbladian ws into the channel method.
             @test_throws ArgumentError krylov_spectral_gap(
                 cfg_ch, N3_HAM, N3_JUMPS; krylovdim=30, howmany=4, workspace=ws_L)
+
+            # Same dimension/config is insufficient: cached physics must come
+            # from the exact Hamiltonian and jump vector supplied at the call.
+            ham_other = QuantumFurnace._load_hamiltonian_bson(
+                joinpath(dirname(@__DIR__), "hamiltonians",
+                         "heis_xxx_disordered_periodic_n3_seed46.bson"), BETA)
+            @test_throws ArgumentError krylov_spectral_gap(
+                cfg, ham_other, N3_JUMPS; krylovdim=30, howmany=4, workspace=ws_L)
+
+            jumps_other = copy(N3_JUMPS)
+            j1 = jumps_other[1]
+            jumps_other[1] = JumpOp(2 .* j1.data, 2 .* j1.in_eigenbasis,
+                                    j1.orthogonal, j1.hermitian)
+            @test_throws ArgumentError krylov_spectral_gap(
+                cfg, N3_HAM, jumps_other; krylovdim=30, howmany=4, workspace=ws_L)
+
+            cfg_t = make_config(Lindbladian(), TrotterDomain();
+                                num_qubits=3, construction=GNS())
+            ws_t = Workspace(cfg_t, N3_HAM, N3_TROTTER_JUMPS;
+                             trotter=N3_TROTTER)
+            other = make_classical_ising_n3()
+            cfg_other = Config(
+                sim=Lindbladian(), domain=TrotterDomain(), construction=GNS(),
+                num_qubits=3, with_linear_combination=true,
+                beta=other.beta_alg, beta_phys=other.beta_phys,
+                sigma=1 / other.beta_alg, a=0.0, s=0.25,
+                num_energy_bits=NUM_ENERGY_BITS, t0=T0, w0=W0,
+                num_trotter_steps_per_t0=NUM_TROTTER_STEPS_PER_T0,
+            )
+            @test_throws ArgumentError krylov_spectral_gap(
+                cfg_other, other.ham, N3_TROTTER_JUMPS;
+                trotter=N3_TROTTER, krylovdim=30, howmany=4, workspace=ws_t)
         end
 
         # -- (c) End-to-end: predict_*_trajectory(compute_true_gap=true) with a
@@ -261,7 +296,7 @@ using QuantumFurnace
             psi = ones(ComplexF64, d3) ./ sqrt(2.0^3)
             rho_0 = psi * psi'
 
-            cfg = make_config(Lindbladian(), EnergyDomain(); construction=KMS())
+            cfg = make_config(Lindbladian(), EnergyDomain(); num_qubits=3, construction=KMS())
             t_grid = collect(range(0.0, 1.0, length=3))
             # Self-build path (workspace defaulted to nothing inside predict_*).
             tj_self = predict_lindbladian_trajectory(
@@ -277,7 +312,7 @@ using QuantumFurnace
             @test tj_self.total_matvecs == tj_ws.total_matvecs
             @test tj_self.all_converged == tj_ws.all_converged
 
-            cfg_ch = make_config(Thermalize(), EnergyDomain(); construction=KMS())
+            cfg_ch = make_config(Thermalize(), EnergyDomain(); num_qubits=3, construction=KMS())
             k_grid = collect(0:5:20)
             rho_init = Matrix{ComplexF64}(rho_0)
             tc_self = predict_channel_trajectory(

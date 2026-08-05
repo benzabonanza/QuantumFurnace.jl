@@ -201,7 +201,7 @@ function predict_lindbladian_trajectory(
     d = size(rho_0, 1)
     @assert size(rho_0, 2) == d  "rho_0 must be square"
 
-    validate_config!(config)
+    validate_config!(config, hamiltonian)
     validate_jump_pairing(jumps; allow_unpaired_nonhermitian=allow_unpaired_nonhermitian)
 
     ws = _reuse_or_build_krylov_workspace(
@@ -338,7 +338,7 @@ function predict_channel_trajectory(
     d = size(rho_0, 1)
     @assert size(rho_0, 2) == d  "rho_0 must be square"
 
-    validate_config!(config)
+    validate_config!(config, hamiltonian)
     validate_jump_pairing(jumps; allow_unpaired_nonhermitian=allow_unpaired_nonhermitian)
     config.jump_selection === :sweep || throw(ArgumentError(
         "predict_channel_trajectory requires config.jump_selection = :sweep " *

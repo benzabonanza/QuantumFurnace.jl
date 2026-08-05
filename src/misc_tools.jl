@@ -153,7 +153,6 @@ substep counts raise `ArgumentError`.
 function make_trotter_for_config(hamiltonian::HamHam, config::Config)
     config.domain isa TrotterDomain ||
         throw(ArgumentError("make_trotter_for_config: config.domain must be TrotterDomain (got $(typeof(config.domain)))."))
-    M_user_legacy = config.num_trotter_steps_per_t0
     t0_D = register_t0_D(config)
     t0_D === nothing &&
         throw(ArgumentError("make_trotter_for_config: register_t0_D(config) must be set."))
@@ -175,14 +174,118 @@ function make_trotter_for_config(hamiltonian::HamHam, config::Config)
         end
         return TrotterTriple(hamiltonian, t0_D, t0_bm_evol, t0_bp_evol, M_D, M_bm, M_bp)
     else
-        M_user_legacy === nothing &&
-            throw(ArgumentError("make_trotter_for_config: config.num_trotter_steps_per_t0 must be set (GNS branch)."))
-        return TrottTrott(hamiltonian, t0_D, M_user_legacy)
+        M_D = register_M_D(config)
+        M_D === nothing &&
+            throw(ArgumentError("make_trotter_for_config: register_M_D(config) must be set."))
+        return TrottTrott(hamiltonian, t0_D, M_D)
     end
+end
+
+@inline function _require_trotter_value(actual, expected, label::AbstractString)
+    isapprox(actual, expected; atol=0, rtol=100eps(float(expected))) ||
+        throw(ArgumentError(
+            "Trotter cache $label=$actual does not match the configuration value $expected. " *
+            "Rebuild it with make_trotter_for_config(hamiltonian, config)."))
+    return nothing
+end
+
+function _validate_trotter_cache!(
+    config::Config{<:Any, TrotterDomain},
+    hamiltonian::HamHam,
+    trotter::TrottTrott,
+)
+    trotter.source_hamiltonian === hamiltonian || throw(ArgumentError(
+        "The Trotter cache was built from a different Hamiltonian object. " *
+        "Rebuild it for the supplied Hamiltonian."))
+    size(trotter.eigvecs) == size(hamiltonian.data) || throw(ArgumentError(
+        "Trotter cache dimension does not match the Hamiltonian."))
+    _require_trotter_value(trotter.t0, register_t0_D(config), "t0_D")
+    cached_M = trotter.num_trotter_steps_per_t0
+    checks = with_coherent(config.construction) ?
+        (("M_D", register_M_D(config)),
+         ("M_b_minus", register_M_b_minus(config)),
+         ("M_b_plus", register_M_b_plus(config))) :
+        (("M_D", register_M_D(config)),)
+    for (label, expected) in checks
+        cached_M == expected || throw(ArgumentError(
+            "Single Trotter cache $label=$cached_M does not match the configuration " *
+            "value $expected. Use a TrotterTriple for independent coherent-leg counts."))
+    end
+    return nothing
+end
+
+function _validate_trotter_cache!(
+    config::Config{<:Any, TrotterDomain},
+    hamiltonian::HamHam,
+    trotter::TrotterTriple,
+)
+    for (label, leg) in (("D", trotter.D),
+                         ("b_minus", trotter.b_minus),
+                         ("b_plus", trotter.b_plus))
+        leg.source_hamiltonian === hamiltonian || throw(ArgumentError(
+            "The Trotter $label cache was built from a different Hamiltonian object. " *
+            "Rebuild it for the supplied Hamiltonian."))
+        size(leg.eigvecs) == size(hamiltonian.data) || throw(ArgumentError(
+            "Trotter $label cache dimension does not match the Hamiltonian."))
+    end
+
+    _require_trotter_value(trotter.D.t0, register_t0_D(config), "t0_D")
+    checks = if with_coherent(config.construction)
+        _require_trotter_value(
+            trotter.b_minus.t0, register_t0_b_minus(config) / config.sigma,
+            "t0_b_minus / sigma")
+        _require_trotter_value(
+            trotter.b_plus.t0, config.beta * register_t0_b_plus(config),
+            "beta * t0_b_plus")
+        (("M_D", trotter.D.num_trotter_steps_per_t0, register_M_D(config)),
+         ("M_b_minus", trotter.b_minus.num_trotter_steps_per_t0,
+          register_M_b_minus(config)),
+         ("M_b_plus", trotter.b_plus.num_trotter_steps_per_t0,
+          register_M_b_plus(config)))
+    else
+        (("M_D", trotter.D.num_trotter_steps_per_t0, register_M_D(config)),)
+    end
+    for (label, actual, expected) in checks
+        actual == expected || throw(ArgumentError(
+            "Trotter cache $label=$actual does not match the configuration value " *
+            "$expected. Rebuild the cache."))
+    end
+    return nothing
 end
 
 function validate_config!(config::Config)
     errors = String[]
+
+    # Common numerical domain. The implemented kernels divide by beta and
+    # sigma, so the beta = 0 and sigma = 0 limits are not supported implicitly.
+    config.num_qubits > 0 || push!(errors, "num_qubits must be > 0.")
+    (!isfinite(config.beta) || config.beta <= 0) &&
+        push!(errors, "beta (beta_alg) must be finite and > 0.")
+    if config.beta_phys !== nothing &&
+       (!isfinite(config.beta_phys) || config.beta_phys <= 0)
+        push!(errors, "beta_phys must be finite and > 0 when provided.")
+    end
+    (!isfinite(config.sigma) || config.sigma <= 0) &&
+        push!(errors, "sigma must be finite and > 0.")
+
+    for (name, value) in (("a", config.a), ("s", config.s))
+        if value !== nothing && (!isfinite(value) || value < 0)
+            push!(errors, "$name must be finite and >= 0 when provided.")
+        end
+    end
+    if config.eta !== nothing && (!isfinite(config.eta) || config.eta <= 0)
+        push!(errors, "eta must be finite and > 0 when provided.")
+    end
+
+    if config.sim isa Thermalize
+        if config.mixing_time === nothing || !isfinite(config.mixing_time) || config.mixing_time < 0
+            push!(errors, "Thermalize requires finite mixing_time >= 0.")
+        end
+        if config.delta === nothing || !isfinite(config.delta) ||
+           config.delta <= 0 || config.delta > 1
+            push!(errors, "Thermalize requires 0 < delta <= 1.")
+        end
+    end
 
     # --- Domain-Specific Validation ---
     _collect_config_errors!(errors, config)
@@ -199,6 +302,9 @@ function validate_config!(config::Config)
         if w_gamma === nothing || sigma_gamma === nothing
             push!(errors, "For Gaussian transitions gaussian_parameters=(ω_γ, σ_γ) must be set.")
         else
+            !isfinite(w_gamma) && push!(errors, "Gaussian transition ω_γ must be finite.")
+            (!isfinite(sigma_gamma) || sigma_gamma <= 0) &&
+                push!(errors, "Gaussian transition σ_γ must be finite and > 0.")
             rhs = if config.construction isa GNS
                 2 * w_gamma / (sigma_gamma^2)
             else
@@ -216,6 +322,9 @@ function validate_config!(config::Config)
     end
 
     if config.with_linear_combination
+        if config.a === nothing || config.s === nothing
+            push!(errors, "Linear-combination transitions require explicit finite a and s values.")
+        end
         a_val = something(config.a, 0.0)
         s_val = something(config.s, 0.0)
         # (a, s) taxonomy: kinky Metropolis is exactly (s = 0, a = 0); smooth
@@ -335,12 +444,21 @@ end
 
 Validate a configuration and its physical/algorithmic temperature pair.
 
-When `config.beta_phys` is set, require `config.beta` to equal
-`config.beta_phys * ham.rescaling_factor` within `atol` and `rtol`. Otherwise
-only the one-argument validation runs. Throws `ArgumentError` on failure.
+Require the configured system size and cached Gibbs state to match `ham`. When
+`config.beta_phys` is set, also require `config.beta` to equal
+`config.beta_phys * ham.rescaling_factor` within `atol` and `rtol`.
 """
 function validate_config!(config::Config, ham::HamHam; atol::Real = 1e-12, rtol::Real = 1e-10)
     validate_config!(config)
+    dim = size(ham.data, 1)
+    size(ham.data, 2) == dim || throw(ArgumentError("ham.data must be square."))
+    expected_dim = 2^config.num_qubits
+    dim == expected_dim || throw(ArgumentError(
+        "config.num_qubits=$(config.num_qubits) implies dimension $expected_dim, " *
+        "but ham.data has dimension $dim."))
+
+    isfinite(ham.rescaling_factor) && ham.rescaling_factor > 0 ||
+        throw(ArgumentError("ham.rescaling_factor must be finite and > 0."))
     if config.beta_phys !== nothing
         expected_beta_alg = config.beta_phys * ham.rescaling_factor
         if !isapprox(config.beta, expected_beta_alg; atol=atol, rtol=rtol)
@@ -350,6 +468,21 @@ function validate_config!(config::Config, ham::HamHam; atol::Real = 1e-12, rtol:
                 "but config.beta=$(config.beta). Set them at construction so " *
                 "`beta == beta_phys * ham.rescaling_factor`."))
         end
+    end
+
+    # HamHam caches the Gibbs state at construction. Check its diagonal weights
+    # even on the legacy beta_alg-only path so dynamics and diagnostics cannot
+    # silently use different temperatures.
+    length(ham.eigvals) == dim || throw(ArgumentError(
+        "ham.eigvals length $(length(ham.eigvals)) does not match dimension $dim."))
+    emin = minimum(ham.eigvals)
+    weights = exp.(-config.beta .* (ham.eigvals .- emin))
+    weights ./= sum(weights)
+    @inbounds for i in 1:dim
+        isapprox(ham.gibbs[i, i], weights[i]; atol=atol, rtol=rtol) ||
+            throw(ArgumentError(
+                "ham.gibbs was cached at a beta_alg different from config.beta=$(config.beta). " *
+                "Reconstruct HamHam with the same beta before building dynamics."))
     end
     return nothing
 end
@@ -437,8 +570,8 @@ function _collect_config_errors!(errors::Vector{String}, config::Config{<:Any, T
         errors, "D", register_r_D(config), register_t0_D(config), register_w0_D(config);
         require_t0 = true, require_w0 = false,
     )
-    if isnothing(config.num_trotter_steps_per_t0) || config.num_trotter_steps_per_t0 <= 0
-        push!(errors, "For TrotterDomain, num_trotter_steps_per_t0 must be > 0.")
+    if isnothing(register_M_D(config)) || register_M_D(config) <= 0
+        push!(errors, "For TrotterDomain, register_M_D(config) must be > 0.")
     end
 end
 
@@ -447,10 +580,16 @@ function _collect_config_errors!(errors::Vector{String}, config::Config{<:Any, T
         errors, "D", register_r_D(config), register_t0_D(config), register_w0_D(config);
         require_t0 = true, require_w0 = true,
     )
-    if isnothing(config.num_trotter_steps_per_t0) || config.num_trotter_steps_per_t0 <= 0
-        push!(errors, "For TrotterDomain, num_trotter_steps_per_t0 must be > 0.")
+    if isnothing(register_M_D(config)) || register_M_D(config) <= 0
+        push!(errors, "For TrotterDomain, register_M_D(config) must be > 0.")
     end
     if with_coherent(config.construction)
+        if isnothing(register_M_b_minus(config)) || register_M_b_minus(config) <= 0
+            push!(errors, "For coherent TrotterDomain, register_M_b_minus(config) must be > 0.")
+        end
+        if isnothing(register_M_b_plus(config)) || register_M_b_plus(config) <= 0
+            push!(errors, "For coherent TrotterDomain, register_M_b_plus(config) must be > 0.")
+        end
         _check_register_fourier!(
             errors, "b_minus",
             register_r_b_minus(config), register_t0_b_minus(config), register_w0_b_minus(config);

@@ -63,6 +63,7 @@ end
         @test trotter isa AbstractTrotter
         @test trotter.t0 ≈ 0.5
         @test trotter.num_trotter_steps_per_t0 == 4
+        @test trotter.source_hamiltonian === ham
         @test length(trotter.eigvals_t0) == 8
         # Strang eigenbasis is orthonormal and eigenvalues sit on the unit circle.
         @test isapprox(trotter.eigvecs * trotter.eigvecs', I; atol = 1e-10)
@@ -80,6 +81,20 @@ end
         trot_gns = make_trotter_for_config(N3_HAM, cfg_gns)
         @test trot_gns isa TrottTrott
         @test !(trot_gns isa TrotterTriple)
+
+        cfg_gns_D = Config(
+            sim=Lindbladian(), domain=TrotterDomain(), construction=GNS(),
+            num_qubits=3, with_linear_combination=true,
+            beta=BETA, sigma=SIGMA, a=BETA / 30, s=0.4,
+            num_energy_bits=NUM_ENERGY_BITS, t0=T0, w0=W0,
+            num_trotter_steps_per_t0=10,
+            num_trotter_steps_per_t0_D=4,
+        )
+        trot_gns_D = make_trotter_for_config(N3_HAM, cfg_gns_D)
+        @test trot_gns_D.num_trotter_steps_per_t0 == 4
+        @test Workspace(cfg_gns_D, N3_HAM,
+            _build_jumps_in_basis(N3_HAM, trot_gns_D.eigvecs, n);
+            trotter=trot_gns_D) isa Workspace
     end
 
     @testset "Run thermalize with KMS trotter (smoke)" begin
@@ -313,5 +328,42 @@ end
         sigma_beta = trotter.eigvecs' * N3_HAM.eigvecs * N3_HAM.gibbs *
                      N3_HAM.eigvecs' * trotter.eigvecs
         @test norm(L * vec(sigma_beta)) < 1e-9
+
+        # Caches are tied to their construction Hamiltonian and register data.
+        cfg_wrong_M = make_config(Lindbladian(), TrotterDomain(); num_qubits=3,
+            construction=KMS(), num_trotter_steps_per_t0=41)
+        @test_throws ArgumentError construct_lindbladian(
+            jumps, cfg_wrong_M, N3_HAM; trotter=trotter)
+        @test_throws ArgumentError Workspace(
+            cfg_wrong_M, N3_HAM, jumps; trotter=trotter)
+
+        legacy_single = TrottTrott(N3_HAM, T0, NUM_TROTTER_STEPS_PER_T0)
+        cfg_single_compatible = make_config(
+            Lindbladian(), TrotterDomain(); num_qubits=3, construction=KMS())
+        @test QuantumFurnace._validate_trotter_cache!(
+            cfg_single_compatible, N3_HAM, legacy_single) === nothing
+        cfg_single_incompatible = Config(;
+            sim=Lindbladian(), domain=TrotterDomain(), construction=KMS(),
+            num_qubits=3, with_linear_combination=true,
+            beta=BETA, sigma=SIGMA, a=BETA / 30, s=0.4,
+            num_energy_bits=NUM_ENERGY_BITS, t0=T0, w0=W0,
+            num_trotter_steps_per_t0=NUM_TROTTER_STEPS_PER_T0,
+            num_trotter_steps_per_t0_b_minus=77,
+            num_trotter_steps_per_t0_b_plus=88,
+        )
+        @test_throws ArgumentError QuantumFurnace._validate_trotter_cache!(
+            cfg_single_incompatible, N3_HAM, legacy_single)
+
+        other = make_classical_ising_n3()
+        cfg_other = Config(
+            sim=Lindbladian(), domain=TrotterDomain(), construction=GNS(),
+            num_qubits=3, with_linear_combination=true,
+            beta=other.beta_alg, beta_phys=other.beta_phys,
+            sigma=1 / other.beta_alg, a=0.0, s=0.25,
+            num_energy_bits=NUM_ENERGY_BITS, t0=T0, w0=W0,
+            num_trotter_steps_per_t0=NUM_TROTTER_STEPS_PER_T0,
+        )
+        @test_throws ArgumentError Workspace(
+            cfg_other, other.ham, N3_TROTTER_JUMPS; trotter=N3_TROTTER)
     end
 end

@@ -248,6 +248,8 @@ end
 function _validate_reused_krylov_workspace(
     workspace::Workspace{KrylovSpectrum},
     config::Config,
+    hamiltonian::HamHam,
+    trotter::Union{Nothing, AbstractTrotter},
     jumps::Vector{JumpOp},
 )
     workspace.cached_cfg === nothing && throw(ArgumentError(
@@ -257,7 +259,32 @@ function _validate_reused_krylov_workspace(
         "workspace.cached_cfg != config — cannot reuse a workspace whose " *
         "construction config differs from the call-site config (β, σ, a, s, δ, " *
         "register triples, with_gqsp, jump_selection, etc. all matter). Rebuild the workspace."))
-    @assert length(workspace.jumps) == length(jumps)  "workspace jump count mismatch"
+    source = if config.domain isa TrotterDomain
+        trotter === nothing && throw(ArgumentError("TrotterDomain requires a trotter object."))
+        _validate_trotter_cache!(config, hamiltonian, trotter)
+        trotter
+    else
+        hamiltonian
+    end
+    workspace.ham_or_trott === source || throw(ArgumentError(
+        "workspace source Hamiltonian/Trotter object differs from the call-site source. " *
+        "Rebuild the workspace for this system."))
+    length(workspace.jumps) == length(jumps) || throw(ArgumentError(
+        "workspace jump count differs from the call-site jump count. Rebuild the workspace."))
+    # Workspace reuse treats jump matrices as immutable. The constructor keeps
+    # a shallow snapshot, so this O(number of jumps) check accepts a copied
+    # vector but rejects replaced operators without scanning every dense matrix.
+    @inbounds for k in eachindex(jumps)
+        cached = workspace.jumps[k]
+        current = jumps[k]
+        current.data === cached.data &&
+        current.in_eigenbasis === cached.in_eigenbasis &&
+        current.orthogonal == cached.orthogonal &&
+        current.hermitian == cached.hermitian ||
+            throw(ArgumentError(
+                "jump $k differs from the operator used to build the workspace. " *
+                "Rebuild the workspace; jump matrix contents must not be mutated in place."))
+    end
     return workspace
 end
 
@@ -274,7 +301,7 @@ function _reuse_or_build_krylov_workspace(
     workspace.scratch isa KrylovScratch || throw(ArgumentError(
         "$caller requires Workspace(::Config{Lindbladian}, ...); " *
         "got workspace with scratch::$(typeof(workspace.scratch))"))
-    _validate_reused_krylov_workspace(workspace, config, jumps)
+    _validate_reused_krylov_workspace(workspace, config, hamiltonian, trotter, jumps)
     @assert size(workspace.G_left, 1) == dim  "workspace dim mismatch"
     return workspace
 end
@@ -292,7 +319,7 @@ function _reuse_or_build_krylov_workspace(
     workspace.scratch isa ThermalizeScratch || throw(ArgumentError(
         "$caller requires Workspace(::Config{Thermalize}, ...); " *
         "got workspace with scratch::$(typeof(workspace.scratch))"))
-    _validate_reused_krylov_workspace(workspace, config, jumps)
+    _validate_reused_krylov_workspace(workspace, config, hamiltonian, trotter, jumps)
     @assert size(workspace.scratch.rho_next, 1) == dim  "workspace dim mismatch"
     return workspace
 end
@@ -339,6 +366,7 @@ function krylov_spectral_gap(
     # Guards
     krylovdim > howmany || error("krylovdim ($krylovdim) must be > howmany ($howmany)")
     _check_krylov_memory(config.num_qubits, krylovdim)
+    validate_config!(config, hamiltonian)
     validate_jump_pairing(jumps; allow_unpaired_nonhermitian=allow_unpaired_nonhermitian)
 
     # Dimensions
@@ -442,6 +470,7 @@ function krylov_spectral_gap(
     # Guards
     krylovdim > howmany || error("krylovdim ($krylovdim) must be > howmany ($howmany)")
     _check_krylov_memory(config.num_qubits, krylovdim)
+    validate_config!(config, hamiltonian)
     validate_jump_pairing(jumps; allow_unpaired_nonhermitian=allow_unpaired_nonhermitian)
 
     # Get delta from config

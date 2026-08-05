@@ -604,9 +604,12 @@ basis. `workspace` may reuse precomputation. The coherent term remains enabled.
 function lindbladian_arm(config::Config{Lindbladian}, hamiltonian::HamHam,
                          jumps::Vector{JumpOp};
                          basis::Union{Nothing, AbstractMatrix} = hamiltonian.eigvecs,
-                         workspace::Union{Nothing, Workspace} = nothing,
+                         workspace::Union{Nothing, Workspace{KrylovSpectrum}} = nothing,
                          label::AbstractString = "ideal L")
-    ws = workspace === nothing ? Workspace(config, hamiltonian, jumps) : workspace
+    validate_config!(config, hamiltonian)
+    ws = _reuse_or_build_krylov_workspace(
+        workspace, config, hamiltonian, jumps, nothing, size(hamiltonian.data, 1);
+        caller="lindbladian_arm")
     apply! = let ws = ws, config = config, ham = hamiltonian
         (out::AbstractMatrix, x::AbstractMatrix) -> begin
             apply_lindbladian!(ws, Matrix{ComplexF64}(x), config, ham)
@@ -632,12 +635,15 @@ function channel_arm(config::Config{Thermalize}, hamiltonian::HamHam,
                      trotter::Union{Nothing, AbstractTrotter} = nothing;
                      basis::Union{Nothing, AbstractMatrix} =
                          trotter === nothing ? nothing : trotter.eigvecs,
-                     workspace::Union{Nothing, Workspace} = nothing,
+                     workspace::Union{Nothing, Workspace{KrylovSpectrum}} = nothing,
                      label::AbstractString = "implemented Φ_δ")
     config.jump_selection === :sweep || throw(ArgumentError(
         "channel_arm requires config.jump_selection = :sweep (got :$(config.jump_selection))"))
     config.delta === nothing && throw(ArgumentError("channel_arm requires config.delta to be set"))
-    ws = workspace === nothing ? Workspace(config, hamiltonian, jumps; trotter = trotter) : workspace
+    validate_config!(config, hamiltonian)
+    ws = _reuse_or_build_krylov_workspace(
+        workspace, config, hamiltonian, jumps, trotter, size(hamiltonian.data, 1);
+        caller="channel_arm")
     apply! = let ws = ws, config = config, ham = hamiltonian
         (out::AbstractMatrix, x::AbstractMatrix) -> begin
             apply_delta_channel!(
@@ -749,7 +755,7 @@ function channel_discriminant_antiherm_norm(
     config::Config{Thermalize}, hamiltonian::HamHam, jumps::Vector{JumpOp},
     trotter::Union{Nothing, AbstractTrotter} = nothing;
     krylovdim::Integer = 30, tol::Real = 1e-12, max_retries::Integer = 3,
-    workspace::Union{Nothing, Workspace} = nothing,
+    workspace::Union{Nothing, Workspace{KrylovSpectrum}} = nothing,
     compute_discriminant_norm::Bool = false,
 )
     config.delta === nothing && throw(ArgumentError(
@@ -757,8 +763,10 @@ function channel_discriminant_antiherm_norm(
     config.jump_selection === :sweep || throw(ArgumentError(
         "channel_discriminant_antiherm_norm requires config.jump_selection = :sweep " *
         "(got :$(config.jump_selection))"))
-    ws = workspace === nothing ?
-        Workspace(config, hamiltonian, jumps; trotter = trotter) : workspace
+    validate_config!(config, hamiltonian)
+    ws = _reuse_or_build_krylov_workspace(
+        workspace, config, hamiltonian, jumps, trotter, size(hamiltonian.data, 1);
+        caller="channel_discriminant_antiherm_norm")
     d = size(hamiltonian.data, 1)
     δ = float(config.delta)
     sq, sqinv = _gibbs_quarter_powers(hamiltonian, config.beta)
@@ -807,10 +815,13 @@ precomputation. Returns the fields from [`discriminant_antiherm_norm`](@ref).
 function lindbladian_discriminant_antiherm_norm(
     config::Config{Lindbladian}, hamiltonian::HamHam, jumps::Vector{JumpOp};
     krylovdim::Integer = 30, tol::Real = 1e-12, max_retries::Integer = 3,
-    workspace::Union{Nothing, Workspace} = nothing,
+    workspace::Union{Nothing, Workspace{KrylovSpectrum}} = nothing,
     compute_discriminant_norm::Bool = false,
 )
-    ws = workspace === nothing ? Workspace(config, hamiltonian, jumps) : workspace
+    validate_config!(config, hamiltonian)
+    ws = _reuse_or_build_krylov_workspace(
+        workspace, config, hamiltonian, jumps, nothing, size(hamiltonian.data, 1);
+        caller="lindbladian_discriminant_antiherm_norm")
     d = size(hamiltonian.data, 1)
     sq, sqinv = _gibbs_quarter_powers(hamiltonian, config.beta)
 

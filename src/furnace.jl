@@ -26,6 +26,7 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::Config{Lindbladian
     allow_unpaired_nonhermitian::Bool=false,
     verbose::Bool=false)
 
+    validate_config!(config, hamiltonian)
     validate_jump_pairing(jumps; allow_unpaired_nonhermitian=allow_unpaired_nonhermitian)
 
     if verbose
@@ -35,6 +36,7 @@ function construct_lindbladian(jumps::Vector{JumpOp}, config::Config{Lindbladian
 
     ham_or_trott = if config.domain isa TrotterDomain
         trotter === nothing && error("A Trotter object must be provided for the TrotterDomain")
+        _validate_trotter_cache!(config, hamiltonian, trotter)
         trotter
     else # For Bohr, Energy, Time domains
         hamiltonian
@@ -103,8 +105,6 @@ function run_lindblad(
 
     t_start = time()
 
-    validate_config!(config)
-    validate_jump_pairing(jumps; allow_unpaired_nonhermitian=allow_unpaired_nonhermitian)
     verbose && _print_press(config)
 
     liouv = construct_lindbladian(jumps, config, hamiltonian; trotter=trotter,
@@ -189,13 +189,15 @@ function run_thermalize(
 
     t_start = time()
 
-    validate_config!(config)
+    validate_config!(config, hamiltonian)
+    isempty(jumps) && throw(ArgumentError("run_thermalize requires at least one jump operator."))
     validate_jump_pairing(jumps; allow_unpaired_nonhermitian=allow_unpaired_nonhermitian)
     @assert save_every >= 1 "save_every must be >= 1"
     verbose && _print_press(config)
 
     if config.domain isa TrotterDomain
         @assert trotter !== nothing
+        _validate_trotter_cache!(config, hamiltonian, trotter)
         ham_or_trott = trotter
         gibbs = Hermitian(trotter.eigvecs' * hamiltonian.eigvecs * hamiltonian.gibbs *
                           hamiltonian.eigvecs' * trotter.eigvecs)
