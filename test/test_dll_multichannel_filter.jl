@@ -28,6 +28,13 @@
             β,
         )
 
+        # Temperature matching is scale-aware but restricted to roundoff.
+        beta_large = 1e100
+        @test_nowarn DLLMultiChannelFilter(
+            [DLLGaussianFilter(nextfloat(beta_large))], beta_large)
+        @test_throws ArgumentError DLLMultiChannelFilter(
+            [DLLGaussianFilter(beta_large * (1 + 1e-10))], beta_large)
+
         # Channel without `.beta` field → ArgumentError.
         @test_throws ArgumentError DLLMultiChannelFilter(
             [GaussianFilter(0.5)], β)
@@ -200,6 +207,31 @@
         end
     end
 
+    @testset "(j2) shifted Gaussian window bounds the coherent frequency tail" begin
+        for beta_alg in (1e-6, 0.1, 1.0, 5.0), shift in (0.0, 0.4, 5.0),
+                weight in (0.01, 1.0, 100.0)
+            shifted = ShiftedSymmetricFilter(
+                DLLGaussianFilter(beta_alg), shift, weight)
+            nu_min, nu_max = QuantumFurnace._shifted_frequency_window(shifted)
+
+            centre = -1 / beta_alg
+            half_width = min(
+                centre - abs(shift) - nu_min,
+                nu_max - (centre + abs(shift)),
+            )
+            total_l1 = sqrt(weight / 2) * exp(1 / 8) *
+                       2cosh(beta_alg * shift / 4) *
+                       sqrt(8pi) / beta_alg
+            z = beta_alg * half_width / sqrt(8)
+            tail_l1 = total_l1 * QuantumFurnace.erfc(z)
+            coherent_tail_bound = total_l1 * tail_l1 / (2pi)^2
+
+            @test nu_min < nu_max
+            @test half_width > 0
+            @test coherent_tail_bound <= 64eps(Float64)
+        end
+    end
+
     @testset "(k) dll_multichannel_translates: k=1 factory structure" begin
         β = 5.0
         base = DLLMetropolisFilter(β; S = 2.0)
@@ -224,6 +256,29 @@
         end
     end
 
+    @testset "(l2) public Kossakowski helper sums channels without cross terms" begin
+        beta_alg = 5.0
+        channel = DLLGaussianFilter(beta_alg)
+        identical = DLLMultiChannelFilter([channel, channel], beta_alg)
+        nu_grid = collect(range(-0.5, 0.5; length = 11))
+        alpha_single = dll_kossakowski_bohr(channel, nu_grid)
+        alpha_identical = dll_kossakowski_bohr(identical, nu_grid)
+        @test isapprox(alpha_identical, 2 .* alpha_single;
+                       atol = 1e-14, rtol = 1e-14)
+        @test !isapprox(alpha_identical, 4 .* alpha_single;
+                        atol = 1e-14, rtol = 1e-14)
+
+        metro = DLLMetropolisFilter(beta_alg; S = 2.0)
+        distinct = DLLMultiChannelFilter{Float64, AbstractFilter}(
+            AbstractFilter[channel, metro], beta_alg)
+        alpha_expected = dll_kossakowski_bohr(channel, nu_grid) .+
+                         dll_kossakowski_bohr(metro, nu_grid)
+        @test isapprox(dll_kossakowski_bohr(distinct, nu_grid), alpha_expected;
+                       atol = 1e-14, rtol = 1e-14)
+        assert_kms_skew_symmetric(alpha_expected, nu_grid, beta_alg;
+                                  atol = 1e-12)
+    end
+
     @testset "(m) dll_multichannel_translates rejects out-of-bump centers" begin
         β = 5.0
         base = DLLMetropolisFilter(β; S = 2.0)
@@ -242,6 +297,11 @@
         @test_throws ArgumentError dll_multichannel_translates(base;
                                                                 centers = [0.0],
                                                                 weights = [-0.1])
+        @test_throws ArgumentError dll_multichannel_translates(base;
+                                                                centers = [NaN])
+        @test_throws ArgumentError dll_multichannel_translates(base;
+                                                                centers = [0.0],
+                                                                weights = [Inf])
         # Non-DLL base (no .beta) throws.
         @test_throws ArgumentError dll_multichannel_translates(GaussianFilter(0.5))
     end

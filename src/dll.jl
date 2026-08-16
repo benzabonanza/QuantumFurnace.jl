@@ -219,44 +219,49 @@ function dll_coherent_op_time(
 end
 
 """
-    dll_coherent_op_time(jumps, hamiltonian, time_labels,
-                         filter::DLLMetropolisFilter, beta, tau;
-                         nu_grid_size=256)
+    _dll_coherent_op_time_frequency_grid(jumps, hamiltonian, time_labels,
+                                         filter, beta, tau;
+                                         nu_min, nu_max, nu_grid_size)
 
-Construct the Metropolis-filter DLL coherent operator by time quadrature.
+Construct a DLL coherent operator from a controlled frequency window.
 
-# Keywords
-- `nu_grid_size`: Points per frequency axis on the exact support `[-S, S]`.
-
-# Returns
-The Hamiltonian-eigenbasis coherent matrix. The method transforms the compact
-frequency kernel to the time grid, then uses the shared NUFFT contraction.
+The two-dimensional trapezoidal rule samples the paper's coherent kernel
+`(2i)^(-1) tanh(beta*(nu'-nu)/4) fhat(nu) conj(fhat(nu'))`, transforms it to
+the time grid with a type-3 NUFFT, and contracts the ordered products
+`A(t')A(t)`.
 """
-function dll_coherent_op_time(
+function _dll_coherent_op_time_frequency_grid(
     jumps::AbstractVector{<:JumpOp},
     hamiltonian::HamHam{T},
     time_labels::AbstractVector{<:Real},
-    filter::DLLMetropolisFilter{T},
+    filter::AbstractFilter,
     beta::Real,
     τ::Real;
+    nu_min::Real,
+    nu_max::Real,
     nu_grid_size::Int = 256,
 ) where {T<:AbstractFloat}
+    nu_grid_size >= 2 || throw(ArgumentError("nu_grid_size must be >= 2."))
+    nu_lo = T(nu_min)
+    nu_hi = T(nu_max)
+    isfinite(nu_lo) && isfinite(nu_hi) && nu_lo < nu_hi ||
+        throw(ArgumentError("Require finite nu_min < nu_max."))
+
     Nt = length(time_labels)
     CT = Complex{T}
     βT = T(beta)
-    S = filter.S
 
-    # Math: $hat(g)(nu,nu') = tanh(beta(nu'-nu)/4) hat(f)(nu) hat(f)(nu')/(2i)$.
+    # Math: $hat(g)(nu,nu') = tanh(beta(nu'-nu)/4)
+    # hat(f)(nu) conj(hat(f)(nu'))/(2i)$.
     Nν = nu_grid_size
-    nu = collect(range(-S, S; length = Nν))
-    Δν = T(2) * S / T(Nν - 1)
-    f_vec = T[T(freq_kernel(filter, ν)) for ν in nu]
+    nu = collect(range(nu_lo, nu_hi; length = Nν))
+    Δν = (nu_hi - nu_lo) / T(Nν - 1)
+    f_vec = CT[CT(freq_kernel(filter, ν)) for ν in nu]
     g_hat = Matrix{CT}(undef, Nν, Nν)
     pref_g = CT(one(T) / (2im))
     @inbounds for q in 1:Nν, p in 1:Nν
         th = tanh(βT * (nu[q] - nu[p]) / 4)
-        # The Metropolis frequency kernel is real.
-        g_hat[p, q] = pref_g * Complex{T}(th * f_vec[p] * f_vec[q])
+        g_hat[p, q] = pref_g * th * f_vec[p] * conj(f_vec[q])
     end
 
     # FINUFFT uses $exp(i(s_x t_x + s_y t_y))$; negate the first source axis.
@@ -269,7 +274,9 @@ function dll_coherent_op_time(
         idx += 1
         src_x[idx] = -Float64(nu[p])
         src_y[idx] = Float64(nu[q])
-        src_c[idx] = ComplexF64(g_hat[p, q])
+        wp = (p == 1 || p == Nν) ? T(1) / T(2) : one(T)
+        wq = (q == 1 || q == Nν) ? T(1) / T(2) : one(T)
+        src_c[idx] = ComplexF64(wp * wq * g_hat[p, q])
     end
 
     Ntgt = Nt * Nt
@@ -296,6 +303,31 @@ function dll_coherent_op_time(
 
     # Contract the sampled kernel with the ordered products $A(t') A(t)$.
     return _dll_coherent_from_g_tt(jumps, hamiltonian, g_tt, time_labels, τ)
+end
+
+"""
+    dll_coherent_op_time(jumps, hamiltonian, time_labels,
+                         filter::DLLMetropolisFilter, beta, tau;
+                         nu_grid_size=256)
+
+Construct the Metropolis-filter DLL coherent operator by time quadrature on
+the exact support `[-S,S]`.
+"""
+function dll_coherent_op_time(
+    jumps::AbstractVector{<:JumpOp},
+    hamiltonian::HamHam{T},
+    time_labels::AbstractVector{<:Real},
+    filter::DLLMetropolisFilter{T},
+    beta::Real,
+    τ::Real;
+    nu_grid_size::Int = 256,
+) where {T<:AbstractFloat}
+    return _dll_coherent_op_time_frequency_grid(
+        jumps, hamiltonian, time_labels, filter, beta, τ;
+        nu_min = -filter.S,
+        nu_max = filter.S,
+        nu_grid_size = nu_grid_size,
+    )
 end
 
 """

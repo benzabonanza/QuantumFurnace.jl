@@ -253,6 +253,62 @@ function _validate_trotter_cache!(
     return nothing
 end
 
+function _collect_dll_filter_errors!(
+    errors::Vector{String},
+    filter::AbstractFilter,
+    config_beta::T;
+    label::String = string(nameof(typeof(filter))),
+) where {T<:AbstractFloat}
+    if filter isa DLLMultiChannelFilter
+        beta_rtol = T(10) * eps(T)
+        if !isfinite(filter.beta) ||
+           !isapprox(filter.beta, config_beta;
+                     atol = zero(T), rtol = beta_rtol)
+            push!(errors, "$label.beta must match Config.beta.")
+        end
+        isempty(filter.channels) &&
+            push!(errors, "$label must have at least one channel.")
+        for (channel_index, channel) in enumerate(filter.channels)
+            _collect_dll_filter_errors!(
+                errors, channel, config_beta;
+                label = "$label channel $channel_index ($(nameof(typeof(channel))))",
+            )
+        end
+        return nothing
+    end
+
+    if !_is_admissible_dll_filter(filter)
+        push!(errors,
+              "$label is not an admissible DLL filter. Use DLLGaussianFilter, " *
+              "DLLMetropolisFilter, a ShiftedSymmetricFilter of one of those " *
+              "families, or DLLMultiChannelFilter with admissible channels.")
+        return nothing
+    end
+
+    beta_rtol = T(10) * eps(T)
+    if !hasproperty(filter, :beta) || !isfinite(filter.beta) ||
+       !isapprox(filter.beta, config_beta;
+                 atol = zero(T), rtol = beta_rtol)
+        push!(errors, "$label.beta must match Config.beta.")
+    end
+
+    if filter isa DLLMetropolisFilter
+        if !isfinite(filter.S) || filter.S <= 0
+            push!(errors, "$label.S must be > 0 (finite; got $(filter.S)).")
+        end
+    elseif filter isa ShiftedSymmetricFilter
+        !isfinite(filter.shift) &&
+            push!(errors, "$label.shift must be finite.")
+        (!isfinite(filter.weight) || filter.weight <= 0) &&
+            push!(errors, "$label.weight must be finite and > 0.")
+        _collect_dll_filter_errors!(
+            errors, filter.base, config_beta;
+            label = "$label.base ($(nameof(typeof(filter.base))))",
+        )
+    end
+    return nothing
+end
+
 function validate_config!(config::Config)
     errors = String[]
 
@@ -367,49 +423,14 @@ function validate_config!(config::Config)
         push!(errors, "jump_selection must be :sweep or :random (got $(config.jump_selection)).")
     end
 
-    # DLL filter validation.
-    # All DLL filters carry a `beta` that must agree with Config.beta —
-    # the filter's KMS factor `e^{-βν/4}` is locked to the simulator's β.
-    if config.filter isa DLLGaussianFilter
-        beta_tol = 10 * eps(typeof(config.beta))
-        if !isapprox(config.filter.beta, config.beta; atol=beta_tol)
-            push!(errors, "DLLGaussianFilter.beta must match Config.beta.")
-        end
-    end
-    if config.filter isa DLLMetropolisFilter
-        beta_tol = 10 * eps(typeof(config.beta))
-        if !isapprox(config.filter.beta, config.beta; atol=beta_tol)
-            push!(errors, "DLLMetropolisFilter.beta must match Config.beta.")
-        end
-        # Bump radius S must be positive — guards against accidental zero/negative.
-        if config.filter.S <= 0
-            push!(errors, "DLLMetropolisFilter.S must be > 0 (got $(config.filter.S)).")
-        end
-    end
-    # Every DLL channel must use the configuration temperature.
-    if config.filter isa DLLMultiChannelFilter
-        beta_tol = 10 * eps(typeof(config.beta))
-        if !isapprox(config.filter.beta, config.beta; atol=beta_tol)
-            push!(errors, "DLLMultiChannelFilter.beta must match Config.beta.")
-        end
-        if isempty(config.filter.channels)
-            push!(errors, "DLLMultiChannelFilter must have at least one channel.")
-        end
-        for (ℓ, ch) in enumerate(config.filter.channels)
-            if !hasproperty(ch, :beta)
-                push!(errors, "DLLMultiChannelFilter channel $ℓ ($(typeof(ch))) " *
-                              "lacks a `beta` field — only DLL-style channels supported.")
-                continue
-            end
-            if !isapprox(ch.beta, config.beta; atol=beta_tol)
-                push!(errors, "DLLMultiChannelFilter channel $ℓ.beta=$(ch.beta) " *
-                              "does not match Config.beta=$(config.beta).")
-            end
-            if ch isa DLLMetropolisFilter && ch.S <= 0
-                push!(errors, "DLLMultiChannelFilter channel $ℓ.S must be > 0 " *
-                              "(got $(ch.S)).")
-            end
-        end
+    # Every DLL frequency kernel contains `e^{-beta*nu/4}` and therefore must
+    # use the simulator temperature. A DLL construction additionally rejects
+    # ordinary CKG filters, whose kernels do not satisfy the DLL symmetry.
+    if config.filter !== nothing &&
+       (config.construction isa DLL ||
+        config.filter isa Union{DLLGaussianFilter, DLLMetropolisFilter,
+                                ShiftedSymmetricFilter, DLLMultiChannelFilter})
+        _collect_dll_filter_errors!(errors, config.filter, config.beta)
     end
 
     # --- DLL construction validation (DLL-2) ---

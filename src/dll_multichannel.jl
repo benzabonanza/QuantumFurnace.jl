@@ -24,15 +24,15 @@ struct DLLMultiChannelFilter{T<:AbstractFloat, F<:AbstractFilter} <: AbstractFil
         if isempty(channels)
             throw(ArgumentError("DLLMultiChannelFilter requires at least one channel."))
         end
-        beta_tol = T(10) * eps(T)
+        beta_rtol = T(10) * eps(T)
         for (ℓ, c) in enumerate(channels)
             if !hasproperty(c, :beta)
                 throw(ArgumentError("DLLMultiChannelFilter channel $ℓ ($(typeof(c))) " *
                                     "lacks a `beta` field — only DLL-style filters supported."))
             end
-            if !isapprox(c.beta, beta; atol = beta_tol)
+            if !isapprox(c.beta, beta; atol = zero(T), rtol = beta_rtol)
                 throw(ArgumentError("DLLMultiChannelFilter channel $ℓ has beta $(c.beta), " *
-                                    "expected $beta (atol=$beta_tol)."))
+                                    "expected $beta (rtol=$beta_rtol)."))
             end
         end
         return new{T, F}(channels, beta)
@@ -46,6 +46,8 @@ DLLMultiChannelFilter(channels::Vector{F}, beta::T) where
 # Multi-channel time kernels are sums of per-channel `Complex{T}` kernels;
 # `Complex{T}` is the right element type regardless of which sub-filters appear.
 Base.eltype(::DLLMultiChannelFilter{T}) where {T} = Complex{T}
+@inline _is_admissible_dll_filter(f::DLLMultiChannelFilter) =
+    !isempty(f.channels) && all(_is_admissible_dll_filter, f.channels)
 
 """
     q_weight(filter::DLLMultiChannelFilter, nu) -> Real
@@ -103,6 +105,24 @@ Return the largest channel cutoff after dividing `tol` across channels.
     return tc
 end
 
+"""
+    dll_kossakowski_bohr(filter::DLLMultiChannelFilter, bohr_freqs) -> Matrix
+
+Construct the channel-wise Kossakowski sum
+`alpha = sum_l v_l * v_l^dagger`. Channels remain distinct Lindblad operators,
+so no cross terms between different `l` occur.
+"""
+function dll_kossakowski_bohr(
+    filter::DLLMultiChannelFilter,
+    bohr_freqs::AbstractVector{<:Real},
+)
+    alpha = dll_kossakowski_bohr(filter.channels[1], bohr_freqs)
+    @inbounds for channel_index in 2:length(filter.channels)
+        alpha .+= dll_kossakowski_bohr(filter.channels[channel_index], bohr_freqs)
+    end
+    return alpha
+end
+
 # Symmetric frequency translates preserve the real-even DLL weight.
 # Math: $q_l(nu) = sqrt(w_l/2) [q(nu-nu_l) + q(nu+nu_l)]$.
 
@@ -124,11 +144,22 @@ struct ShiftedSymmetricFilter{T<:AbstractFloat, F<:AbstractFilter} <: AbstractFi
     beta::T
 end
 
-ShiftedSymmetricFilter(base::F, shift::T, weight::T) where
-        {T<:AbstractFloat, F<:AbstractFilter} =
-    ShiftedSymmetricFilter{T, F}(base, shift, weight, T(base.beta))
+function ShiftedSymmetricFilter(base::F, shift::T, weight::T) where
+        {T<:AbstractFloat, F<:AbstractFilter}
+    hasproperty(base, :beta) || throw(ArgumentError(
+        "ShiftedSymmetricFilter base $(typeof(base)) lacks a beta field."))
+    isfinite(base.beta) && base.beta > zero(base.beta) || throw(ArgumentError(
+        "ShiftedSymmetricFilter base beta must be finite and > 0."))
+    isfinite(shift) || throw(ArgumentError(
+        "ShiftedSymmetricFilter shift must be finite."))
+    isfinite(weight) && weight > zero(T) || throw(ArgumentError(
+        "ShiftedSymmetricFilter weight must be finite and > 0."))
+    return ShiftedSymmetricFilter{T, F}(base, shift, weight, T(base.beta))
+end
 
 Base.eltype(::ShiftedSymmetricFilter{T}) where {T} = Complex{T}
+@inline _is_admissible_dll_filter(f::ShiftedSymmetricFilter) =
+    f.base isa Union{DLLGaussianFilter, DLLMetropolisFilter}
 
 """
     q_weight(filter::ShiftedSymmetricFilter, ν) -> Real
@@ -181,6 +212,79 @@ Return a cutoff that includes the shifted kernel's `cosh` envelope.
     return T(filter_time_cutoff(f.base, T(tol) / envelope))
 end
 
+@inline function _shifted_frequency_window(
+    f::ShiftedSymmetricFilter{T, F},
+) where {T<:AbstractFloat, F<:DLLMetropolisFilter}
+    radius = f.base.S + abs(f.shift)
+    return (-radius, radius)
+end
+
+@inline function _shifted_frequency_window(
+    f::ShiftedSymmetricFilter{T, F},
+) where {T<:AbstractFloat, F<:DLLGaussianFilter}
+    # The two positive Gaussian terms are centred at +/-shift - 1/beta. Their
+    # exact total L1 mass is
+    #   M = sqrt(w/2) exp(1/8) 2cosh(beta*shift/4) sqrt(8pi)/beta.
+    # Extending the window a distance h beyond both centres leaves frequency
+    # L1 tail delta <= M*erfc(beta*h/sqrt(8)) <= M*exp(-beta^2*h^2/8).
+    # Since |tanh|<=1, the omitted two-frequency coherent kernel has L1 mass
+    # at most M*delta. After the inverse-transform factor (2pi)^-2, the choice
+    # below bounds its uniform frequency-tail error by 64eps(T).
+    beta_shift = f.beta * abs(f.shift) / T(4)
+    isfinite(beta_shift) || throw(ArgumentError(
+        "Shifted Gaussian beta*shift is non-finite; reduce shift."))
+    log_two_cosh = beta_shift + log1p(exp(-T(2) * beta_shift))
+    log_l1_mass = (log(f.weight) - log(T(2))) / T(2) + T(1) / T(8) +
+                  log_two_cosh + log(T(8) * T(pi)) / T(2) - log(f.beta)
+    kernel_tail_tolerance = T(64) * eps(T)
+    tail_exponent = max(
+        T(2) * log_l1_mass - T(2) * log(T(2) * T(pi)) -
+        log(kernel_tail_tolerance),
+        one(T),
+    )
+    isfinite(tail_exponent) || throw(ArgumentError(
+        "Shifted Gaussian frequency-tail budget is non-finite; " *
+        "reduce shift or weight, or increase beta."))
+    tail_units = sqrt(T(8) * tail_exponent)
+    isfinite(tail_units) || throw(ArgumentError(
+        "Shifted Gaussian frequency window is non-finite; reduce shift or weight."))
+    half_width = tail_units / f.beta
+    centre = -one(T) / f.beta
+    shift_abs = abs(f.shift)
+    nu_min = centre - shift_abs - half_width
+    nu_max = centre + shift_abs + half_width
+    isfinite(nu_min) && isfinite(nu_max) || throw(ArgumentError(
+        "Shifted Gaussian frequency window overflowed; increase beta."))
+    return (nu_min, nu_max)
+end
+
+"""
+    dll_coherent_op_time(jumps, hamiltonian, time_labels,
+                         filter::ShiftedSymmetricFilter, beta, tau;
+                         nu_grid_size=256)
+
+Construct the translated DLL coherent operator from the paper's two-frequency
+kernel on the shifted filter's complete compact support, or on a Gaussian
+window whose omitted coherent-kernel tail is bounded in `L1`.
+"""
+function dll_coherent_op_time(
+    jumps::AbstractVector{<:JumpOp},
+    hamiltonian::HamHam{T},
+    time_labels::AbstractVector{<:Real},
+    filter::ShiftedSymmetricFilter{T},
+    beta::Real,
+    tau::Real;
+    nu_grid_size::Int = 256,
+) where {T<:AbstractFloat}
+    nu_min, nu_max = _shifted_frequency_window(filter)
+    return _dll_coherent_op_time_frequency_grid(
+        jumps, hamiltonian, time_labels, filter, beta, tau;
+        nu_min = nu_min,
+        nu_max = nu_max,
+        nu_grid_size = nu_grid_size,
+    )
+end
+
 """
     dll_multichannel_translates(base::AbstractFilter;
                                  centers::AbstractVector{<:Real} = [0.0],
@@ -204,9 +308,14 @@ function dll_multichannel_translates(
     centers::AbstractVector{<:Real} = [0.0],
     weights::Union{Nothing, AbstractVector{<:Real}} = nothing,
 )
-    if !hasproperty(base, :beta)
-        throw(ArgumentError("base filter $(typeof(base)) lacks a `beta` field — " *
-                            "only DLL-style filters supported."))
+    if !(base isa Union{DLLGaussianFilter, DLLMetropolisFilter})
+        throw(ArgumentError("base filter $(typeof(base)) is not an admissible DLL " *
+                            "filter; use DLLGaussianFilter or DLLMetropolisFilter."))
+    end
+    isfinite(base.beta) && base.beta > zero(base.beta) ||
+        throw(ArgumentError("base filter beta must be finite and > 0."))
+    if base isa DLLMetropolisFilter && (!isfinite(base.S) || base.S <= 0)
+        throw(ArgumentError("DLLMetropolisFilter.S must be finite and > 0."))
     end
     if isempty(centers)
         throw(ArgumentError("centers must be non-empty."))
@@ -222,8 +331,11 @@ function dll_multichannel_translates(
         end
         T.(weights)
     end
-    if any(w -> w <= 0, ws)
-        throw(ArgumentError("weights must be strictly positive."))
+    if any(w -> !isfinite(w) || w <= 0, ws)
+        throw(ArgumentError("weights must be finite and strictly positive."))
+    end
+    if any(c -> !isfinite(c), centers)
+        throw(ArgumentError("centers must be finite."))
     end
     if base isa DLLMetropolisFilter
         S = base.S

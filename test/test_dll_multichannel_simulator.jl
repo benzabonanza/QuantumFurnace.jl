@@ -16,7 +16,13 @@
     _NEB = 10
     _T0_CFG = 2π / (2^_NEB * 0.05)
 
-    function _make_cfg(domain, beta, filter)
+    function _make_cfg(
+        domain,
+        beta,
+        filter;
+        num_energy_bits::Int = _NEB,
+        t0::Real = _T0_CFG,
+    )
         Config(;
             sim = Lindbladian(),
             domain = domain,
@@ -27,8 +33,8 @@
             sigma = 1.0 / beta,
             a = beta / 30.0,
             s = 0.4,
-            num_energy_bits = _NEB,
-            t0 = _T0_CFG,
+            num_energy_bits = num_energy_bits,
+            t0 = t0,
             num_trotter_steps_per_t0 = 10,
             filter = filter,
         )
@@ -192,5 +198,52 @@
             @test e isa ArgumentError
             @test occursin("DLLMultiChannelFilter", e.msg)
         end
+    end
+
+
+    @testset "(h) DLL rejects an ordinary CKG Gaussian filter" begin
+        beta_alg = 5.0
+        bad_config = _make_cfg(
+            BohrDomain(), beta_alg, GaussianFilter(0.5))
+        err = try
+            validate_config!(bad_config)
+            nothing
+        catch caught
+            caught
+        end
+        @test err isa ArgumentError
+        @test occursin("not an admissible DLL filter", sprint(showerror, err))
+    end
+
+
+    @testset "(i) factory-translated filters construct end-to-end in TimeDomain" begin
+        beta_alg = 5.0
+        sys = make_dll_n3_system(beta_alg)
+        filter = dll_multichannel_translates(
+            DLLMetropolisFilter(beta_alg; S = 2.0);
+            centers = [0.0, 0.4],
+            weights = [1.0, 0.7],
+        )
+        config_bohr = _make_cfg(BohrDomain(), beta_alg, filter)
+        # Keep the validated spacing while doubling the time horizon. This is
+        # the final point of the convergence check in test_dll_multichannel_time.
+        config_time = _make_cfg(
+            TimeDomain(), beta_alg, filter;
+            num_energy_bits = 11,
+            t0 = _T0_CFG,
+        )
+        @test validate_config!(config_time) === nothing
+        L_bohr = construct_lindbladian(sys.jumps, config_bohr, sys.ham)
+        L_time = @test_logs (:warn, r"OFT Integration Warning") begin
+            construct_lindbladian(sys.jumps, config_time, sys.ham)
+        end
+
+        verification = verify_detailed_balance(
+            L_time, sys.ham.gibbs; atol = 1e-8)
+        @test opnorm(L_time - L_bohr) <= 5e-8
+        @test norm(L_time * vec(Matrix(sys.gibbs))) <= 5e-9
+        @test verification.relative_norm <= 5e-9
+        @test verification.fixed_point_residual <= 5e-9
+        @test verification.is_kms_db
     end
 end

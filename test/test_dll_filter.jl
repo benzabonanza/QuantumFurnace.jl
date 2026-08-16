@@ -543,13 +543,12 @@ using QuadGK
         end
 
         # ----- (i.2) Fourier round-trip: time_kernel followed by FT
-        # recovers freq_kernel.
-        # ∫_{-T}^{T} f(t) e^{+i ν t} dt ≈ f̂(ν), with T = filter_time_cutoff.
-        # Use small/medium tol to keep T moderate.
+        # recovers freq_kernel. This is a numerical transform check at a
+        # practical window; the certified cutoff is tested separately below.
         @testset "Fourier round-trip (time → freq)" begin
             for beta in (1.0, 5.0)
                 f = DLLMetropolisFilter(beta; S = 2.0)
-                T_cut = filter_time_cutoff(f, 1e-10)
+                T_cut = 160.0
                 for nu in (-0.7, -0.2, 0.0, 0.3, 0.9)
                     integrand = t -> time_kernel(f, t) * cis(nu * t)
                     num, _ = quadgk(integrand, -T_cut, T_cut;
@@ -572,17 +571,44 @@ using QuadGK
             end
         end
 
-        # ----- (i.4) filter_time_cutoff: |f(cutoff)| ≤ tol (exact bound). -----
-        @testset "filter_time_cutoff bounds |f(cutoff)| ≤ tol" begin
+        # ----- (i.4) filter_time_cutoff: the fourth-derivative envelope
+        # controls the weighted tail of every centred uniform time lattice. -----
+        @testset "filter_time_cutoff certifies the trapezoidal lattice tail" begin
             for tol in (1e-6, 1e-9, 1e-12)
                 for beta in (1.0, 2.0, 5.0, 10.0)
                     f = DLLMetropolisFilter(beta; S = 2.0)
                     tc = filter_time_cutoff(f, tol)
-                    @test abs(time_kernel(f, tc)) <= tol
-                    # Cutoff is positive and finite.
-                    @test 0 < tc < 1e6
+                    tail_bound = QuantumFurnace._dll_metropolis_time_tail_bound(f, tc)
+                    @test tail_bound <= tol
+                    @test isapprox(
+                        QuantumFurnace._dll_metropolis_time_tail_bound(f, 2tc),
+                        tail_bound / 8;
+                        atol = 0,
+                        rtol = 100eps(Float64),
+                    )
+                    @test isfinite(tc) && tc > 0
                 end
             end
+            f = DLLMetropolisFilter(2.0; S = 2.0)
+            tc = filter_time_cutoff(f, 1e-9)
+            derivative_bound =
+                QuantumFurnace._dll_metropolis_fourier_d4_l1_bound(f)
+            # Worst spacing-independent case: tau is just above the cutoff,
+            # so every nonzero lattice point is discarded. The exact envelope
+            # sum uses zeta(4)=pi^4/90 and remains below the returned bound.
+            tau = nextfloat(tc)
+            exact_envelope_sum = derivative_bound * (pi^4 / 90) /
+                                 (pi * tau^3)
+            @test exact_envelope_sum <=
+                  QuantumFurnace._dll_metropolis_time_tail_bound(f, tc)
+
+            # Ratios that are representable only after combining powers must
+            # not spuriously underflow the certificate to zero.
+            extreme = DLLMetropolisFilter(1e-100; S = 1e100)
+            @test QuantumFurnace._dll_metropolis_fourier_d4_l1_bound(extreme) > 0
+            @test filter_time_cutoff(extreme, 1e-12) > 0
+            @test_throws ArgumentError filter_time_cutoff(f, 0.0)
+            @test_throws ArgumentError filter_time_cutoff(f, Inf)
         end
 
         # ----- (i.5) Cutoff scales monotonically: smaller tol ⇒ larger cutoff -----

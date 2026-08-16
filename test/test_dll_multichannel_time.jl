@@ -122,4 +122,34 @@
         G_b = dll_coherent_op_bohr(sys.jumps, sys.ham, multi, beta)
         @test opnorm(G_t - G_b) <= 1e-5
     end
+
+
+    @testset "(g) shifted coherent TimeDomain path is controlled" begin
+        beta_alg = 5.0
+        sys = make_dll_n3_system(beta_alg)
+
+        gaussian = ShiftedSymmetricFilter(DLLGaussianFilter(beta_alg), 0.4, 1.0)
+        gaussian_labels = collect((-512):(511)) .* _T0
+        G_gaussian_bohr = dll_coherent_op_bohr(
+            sys.jumps, sys.ham, gaussian, beta_alg)
+        G_gaussian_time = dll_coherent_op_time(
+            sys.jumps, sys.ham, gaussian_labels, gaussian, beta_alg, _T0;
+            nu_grid_size = 128)
+        @test opnorm(G_gaussian_time - G_gaussian_bohr) <= 1e-10
+
+        metropolis = ShiftedSymmetricFilter(
+            DLLMetropolisFilter(beta_alg; S = 2.0), 0.4, 1.0)
+        G_metropolis_bohr = dll_coherent_op_bohr(
+            sys.jumps, sys.ham, metropolis, beta_alg)
+        errors = Float64[]
+        for num_times in (512, 1024, 2048)
+            time_labels = collect((-num_times÷2):(num_times÷2 - 1)) .* _T0
+            G_metropolis_time = dll_coherent_op_time(
+                sys.jumps, sys.ham, time_labels, metropolis, beta_alg, _T0;
+                nu_grid_size = 256)
+            push!(errors, opnorm(G_metropolis_time - G_metropolis_bohr))
+        end
+        @test all(diff(errors) .< 0)
+        @test last(errors) <= 1e-9
+    end
 end

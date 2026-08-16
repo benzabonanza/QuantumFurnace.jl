@@ -8,6 +8,11 @@ Supertype for time/frequency kernels used by the operator Fourier transform.
 """
 abstract type AbstractFilter end
 
+# Only filters whose frequency kernel has the DLL form
+# $\widehat f(\nu)=q(\nu)e^{-\beta\nu/4}$ with
+# $q(-\nu)=\overline{q(\nu)}$ are admissible in a DLL construction.
+@inline _is_admissible_dll_filter(::AbstractFilter) = false
+
 """
     GaussianFilter{T<:AbstractFloat}(sigma::T)
 
@@ -33,6 +38,8 @@ Paley–Wiener bound.
 struct DLLGaussianFilter{T<:AbstractFloat} <: AbstractFilter
     beta::T
 end
+
+@inline _is_admissible_dll_filter(::DLLGaussianFilter) = true
 
 # NUFFT prefactors store every kernel as complex data.
 Base.eltype(::GaussianFilter{T}) where {T} = Complex{T}
@@ -191,6 +198,7 @@ DLLMetropolisFilter(beta::T; S::Real = T(2)) where {T<:AbstractFloat} =
     DLLMetropolisFilter{T}(beta, T(S))
 
 Base.eltype(::DLLMetropolisFilter{T}) where {T} = Complex{T}
+@inline _is_admissible_dll_filter(::DLLMetropolisFilter) = true
 
 """
     q_weight(filter::DLLMetropolisFilter, ν)
@@ -229,33 +237,193 @@ function time_kernel(f::DLLMetropolisFilter{T}, t::Real) where {T}
 end
 
 """
+    _dll_metropolis_fourier_d4_l1_bound(filter) -> Real
+
+Return a rigorous upper bound on the `L1` norm of the fourth frequency
+derivative of the full Metropolis frequency kernel.
+
+The bound uses the exact filter in Eq. (3.19) of Ding--Li--Lin and elementary
+global derivative bounds for the implemented Hoermander step. Since the kernel
+and its first three derivatives vanish at `+-S`, four integrations by parts
+give `|f(t)| <= bound / (2pi |t|^4)` for every nonzero `t`.
+"""
+function _dll_metropolis_fourier_d4_l1_bound(
+    f::DLLMetropolisFilter{T},
+) where {T<:AbstractFloat}
+    isfinite(f.beta) && f.beta > zero(T) ||
+        throw(ArgumentError("DLLMetropolisFilter.beta must be finite and > 0."))
+    isfinite(f.S) && f.S > zero(T) ||
+        throw(ArgumentError("DLLMetropolisFilter.S must be finite and > 0."))
+
+    # For eta(x)=exp(-1/x), x>0, every term exp(-1/x)x^(-m) is bounded by
+    # (m/e)^m. These are bounds for eta^(k), k=0,...,4, obtained from the
+    # explicit derivative polynomials.
+    # Use the exact elementary inequality e > 5/2, rather than a rounded
+    # evaluation of `exp(1)`, so these remain one-sided upper bounds.
+    power_bound(m::Int) = (T(m) / (T(5) / T(2)))^m
+    eta_bounds = Vector{T}(undef, 5)
+    eta_bounds[1] = one(T)
+    eta_bounds[2] = power_bound(2)
+    eta_bounds[3] = power_bound(4) + T(2) * power_bound(3)
+    eta_bounds[4] = power_bound(6) + T(6) * power_bound(5) +
+                    T(6) * power_bound(4)
+    eta_bounds[5] = power_bound(8) + T(12) * power_bound(7) +
+                    T(36) * power_bound(6) + T(24) * power_bound(5)
+
+    # phi=eta(x)/(eta(x)+eta(1-x)). At least one of x and 1-x is >=1/2,
+    # hence the denominator is >=exp(-2). Differentiate phi*denominator=eta
+    # recursively to bound phi^(k).
+    phi_bounds = Vector{T}(undef, 5)
+    phi_bounds[1] = one(T)
+    # exp(2) < 8, hence 1/(eta(x)+eta(1-x)) <= exp(2) < 8.
+    inv_denominator_bound = T(8)
+    for k in 1:4
+        rhs_bound = eta_bounds[k + 1]
+        for j in 1:k
+            denominator_derivative_bound = T(2) * eta_bounds[j + 1]
+            rhs_bound += T(binomial(k, j)) * denominator_derivative_bound *
+                         phi_bounds[k - j + 1]
+        end
+        phi_bounds[k + 1] = inv_denominator_bound * rhs_bound
+    end
+
+    # w(x)=phi(2(1-|x|)) on its transition region, so each kth derivative
+    # gains at most 2^k. The constant regions have zero derivatives.
+    bump_bounds = Vector{T}(undef, 5)
+    for k in 0:4
+        bump_bounds[k + 1] = T(2)^k * phi_bounds[k + 1]
+    end
+
+    # Let a(nu)=exp(-(sqrt(1+(beta*nu)^2)+beta*nu)/4). Bounds on the first
+    # four derivatives of its exponent give the following derivative bounds
+    # for a; also 0<a<=1 on the real line.
+    amplitude_coefficients = T[
+        one(T),
+        one(T) / T(2),
+        one(T) / T(2),
+        T(5) / T(4),
+        T(41) / T(8),
+    ]
+
+    # Leibniz rule for h(nu)=a(nu)w(nu/S), followed by
+    # ||h''''||_1 <= 2S ||h''''||_infinity on supp(h)=[-S,S]. Evaluate each
+    # final positive term in the log domain: forming beta^j and S^(4-j)
+    # separately can underflow even when their ratio is representable.
+    log_beta = log(f.beta)
+    log_support = log(f.S)
+    log_terms = Vector{T}(undef, 5)
+    for j in 0:4
+        log_terms[j + 1] = log(T(2) * T(binomial(4, j)) *
+                               amplitude_coefficients[j + 1] *
+                               bump_bounds[4 - j + 1]) +
+                           T(j) * log_beta + T(j - 3) * log_support
+    end
+    max_log_term = maximum(log_terms)
+    isfinite(max_log_term) || throw(ArgumentError(
+        "Metropolis fourth-derivative bound is not representable for this beta and S."))
+    scaled_sum = sum(exp(log_term - max_log_term) for log_term in log_terms)
+    bound = exp(max_log_term + log(scaled_sum))
+
+    # The analytic constants above have substantial one-sided slack. A factor
+    # two additionally absorbs round-to-nearest error in the finite positive
+    # arithmetic without changing the asymptotic cutoff scaling.
+    bound *= T(2)
+    isfinite(bound) && bound > zero(T) || throw(ArgumentError(
+        "Metropolis fourth-derivative bound underflowed or overflowed; " *
+        "use less extreme beta and S."))
+    return bound
+end
+
+"""
+    _dll_metropolis_time_envelope(filter, t) -> Real
+
+Return the certified envelope `B4 / (2pi |t|^4)` for the Metropolis time
+kernel, where `B4` bounds the fourth frequency-derivative `L1` norm.
+"""
+function _dll_metropolis_time_envelope(
+    f::DLLMetropolisFilter{T},
+    t::Real,
+) where {T<:AbstractFloat}
+    abs_t = abs(T(t))
+    isnan(abs_t) && throw(ArgumentError("t must not be NaN."))
+    iszero(abs_t) && return T(Inf)
+    isinf(abs_t) && return zero(T)
+    return _dll_metropolis_fourier_d4_l1_bound(f) /
+           (T(2) * T(pi) * abs_t^4)
+end
+
+"""
+    _dll_metropolis_time_tail_bound(filter, cutoff) -> Real
+
+Bound the discarded, quadrature-weighted tail on every centred uniform time
+lattice. If the spacing is `tau`, this bounds
+`tau * sum_{|m*tau|>cutoff} |f(m*tau)|` independently of `tau`. It also bounds
+the smaller continuum-tail estimate obtained from the same envelope.
+"""
+function _dll_metropolis_time_tail_bound(
+    f::DLLMetropolisFilter{T},
+    cutoff::Real,
+) where {T<:AbstractFloat}
+    cutoff_T = T(cutoff)
+    isfinite(cutoff_T) && cutoff_T > zero(T) ||
+        throw(ArgumentError("cutoff must be finite and > 0."))
+
+    # For n=floor(cutoff/tau)+1 and y=cutoff/tau,
+    #   tau * sum_{|m|>=n} B4/(2pi|m*tau|^4)
+    #     = B4*y^3/(pi*cutoff^3) * sum_{m=n}^infinity m^-4
+    #     <= B4*zeta(4)/(pi*cutoff^3).
+    # Here zeta(4)=pi^4/90. The bound is valid for every tau>0 and therefore
+    # matches the centred lattice consumed by `_truncate_time_labels_for_oft`.
+    zeta_four = T(pi)^4 / T(90)
+    roundoff_guard = one(T) + T(64) * eps(T)
+    log_tail_bound = log(_dll_metropolis_fourier_d4_l1_bound(f)) +
+                     log(zeta_four) - log(T(pi)) - T(3) * log(cutoff_T) +
+                     log(roundoff_guard)
+    # A positive real bound below the subnormal range must not be represented
+    # by zero, which would be a false certificate.
+    return max(exp(log_tail_bound), nextfloat(zero(T)))
+end
+
+"""
     filter_time_cutoff(filter::DLLMetropolisFilter, tol)
 
-Return a conservative time cutoff for the compact-support kernel.
-
-A doubling search samples four points per oscillation window and returns the
-first window below `tol`, failing after 30 doublings.
+Return a cutoff whose complete quadrature-weighted tail is at most `tol` on
+every centred uniform time lattice. The guarantee follows from the
+fourth-order integration-by-parts envelope and `zeta(4)=pi^4/90`; it therefore
+applies directly to the simulator's trapezoidal time grid without sampling the
+oscillatory kernel.
 """
 function filter_time_cutoff(f::DLLMetropolisFilter{T}, tol::Real) where {T}
-    osc_period = T(4 * π) / f.S
-    t = max(T(8) * f.beta, T(20))
-    iter = 0
-    while true
-        passed = true
-        for k in 0:3
-            if abs(time_kernel(f, t + k * osc_period / 4)) > tol
-                passed = false
-                break
-            end
-        end
-        passed && return t
-        t *= 2
-        iter += 1
-        if iter > 30
-            error("filter_time_cutoff: doubling search exceeded 30 iterations " *
-                  "(β=$(f.beta), S=$(f.S), tol=$tol).")
-        end
+    tol_T = T(tol)
+    isfinite(tol_T) && tol_T > zero(T) ||
+        throw(ArgumentError("tol must be finite and > 0."))
+    derivative_bound = _dll_metropolis_fourier_d4_l1_bound(f)
+    zeta_four = T(pi)^4 / T(90)
+    roundoff_guard = one(T) + T(64) * eps(T)
+    log_tail_coefficient = log(derivative_bound) + log(zeta_four) - log(T(pi)) +
+                           log(roundoff_guard)
+    cutoff = exp((log_tail_coefficient - log(tol_T)) / T(3))
+    isfinite(cutoff) && cutoff > zero(T) || throw(ArgumentError(
+        "filter_time_cutoff produced a non-positive or non-finite cutoff; " *
+        "check beta, S, and tol."))
+
+    # The cube root can round downward by enough that evaluating the certified
+    # bound at `cutoff` lies a few ulps above `tol_T`. Advance to the first
+    # representable cutoff that satisfies the inequality in the working type.
+    tail_bound = max(
+        exp(log_tail_coefficient - T(3) * log(cutoff)),
+        nextfloat(zero(T)),
+    )
+    while tail_bound > tol_T
+        cutoff = nextfloat(cutoff)
+        isfinite(cutoff) || throw(ArgumentError(
+            "filter_time_cutoff overflowed while enforcing its tail bound."))
+        tail_bound = max(
+            exp(log_tail_coefficient - T(3) * log(cutoff)),
+            nextfloat(zero(T)),
+        )
     end
+    return cutoff
 end
 
 # Multi-channel filter types live in `dll_multichannel.jl`.
