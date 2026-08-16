@@ -51,10 +51,16 @@ end
 function _scaling_aic_metrics(rss::Real, n_data::Integer, n_model_params::Integer)
     N = Int(n_data)
     k = n_model_params + 1                          # +1 for σ²
+    isfinite(rss) && rss >= 0 || throw(ArgumentError("rss must be finite and nonnegative"))
     if N <= k + 1
         # AICc denominator (N - k - 1) must be positive.
         # 3-param model + σ² ⇒ need N ≥ 6 for finite AICc.
         return (aicc = Inf, aic = Inf, log_likelihood = -Inf)
+    end
+    if iszero(rss)
+        # The Gaussian MLE has σ²=0: log L=+Inf and both information
+        # criteria are -Inf. Model weighting handles tied exact fits below.
+        return (aicc = -Inf, aic = -Inf, log_likelihood = Inf)
     end
     σ²_mle = rss / N
     log_L = -N / 2 * (log(2π) + log(σ²_mle) + 1.0)
@@ -164,7 +170,8 @@ function fit_scaling(
     N ≥ 6 || throw(ArgumentError(
         "need at least 6 data points for 3-parameter fit + σ² + AICc denominator (got $N)"))
     all(n -> n > 0, n_vals)    || throw(ArgumentError("all n must be positive"))
-    all(b -> b > 0, beta_vals) || throw(ArgumentError("all β must be positive"))
+    all(b -> isfinite(b) && b > 0, beta_vals) || throw(ArgumentError(
+        "all β must be positive and finite"))
     all(t -> t > 0 && isfinite(t), tau_vals) || throw(ArgumentError(
         "all τ_mix must be positive and finite (cannot take log of zero, negative, or non-finite)"))
     isempty(models) && throw(ArgumentError("models must be non-empty"))
@@ -225,6 +232,9 @@ Fit scaling laws from mixing-sweep named tuples.
 - `source_filter`: Accepted mixing-time source tags; defaults to extrapolated cells.
 - `beta_kind`: `:auto`, `:phys`, or `:alg`. Auto prefers `beta_phys`, then
   `beta_alg` or `beta`, and records the chosen convention.
+
+When redundant temperature fields are present, `beta` must agree with
+`beta_alg` and `beta_alg = beta_phys * rescaling_factor` must hold.
 """
 function fit_scaling(
     results::Vector{<:NamedTuple};
@@ -254,23 +264,42 @@ function fit_scaling(
         return nothing
     end
 
-    # Select a temperature field and report the convention actually used.
-    function _get_beta(r, kind::Symbol)
-        β_phys = haskey(r, :beta_phys) ? r.beta_phys : nothing
-        β_alg  = if haskey(r, :beta_alg)
-            r.beta_alg
-        elseif haskey(r, :beta)
-            r.beta
-        else
-            nothing
+    function _positive_metadata(r, key::Symbol, row_index::Int)
+        (!haskey(r, key) || getproperty(r, key) === nothing) && return nothing
+        value = getproperty(r, key)
+        value isa Real && isfinite(value) && value > 0 || throw(ArgumentError(
+            "row $row_index has invalid $key metadata; expected a finite positive value"))
+        return Float64(value)
+    end
+
+    function _temperature_metadata(r, row_index::Int)
+        β_phys = _positive_metadata(r, :beta_phys, row_index)
+        β_alg_tag = _positive_metadata(r, :beta_alg, row_index)
+        β_alias = _positive_metadata(r, :beta, row_index)
+        rescale = _positive_metadata(r, :rescaling_factor, row_index)
+
+        if β_alg_tag !== nothing && β_alias !== nothing &&
+                !isapprox(β_alg_tag, β_alias; rtol=1e-10, atol=0.0)
+            throw(ArgumentError(
+                "row $row_index has inconsistent beta_alg=$β_alg_tag and beta=$β_alias"))
         end
-        rescale = haskey(r, :rescaling_factor) ? r.rescaling_factor : nothing
-        β_phys = (β_phys === nothing || !(β_phys isa Real) || !isfinite(β_phys)) ?
-                  nothing : Float64(β_phys)
-        β_alg  = (β_alg  === nothing || !(β_alg  isa Real) || !isfinite(β_alg))  ?
-                  nothing : Float64(β_alg)
-        rescale = (rescale === nothing || !(rescale isa Real) || !isfinite(rescale)) ?
-                  nothing : Float64(rescale)
+        β_alg = β_alg_tag === nothing ? β_alias : β_alg_tag
+
+        if β_phys !== nothing && β_alg !== nothing && rescale !== nothing
+            expected_alg = β_phys * rescale
+            isapprox(β_alg, expected_alg; rtol=1e-10, atol=0.0) || throw(ArgumentError(
+                "row $row_index violates beta_alg = beta_phys * rescaling_factor " *
+                "($β_alg != $β_phys * $rescale)"))
+        end
+        return (; β_phys, β_alg, rescale)
+    end
+
+    # Select a temperature field and report the convention actually used.
+    function _get_beta(r, kind::Symbol, row_index::Int)
+        metadata = _temperature_metadata(r, row_index)
+        β_phys = metadata.β_phys
+        β_alg = metadata.β_alg
+        rescale = metadata.rescale
 
         if kind === :phys
             β_phys !== nothing && return (β_phys, :phys)
@@ -288,9 +317,9 @@ function fit_scaling(
     end
 
     valid_pairs = Tuple{NamedTuple, Float64, Symbol}[]
-    for r in results
+    for (row_index, r) in enumerate(results)
         haskey(r, :n) || continue
-        β, kind = _get_beta(r, beta_kind)
+        β, kind = _get_beta(r, beta_kind, row_index)
         (β === nothing || !(β isa Real) || !isfinite(β) || β <= 0) && continue
         τ = _get_tau(r)
         τ === nothing && continue
@@ -346,12 +375,30 @@ end
 """
     aicc_weights(fits::Dict{Symbol, ScalingFit}) -> Dict{Symbol, Float64}
 
-Compute normalized AICc model weights.
+Compute normalized AICc model weights. Exact-fit (`-Inf`) winners share all
+weight; unavailable (`+Inf`) candidates receive zero weight when any finite
+candidate exists, and all-`+Inf` collections receive uniform weights.
 """
 function aicc_weights(fits::Dict{Symbol, ScalingFit})
     isempty(fits) && return Dict{Symbol, Float64}()
-    aicc_min = minimum(f.aicc for f in values(fits))
-    raw = Dict(k => exp(-(f.aicc - aicc_min) / 2) for (k, f) in fits)
+    any(isnan(f.aicc) for f in values(fits)) && throw(ArgumentError(
+        "AICc values must not be NaN"))
+
+    exact_winners = [k for (k, f) in fits if f.aicc == -Inf]
+    if !isempty(exact_winners)
+        winner_weight = inv(Float64(length(exact_winners)))
+        return Dict(k => (k in exact_winners ? winner_weight : 0.0) for k in keys(fits))
+    end
+
+    finite_keys = [k for (k, f) in fits if isfinite(f.aicc)]
+    if isempty(finite_keys)
+        uniform_weight = inv(Float64(length(fits)))
+        return Dict(k => uniform_weight for k in keys(fits))
+    end
+
+    aicc_min = minimum(fits[k].aicc for k in finite_keys)
+    raw = Dict(k => (isfinite(f.aicc) ? exp(-(f.aicc - aicc_min) / 2) : 0.0)
+               for (k, f) in fits)
     Z = sum(values(raw))
     return Dict(k => v / Z for (k, v) in raw)
 end
@@ -370,11 +417,17 @@ NamedTuple with fields:
 """
 function compare_models(fits::Dict{Symbol, ScalingFit})
     isempty(fits) && throw(ArgumentError("fits dictionary is empty"))
-    ordered = sort(collect(fits); by = kv -> kv[2].aicc)
+    ordered = sort(collect(fits); by = kv -> (kv[2].aicc, String(kv[1])))
     ranked = [kv[1] for kv in ordered]
     aiccs  = [kv[2].aicc for kv in ordered]
     aicc_min = aiccs[1]
-    delta  = aiccs .- aicc_min
+    delta = if aicc_min == -Inf
+        [aicc == -Inf ? 0.0 : Inf for aicc in aiccs]
+    elseif aicc_min == Inf
+        zeros(length(aiccs))
+    else
+        aiccs .- aicc_min
+    end
     w_dict = aicc_weights(fits)
     weights = [w_dict[k] for k in ranked]
     return (

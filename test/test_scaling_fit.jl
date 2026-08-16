@@ -154,6 +154,11 @@ using Random: MersenneTwister
         @test_throws ArgumentError fit_scaling([3,4,5,6,7,8], [5.0, 5.0, 5.0, 5.0, 5.0, 5.0],
                                                 [1.0, 2.0, NaN, 4.0, 5.0, 6.0])
 
+        # Non-finite inverse temperature
+        @test_throws ArgumentError fit_scaling([3,4,5,6,7,8],
+                                                [5.0, 5.0, Inf, 5.0, 5.0, 5.0],
+                                                [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+
         # Unknown model
         @test_throws ArgumentError fit_scaling([3,4,5,6,7,8], [5.0, 5.0, 5.0, 5.0, 5.0, 5.0],
                                                 [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]; models = (:M0, :M99))
@@ -367,6 +372,35 @@ using Random: MersenneTwister
         fit_alg = fit_scaling(rows_phys; beta_kind=:alg)[:M0]
         @test fit_alg.beta_kind === :alg
         @test Set(fit_alg.beta_values) == Set((3.0, 6.0, 9.0))
+
+        # All redundant metadata are checked, even when one convention is
+        # explicitly selected for the fit.
+        inconsistent_alias = copy(rows_phys)
+        inconsistent_alias[1] = merge(
+            inconsistent_alias[1], (beta=inconsistent_alias[1].beta + 0.25,))
+        @test_throws ArgumentError fit_scaling(inconsistent_alias; beta_kind=:phys)
+
+        inconsistent_rescaling = copy(rows_phys)
+        inconsistent_rescaling[1] = merge(
+            inconsistent_rescaling[1], (rescaling_factor=4.0,))
+        @test_throws ArgumentError fit_scaling(inconsistent_rescaling; beta_kind=:alg)
+
+        invalid_redundant = copy(rows_phys)
+        invalid_redundant[1] = merge(invalid_redundant[1], (beta_phys=NaN,))
+        @test_throws ArgumentError fit_scaling(invalid_redundant; beta_kind=:alg)
+
+        # Missing algorithmic beta is derived only when the physical beta and
+        # positive rescaling factor are both present.
+        rows_phys_only = [(
+            n=n,
+            beta_phys=βp,
+            rescaling_factor=rescale,
+            mixing_time=Float64(n)^2 * βp^1.5,
+            mixing_time_source=:extrapolated,
+        ) for n in 3:8 for βp in (1.0, 2.0, 3.0)]
+        fit_derived_alg = fit_scaling(rows_phys_only; beta_kind=:alg)[:M0]
+        @test fit_derived_alg.beta_kind === :alg
+        @test Set(fit_derived_alg.beta_values) == Set((3.0, 6.0, 9.0))
     end
 
     # ------------------------------------------------------------------------
@@ -376,5 +410,55 @@ using Random: MersenneTwister
         # Empty dict
         @test isempty(aicc_weights(Dict{Symbol, ScalingFit}()))
         @test_throws ArgumentError compare_models(Dict{Symbol, ScalingFit}())
+
+        metrics = QuantumFurnace._scaling_aic_metrics(0.0, 10, 3)
+        @test metrics.aicc == -Inf
+        @test metrics.aic == -Inf
+        @test metrics.log_likelihood == Inf
+
+        n_vals = [3, 4, 5, 6, 7, 8]
+        β_vals = [1.0, 1.0, 2.0, 2.0, 3.0, 3.0]
+        τ_vals = [2.0, 3.0, 5.0, 7.0, 11.0, 13.0]
+        template = fit_scaling(n_vals, β_vals, τ_vals; models=(:M0,))[:M0]
+        function with_aicc(fit::ScalingFit, value::Float64)
+            fields = Any[getfield(fit, i) for i in 1:fieldcount(ScalingFit)]
+            fields[findfirst(==(:aicc), fieldnames(ScalingFit))] = value
+            return ScalingFit(fields...)
+        end
+
+        tied_exact = Dict(
+            :M0 => with_aicc(template, -Inf),
+            :M1 => with_aicc(template, -Inf),
+        )
+        tied_weights = aicc_weights(tied_exact)
+        @test tied_weights == Dict(:M0 => 0.5, :M1 => 0.5)
+        tied_comparison = compare_models(tied_exact)
+        @test tied_comparison.delta_aicc == [0.0, 0.0]
+        @test all(isfinite, tied_comparison.weights)
+
+        exact_and_finite = Dict(
+            :M0 => with_aicc(template, -Inf),
+            :M1 => with_aicc(template, 3.0),
+        )
+        @test aicc_weights(exact_and_finite) == Dict(:M0 => 1.0, :M1 => 0.0)
+
+        finite_and_unavailable = Dict(
+            :M0 => with_aicc(template, 3.0),
+            :M1 => with_aicc(template, Inf),
+        )
+        @test aicc_weights(finite_and_unavailable) == Dict(:M0 => 1.0, :M1 => 0.0)
+
+        all_unavailable = Dict(
+            :M0 => with_aicc(template, Inf),
+            :M1 => with_aicc(template, Inf),
+        )
+        @test aicc_weights(all_unavailable) == Dict(:M0 => 0.5, :M1 => 0.5)
+        unavailable_comparison = compare_models(all_unavailable)
+        @test unavailable_comparison.delta_aicc == [0.0, 0.0]
+        @test all(isfinite, unavailable_comparison.weights)
+
+        @test_throws ArgumentError aicc_weights(Dict(
+            :M0 => with_aicc(template, NaN),
+        ))
     end
 end
