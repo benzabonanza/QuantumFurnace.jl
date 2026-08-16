@@ -78,6 +78,14 @@ end
 _channel_cost_interpretation(with_gqsp::Bool) = with_gqsp ?
     :formal_unscaled_gqsp_surrogate : :physical_channel
 
+@inline _is_hypothetical_dll_trotter(config::Config) =
+    config.construction isa DLL && config.domain isa TrotterDomain
+
+@inline _trotter_cost_interpretation(config::Config) =
+    _is_hypothetical_dll_trotter(config) ?
+        :hypothetical_unimplemented_dll_trotter :
+        _channel_cost_interpretation(config.with_gqsp)
+
 function Base.show(io::IO, b::SimulationTimeBudget)
     gqsp = b.with_gqsp ? ", gqsp d=$(b.gqsp_degree), formal surrogate" : ""
     print(io, "SimulationTimeBudget(r_D=$(b.r_D), total=$(b.total_time), n_steps=$(b.n_steps), $(b.construction)$gqsp)")
@@ -207,6 +215,8 @@ function compute_simulation_time(
     ;
     n_steps::Union{Nothing, Integer}=nothing,
 ) where {D <: Union{TimeDomain, TrotterDomain}}
+    validate_config!(config, ham)
+
     delta = config.delta
     # OFT and the two coherent kernels use independent register triples.
     r_D  = register_r_D(config)
@@ -318,9 +328,10 @@ Plain substep counts are a lower bound until control overheads are applied.
 - `blocks_per_step`, `total_blocks`: contiguous ladder blocks used for
   transpiler-intercept corrections.
 - `r_*`, `N_*`, `t0_*`, `M_*`: independent register and Strang parameters.
-- `cost_interpretation`: `:physical_channel` or
-  `:formal_unscaled_gqsp_surrogate`, with the latter marking counts that assume
-  a GQSP query pattern but not a synthesized contractive polynomial.
+- `cost_interpretation`: `:physical_channel`,
+  `:formal_unscaled_gqsp_surrogate`, or
+  `:hypothetical_unimplemented_dll_trotter`. The latter two labels distinguish
+  unsynthesised or unimplemented resource models from supported channels.
 - Remaining fields record GQSP, construction, temperature, and system metadata.
 """
 struct TrotterStepBudget
@@ -368,8 +379,14 @@ struct TrotterStepBudget
 end
 
 function Base.show(io::IO, b::TrotterStepBudget)
-    gqsp = b.with_gqsp ? ", gqsp d=$(b.gqsp_degree), formal surrogate" : ""
-    print(io, "TrotterStepBudget(total=$(b.total_substeps), per_step=$(b.substeps_per_step), n_steps=$(b.n_steps), $(b.construction)$gqsp)")
+    qualifier = if b.cost_interpretation === :hypothetical_unimplemented_dll_trotter
+        ", hypothetical unimplemented DLL Trotter model"
+    elseif b.with_gqsp
+        ", gqsp d=$(b.gqsp_degree), formal surrogate"
+    else
+        ""
+    end
+    print(io, "TrotterStepBudget(total=$(b.total_substeps), per_step=$(b.substeps_per_step), n_steps=$(b.n_steps), $(b.construction)$qualifier)")
 end
 
 function Base.show(io::IO, ::MIME"text/plain", b::TrotterStepBudget)
@@ -380,8 +397,13 @@ function Base.show(io::IO, ::MIME"text/plain", b::TrotterStepBudget)
     println(io, "  Physics: β=$(b.beta), σ=$(b.sigma), δ=$(b.delta), n=$(b.n_qubits)")
     println(io, "  Construction: $(b.construction), GQSP: with_gqsp=$(b.with_gqsp), d=$(b.gqsp_degree)")
     println(io, "  Cost interpretation: $(b.cost_interpretation)")
-    b.with_gqsp && println(io,
-        "  Warning: formal query count for the unscaled polynomial surrogate; not a synthesized GQSP circuit")
+    if b.cost_interpretation === :hypothetical_unimplemented_dll_trotter
+        println(io,
+            "  Warning: hypothetical DLL Trotter count; this construction is not implemented")
+    elseif b.with_gqsp
+        println(io,
+            "  Warning: formal query count for the unscaled polynomial surrogate; not a synthesized GQSP circuit")
+    end
     println(io, "  T: $(b.T)")
     println(io, "  ─────────────────────────────────")
     println(io, "  OFT substeps/pass:   $(b.oft_substeps_per_pass)  (= (N_D−1)·M_D)")
@@ -395,7 +417,7 @@ function Base.show(io::IO, ::MIME"text/plain", b::TrotterStepBudget)
 end
 
 """
-    count_trotter_steps(config, ham, T) -> TrotterStepBudget
+    count_trotter_steps(config, ham, T; allow_hypothetical=false) -> TrotterStepBudget
 
 Count second-order Strang substeps and contiguous ladder blocks up to time `T`.
 
@@ -404,13 +426,26 @@ count uses full QPE ladders without transition-amplitude weighting or kernel
 truncation and returns a [`TrotterStepBudget`](@ref). For `with_gqsp=true`,
 the count prices the formal `2 * gqsp_degree` query pattern but is labelled as
 an unscaled-polynomial surrogate until contraction and complementary synthesis
-are implemented.
+are implemented. DLL in `TrotterDomain` is not implemented and is rejected by
+default. Set `allow_hypothetical=true` only to retain the legacy arithmetic as
+an explicitly labelled `:hypothetical_unimplemented_dll_trotter` estimate.
 """
 function count_trotter_steps(
     config::Config{Thermalize, D},
     ham::HamHam,
     T::Real,
+    ;
+    allow_hypothetical::Bool = false,
 ) where {D <: Union{TimeDomain, TrotterDomain}}
+    hypothetical_dll_trotter = _is_hypothetical_dll_trotter(config)
+    validate_config!(config, ham;
+        _allow_hypothetical_dll_trotter = hypothetical_dll_trotter)
+    if hypothetical_dll_trotter && !allow_hypothetical
+        throw(ArgumentError(
+            "DLL construction in TrotterDomain is not implemented. " *
+            "Pass allow_hypothetical=true only to price the legacy hypothetical model."))
+    end
+
     delta = config.delta
     r_D = register_r_D(config)
     M_D = register_M_D(config)
@@ -418,7 +453,9 @@ function count_trotter_steps(
     delta !== nothing && delta > 0 || throw(ArgumentError("config.delta must be set and positive"))
     r_D !== nothing && r_D > 0 || throw(ArgumentError("dissipative register r_D must be set and positive"))
     M_D !== nothing && M_D > 0 || throw(ArgumentError("dissipative Strang substep count M_D must be set and positive"))
-    T > 0 || throw(ArgumentError("T must be positive"))
+    T_float = Float64(T)
+    isfinite(T_float) || throw(ArgumentError("T must be finite"))
+    T_float > 0 || throw(ArgumentError("T must be positive"))
 
     N_D = 2^r_D
     t0_D = register_t0_D(config)
@@ -460,7 +497,7 @@ function count_trotter_steps(
     b_substeps_per_step = n_be_queries * b_substeps_per_be
 
     substeps_per_step = oft_substeps_per_step + b_substeps_per_step
-    n_steps = ceil(Int, T / delta)
+    n_steps = ceil(Int, T_float / delta)
     total_substeps = n_steps * substeps_per_step
 
     # Contiguous controlled blocks (ladder rungs): 2 OFT passes of r_D rungs;
@@ -480,9 +517,9 @@ function count_trotter_steps(
         Int(r_bm), Int(N_bm), t0_bm, Int(M_bm),
         Int(r_bp), Int(N_bp), t0_bp, Int(M_bp),
         Bool(config.with_gqsp), Int(config.gqsp_degree),
-        _channel_cost_interpretation(config.with_gqsp),
+        _trotter_cost_interpretation(config),
         Float64(config.beta), Float64(config.sigma), Float64(delta),
-        construction_sym, config.num_qubits, Float64(ham.rescaling_factor), Float64(T),
+        construction_sym, config.num_qubits, Float64(ham.rescaling_factor), T_float,
     )
 end
 
@@ -503,7 +540,9 @@ The estimate excludes state preparation, transition-weight rotations, and LCU
 PREP/SELECT beyond the counted block encodings. Generic-angle transpiler fits
 do not credit accidental angle simplifications. If `steps.with_gqsp` is true,
 the result is a formal count for the current unscaled polynomial surrogate,
-not a resource estimate for a synthesized postselected GQSP circuit.
+not a resource estimate for a synthesized postselected GQSP circuit. A DLL
+Trotter estimate is likewise available only by explicit hypothetical opt-in
+and remains labelled as unimplemented through `steps.cost_interpretation`.
 """
 struct RxxBudget
     rxx_total::Float64               # plain lower bound
@@ -520,7 +559,13 @@ struct RxxBudget
 end
 
 function Base.show(io::IO, b::RxxBudget)
-    suffix = b.steps.with_gqsp ? ", formal unscaled-GQSP surrogate" : ""
+    suffix = if b.steps.cost_interpretation === :hypothetical_unimplemented_dll_trotter
+        ", hypothetical unimplemented DLL Trotter model"
+    elseif b.steps.with_gqsp
+        ", formal unscaled-GQSP surrogate"
+    else
+        ""
+    end
     print(io, "RxxBudget(rxx_total=$(b.rxx_total), controlled=$(b.rxx_total_controlled), $(b.hamiltonian) n=$(b.steps.n_qubits)$suffix)")
 end
 
@@ -533,8 +578,13 @@ function Base.show(io::IO, ::MIME"text/plain", b::RxxBudget)
     println(io, "  Cost interpretation: $(b.steps.cost_interpretation)")
     println(io, "  ─────────────────────────────────")
     println(io, "  RXX total (plain):       $(b.rxx_total)   [lower bound]")
-    controlled_label = b.steps.with_gqsp ?
-        "formal unscaled-GQSP surrogate" : "implemented Ham-sim model"
+    controlled_label = if b.steps.cost_interpretation === :hypothetical_unimplemented_dll_trotter
+        "hypothetical unimplemented DLL Trotter model"
+    elseif b.steps.with_gqsp
+        "formal unscaled-GQSP surrogate"
+    else
+        "implemented Ham-sim model"
+    end
     print(io,   "  RXX total (controlled):  $(b.rxx_total_controlled)   [$controlled_label]")
 end
 
@@ -580,7 +630,8 @@ function load_rxx_table(path::AbstractString = joinpath(
 end
 
 """
-    estimate_rxx_count(config, ham, T; rxx_table, hamiltonian) -> RxxBudget
+    estimate_rxx_count(config, ham, T; rxx_table, hamiltonian,
+                       allow_hypothetical=false) -> RxxBudget
 
 Estimate native RXX two-qubit gates up to time `T` from a measured cost table.
 
@@ -588,7 +639,8 @@ Estimate native RXX two-qubit gates up to time `T` from a measured cost table.
 family key. Returns an [`RxxBudget`](@ref) containing both the plain lower
 bound and the control-adjusted estimate. A `with_gqsp=true` configuration is
 explicitly labelled as a formal unscaled-polynomial surrogate through its
-underlying step budget.
+underlying step budget. `allow_hypothetical=true` propagates the explicit opt-in
+for an unimplemented DLL Trotter model.
 """
 function estimate_rxx_count(
     config::Config{Thermalize, D},
@@ -596,8 +648,10 @@ function estimate_rxx_count(
     T::Real;
     rxx_table::Dict{Tuple{String, Int}, <:NamedTuple},
     hamiltonian::AbstractString,
+    allow_hypothetical::Bool = false,
 ) where {D <: Union{TimeDomain, TrotterDomain}}
-    steps = count_trotter_steps(config, ham, T)
+    steps = count_trotter_steps(
+        config, ham, T; allow_hypothetical = allow_hypothetical)
     key = (String(hamiltonian), config.num_qubits)
     haskey(rxx_table, key) || throw(ArgumentError(
         "no RXX measurement for $key — available: $(sort(collect(keys(rxx_table))))"))

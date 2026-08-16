@@ -575,6 +575,19 @@
         @test_throws ArgumentError count_trotter_steps(config_no_M, TEST_HAM, 10.0)
         config_ok = make_config(Thermalize(), TrotterDomain())
         @test_throws ArgumentError count_trotter_steps(config_ok, TEST_HAM, -1.0)
+        @test_throws ArgumentError count_trotter_steps(config_ok, TEST_HAM, Inf)
+        @test_throws ArgumentError count_trotter_steps(config_ok, TEST_HAM, NaN)
+        @test_throws ArgumentError count_trotter_steps(
+            make_config(Thermalize(), TrotterDomain(); num_qubits = NUM_QUBITS + 1),
+            TEST_HAM,
+            10.0,
+        )
+        @test_throws ArgumentError compute_simulation_time(
+            make_config(Thermalize(), TimeDomain(); num_qubits = NUM_QUBITS + 1),
+            TEST_HAM,
+            10.0,
+        )
+        @test_throws ArgumentError compute_simulation_time(config_ok, TEST_HAM, Inf)
     end
 
     # ========================================================================
@@ -751,23 +764,66 @@
     end
 
     # ---- count_trotter_steps: DLL is coherent (with_coherent(DLL)=true) ----
-    # DLL is a KMS-DB placeholder with with_coherent = true. The counter must
-    # treat it like KMS (1 direct BE query, full coherent ladders), NOT like GNS.
+    # DLL Trotter dynamics is not implemented: its historical KMS-like resource
+    # arithmetic is available only as an explicitly labelled hypothetical.
     @testset "count_trotter_steps — DLL coherent handling (qf-5hg verify)" begin
-        cfg = Config(;
-            sim = Thermalize(), domain = TrotterDomain(), construction = DLL(),
-            num_qubits = NUM_QUBITS, with_linear_combination = true,
-            beta = BETA, sigma = SIGMA, a = BETA / 30.0, s = 0.4,
-            num_energy_bits = NUM_ENERGY_BITS, w0 = W0, t0 = T0,
-            num_trotter_steps_per_t0 = NUM_TROTTER_STEPS_PER_T0,
-            mixing_time = 1.0, delta = TEST_DELTA,
-        )
-        cnt = count_trotter_steps(cfg, TEST_HAM, 10.0)
+        function _dll_trotter_resource_config(filter)
+            Config(;
+                sim = Thermalize(), domain = TrotterDomain(), construction = DLL(),
+                num_qubits = NUM_QUBITS, with_linear_combination = true,
+                beta = BETA, sigma = SIGMA, a = BETA / 30.0, s = 0.4,
+                num_energy_bits = NUM_ENERGY_BITS, w0 = W0, t0 = T0,
+                num_trotter_steps_per_t0 = NUM_TROTTER_STEPS_PER_T0,
+                mixing_time = 1.0, delta = TEST_DELTA,
+                filter = filter,
+            )
+        end
+
+        # Hypothetical opt-in skips only the unsupported-domain rejection; all
+        # other configuration contracts, including the DLL filter, still run.
+        @test_throws ArgumentError count_trotter_steps(
+            _dll_trotter_resource_config(nothing), TEST_HAM, 10.0;
+            allow_hypothetical = true)
+
+        cfg = _dll_trotter_resource_config(DLLGaussianFilter(BETA))
+        default_err = try
+            count_trotter_steps(cfg, TEST_HAM, 10.0)
+            nothing
+        catch err
+            err
+        end
+        @test default_err isa ArgumentError
+        @test occursin("allow_hypothetical=true", sprint(showerror, default_err))
+        @test_throws ArgumentError compute_simulation_time(cfg, TEST_HAM, 10.0)
+
+        cnt = count_trotter_steps(
+            cfg, TEST_HAM, 10.0; allow_hypothetical = true)
         @test cnt.construction == :DLL
+        @test cnt.cost_interpretation === :hypothetical_unimplemented_dll_trotter
         @test cnt.n_be_queries == 1                       # direct exp(-iδB), not GNS-0
         @test cnt.b_substeps_per_be > 0
         @test cnt.b_substeps_per_step == cnt.b_substeps_per_be
         @test cnt.blocks_per_step == 2 * NUM_ENERGY_BITS + (2 + 3) * NUM_ENERGY_BITS
+        @test occursin("hypothetical unimplemented DLL Trotter model", sprint(show, cnt))
+        @test occursin("construction is not implemented",
+            sprint(show, MIME"text/plain"(), cnt))
+
+        table = Dict(("dll", NUM_QUBITS) => (;
+            geometry = "-", rxx_slope_per_substep = 20.0,
+            rxx_intercept = 3.0, rxx_L1 = 23.0,
+            rxx_fit_max_abs_dev = 0.0, f_ctrl1 = 3.0, f_ctrl2 = 6.0,
+            qiskit_version = "test"))
+        @test_throws ArgumentError estimate_rxx_count(
+            cfg, TEST_HAM, 10.0; rxx_table = table, hamiltonian = "dll")
+        rxx = estimate_rxx_count(
+            cfg, TEST_HAM, 10.0;
+            rxx_table = table,
+            hamiltonian = "dll",
+            allow_hypothetical = true,
+        )
+        @test rxx.steps.cost_interpretation ===
+              :hypothetical_unimplemented_dll_trotter
+        @test occursin("hypothetical unimplemented DLL Trotter model", sprint(show, rxx))
     end
 
     # ---- count_trotter_steps: coherent-leg M/r validation via fallback ----

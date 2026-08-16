@@ -309,7 +309,10 @@ function _collect_dll_filter_errors!(
     return nothing
 end
 
-function validate_config!(config::Config)
+function validate_config!(
+    config::Config;
+    _allow_hypothetical_dll_trotter::Bool = false,
+)
     errors = String[]
 
     # Common numerical domain. The implemented kernels divide by beta and
@@ -446,7 +449,7 @@ function validate_config!(config::Config)
             push!(errors, "DLL construction is not supported in EnergyDomain (out of scope for DLL-2).")
         end
         # Trotter-domain DLL needs a quadrature defined on Trotter eigenvalues.
-        if config.domain isa TrotterDomain
+        if config.domain isa TrotterDomain && !_allow_hypothetical_dll_trotter
             push!(errors, "DLL construction in TrotterDomain is deferred — not yet supported.")
         end
     end
@@ -469,8 +472,15 @@ Require the configured system size and cached Gibbs state to match `ham`. When
 `config.beta_phys` is set, also require `config.beta` to equal
 `config.beta_phys * ham.rescaling_factor` within `atol` and `rtol`.
 """
-function validate_config!(config::Config, ham::HamHam; atol::Real = 1e-12, rtol::Real = 1e-10)
-    validate_config!(config)
+function validate_config!(
+    config::Config,
+    ham::HamHam;
+    atol::Real = 1e-12,
+    rtol::Real = 1e-10,
+    _allow_hypothetical_dll_trotter::Bool = false,
+)
+    validate_config!(config;
+        _allow_hypothetical_dll_trotter = _allow_hypothetical_dll_trotter)
     dim = size(ham.data, 1)
     size(ham.data, 2) == dim || throw(ArgumentError("ham.data must be square."))
     expected_dim = 2^config.num_qubits
