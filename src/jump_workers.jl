@@ -510,17 +510,11 @@ function _accumulate_rho_jump_threaded_energy!(
         task_scratches
     end
 
-    old_blas = BLAS.get_num_threads()
-    BLAS.set_num_threads(1)
-    try
-        @sync for (idx, chunk) in enumerate(chunks)
-            Threads.@spawn _accumulate_rho_jump_chunk_energy!(
-                local_pool[idx], evolving_dm, jump, hamiltonian,
-                config, precomputed_data, half_indices[chunk];
-                base_prefactor=base_prefactor, inv_4sigma2=inv_4sigma2)
-        end
-    finally
-        BLAS.set_num_threads(old_blas)
+    @sync for (idx, chunk) in enumerate(chunks)
+        Threads.@spawn _accumulate_rho_jump_chunk_energy!(
+            local_pool[idx], evolving_dm, jump, hamiltonian,
+            config, precomputed_data, half_indices[chunk];
+            base_prefactor=base_prefactor, inv_4sigma2=inv_4sigma2)
     end
 
     # Reduce: sum per-task rho_jump into scratch.rho_jump
@@ -598,17 +592,11 @@ function _accumulate_rho_jump_threaded_timetrot!(
         task_scratches
     end
 
-    old_blas = BLAS.get_num_threads()
-    BLAS.set_num_threads(1)
-    try
-        @sync for (idx, chunk) in enumerate(chunks)
-            Threads.@spawn _accumulate_rho_jump_chunk_timetrot!(
-                local_pool[idx], evolving_dm, jump,
-                config, precomputed_data, half_indices[chunk];
-                base_prefactor=base_prefactor)
-        end
-    finally
-        BLAS.set_num_threads(old_blas)
+    @sync for (idx, chunk) in enumerate(chunks)
+        Threads.@spawn _accumulate_rho_jump_chunk_timetrot!(
+            local_pool[idx], evolving_dm, jump,
+            config, precomputed_data, half_indices[chunk];
+            base_prefactor=base_prefactor)
     end
 
     # Reduce: sum per-task rho_jump into scratch.rho_jump
@@ -681,17 +669,11 @@ function _accumulate_rho_jump_threaded_bohr!(
         task_scratches
     end
 
-    old_blas = BLAS.get_num_threads()
-    BLAS.set_num_threads(1)
-    try
-        @sync for (idx, chunk) in enumerate(chunks)
-            Threads.@spawn _accumulate_rho_jump_chunk_bohr!(
-                local_pool[idx], evolving_dm, jump, hamiltonian,
-                precomputed_data, bohr_keys, bohr_is, bohr_js, chunk;
-                scaled_delta=scaled_delta)
-        end
-    finally
-        BLAS.set_num_threads(old_blas)
+    @sync for (idx, chunk) in enumerate(chunks)
+        Threads.@spawn _accumulate_rho_jump_chunk_bohr!(
+            local_pool[idx], evolving_dm, jump, hamiltonian,
+            precomputed_data, bohr_keys, bohr_is, bohr_js, chunk;
+            scaled_delta=scaled_delta)
     end
 
     # Reduce: sum per-task rho_jump into scratch.rho_jump

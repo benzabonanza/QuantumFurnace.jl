@@ -84,28 +84,30 @@ function _serial_rho_jump!(scratch, rho, jump, ham,
 end
 
 # ============================================================================
-# DM thermalization BLAS threading tests (THREAD-03, THREAD-05)
+# DM thermalization BLAS policy tests (THREAD-03, THREAD-05)
 # ============================================================================
 
-@testset "DM BLAS thread restoration" begin
-    old_blas = BLAS.get_num_threads()
+@testset "DM thermalization preserves caller BLAS policy" begin
+    saved_blas = BLAS.get_num_threads()
+    try
+        BLAS.set_num_threads(2)
+        caller_blas = BLAS.get_num_threads()
+        @test caller_blas == 2
 
-    # Normal completion (EnergyDomain)
-    therm_config = make_config(Thermalize(), EnergyDomain(); num_qubits=3,
-        delta=0.01, mixing_time=0.1)
-    result = run_thermalize(N3_JUMPS, therm_config, N3_HAM)
-    @test BLAS.get_num_threads() == old_blas
-    @info "DM BLAS restoration (Energy)" blas_before=old_blas blas_after=BLAS.get_num_threads()
-
-    # Test across multiple domains to ensure all paths restore
-    for (domain, jumps, trott, name) in [
-        (TimeDomain(), N3_JUMPS, nothing, "Time"),
-        (TrotterDomain(), N3_TROTTER_JUMPS, N3_TROTTER, "Trotter"),
-    ]
-        cfg = make_config(Thermalize(), domain; num_qubits=3, delta=0.01, mixing_time=0.1)
-        run_thermalize(jumps, cfg, N3_HAM, trott)
-        @test BLAS.get_num_threads() == old_blas
-        @info "DM BLAS restoration ($name)" blas_after=BLAS.get_num_threads()
+        for (domain, jumps, trott, name) in [
+            (EnergyDomain(), N3_JUMPS, nothing, "Energy"),
+            (TimeDomain(), N3_JUMPS, nothing, "Time"),
+            (TrotterDomain(), N3_TROTTER_JUMPS, N3_TROTTER, "Trotter"),
+            (BohrDomain(), N3_JUMPS, nothing, "Bohr"),
+        ]
+            cfg = make_config(Thermalize(), domain; num_qubits=3,
+                delta=0.01, mixing_time=0.1)
+            run_thermalize(jumps, cfg, N3_HAM, trott)
+            @test BLAS.get_num_threads() == caller_blas
+            @info "DM caller BLAS policy preserved" path=name blas=caller_blas
+        end
+    finally
+        BLAS.set_num_threads(saved_blas)
     end
 end
 
@@ -233,20 +235,28 @@ end
     end
 end
 
-@testset "Lindbladian threaded matvec: BLAS thread restoration" begin
+@testset "Lindbladian matvecs preserve caller BLAS policy" begin
     if Threads.nthreads() > 1
-        config = make_config(Lindbladian(), EnergyDomain(); construction=KMS())
-        ws = Workspace(config, TEST_HAM, TEST_JUMPS)
-        rho = Matrix(random_density_matrix(NUM_QUBITS))
+        saved_blas = BLAS.get_num_threads()
+        try
+            BLAS.set_num_threads(2)
+            caller_blas = BLAS.get_num_threads()
+            @test caller_blas == 2
 
-        old_blas = BLAS.get_num_threads()
-        _run_threaded_lindbladian!(ws, rho, config, TEST_HAM; adjoint=false)
-        @test BLAS.get_num_threads() == old_blas
-        _run_threaded_lindbladian!(ws, rho, config, TEST_HAM; adjoint=true)
-        @test BLAS.get_num_threads() == old_blas
-        @info "Lindbladian threaded BLAS restoration" blas_before=old_blas blas_after=BLAS.get_num_threads()
+            config = make_config(Lindbladian(), EnergyDomain(); construction=KMS())
+            ws = Workspace(config, TEST_HAM, TEST_JUMPS)
+            rho = Matrix(random_density_matrix(NUM_QUBITS))
+
+            apply_lindbladian!(ws, rho, config, TEST_HAM)
+            @test BLAS.get_num_threads() == caller_blas
+            apply_adjoint_lindbladian!(ws, rho, config, TEST_HAM)
+            @test BLAS.get_num_threads() == caller_blas
+            @info "Lindbladian caller BLAS policy preserved" blas=caller_blas
+        finally
+            BLAS.set_num_threads(saved_blas)
+        end
     else
-        @info "Skipping Lindbladian threaded BLAS restoration test (nthreads=$(Threads.nthreads()))"
+        @info "Skipping Lindbladian caller BLAS policy test (nthreads=$(Threads.nthreads()))"
         @test_skip Threads.nthreads() > 1
     end
 end
@@ -289,7 +299,7 @@ end
 # tests in `test_thermalization.jl` and the byte-identity check in
 # `test_predict_channel.jl` (a)/(b1)) — driving the threaded variants directly
 # from a re-implementation of the deleted summed-channel matvec is no longer
-# meaningful. The BLAS thread-restoration testset below stays.
+# meaningful. The caller-policy testset below stays.
 # ============================================================================
 
 @testset "Channel frequency accumulation: serial reference ≡ threaded" begin
@@ -336,18 +346,28 @@ end
     end
 end
 
-@testset "Channel threaded matvec: BLAS thread restoration" begin
+@testset "Channel actions preserve caller BLAS policy" begin
     if Threads.nthreads() > 1
-        config = make_config(Thermalize(), EnergyDomain(); construction=KMS())
-        ws = Workspace(config, TEST_HAM, TEST_JUMPS)
-        rho = Matrix(random_density_matrix(NUM_QUBITS))
+        saved_blas = BLAS.get_num_threads()
+        try
+            BLAS.set_num_threads(2)
+            caller_blas = BLAS.get_num_threads()
+            @test caller_blas == 2
 
-        old_blas = BLAS.get_num_threads()
-        apply_delta_channel!(ws, rho, config, TEST_HAM)
-        @test BLAS.get_num_threads() == old_blas
-        @info "Channel threaded BLAS restoration" blas_before=old_blas blas_after=BLAS.get_num_threads()
+            config = make_config(Thermalize(), EnergyDomain(); construction=KMS())
+            ws = Workspace(config, TEST_HAM, TEST_JUMPS)
+            rho = Matrix(random_density_matrix(NUM_QUBITS))
+
+            apply_delta_channel!(ws, rho, config, TEST_HAM)
+            @test BLAS.get_num_threads() == caller_blas
+            apply_adjoint_delta_channel!(ws, rho, config, TEST_HAM)
+            @test BLAS.get_num_threads() == caller_blas
+            @info "Channel caller BLAS policy preserved" blas=caller_blas
+        finally
+            BLAS.set_num_threads(saved_blas)
+        end
     else
-        @info "Skipping channel threaded BLAS restoration test (nthreads=$(Threads.nthreads()))"
+        @info "Skipping channel caller BLAS policy test (nthreads=$(Threads.nthreads()))"
         @test_skip Threads.nthreads() > 1
     end
 end

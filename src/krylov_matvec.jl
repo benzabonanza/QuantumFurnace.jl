@@ -613,17 +613,11 @@ function _apply_lindbladian_threaded_energy!(
     nt = min(Threads.nthreads(), n_work, length(pool))
     chunks = _partition_range(1:n_work, nt)
 
-    old_blas = BLAS.get_num_threads()
-    BLAS.set_num_threads(1)
-    try
-        @sync for (idx, chunk) in enumerate(chunks)
-            Threads.@spawn _apply_lindbladian_chunk_energy!(
-                pool[idx], rho, jump_eigenbases, jump_hermitian,
-                bohr_freqs, energy_labels, work, chunk, config,
-                prefactor, inv_4sigma2; adjoint=adjoint)
-        end
-    finally
-        BLAS.set_num_threads(old_blas)
+    @sync for (idx, chunk) in enumerate(chunks)
+        Threads.@spawn _apply_lindbladian_chunk_energy!(
+            pool[idx], rho, jump_eigenbases, jump_hermitian,
+            bohr_freqs, energy_labels, work, chunk, config,
+            prefactor, inv_4sigma2; adjoint=adjoint)
     end
 
     @inbounds for idx in 1:length(chunks)
@@ -721,15 +715,9 @@ function _apply_lindbladian_threaded_bohr_dll!(
     end
     chunks = _partition_range(1:n_jumps, nt)
 
-    old_blas = BLAS.get_num_threads()
-    BLAS.set_num_threads(1)
-    try
-        @sync for (idx, chunk) in enumerate(chunks)
-            Threads.@spawn _apply_lindbladian_chunk_bohr_dll!(
-                pool[idx], rho, dll_lindblads, chunk; adjoint=adjoint)
-        end
-    finally
-        BLAS.set_num_threads(old_blas)
+    @sync for (idx, chunk) in enumerate(chunks)
+        Threads.@spawn _apply_lindbladian_chunk_bohr_dll!(
+            pool[idx], rho, dll_lindblads, chunk; adjoint=adjoint)
     end
 
     @inbounds for idx in 1:length(chunks)
@@ -783,17 +771,11 @@ function _apply_lindbladian_threaded_timetrot!(
     nt = min(Threads.nthreads(), n_work, length(pool))
     chunks = _partition_range(1:n_work, nt)
 
-    old_blas = BLAS.get_num_threads()
-    BLAS.set_num_threads(1)
-    try
-        @sync for (idx, chunk) in enumerate(chunks)
-            Threads.@spawn _apply_lindbladian_chunk_timetrot!(
-                pool[idx], rho, jump_eigenbases, jump_hermitian,
-                nufft_data, nufft_idx, energy_labels, work, chunk, config,
-                prefactor; adjoint=adjoint)
-        end
-    finally
-        BLAS.set_num_threads(old_blas)
+    @sync for (idx, chunk) in enumerate(chunks)
+        Threads.@spawn _apply_lindbladian_chunk_timetrot!(
+            pool[idx], rho, jump_eigenbases, jump_hermitian,
+            nufft_data, nufft_idx, energy_labels, work, chunk, config,
+            prefactor; adjoint=adjoint)
     end
 
     @inbounds for idx in 1:length(chunks)

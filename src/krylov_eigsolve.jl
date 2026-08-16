@@ -135,21 +135,14 @@ function apply_delta_channel!(
     copyto!(sc.rho_work, rho)
     evolving_dm = sc.rho_work
 
-    # Julia threads own the outer reduction; suppress nested BLAS threading.
-    old_blas = BLAS.get_num_threads()
-    BLAS.set_num_threads(1)
-    try
-        @inbounds for a in 1:length(jumps)
-            U_a = U_coherents === nothing ? nothing : U_coherents[a]
-            _apply_one_dm_substep!(
-                evolving_dm, sc, jumps[a],
-                U_a, K0s[a], U_residuals[a],
-                ham_or_trott, config, pd, jws;
-                hermitize = hermitize,
-            )
-        end
-    finally
-        BLAS.set_num_threads(old_blas)
+    @inbounds for a in 1:length(jumps)
+        U_a = U_coherents === nothing ? nothing : U_coherents[a]
+        _apply_one_dm_substep!(
+            evolving_dm, sc, jumps[a],
+            U_a, K0s[a], U_residuals[a],
+            ham_or_trott, config, pd, jws;
+            hermitize = hermitize,
+        )
     end
 
     copyto!(sc.rho_next, evolving_dm)
@@ -213,21 +206,15 @@ function apply_adjoint_delta_channel!(
     copyto!(sc.rho_work, rho)
     evolving_dm = sc.rho_work
 
-    old_blas = BLAS.get_num_threads()
-    BLAS.set_num_threads(1)
-    try
-        # The adjoint reverses substep composition order.
-        @inbounds for a in length(jumps):-1:1
-            U_a = U_coherents === nothing ? nothing : U_coherents[a]
-            _apply_one_adjoint_dm_substep!(
-                evolving_dm, sc, jumps[a],
-                U_a, K0s[a], U_residuals[a],
-                ham_or_trott, config, pd_adj, jws;
-                hermitize = hermitize,
-            )
-        end
-    finally
-        BLAS.set_num_threads(old_blas)
+    # The adjoint reverses substep composition order.
+    @inbounds for a in length(jumps):-1:1
+        U_a = U_coherents === nothing ? nothing : U_coherents[a]
+        _apply_one_adjoint_dm_substep!(
+            evolving_dm, sc, jumps[a],
+            U_a, K0s[a], U_residuals[a],
+            ham_or_trott, config, pd_adj, jws;
+            hermitize = hermitize,
+        )
     end
 
     copyto!(sc.rho_next, evolving_dm)

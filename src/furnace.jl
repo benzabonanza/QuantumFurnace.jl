@@ -239,43 +239,37 @@ function run_thermalize(
     trace_values = Complex{T}[tr(evolving_dm)]
     recorded_steps = Int[0]
 
-    old_blas = BLAS.get_num_threads()
-    try
-        BLAS.set_num_threads(Threads.nthreads())
-        for step in 1:num_steps
-            if config.jump_selection == :sweep
-                # Math: $Phi_A = Phi_S compose dots compose Phi_1 approx exp(delta cal(L))$.
-                @inbounds for a in 1:n_jumps
-                    _apply_one_dm_substep!(
-                        evolving_dm, scratch, jumps[a],
-                        coherent_unitaries === nothing ? nothing : coherent_unitaries[a],
-                        K0s[a], U_residuals[a],
-                        ham_or_trott, config, precomputed_data, jump_weight_scaling,
-                    )
-                end
-            else  # :random
-                idx = rand(rng, 1:n_jumps)
+    for step in 1:num_steps
+        if config.jump_selection == :sweep
+            # Math: $Phi_A = Phi_S compose dots compose Phi_1 approx exp(delta cal(L))$.
+            @inbounds for a in 1:n_jumps
                 _apply_one_dm_substep!(
-                    evolving_dm, scratch, jumps[idx],
-                    coherent_unitaries === nothing ? nothing : coherent_unitaries[idx],
-                    K0s[idx], U_residuals[idx],
+                    evolving_dm, scratch, jumps[a],
+                    coherent_unitaries === nothing ? nothing : coherent_unitaries[a],
+                    K0s[a], U_residuals[a],
                     ham_or_trott, config, precomputed_data, jump_weight_scaling,
                 )
             end
+        else  # :random
+            idx = rand(rng, 1:n_jumps)
+            _apply_one_dm_substep!(
+                evolving_dm, scratch, jumps[idx],
+                coherent_unitaries === nothing ? nothing : coherent_unitaries[idx],
+                K0s[idx], U_residuals[idx],
+                ham_or_trott, config, precomputed_data, jump_weight_scaling,
+            )
+        end
 
-            if step % save_every == 0
-                dist = trace_distance_h(Hermitian(evolving_dm), gibbs)
-                push!(trace_distances, dist)
-                push!(trace_values, tr(evolving_dm))
-                push!(recorded_steps, step)
-                verbose && @printf("Dist to Gibbs: %s\n", dist)
-                if dist < convergence_cutoff
-                    break
-                end
+        if step % save_every == 0
+            dist = trace_distance_h(Hermitian(evolving_dm), gibbs)
+            push!(trace_distances, dist)
+            push!(trace_values, tr(evolving_dm))
+            push!(recorded_steps, step)
+            verbose && @printf("Dist to Gibbs: %s\n", dist)
+            if dist < convergence_cutoff
+                break
             end
         end
-    finally
-        BLAS.set_num_threads(old_blas)
     end
 
     time_steps = T.(recorded_steps .* config.delta)

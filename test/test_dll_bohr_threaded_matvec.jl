@@ -349,10 +349,9 @@ _rand_herm(rng, d) = (G = randn(rng, ComplexF64, d, d); (G + G') / 2)
     end
 
     # ---------------------------------------------------------------------
-    # (i) BLAS thread count is restored after the matvec (try/finally is
-    #     exception-safe; here we check the normal-return restore path).
+    # (i) The matvec leaves the caller-selected BLAS policy unchanged.
     # ---------------------------------------------------------------------
-    @testset "(i) BLAS.set_num_threads save/restore" begin
+    @testset "(i) caller BLAS policy preservation" begin
         n = 5
         ham = _load_heis(n, 0.5)
         d = 2^n
@@ -364,11 +363,12 @@ _rand_herm(rng, d) = (G = randn(rng, ComplexF64, d, d); (G + G') / 2)
         saved = BLAS.get_num_threads()
         try
             BLAS.set_num_threads(2)
-            before = BLAS.get_num_threads()
+            caller_blas = BLAS.get_num_threads()
+            @test caller_blas == 2
             apply_lindbladian!(ws, copy(rho), cfg, ham)
+            @test BLAS.get_num_threads() == caller_blas
             apply_adjoint_lindbladian!(ws, copy(rho), cfg, ham)
-            after = BLAS.get_num_threads()
-            @test before == after            # restored to the value before the matvec
+            @test BLAS.get_num_threads() == caller_blas
         finally
             BLAS.set_num_threads(saved)
         end
