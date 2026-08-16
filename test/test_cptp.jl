@@ -117,6 +117,8 @@ end
 end
 
 @testset "Density-matrix helper invariants" begin
+    @test length(methods(is_density_matrix)) == 1
+
     rho = Hermitian(ComplexF64[0.75 0.0; 0.0 0.25])
     sigma = Hermitian(ComplexF64[0.25 0.0; 0.0 0.75])
     delta = rho - sigma
@@ -137,6 +139,7 @@ end
     pure = ComplexF64[1.0 0.0; 0.0 0.0]
     pure_orthogonal = ComplexF64[0.0 0.0; 0.0 1.0]
     @test is_density_matrix(rho_roundoff; atol=2e-14, rtol=0)
+    @test is_density_matrix(Hermitian(rho_roundoff); atol=2e-14, rtol=0)
     @test fidelity(rho_roundoff, pure; atol=2e-14, rtol=0) ≈ 1.0 atol=1e-15
     @test fidelity(pure, pure) ≈ 1.0 atol=1e-15
     @test fidelity(pure, pure_orthogonal) ≈ 0.0 atol=1e-15
@@ -175,6 +178,8 @@ end
     @test_throws ArgumentError is_density_matrix(ComplexF64[NaN 0.0; 0.0 NaN])
     @test_throws ArgumentError is_density_matrix(
         ComplexF64[1.0 + 1e-6 0.0; 0.0 -1e-6]; atol=2e-14, rtol=0)
+    @test_throws ArgumentError is_density_matrix(Hermitian(
+        ComplexF64[1.0 + 1e-6 0.0; 0.0 -1e-6]); atol=2e-14, rtol=0)
     @test_throws ArgumentError fidelity(rho, ones(ComplexF64, 3, 3) / 3)
     @test_throws ArgumentError fidelity(rho, ComplexF64[0.5 0.1; 0.0 0.5])
     @test_throws ArgumentError fidelity(

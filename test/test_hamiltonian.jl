@@ -245,6 +245,39 @@ using Statistics: median
         @test all(isfinite, ham.gibbs)
         @test isapprox(tr(ham.gibbs), 1.0; atol=1e-15, rtol=0)
         @test ham.gibbs[1, 1] == 1.0
+
+        theta = 0.37
+        eigvecs_rotated = ComplexF64[
+            cos(theta) -sin(theta)
+            sin(theta)  cos(theta)
+        ]
+        raw_rotated = merge(raw, (
+            matrix=eigvecs_rotated * Diagonal(eigvals) * eigvecs_rotated',
+            eigvecs=eigvecs_rotated,
+        ))
+        beta_extreme = 1.0e308
+        ham_rotated = HamHam(raw_rotated, beta_extreme)
+        rho_eigen = gibbs_state_in_eigen(ham_rotated, beta_extreme)
+        rho_computational = gibbs_state(ham_rotated, beta_extreme)
+        @test rho_eigen isa Matrix{ComplexF64}
+        @test rho_computational isa Matrix{ComplexF64}
+        @test isdiag(rho_eigen)
+        @test isapprox(tr(rho_eigen), 1.0; atol=1e-15, rtol=0)
+        @test isapprox(tr(rho_computational), 1.0; atol=1e-15, rtol=0)
+        @test isapprox(
+            rho_computational,
+            eigvecs_rotated * rho_eigen * eigvecs_rotated';
+            atol=1e-15,
+            rtol=0,
+        )
+        @test isapprox(
+            eigvecs_rotated' * rho_computational * eigvecs_rotated,
+            rho_eigen;
+            atol=1e-15,
+            rtol=0,
+        )
+        @test abs(rho_computational[1, 2]) > 0.1
+        @test is_density_matrix(rho_computational)
         @test QuantumFurnace._validate_raw_hamiltonian(
             raw; full_spectral_max_dim=1) === nothing
         @test QuantumFurnace._validate_raw_hamiltonian(
@@ -286,7 +319,13 @@ using Statistics: median
         @test QuantumFurnace._validate_raw_hamiltonian(
             raw32_large; spectral_validation=:full) === nothing
         ham32_large = HamHam(raw32_large, 1.0f6; spectral_validation=:full)
-        @test is_density_matrix(gibbs_state(ham32_large, 1.0f6))
+        rho_eigen32 = gibbs_state_in_eigen(ham32_large, 1.0f6)
+        rho_computational32 = gibbs_state(ham32_large, 1.0f6)
+        @test rho_eigen32 isa Matrix{ComplexF32}
+        @test rho_computational32 isa Matrix{ComplexF32}
+        @test isdiag(rho_eigen32)
+        @test isapprox(tr(rho_eigen32), 1.0f0; atol=eps(Float32), rtol=0)
+        @test is_density_matrix(rho_computational32)
 
         scaled_eigvecs32 = copy(eigvecs32)
         scaled_eigvecs32[:, 1] .*= 1.0008f0

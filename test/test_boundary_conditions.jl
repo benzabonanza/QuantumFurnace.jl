@@ -3,6 +3,7 @@
 
 using Test
 using LinearAlgebra
+using SparseArrays
 using Random
 using QuantumFurnace
 using QuantumFurnace: X, Y, Z, pad_term, expm_pauli_padded,
@@ -35,6 +36,9 @@ end
         P_obc = pad_term([Z, Z], n, n; periodic=false)
         @test opnorm(Matrix(P_pbc)) ≈ 1.0   # nontrivial Pauli string
         @test iszero(Matrix(P_obc))         # explicit zero — OBC has no wrap
+        @test P_obc isa SparseMatrixCSC{ComplexF64}
+        @test size(P_obc) == (2^n, 2^n)
+        @test nnz(P_obc) == 0
 
         # Single-site at any position: BC is irrelevant
         S_pbc = pad_term([Z], n, n; periodic=true)

@@ -211,30 +211,6 @@ function _capture_git_hash()
     end
 end
 
-# ============================================================================
-# Hamiltonian parameter extraction
-# ============================================================================
-
-"""
-    _extract_hamiltonian_params(ham::HamHam) -> Dict{Symbol, Any}
-
-Extract the minimal set of Hamiltonian parameters needed for provenance/reconstruction.
-Does NOT store derived quantities (eigendecomposition, bohr_freqs, bohr_dict, gibbs).
-"""
-function _extract_hamiltonian_params(ham::HamHam)
-    return Dict{Symbol, Any}(
-        :num_qubits        => Int(log2(size(ham.data, 1))),
-        :base_coeffs       => ham.base_coeffs,
-        :base_terms        => [Matrix.(term_group) for term_group in ham.base_terms],
-        :disordering_terms  => ham.disordering_terms === nothing ? nothing : [Matrix.(t) for t in ham.disordering_terms],
-        :disordering_coeffs => ham.disordering_coeffs,
-        :periodic          => ham.periodic,
-        :shift             => ham.shift,
-        :rescaling_factor  => ham.rescaling_factor,
-    )
-end
-
-
 # Result type tags.
 
 _result_type_tag(::LindbladResults) = "lindblad"

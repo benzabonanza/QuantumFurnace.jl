@@ -88,33 +88,6 @@ function _namedtuple_schema_to_raw(ham_raw::Dict)
     )
 end
 
-function _generate_filename(config::Config{Lindbladian})
-    pic_str = string(typeof(config.domain))
-    db_str = config.construction isa GNS ? "GNS" : "KMS"
-
-    beta_str = "beta=$(config.beta)"
-    a_str = "a=$(config.a)"
-    s_str = "s=$(config.s)"
-    nqb_str = "n=$(config.num_qubits)"
-    B = with_coherent(config.construction) ? "B" : "noB"
-
-    return join(["liouv", db_str, pic_str, nqb_str, beta_str, B, a_str, s_str], "_") * ".bson"
-end
-
-function _generate_filename(config::Config{Thermalize})
-    pic_str = string(typeof(config.domain))
-    db_str = config.construction isa GNS ? "GNS" : "KMS"
-
-    beta_str = "beta=$(config.beta)"
-    a_str = "a=$(config.a)"
-    s_str = "s=$(config.s)"
-    nqb_str = "n=$(config.num_qubits)"
-    B = with_coherent(config.construction) ? "B" : "noB"
-    mix = "mix=$(config.mixing_time)"
-
-    return join(["alg", db_str, pic_str, nqb_str, beta_str, B, a_str, s_str, mix], "_") * ".bson"
-end
-
 function _riemann_sum(f::Function, grid::Vector{Float64})
     # Uniform-grid rectangle rule.
     d0 = grid[2] - grid[1]
@@ -787,7 +760,7 @@ function pad_term(terms::Vector{Matrix{ComplexF64}}, num_qubits::Int64, position
     last_position = position + term_length - 1
     # Drop boundary overstepping terms for aperiodic boundary condition 
     if (!(periodic) && last_position > num_qubits)
-        return zeros(2^num_qubits, 2^num_qubits)
+        return spzeros(ComplexF64, 2^num_qubits, 2^num_qubits)
     end
 
     if last_position <= num_qubits

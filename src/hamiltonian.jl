@@ -31,13 +31,7 @@ Return the diagonal eigenbasis state `\$rho_i = exp(-beta E_i) / Z\$`.
 """
 function _gibbs_in_eigen(eigvals::Vector{T}, beta::T) where {T<:AbstractFloat}
     weights = _gibbs_weights(eigvals, beta)
-    dim = length(eigvals)
-    CT = Complex{T}
-    rho = zeros(CT, dim, dim)
-    for i in 1:dim
-        rho[i, i] = CT(weights[i])
-    end
-    return rho
+    return Matrix{Complex{T}}(Diagonal(weights))
 end
 
 """Return normalised Gibbs weights after shifting the ground energy to zero."""

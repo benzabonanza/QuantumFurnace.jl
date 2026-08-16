@@ -41,6 +41,11 @@ end
             path = joinpath(tmpdir, "test_lindblad.bson")
             save_result(result, path)
 
+            serialized_payload = BSON.load(path)
+            @test Set(keys(serialized_payload)) == Set((
+                :result_type, :config, :eigenvalues, :fixed_point, :gap_mode,
+                :spectral_gap, :metadata,
+            ))
             loaded = load_result(path)
             @test loaded isa LindbladResults
             _test_config_roundtrip(loaded.config, config)

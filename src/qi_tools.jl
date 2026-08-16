@@ -302,11 +302,9 @@ end
 Return `\$rho_beta = exp(-beta H) / Z\$` in the computational basis.
 """
 function gibbs_state(hamiltonian::HamHam{T}, beta::Real) where {T<:AbstractFloat}
-    CT = Complex{T}
-    weights = _gibbs_weights(hamiltonian.eigvals, beta)
-    rho = sum([weights[i] * hamiltonian.eigvecs[:, i] * hamiltonian.eigvecs[:, i]'
-                                                                                    for i in 1:length(hamiltonian.eigvals)])
-    return Matrix{CT}(rho)
+    rho_eigen = _gibbs_in_eigen(hamiltonian.eigvals, T(beta))
+    return Matrix{Complex{T}}(
+        hamiltonian.eigvecs * rho_eigen * adjoint(hamiltonian.eigvecs))
 end
 
 """
