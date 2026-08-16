@@ -11,9 +11,71 @@
 # sweeps keep it to a few seconds.
 
 using QuantumFurnace
+using Random
 using Test
 
 @testset "classical_qmc module (SSE quantum Monte Carlo)" begin
+
+    @testset "validated SSE regime and statistics" begin
+        @test_throws ArgumentError build_sse_heis_model(
+            1; seed=1, periodic=false, disorder_strength=0.0)
+        @test_throws ArgumentError build_sse_heis_model(
+            4; seed=1, periodic=false, disorder_strength=0.0, J=0.0)
+        @test_throws ArgumentError build_sse_heis_model(
+            4; seed=1, periodic=false, disorder_strength=NaN)
+        @test_throws ArgumentError build_sse_tfim_model(
+            0, 2; seed=1, h=1.0, disorder_strength=0.0)
+        @test_throws ArgumentError build_sse_tfim_model(
+            2, 2; seed=1, h=0.0, disorder_strength=0.0)
+        @test_throws ArgumentError build_sse_tfim_model(
+            2, 2; seed=1, h=1.0, disorder_strength=-0.1)
+
+        even_model = build_sse_heis_model(
+            4; seed=1, periodic=true, disorder_strength=0.0)
+        odd_model = build_sse_heis_model(
+            3; seed=1, periodic=true, disorder_strength=0.0)
+        @test_throws ArgumentError run_sse(
+            odd_model, 0.5; pairs=[(1, 2)], nsweeps=100, nwarm=10)
+        @test_throws ArgumentError run_sse(
+            even_model, 0.0; pairs=[(1, 2)], nsweeps=100, nwarm=10)
+        @test_throws ArgumentError run_sse(
+            even_model, 0.5; pairs=[(1, 2)], nsweeps=1, nwarm=10)
+        @test_throws ArgumentError run_sse(
+            even_model, 0.5; pairs=[(1, 2)], nsweeps=100, nwarm=-1)
+        @test_throws ArgumentError run_sse(
+            even_model, 0.5; pairs=[(0, 2)], nsweeps=100, nwarm=10)
+        @test_throws ArgumentError run_sse(
+            even_model, 0.5; pairs=[(1, 1)], nsweeps=100, nwarm=10)
+        @test_throws ArgumentError sse_exact_reference(
+            even_model, Inf; pairs=[(1, 2)])
+        @test_throws ArgumentError sse_exact_reference(
+            even_model, 0.5; pairs=[(1, 5)])
+
+        qmc = QuantumFurnace.ClassicalQMC
+        @test qmc.count_signflips([1.0, 0.0, -1.0, 0.0, 1.0]) == 2
+        @test qmc.count_signflips([0.0, 1.0, 0.0, 1.0, 0.0]) == 0
+
+        rng = MersenneTwister(20260816)
+        correlated = zeros(50_000)
+        for i in 2:length(correlated)
+            correlated[i] = 0.8 * correlated[i - 1] + randn(rng)
+        end
+        tau, tau_err, window = qmc.tau_int(correlated; max_pairs=5_000_000)
+        @test 3.5 < tau < 5.5
+        @test tau_err > 0
+        @test window >= 6 * tau
+
+        unresolved = collect(1.0:10_000.0)
+        @test_logs (:warn, r"No self-consistent autocorrelation window") begin
+            truncated_tau, _, truncated_window = qmc.tau_int(
+                unresolved; max_pairs=10_000)
+            @test truncated_tau >= 0.5
+            @test truncated_window == 1
+        end
+        @test_logs (:warn, r"measurement run is too short") begin
+            @test qmc.blocking_nblocks(100, 20.0) == 2
+        end
+    end
 
     # --- Reconstruction: H_phys matches the fixture un-rescaled Hamiltonian to ~1e-10 -----------
     @testset "model reconstruction vs fixture" begin

@@ -132,6 +132,12 @@ Reconstruct the 1D Heisenberg SSE model in physical units.
 An `HeisModel` containing the SSE data and dense physical Hamiltonian.
 """
 function build_sse_heis_model(n::Int; seed::Int, periodic::Bool, disorder_strength::Float64, J::Float64=1.0)
+    n >= 2 || throw(ArgumentError("n must be at least 2."))
+    isfinite(J) && J > 0 || throw(ArgumentError(
+        "J must be finite and > 0 for the antiferromagnetic SSE decomposition."))
+    isfinite(disorder_strength) && disorder_strength >= 0 || throw(ArgumentError(
+        "disorder_strength must be finite and >= 0."))
+
     # Exchange bonds: pad_term places [O,O] at (q,q+1), wrap (n,1) when periodic.
     bonds = Tuple{Int,Int}[]
     for q in 1:(periodic ? n : n - 1)
@@ -181,6 +187,15 @@ A `TfimModel` containing the SSE data and dense physical Hamiltonian.
 """
 function build_sse_tfim_model(Lx::Int, Ly::Int; seed::Int, h::Float64, disorder_strength::Float64,
                           J::Float64=1.0, periodic::Bool=true)
+    Lx >= 1 || throw(ArgumentError("Lx must be at least 1."))
+    Ly >= 1 || throw(ArgumentError("Ly must be at least 1."))
+    isfinite(J) && J > 0 || throw(ArgumentError(
+        "J must be finite and > 0 for the ferromagnetic SSE decomposition."))
+    isfinite(h) && h > 0 || throw(ArgumentError(
+        "h must be finite and > 0 for the transverse-field SSE decomposition."))
+    isfinite(disorder_strength) && disorder_strength >= 0 || throw(ArgumentError(
+        "disorder_strength must be finite and >= 0."))
+
     n = Lx * Ly
     site_index(i, j) = (i - 1) * Ly + (j - 1) + 1
 
@@ -264,6 +279,7 @@ sse_exact_reference(model::TfimModel, beta_phys::Float64; pairs::Vector{Tuple{In
     _exact_reference(model.H_phys, model.n, beta_phys; pairs=pairs)
 
 function _exact_reference(H::Matrix{ComplexF64}, n::Int, beta_phys::Float64; pairs::Vector{Tuple{Int,Int}})
+    validate_observable_inputs(n, beta_phys, pairs)
     Hh = Hermitian(H)
     vals, vecs = eigen(Hh)
     w = exp.(-beta_phys .* (vals .- minimum(vals)))
@@ -286,14 +302,21 @@ end
 "Block-jackknife mean and error of the ratio mean(X)/mean(Y). For Y≡1, plain jackknife of mean(X)."
 function jackknife_ratio(X::Vector{Float64}, Y::Vector{Float64}; nblocks::Int=40)
     N = length(X)
-    nb = min(nblocks, N)
+    length(Y) == N || throw(DimensionMismatch("X and Y must have equal lengths."))
+    N >= 2 || throw(ArgumentError("jackknife_ratio requires at least two samples."))
+    2 <= nblocks <= N || throw(ArgumentError("nblocks must lie between 2 and the sample count."))
+    nb = nblocks
     edges = round.(Int, range(0, N; length=nb + 1))
     sumX = sum(X); sumY = sum(Y)
+    iszero(sumY) && throw(ArgumentError("ratio estimator has zero total denominator."))
     Rb = Float64[]
     for b in 1:nb
         lo, hi = edges[b] + 1, edges[b + 1]
         sx = sum(@view X[lo:hi]); sy = sum(@view Y[lo:hi])
-        push!(Rb, (sumX - sx) / (sumY - sy))
+        denominator = sumY - sy
+        iszero(denominator) && throw(ArgumentError(
+            "ratio estimator has a zero leave-one-block-out denominator."))
+        push!(Rb, (sumX - sx) / denominator)
     end
     Rjk = mean(Rb)
     err = sqrt((nb - 1) / nb * sum((Rb .- Rjk) .^ 2))
@@ -301,30 +324,152 @@ function jackknife_ratio(X::Vector{Float64}, Y::Vector{Float64}; nblocks::Int=40
     return Rfull, err
 end
 
-"Integrated autocorrelation time via Sokal automatic windowing. Returns (tau, err, window)."
-function tau_int(series::Vector{Float64}; c::Float64=6.0)
+"""
+    tau_int(series; c=6.0, max_pairs=20_000_000, label="series")
+
+Estimate the integrated autocorrelation time using a finite Sokal window.
+Direct autocovariances are capped at `max_pairs` multiply-add pairs, preventing
+the unresolved-window case from degrading to quadratic cost. A warning is
+emitted when no self-consistent window is found. Returns `(tau, err, window)`.
+"""
+function tau_int(
+    series::Vector{Float64};
+    c::Float64=6.0,
+    max_pairs::Int=20_000_000,
+    label::AbstractString="series",
+)
     N = length(series)
+    N >= 2 || throw(ArgumentError("tau_int requires at least two samples."))
+    isfinite(c) && c > 0 || throw(ArgumentError("c must be finite and > 0."))
+    max_pairs > 0 || throw(ArgumentError("max_pairs must be positive."))
+    all(isfinite, series) || throw(ArgumentError("autocorrelation samples must be finite."))
+
     m = mean(series)
-    v = sum((series .- m) .^ 2) / N
+    centered = series .- m
+    v = dot(centered, centered) / N
     if v ≤ 0
         return 0.5, 0.0, 0
     end
+
+    max_lag = min(N - 1, max(1, fld(max_pairs, N)))
     tau = 0.5
-    W = N - 1
-    for t in 1:(N - 1)
-        rho_t = 0.0
-        @inbounds for k in 1:(N - t)
-            rho_t += (series[k] - m) * (series[k + t] - m)
-        end
-        rho_t /= (N - t) * v
+    W = max_lag
+    resolved = false
+    for t in 1:max_lag
+        rho_t = dot(@view(centered[1:(N - t)]), @view(centered[(t + 1):N])) /
+            ((N - t) * v)
         tau += rho_t
-        if t ≥ c * tau
+        if t >= c * max(tau, 0.5)
             W = t
+            resolved = true
             break
         end
     end
+    tau = max(tau, 0.5)
+    if !resolved
+        @warn(
+            "No self-consistent autocorrelation window was resolved; the reported tau is truncated.",
+            label=label,
+            N=N,
+            max_lag=max_lag,
+            tau=tau,
+        )
+    end
     err = tau * sqrt(2 * (2 * W + 1) / N)     # Madras–Sokal
     return tau, err, W
+end
+
+"Choose blocks much longer than the pilot autocorrelation time."
+function blocking_nblocks(N::Int, tau::Float64; label::AbstractString="SSE observables")
+    N >= 2 || throw(ArgumentError("blocking requires at least two samples."))
+    isfinite(tau) && tau >= 0.5 || throw(ArgumentError(
+        "pilot autocorrelation time must be finite and >= 0.5."))
+
+    # Sandvik, arXiv:1101.3281, Eqs. (46)--(48): bins must be much longer
+    # than tau. A factor of ten is conservative while retaining enough bins.
+    target_block_length = max(1, ceil(Int, 10 * tau))
+    available_blocks = fld(N, target_block_length)
+    if available_blocks < 20
+        @warn(
+            "SSE measurement run is too short for 20 autocorrelation-sized jackknife blocks.",
+            label=label,
+            N=N,
+            tau=tau,
+            target_block_length=target_block_length,
+            available_blocks=available_blocks,
+        )
+    end
+    return clamp(available_blocks, 2, min(N, 1_000))
+end
+
+function validate_observable_inputs(
+    n::Int,
+    beta_phys::Float64,
+    pairs::Vector{Tuple{Int,Int}},
+)
+    n >= 1 || throw(ArgumentError("model size must be positive."))
+    isfinite(beta_phys) && beta_phys > 0 || throw(ArgumentError(
+        "beta_phys must be finite and > 0."))
+    for (i, j) in pairs
+        1 <= i <= n || throw(ArgumentError("pair index $i lies outside 1:$n."))
+        1 <= j <= n || throw(ArgumentError("pair index $j lies outside 1:$n."))
+        i != j || throw(ArgumentError("pair sites must be distinct (got ($i, $j))."))
+    end
+    return nothing
+end
+
+function validate_run_inputs(
+    n::Int,
+    beta_phys::Float64,
+    pairs::Vector{Tuple{Int,Int}},
+    nsweeps::Int,
+    nwarm::Int,
+)
+    validate_observable_inputs(n, beta_phys, pairs)
+    nsweeps >= 2 || throw(ArgumentError("nsweeps must be at least 2."))
+    nwarm >= 0 || throw(ArgumentError("nwarm must be nonnegative."))
+    return nothing
+end
+
+function validate_model(m::HeisModel)
+    m.n >= 2 || throw(ArgumentError("Heisenberg SSE models require at least two sites."))
+    isfinite(m.J) && m.J > 0 || throw(ArgumentError(
+        "Heisenberg SSE requires finite antiferromagnetic J > 0."))
+    length(m.field) == m.n || throw(DimensionMismatch("Heisenberg field length must equal n."))
+    length(m.zz) == length(m.bonds) || throw(DimensionMismatch(
+        "Heisenberg bond-disorder length must match bonds."))
+    length(m.frustrated) == length(m.bonds) || throw(DimensionMismatch(
+        "Heisenberg frustration flags must match bonds."))
+    all(isfinite, m.field) && all(isfinite, m.zz) || throw(ArgumentError(
+        "Heisenberg SSE couplings must be finite."))
+    isfinite(m.C_shift) || throw(ArgumentError("Heisenberg SSE energy shift must be finite."))
+    for (i, j) in m.bonds
+        1 <= i <= m.n && 1 <= j <= m.n && i != j || throw(ArgumentError(
+            "Heisenberg bonds must join distinct sites in 1:$(m.n)."))
+    end
+    any(m.frustrated) && throw(ArgumentError(
+        "Heisenberg SSE is restricted to bipartite exchange graphs; odd periodic chains are unsupported."))
+    return nothing
+end
+
+function validate_model(m::TfimModel)
+    m.n == m.Lx * m.Ly || throw(DimensionMismatch("TFIM n must equal Lx * Ly."))
+    m.Lx >= 1 && m.Ly >= 1 || throw(ArgumentError("TFIM dimensions must be positive."))
+    isfinite(m.J) && m.J > 0 || throw(ArgumentError(
+        "TFIM SSE requires finite ferromagnetic J > 0."))
+    isfinite(m.h) && m.h > 0 || throw(ArgumentError(
+        "TFIM SSE requires finite transverse field h > 0."))
+    length(m.zdis) == m.n || throw(DimensionMismatch("TFIM site-disorder length must equal n."))
+    length(m.zz) == length(m.bonds) || throw(DimensionMismatch(
+        "TFIM bond-disorder length must match bonds."))
+    all(isfinite, m.zdis) && all(isfinite, m.zz) || throw(ArgumentError(
+        "TFIM SSE couplings must be finite."))
+    isfinite(m.C_shift) || throw(ArgumentError("TFIM SSE energy shift must be finite."))
+    for (i, j) in m.bonds
+        1 <= i <= m.n && 1 <= j <= m.n && i != j || throw(ArgumentError(
+            "TFIM bonds must join distinct sites in 1:$(m.n)."))
+    end
+    return nothing
 end
 
 # SSE state and diagonal updates.
@@ -629,8 +774,12 @@ end
 "Count sign changes of a (signed) series — the number of sector-tunnelling events."
 function count_signflips(arr::Vector{Float64})
     c = 0
-    @inbounds for i in 2:length(arr)
-        (arr[i] * arr[i-1] < 0) && (c += 1)
+    previous_sign = 0
+    @inbounds for value in arr
+        current_sign = value > 0 ? 1 : value < 0 ? -1 : 0
+        current_sign == 0 && continue
+        previous_sign != 0 && current_sign != previous_sign && (c += 1)
+        previous_sign = current_sign
     end
     return c
 end
@@ -666,6 +815,9 @@ sector described in the module documentation.
 """
 function run_sse(m::HeisModel, beta_phys::Float64; pairs::Vector{Tuple{Int,Int}},
                         nsweeps::Int=200_000, nwarm::Int=40_000, seed::Int=12345)
+    validate_model(m)
+    validate_run_inputs(m.n, beta_phys, pairs, nsweeps, nwarm)
+
     rng = MersenneTwister(seed)
     menu = heis_menu(m)
     st = SSEState(m.n, rand(rng, (-1, 1), m.n), Op[IDOP for _ in 1:20], 20, 0)
@@ -706,18 +858,28 @@ function run_sse(m::HeisModel, beta_phys::Float64; pairs::Vector{Tuple{Int,Int}}
         end
     end
 
+    tauE = tau_int(n_arr; label="expansion order")
+    taumz = tau_int(absmz_arr; label="absolute magnetisation")
+    taumzs = tau_int(mz_arr; label="signed magnetisation")
+    tau_mz2 = tau_int(mz2_arr; label="squared magnetisation")
+    tau_zz = [tau_int(zz_arr[pr]; label="correlation $pr") for pr in pairs]
+    pilot_tau = maximum((tauE[1], taumz[1], taumzs[1], tau_mz2[1],
+                         (tau[1] for tau in tau_zz)...))
+    nblocks = blocking_nblocks(nsweeps, pilot_tau; label="Heisenberg observables")
+
     # Sign-reweighted estimators: <O> = <O*s>/<s>.
-    avg_sign, avg_sign_err = jackknife_ratio(sign_arr, ones(length(sign_arr)))
-    nbar, nbar_err = jackknife_ratio(n_arr .* sign_arr, sign_arr)
+    avg_sign, avg_sign_err = jackknife_ratio(
+        sign_arr, ones(length(sign_arr)); nblocks=nblocks)
+    nbar, nbar_err = jackknife_ratio(n_arr .* sign_arr, sign_arr; nblocks=nblocks)
     energy = m.C_shift - nbar / beta_phys
     energy_err = nbar_err / beta_phys
-    mz2, mz2_err = jackknife_ratio(mz2_arr .* sign_arr, sign_arr)
+    mz2, mz2_err = jackknife_ratio(mz2_arr .* sign_arr, sign_arr; nblocks=nblocks)
     zzres = Dict{Tuple{Int,Int},Tuple{Float64,Float64}}()
     for pr in pairs
-        zzres[pr] = jackknife_ratio(zz_arr[pr] .* sign_arr, sign_arr)
+        zzres[pr] = jackknife_ratio(
+            zz_arr[pr] .* sign_arr, sign_arr; nblocks=nblocks)
     end
 
-    tauE = tau_int(n_arr); taumz = tau_int(absmz_arr); taumzs = tau_int(mz_arr)
     loop_accept = loops_total > 0 ? flips_total / loops_total : 0.0
     mean_r = loops_total > 0 ? r_total / loops_total : 1.0
     return SSEResult(energy, energy_err, mz2, mz2_err, zzres, avg_sign, avg_sign_err,
@@ -1047,6 +1209,9 @@ function run_sse(m::TfimModel, beta_phys::Float64; pairs::Vector{Tuple{Int,Int}}
     offdiag! = update === :local ? tfim_local_update! :
                update === :cluster ? tfim_cluster_update! :
                throw(ArgumentError("update must be :cluster or :local, got :$update"))
+    validate_model(m)
+    validate_run_inputs(m.n, beta_phys, pairs, nsweeps, nwarm)
+
     rng = MersenneTwister(seed)
     menu = tfim_menu(m)
     st = SSEState(m.n, rand(rng, (-1, 1), m.n), Op[IDOP for _ in 1:20], 20, 0)
@@ -1074,16 +1239,24 @@ function run_sse(m::TfimModel, beta_phys::Float64; pairs::Vector{Tuple{Int,Int}}
             push!(zz_arr[pr], st.spins[pr[1]] * st.spins[pr[2]])
         end
     end
+    tauE = tau_int(n_arr; label="expansion order")
+    taumz = tau_int(absmz_arr; label="absolute magnetisation")
+    taumzs = tau_int(mz_arr; label="signed magnetisation")
+    tau_mz2 = tau_int(mz2_arr; label="squared magnetisation")
+    tau_zz = [tau_int(zz_arr[pr]; label="correlation $pr") for pr in pairs]
+    pilot_tau = maximum((tauE[1], taumz[1], taumzs[1], tau_mz2[1],
+                         (tau[1] for tau in tau_zz)...))
+    nblocks = blocking_nblocks(nsweeps, pilot_tau; label="TFIM observables")
+
     ones_ = ones(length(n_arr))
-    nbar, nbar_err = jackknife_ratio(n_arr, ones_)
+    nbar, nbar_err = jackknife_ratio(n_arr, ones_; nblocks=nblocks)
     energy = m.C_shift - nbar / beta_phys
     energy_err = nbar_err / beta_phys
-    mz2, mz2_err = jackknife_ratio(mz2_arr, ones_)
+    mz2, mz2_err = jackknife_ratio(mz2_arr, ones_; nblocks=nblocks)
     zzres = Dict{Tuple{Int,Int},Tuple{Float64,Float64}}()
     for pr in pairs
-        zzres[pr] = jackknife_ratio(zz_arr[pr], ones_)
+        zzres[pr] = jackknife_ratio(zz_arr[pr], ones_; nblocks=nblocks)
     end
-    tauE = tau_int(n_arr); taumz = tau_int(absmz_arr); taumzs = tau_int(mz_arr)
     accept = cl_total > 0 ? fl_total / cl_total : 0.0
     return SSEResult(energy, energy_err, mz2, mz2_err, zzres, 1.0, 0.0,
                      (tauE[1], tauE[2]), (taumz[1], taumz[2]), (taumzs[1], taumzs[2]),
