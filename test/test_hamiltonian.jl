@@ -138,6 +138,8 @@ using Statistics: median
         @test raw.periodic === true
         @test raw.Lx == 2
         @test raw.Ly == 2
+        @test raw.periodic_x === true
+        @test raw.periodic_y === true
         @test raw.J == 1.0
         @test raw.h == 1.0
         @test length(raw.disordering_coeffs[1]) == 4

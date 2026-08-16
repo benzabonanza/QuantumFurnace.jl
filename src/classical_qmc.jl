@@ -89,7 +89,8 @@ struct TfimModel
     zz::Vector{Float64}               # eps_zz per bond (aligned with bonds)
     C_shift::Float64
     H_phys::Matrix{ComplexF64}
-    periodic::Bool
+    periodic_x::Bool
+    periodic_y::Bool
 end
 
 "2-colour the bond graph by BFS; a bond is frustrated iff its endpoints share a colour."
@@ -171,7 +172,8 @@ function build_sse_heis_model(n::Int; seed::Int, periodic::Bool, disorder_streng
 end
 
 """
-    build_sse_tfim_model(Lx, Ly; seed, h, disorder_strength, J=1.0, periodic=true) -> TfimModel
+    build_sse_tfim_model(Lx, Ly; seed, h, disorder_strength, J=1.0,
+        periodic_x=true, periodic_y=true) -> TfimModel
 
 Reconstruct the 2D TFIM SSE model in physical units.
 
@@ -180,13 +182,14 @@ Reconstruct the 2D TFIM SSE model in physical units.
 - `h`: Transverse-field strength.
 - `disorder_strength`: Scale of the longitudinal and bond disorder.
 - `J`: Ising coupling.
-- `periodic`: Whether to include boundary-crossing bonds.
+- `periodic_x`, `periodic_y`: Whether to include boundary-crossing bonds in
+  each lattice direction.
 
 # Returns
 A `TfimModel` containing the SSE data and dense physical Hamiltonian.
 """
 function build_sse_tfim_model(Lx::Int, Ly::Int; seed::Int, h::Float64, disorder_strength::Float64,
-                          J::Float64=1.0, periodic::Bool=true)
+                          J::Float64=1.0, periodic_x::Bool=true, periodic_y::Bool=true)
     Lx >= 1 || throw(ArgumentError("Lx must be at least 1."))
     Ly >= 1 || throw(ArgumentError("Ly must be at least 1."))
     isfinite(J) && J > 0 || throw(ArgumentError(
@@ -210,12 +213,12 @@ function build_sse_tfim_model(Lx::Int, Ly::Int; seed::Int, h::Float64, disorder_
         c = ezz_site[site_index(i, j)]
         if i < Lx
             push!(bonds, (site_index(i, j), site_index(i + 1, j))); push!(zz, c)
-        elseif periodic && Lx > 1
+        elseif periodic_x && Lx > 1
             push!(bonds, (site_index(Lx, j), site_index(1, j))); push!(zz, c)
         end
         if j < Ly
             push!(bonds, (site_index(i, j), site_index(i, j + 1))); push!(zz, c)
-        elseif periodic && Ly > 1
+        elseif periodic_y && Ly > 1
             push!(bonds, (site_index(i, Ly), site_index(i, 1))); push!(zz, c)
         end
     end
@@ -236,7 +239,8 @@ function build_sse_tfim_model(Lx::Int, Ly::Int; seed::Int, h::Float64, disorder_
     end
 
     C_shift = J * length(bonds) + h * n + sum(abs, ez) + sum(abs, zz)
-    return TfimModel(n, Lx, Ly, bonds, J, h, ez, zz, C_shift, H, periodic)
+    return TfimModel(
+        n, Lx, Ly, bonds, J, h, ez, zz, C_shift, H, periodic_x, periodic_y)
 end
 
 # Convert a package Hamiltonian back to the physical frame.

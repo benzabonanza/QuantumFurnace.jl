@@ -89,6 +89,17 @@ using Test
             m   = build_sse_tfim_model(Lx, Ly; seed = 46, h = h, disorder_strength = ds)
             @test sse_reconstruction_error(m, raw) ≤ 1e-10
         end
+        for (px, py) in ((true, false), (false, true), (false, false))
+            raw = build_tfim_2d(
+                2, 3; J=1.0, h=1.0, seed=46, disorder_strength=1e-3,
+                periodic_x=px, periodic_y=py)
+            m = build_sse_tfim_model(
+                2, 3; J=1.0, h=1.0, seed=46, disorder_strength=1e-3,
+                periodic_x=px, periodic_y=py)
+            @test m.periodic_x === px
+            @test m.periodic_y === py
+            @test sse_reconstruction_error(m, raw) <= 1e-10
+        end
     end
 
     # Helper: assert an MC estimate sits within a generous, deterministic band of the exact value.

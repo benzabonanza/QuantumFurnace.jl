@@ -166,6 +166,38 @@ function _validate_raw_hamiltonian(
         throw(ArgumentError("raw.shift must be finite and real."))
     raw.periodic isa Bool || throw(ArgumentError("raw.periodic must be Bool."))
 
+    has_Lx = haskey(raw, :Lx)
+    has_Ly = haskey(raw, :Ly)
+    has_periodic_x = haskey(raw, :periodic_x)
+    has_periodic_y = haskey(raw, :periodic_y)
+    has_Lx == has_Ly || throw(ArgumentError(
+        "raw 2D geometry must provide both Lx and Ly."))
+    has_periodic_x == has_periodic_y || throw(ArgumentError(
+        "raw 2D geometry must provide both periodic_x and periodic_y."))
+    if has_periodic_x
+        has_Lx || throw(ArgumentError(
+            "raw periodic_x/periodic_y metadata requires Lx/Ly."))
+        raw.Lx isa Int && raw.Lx >= 1 || throw(ArgumentError(
+            "raw.Lx must be a positive Int."))
+        raw.Ly isa Int && raw.Ly >= 1 || throw(ArgumentError(
+            "raw.Ly must be a positive Int."))
+        raw.Lx * raw.Ly == Int(log2(dim)) || throw(ArgumentError(
+            "raw.Lx * raw.Ly must match the Hamiltonian qubit count."))
+        raw.periodic_x isa Bool || throw(ArgumentError("raw.periodic_x must be Bool."))
+        raw.periodic_y isa Bool || throw(ArgumentError("raw.periodic_y must be Bool."))
+        raw.periodic == (raw.periodic_x && raw.periodic_y) || throw(ArgumentError(
+            "raw.periodic must equal periodic_x && periodic_y."))
+    elseif has_Lx
+        # Compatibility with older 2D caches, which retained Lx/Ly but not the
+        # independent boundaries. Do not infer a cylinder's missing axis data.
+        raw.Lx isa Int && raw.Lx >= 1 || throw(ArgumentError(
+            "raw.Lx must be a positive Int."))
+        raw.Ly isa Int && raw.Ly >= 1 || throw(ArgumentError(
+            "raw.Ly must be a positive Int."))
+        raw.Lx * raw.Ly == Int(log2(dim)) || throw(ArgumentError(
+            "raw.Lx * raw.Ly must match the Hamiltonian qubit count."))
+    end
+
     expected_nu_min = minimum(diff(eigvals))
     nu_tolerance = atol + rtol * max(abs(expected_nu_min), one(T))
     raw.nu_min isa Real && isfinite(raw.nu_min) &&
@@ -595,6 +627,8 @@ function build_tfim_2d(Lx::Int, Ly::Int;
         shift = shift,
         rescaling_factor = rescaling_factor,
         periodic = periodic_x && periodic_y,
+        periodic_x = periodic_x,
+        periodic_y = periodic_y,
         seed = seed,
         disorder_strength = disorder_strength,
         Lx = Lx, Ly = Ly,

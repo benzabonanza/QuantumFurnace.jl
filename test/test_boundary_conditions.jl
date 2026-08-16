@@ -218,8 +218,30 @@ end
                 disorder_strength=1e-2,
                 periodic_x=px, periodic_y=py)
             @test raw.periodic === (px && py)
+            @test raw.Lx == Lx
+            @test raw.Ly == Ly
+            @test raw.periodic_x === px
+            @test raw.periodic_y === py
             @test isapprox(raw.matrix, raw.matrix'; atol=1e-12)
+
+            # The SSE builder uses the same per-axis geometry contract.
+            sse = build_sse_tfim_model(
+                Lx, Ly; seed=91, J=1.0, h=1.0, disorder_strength=1e-2,
+                periodic_x=px, periodic_y=py)
+            @test sse.Lx == Lx
+            @test sse.Ly == Ly
+            @test sse.periodic_x === px
+            @test sse.periodic_y === py
+            @test sse_reconstruction_error(sse, raw) <= 1e-10
         end
+
+        cylinder = build_tfim_2d(Lx, Ly; J=1.0, h=1.0, seed=91,
+            disorder_strength=1e-2, periodic_x=true, periodic_y=false)
+        @test HamHam(cylinder, 1.0; spectral_validation=:probed).periodic === false
+        @test_throws ArgumentError HamHam(
+            merge(cylinder, (periodic=true,)), 1.0; spectral_validation=:probed)
+        @test_throws ArgumentError HamHam(
+            merge(cylinder, (periodic_y=nothing,)), 1.0; spectral_validation=:probed)
 
         # The four BC variants give four distinct matrices (different bond sets)
         raw_pp = build_tfim_2d(Lx, Ly; J=1.0, h=1.0, seed=91,
