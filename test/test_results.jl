@@ -193,4 +193,70 @@ end
         @test haskey(meta, :wall_time_seconds)
     end
 
+    @testset "Serialization path and tag validation" begin
+        config = Config(;
+            sim=Lindbladian(), domain=EnergyDomain(), construction=GNS(),
+            num_qubits=3, with_linear_combination=false,
+            beta=1.25, sigma=0.8,
+        )
+        result = LindbladResults{Float64}(
+            config,
+            ComplexF64[0.0, -0.5],
+            Matrix{ComplexF64}(I, N3_DIM, N3_DIM) / N3_DIM,
+            zeros(ComplexF64, N3_DIM, N3_DIM),
+            -0.5 + 0.0im,
+            Dict{Symbol, Any}(),
+        )
+
+        mktempdir() do tmpdir
+            requested_path = joinpath(tmpdir, "result.data")
+            write(requested_path, "unrelated payload")
+
+            saved_path = save_result(result, requested_path)
+
+            @test saved_path == joinpath(tmpdir, "result.bson")
+            @test isfile(saved_path)
+            @test isfile(joinpath(tmpdir, "result.txt"))
+            @test read(requested_path, String) == "unrelated payload"
+            @test load_result(saved_path) isa LindbladResults
+        end
+
+        serialized = QuantumFurnace._config_to_dict(config)
+        legacy = copy(serialized)
+        legacy[:config_kind] = "liouv"
+        @test QuantumFurnace._reconstruct_config(legacy).sim isa Lindbladian
+
+        bad_construction = copy(serialized)
+        bad_construction[:config_type] = "KMZ"
+        @test_throws ArgumentError QuantumFurnace._reconstruct_config(bad_construction)
+
+        bad_simulation = copy(serialized)
+        bad_simulation[:config_kind] = "thermalise"
+        @test_throws ArgumentError QuantumFurnace._reconstruct_config(bad_simulation)
+    end
+
+    @testset "Generated filenames preserve beta" begin
+        function filename_result(beta)
+            config = Config(;
+                sim=Lindbladian(), domain=EnergyDomain(), construction=GNS(),
+                num_qubits=3, with_linear_combination=false,
+                beta=beta, sigma=inv(beta),
+            )
+            return LindbladResults{Float64}(
+                config,
+                ComplexF64[0.0, -0.5],
+                Matrix{ComplexF64}(I, N3_DIM, N3_DIM) / N3_DIM,
+                zeros(ComplexF64, N3_DIM, N3_DIM),
+                -0.5 + 0.0im,
+                Dict{Symbol, Any}(),
+            )
+        end
+
+        name_1 = QuantumFurnace._generate_result_filename(filename_result(1.25))
+        name_2 = QuantumFurnace._generate_result_filename(filename_result(1.4))
+        @test name_1 != name_2
+        @test occursin("beta1.25", name_1)
+        @test occursin("beta1.4", name_2)
+    end
+
 end  # @testset "New Result types serialization"

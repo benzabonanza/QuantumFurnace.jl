@@ -82,16 +82,26 @@ function _reconstruct_config(d::Dict)
 
     kwargs = _dict_to_config_kwargs(d, domain)
 
-    construction = config_type == "GNS" ? GNS() : config_type == "DLL" ? DLL() : KMS()
+    construction = if config_type == "KMS"
+        KMS()
+    elseif config_type == "GNS"
+        GNS()
+    elseif config_type == "DLL"
+        DLL()
+    else
+        throw(ArgumentError("unknown serialized construction tag: $(repr(config_type))"))
+    end
     sim = if config_kind == "thermalize"
         Thermalize()
     elseif config_kind == "krylov_spectrum"
         KrylovSpectrum()
-    elseif config_kind !== nothing
+    elseif config_kind == "lindbladian" || config_kind == "liouv"
         Lindbladian()
-    else
+    elseif config_kind === nothing
         # Untagged compatibility schema: infer from `mixing_time`.
         (haskey(d, :mixing_time) && d[:mixing_time] !== nothing) ? Thermalize() : Lindbladian()
+    else
+        throw(ArgumentError("unknown serialized simulation tag: $(repr(config_kind))"))
     end
 
     Config(; sim=sim, domain=domain, construction=construction, kwargs...)
@@ -344,15 +354,19 @@ end
 """
     save_result(result::AbstractResults, path::String) -> String
 
-Save a typed Result to a BSON file at `path`, plus a companion `.txt` file.
-Creates parent directories as needed. Returns the path.
+Save a typed Result to a canonical `.bson` target derived from `path`, plus a
+companion `.txt` file with the same stem. Creates parent directories as needed
+and returns the canonical BSON path.
 """
 function save_result(result::AbstractResults, path::String)
+    stem, _ = splitext(path)
+    bson_path = stem * ".bson"
+    txt_path = stem * ".txt"
     d = _result_to_dict(result)
-    mkpath(dirname(path))
-    BSON.bson(path, d)
-    _write_result_companion_txt(result, replace(path, ".bson" => ".txt"))
-    return path
+    mkpath(dirname(bson_path))
+    BSON.bson(bson_path, d)
+    _write_result_companion_txt(result, txt_path)
+    return bson_path
 end
 
 """
@@ -450,7 +464,7 @@ function _generate_result_filename(result::AbstractResults)
     db_str = cfg.construction isa GNS ? "gns" : cfg.construction isa KMS ? "kms" : "dll"
     domain_str = lowercase(replace(string(typeof(cfg.domain)), "Domain" => ""))
     n_str = "n$(cfg.num_qubits)"
-    beta_str = "beta$(round(Int, cfg.beta))"
+    beta_str = "beta$(repr(cfg.beta))"
     date_str = Dates.format(Dates.now(), dateformat"yyyymmdd")
     return "$(type_str)_$(db_str)_$(n_str)_$(beta_str)_$(domain_str)_$(date_str).bson"
 end
