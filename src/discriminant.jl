@@ -21,6 +21,7 @@ end
 Allocate three uninitialised `dim × dim` buffers of element type `T`.
 """
 function DiscriminantBuffers{T}(dim::Int) where {T<:Complex}
+    dim > 0 || throw(ArgumentError("dim must be > 0."))
     return DiscriminantBuffers{T}(
         Matrix{T}(undef, dim, dim),
         Matrix{T}(undef, dim, dim),
@@ -35,27 +36,76 @@ Allocate `ComplexF64` discriminant buffers.
 """
 DiscriminantBuffers(dim::Int) = DiscriminantBuffers{ComplexF64}(dim)
 
+function _validated_diagonal_gibbs_state(
+    gibbs::AbstractMatrix{<:Number};
+    atol::Union{Nothing, Real} = nothing,
+    rtol::Union{Nothing, Real} = nothing,
+)
+    d = size(gibbs, 1)
+    size(gibbs, 2) == d || throw(ArgumentError("Gibbs state must be square."))
+    d > 0 || throw(ArgumentError("Gibbs state must be nonempty."))
+    all(isfinite, gibbs) || throw(ArgumentError(
+        "Gibbs state must contain only finite values."))
+
+    atol_value, rtol_value = _density_tolerances(gibbs; atol = atol, rtol = rtol)
+    gibbs_matrix = Matrix(gibbs)
+    isapprox(gibbs_matrix, adjoint(gibbs_matrix);
+        atol = atol_value, rtol = rtol_value) || throw(ArgumentError(
+        "Gibbs state must be Hermitian."))
+
+    RT = typeof(atol_value)
+    scale = max(norm(gibbs_matrix, Inf), one(RT))
+    tolerance = atol_value + rtol_value * scale
+    max_offdiag = zero(RT)
+    max_diag_imag = zero(RT)
+    diag_real = Vector{RT}(undef, d)
+    @inbounds for j in 1:d, i in 1:d
+        value = gibbs_matrix[i, j]
+        if i == j
+            diag_real[i] = RT(real(value))
+            max_diag_imag = max(max_diag_imag, RT(abs(imag(value))))
+        else
+            max_offdiag = max(max_offdiag, RT(abs(value)))
+        end
+    end
+    max_offdiag <= tolerance || throw(ArgumentError(
+        "Gibbs state must be diagonal in the declared working basis " *
+        "(maximum off-diagonal magnitude $max_offdiag exceeds tolerance $tolerance)."))
+    max_diag_imag <= tolerance || throw(ArgumentError(
+        "Gibbs-state diagonal must be real."))
+
+    trace_value = tr(gibbs_matrix)
+    isapprox(trace_value, one(trace_value); atol = atol_value, rtol = rtol_value) ||
+        throw(ArgumentError("Gibbs state must have unit trace."))
+    minimum(diag_real) > zero(RT) || throw(ArgumentError(
+        "Gibbs state must be positive definite; every diagonal weight must be > 0."))
+    return diag_real
+end
+
 """
-    gibbs_fractional_powers(gibbs::Hermitian{Complex{T}}; eps_trunc=1e-12)
+    gibbs_fractional_powers(gibbs; atol=nothing, rtol=nothing)
 
 Return diagonal vectors for `sigma^(1/4)`, `sigma^(-1/4)`, and `sigma^(1/2)`.
 
 # Keywords
-- `eps_trunc`: Floor applied before the negative fractional power.
+- `atol`, `rtol`: Validation tolerances for Hermiticity, diagonality, and trace.
 
-The input must be diagonal in the working basis; Trotter-domain Gibbs states
-generally do not meet this requirement.
+The input must be a finite, normalised, positive-definite Gibbs state diagonal
+in the declared working basis. Every strictly positive weight is retained
+exactly; changing small weights would change the discriminant similarity
+transform.
 """
 function gibbs_fractional_powers(
-    gibbs::Hermitian{Complex{T}, Matrix{Complex{T}}};
-    eps_trunc::Real = 1e-12,
-) where {T<:AbstractFloat}
-    diag_real = real.(diag(gibbs))
-    diag_safe = max.(diag_real, T(eps_trunc))
+    gibbs::AbstractMatrix{<:Number};
+    atol::Union{Nothing, Real} = nothing,
+    rtol::Union{Nothing, Real} = nothing,
+)
+    diag_real = _validated_diagonal_gibbs_state(gibbs; atol = atol, rtol = rtol)
+    T = eltype(diag_real)
     return (
-        sigma_quarter     = diag_safe .^ T(0.25),
-        sigma_inv_quarter = diag_safe .^ T(-0.25),
-        sigma_half        = diag_safe .^ T(0.5),
+        sigma_quarter     = diag_real .^ T(0.25),
+        sigma_inv_quarter = diag_real .^ T(-0.25),
+        sigma_half        = diag_real .^ T(0.5),
     )
 end
 
@@ -85,6 +135,20 @@ function apply_discriminant!(
     work1 = buffers.work1
     work2 = buffers.work2
     d = size(X, 1)
+    size(X, 2) == d || throw(ArgumentError("X must be square."))
+    size(out) == (d, d) || throw(ArgumentError(
+        "out must have size ($d, $d), got $(size(out))."))
+    length(sigma_quarter) == d || throw(ArgumentError(
+        "sigma_quarter length $(length(sigma_quarter)) does not match dimension $d."))
+    length(sigma_inv_quarter) == d || throw(ArgumentError(
+        "sigma_inv_quarter length $(length(sigma_inv_quarter)) does not match dimension $d."))
+    all(value -> isfinite(value) && value > 0, sigma_quarter) || throw(ArgumentError(
+        "sigma_quarter must contain finite positive values."))
+    all(value -> isfinite(value) && value > 0, sigma_inv_quarter) || throw(ArgumentError(
+        "sigma_inv_quarter must contain finite positive values."))
+    size(work1) == (d, d) && size(work2) == (d, d) &&
+        size(buffers.work3) == (d, d) || throw(ArgumentError(
+        "Discriminant buffers must have size ($d, $d)."))
 
     # Math: $work1 = sigma^(1/4) X sigma^(1/4)$.
     @inbounds for j in 1:d, i in 1:d
@@ -103,7 +167,7 @@ end
 
 """
     materialize_discriminant!(D, L, sigma_quarter, sigma_inv_quarter)
-    materialize_discriminant!(D, L, gibbs::Hermitian; eps_trunc=1e-12)
+    materialize_discriminant!(D, L, gibbs)
 
 Materialise the KMS quantum discriminant in `D`.
 
@@ -121,7 +185,18 @@ function materialize_discriminant!(
     sigma_inv_quarter::AbstractVector{<:Real},
 )
     d = length(sigma_quarter)
+    d > 0 || throw(ArgumentError("sigma_quarter must be nonempty."))
+    length(sigma_inv_quarter) == d || throw(ArgumentError(
+        "sigma_quarter and sigma_inv_quarter must have the same length."))
+    all(value -> isfinite(value) && value > 0, sigma_quarter) || throw(ArgumentError(
+        "sigma_quarter must contain finite positive values."))
+    all(value -> isfinite(value) && value > 0, sigma_inv_quarter) || throw(ArgumentError(
+        "sigma_inv_quarter must contain finite positive values."))
     d2 = d * d
+    size(L) == (d2, d2) || throw(ArgumentError(
+        "L must have size ($d2, $d2) for Gibbs dimension $d, got $(size(L))."))
+    size(D) == size(L) || throw(ArgumentError(
+        "D must have the same dimensions as L, got $(size(D)) and $(size(L))."))
 
     @inbounds for l in 1:d2
         c2 = ((l - 1) ÷ d) + 1
@@ -140,25 +215,28 @@ end
 function materialize_discriminant!(
     D::AbstractMatrix{<:Complex},
     L::AbstractMatrix{<:Complex},
-    gibbs::Hermitian;
-    eps_trunc::Real = 1e-12,
+    gibbs::AbstractMatrix{<:Number};
+    atol::Union{Nothing, Real} = nothing,
+    rtol::Union{Nothing, Real} = nothing,
 )
-    powers = gibbs_fractional_powers(gibbs; eps_trunc = eps_trunc)
+    powers = gibbs_fractional_powers(gibbs; atol = atol, rtol = rtol)
     return materialize_discriminant!(D, L, powers.sigma_quarter, powers.sigma_inv_quarter)
 end
 
 """
-    materialize_discriminant(L, gibbs::Hermitian; eps_trunc=1e-12) -> Matrix
+    materialize_discriminant(L, gibbs; atol=nothing, rtol=nothing) -> Matrix
 
 Allocate and return the dense KMS quantum discriminant.
 """
 function materialize_discriminant(
     L::AbstractMatrix{T},
-    gibbs::Hermitian;
-    eps_trunc::Real = 1e-12,
+    gibbs::AbstractMatrix{<:Number};
+    atol::Union{Nothing, Real} = nothing,
+    rtol::Union{Nothing, Real} = nothing,
 ) where {T<:Complex}
     D = similar(L)
-    return materialize_discriminant!(D, L, gibbs; eps_trunc = eps_trunc)
+    return materialize_discriminant!(
+        D, L, gibbs; atol = atol, rtol = rtol)
 end
 
 """
@@ -220,24 +298,26 @@ struct DiscriminantSpectrum
 end
 
 """
-    discriminant_spectrum(L, gibbs::Hermitian; n_modes=20, eps_trunc=1e-12) -> DiscriminantSpectrum
+    discriminant_spectrum(L, gibbs; n_modes=20, atol=nothing, rtol=nothing) -> DiscriminantSpectrum
 
 Compute the dense Hermitian-discriminant spectrum.
 
 # Keywords
 - `n_modes`: Number of eigenvalues nearest zero to retain.
-- `eps_trunc`: Gibbs fractional-power floor.
+- `atol`, `rtol`: Gibbs-state validation tolerances.
 
 # Returns
 A `DiscriminantSpectrum`. Dense eigendecomposition costs `O(d^6)`.
 """
 function discriminant_spectrum(
     L::AbstractMatrix{<:Complex},
-    gibbs::Hermitian;
+    gibbs::AbstractMatrix{<:Number};
     n_modes::Int = 20,
-    eps_trunc::Real = 1e-12,
+    atol::Union{Nothing, Real} = nothing,
+    rtol::Union{Nothing, Real} = nothing,
 )
-    D = materialize_discriminant(L, gibbs; eps_trunc = eps_trunc)
+    n_modes >= 1 || throw(ArgumentError("n_modes must be >= 1."))
+    D = materialize_discriminant(L, gibbs; atol = atol, rtol = rtol)
     H, _ = hermitian_antihermitian_split(D)
 
     # Remove roundoff asymmetry before the Hermitian eigensolve.
@@ -287,13 +367,12 @@ struct DBVerificationResult
 end
 
 """
-    verify_detailed_balance(L, gibbs::Hermitian; atol=1e-10, eps_trunc=1e-12) -> DBVerificationResult
+    verify_detailed_balance(L, gibbs; atol=1e-10) -> DBVerificationResult
 
 Verify KMS detailed balance from the dense quantum discriminant.
 
 # Keywords
 - `atol`: Threshold for the relative anti-Hermitian norm.
-- `eps_trunc`: Gibbs fractional-power floor.
 
 # Returns
 A `DBVerificationResult` containing the defect, fixed-point residual, and
@@ -301,11 +380,10 @@ dense gap cross-check. The calculation costs `O(d^6)`.
 """
 function verify_detailed_balance(
     L::AbstractMatrix{<:Complex},
-    gibbs::Hermitian;
+    gibbs::AbstractMatrix{<:Number};
     atol::Float64 = 1e-10,
-    eps_trunc::Real = 1e-12,
 )
-    D = materialize_discriminant(L, gibbs; eps_trunc = eps_trunc)
+    D = materialize_discriminant(L, gibbs)
     H_part, A_part = hermitian_antihermitian_split(D)
 
     A_norm   = opnorm(A_part)
@@ -313,7 +391,7 @@ function verify_detailed_balance(
     rel_norm = A_norm / max(D_norm, 1e-30)
 
     # Math: the stationary discriminant vector is $vec(sigma^(1/2))$.
-    powers = gibbs_fractional_powers(gibbs; eps_trunc = eps_trunc)
+    powers = gibbs_fractional_powers(gibbs)
     sigma_half = powers.sigma_half
     d = length(sigma_half)
     vec_sh = zeros(eltype(D), d * d)

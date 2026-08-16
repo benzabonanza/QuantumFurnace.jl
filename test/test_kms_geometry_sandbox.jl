@@ -125,6 +125,17 @@ end
         @test isapprox(kms_variance(Id, gibbs; sigma_sqrt = s12), 0.0;
                        atol = 1e-10)
 
+        # Complex constants are also centred exactly, and adding any complex
+        # constant leaves the variance unchanged.
+        @test isapprox(kms_variance(im .* Id, gibbs; sigma_sqrt = s12), 0.0;
+                       atol = 1e-10, rtol = 0)
+        c = 0.7 - 1.3im
+        @test isapprox(
+            kms_variance(X .+ c .* Id, gibbs; sigma_sqrt = s12),
+            kms_variance(X, gibbs; sigma_sqrt = s12);
+            atol = 1e-10, rtol = 0,
+        )
+
         # Cauchy–Schwarz: |⟨X, Y⟩| ≤ ‖X‖ ‖Y‖.
         cs_lhs = abs(kms_inner_product(X, Y, gibbs; sigma_sqrt = s12))
         cs_rhs = kms_norm(X, gibbs; sigma_sqrt = s12) *
@@ -171,6 +182,41 @@ end
         gap_krylov = kr.spectral_gap
         @test isapprox(gap_dense, gap_krylov; rtol = 1e-7)
         @info "(2) gap dense vs Krylov" β gap_dense gap_krylov anti_to_sym
+    end
+
+    @testset "(2b) stationary-mode exclusion" begin
+        Id2 = Matrix{ComplexF64}(I, 2, 2)
+        sigma2 = Id2 ./ 2
+
+        # L(rho) = tr(rho) sigma - rho has rates {0, 1, 1, 1}.
+        L_depolarising = vec(sigma2) * vec(Id2)' -
+            Matrix{ComplexF64}(I, 4, 4)
+        for project_constants in (true, false)
+            result = spectral_gap_kms(
+                L_depolarising, sigma2; project_constants = project_constants)
+            @test isapprox(result.gap, 1.0; atol = 1e-12, rtol = 0)
+            @test length(result.eigvals) == 3
+        end
+
+        # Remove the known stationary witness, not simply the eigenvalue nearest
+        # zero: a physical rate can be smaller than a finite stationarity residual.
+        pauli_x = ComplexF64[0 1; 1 0]
+        pauli_y = ComplexF64[0 -im; im 0]
+        pauli_z = ComplexF64[1 0; 0 -1]
+        vI = vec(Id2) ./ sqrt(2)
+        vX = vec(pauli_x) ./ sqrt(2)
+        vY = vec(pauli_y) ./ sqrt(2)
+        vZ = vec(pauli_z) ./ sqrt(2)
+        stationary_residual = 1e-6
+        physical_gap = 1e-8
+        positive_parent = stationary_residual .* (vI * vI') .+
+            vX * vX' .+ vY * vY' .+ physical_gap .* (vZ * vZ')
+        L_near_stationary = -positive_parent
+        for project_constants in (true, false)
+            result = spectral_gap_kms(
+                L_near_stationary, sigma2; project_constants = project_constants)
+            @test isapprox(result.gap, physical_gap; atol = 1e-12, rtol = 1e-8)
+        end
     end
 
     # -----------------------------------------------------------------------
@@ -243,6 +289,13 @@ end
         s_krylov = hs_operator_norm_krylov(Lap!, Lad!, dim;
                                             tol = 1e-12, krylovdim = 30)
         @test isapprox(s_dense, s_krylov; rtol = 1e-9)
+
+        bad_forward! = (out, X) -> (out .= 2 .* X; out)
+        bad_adjoint! = (out, X) -> (out .= 3 .* X; out)
+        @test_throws ArgumentError hs_operator_norm_krylov(
+            bad_forward!, bad_adjoint!, 2;
+            tol = 1e-12, krylovdim = 4, max_retries = 0,
+        )
         @info "(4) DLL Metro β=$β" bound hs s_dense s_krylov
     end
 end

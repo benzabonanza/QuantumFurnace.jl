@@ -34,8 +34,7 @@ using LinearAlgebra: mul!
 
         diag_real = real.(diag(N3_GIBBS))
 
-        # sigma_quarter^4 = sigma  (after eps_trunc floor; for N3 fixture
-        # the floor is not active, so equality should be exact-up-to-fp).
+        # sigma_quarter^4 = sigma.
         @test isapprox(powers.sigma_quarter .^ 4, diag_real; atol=TOL_EXACT)
 
         # sigma_quarter * sigma_inv_quarter = 1
@@ -310,28 +309,54 @@ using LinearAlgebra: mul!
     end
 
     # -----------------------------------------------------------------------
-    # eps_trunc floor: defensive behaviour at synthetic low temperature
+    # Strict Gibbs validation and exact low-temperature powers
     # -----------------------------------------------------------------------
-    @testset "gibbs_fractional_powers eps_trunc floor" begin
-        # Synthetic 4x4 diagonal Gibbs with one entry below eps_trunc=1e-12.
-        diag_vals = [0.5, 0.49, 1e-20, 0.01]
-        rho = Hermitian(diagm(ComplexF64.(diag_vals)))
-
-        # Default eps_trunc = 1e-12: third entry is floored.
+    @testset "strict Gibbs-state validation" begin
+        tiny = 1e-20
+        rho = Matrix(Diagonal(ComplexF64[tiny, 1 - tiny]))
         powers = gibbs_fractional_powers(rho)
 
-        @test powers.sigma_inv_quarter[3] ≈ (1e-12)^(-0.25)
-        @test isfinite(powers.sigma_inv_quarter[3])
+        # Every positive weight is used exactly. A numerical floor would alter
+        # the discriminant and can manufacture a detailed-balance defect.
+        @test powers.sigma_quarter[1] ≈ tiny^0.25 rtol = 1e-15
+        @test powers.sigma_inv_quarter[1] ≈ tiny^(-0.25) rtol = 1e-15
+        @test powers.sigma_half[1] ≈ sqrt(tiny) rtol = 1e-15
 
-        # Other entries untouched.
-        for i in (1, 2, 4)
-            @test powers.sigma_quarter[i] ≈ diag_vals[i]^0.25
-            @test powers.sigma_inv_quarter[i] ≈ diag_vals[i]^(-0.25)
+        @test_throws ArgumentError gibbs_fractional_powers(zeros(ComplexF64, 0, 0))
+        @test_throws ArgumentError gibbs_fractional_powers(zeros(ComplexF64, 2, 3))
+        @test_throws ArgumentError gibbs_fractional_powers(
+            ComplexF64[0.5 Inf; Inf 0.5])
+        @test_throws ArgumentError gibbs_fractional_powers(
+            ComplexF64[0.5 0.1; 0.0 0.5])
+        @test_throws ArgumentError gibbs_fractional_powers(
+            ComplexF64[0.5 0.1; 0.1 0.5])
+        @test_throws ArgumentError gibbs_fractional_powers(
+            Matrix(Diagonal(ComplexF64[0.4, 0.4])))
+        @test_throws ArgumentError gibbs_fractional_powers(
+            Matrix(Diagonal(ComplexF64[1.0, 0.0])))
+        @test_throws ArgumentError gibbs_fractional_powers(
+            Matrix(Diagonal(ComplexF64[1.1, -0.1])))
+
+        # A valid Gibbs state must also match the Hilbert-space dimension of L.
+        @test_throws ArgumentError materialize_discriminant(
+            zeros(ComplexF64, 9, 9), rho)
+
+        # Exact two-level KMS amplitude damping remains detailed-balanced even
+        # when one valid stationary weight is far below the former 1e-12 floor.
+        J01 = ComplexF64[0 sqrt(tiny); 0 0]
+        J10 = ComplexF64[0 0; sqrt(1 - tiny) 0]
+        amplitude_damping! = function (out, X)
+            fill!(out, 0)
+            for J in (J01, J10)
+                Jdag = adjoint(J)
+                JdagJ = Jdag * J
+                out .+= J * X * Jdag - (JdagJ * X + X * JdagJ) / 2
+            end
+            return out
         end
-
-        # Lower eps_trunc lets the small entry through.
-        powers_loose = gibbs_fractional_powers(rho; eps_trunc=1e-30)
-        @test powers_loose.sigma_inv_quarter[3] ≈ (1e-20)^(-0.25)
-        @test powers_loose.sigma_inv_quarter[3] > powers.sigma_inv_quarter[3]
+        L_tiny = build_dense_superoperator(amplitude_damping!, 2)
+        tiny_result = verify_detailed_balance(L_tiny, rho)
+        @test tiny_result.relative_norm < 1e-20
+        @test tiny_result.fixed_point_residual < 1e-20
     end
 end

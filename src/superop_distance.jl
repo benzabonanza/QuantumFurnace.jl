@@ -308,7 +308,8 @@ seed for low-temperature channels, but not an exact Lindbladian fixed point.
 # Keywords
 - `seed`: common-basis Krylov seed; `nothing` uses `I/d`.
 - `krylovdim`, `tol`: Krylov controls.
-- `dense_max_dim`: largest Hilbert dimension allowed for dense fallback.
+- `dense_max_dim`: largest superoperator dimension `d^2` allowed for dense
+  fallback; the dense allocation has size `d^2 x d^2`.
 - `degeneracy_tol`, `psd_tol`: warning thresholds for uniqueness and positivity.
 
 # Returns
@@ -323,9 +324,17 @@ function arm_fixed_point(arm::PropagatorArm;
         degeneracy_tol::Real = 1e-9, psd_tol::Real = 1e-10)
     method in (:auto, :krylov, :dense) ||
         throw(ArgumentError("method must be :auto, :krylov or :dense (got :$method)"))
+    dense_max_dim >= 1 || throw(ArgumentError("dense_max_dim must be >= 1."))
     d = arm.basis !== nothing ? size(arm.basis, 1) :
         (seed !== nothing ? size(seed, 1) :
          throw(ArgumentError("provide a seed, or an arm with a basis, to fix the dimension")))
+    d > 0 || throw(ArgumentError("fixed-point dimension must be > 0."))
+    superop_dim = try
+        Base.checked_mul(d, d)
+    catch err
+        err isa OverflowError || rethrow()
+        throw(ArgumentError("fixed-point superoperator dimension d^2 overflows Int for d=$d."))
+    end
     seed_m = seed === nothing ? Matrix{ComplexF64}(I(d) / d) : Matrix{ComplexF64}(seed)
 
     dense_result() = let (σ, μ, ah, sgap) = _dense_arm_fixed_point(arm, d)
@@ -361,9 +370,10 @@ function arm_fixed_point(arm::PropagatorArm;
     (!broke && isfinite(resk) && resk <= residual_gate) && return (sigma = σk,
         residual = resk, eigval = NaN, antiherm_frac = NaN, steady_gap = NaN,
         min_eigval = mineig_k(), method = :krylov, matvecs = mvk, converged = true)
-    d <= dense_max_dim && return dense_result()
-    @warn "arm_fixed_point: Krylov residual $(resk) > gate $(residual_gate) but d=$d > " *
-          "dense_max_dim=$(dense_max_dim) — returning UNGATED Krylov fixed point (approximate)." maxlog = 1
+    superop_dim <= dense_max_dim && return dense_result()
+    @warn "arm_fixed_point: Krylov residual $(resk) > gate $(residual_gate), but " *
+          "superoperator dimension d^2=$superop_dim exceeds dense_max_dim=$(dense_max_dim) — " *
+          "returning UNGATED Krylov fixed point (approximate)." maxlog = 1
     return (sigma = σk, residual = resk, eigval = NaN, antiherm_frac = NaN,
             steady_gap = NaN, min_eigval = mineig_k(), method = :krylov_ungated,
             matvecs = mvk, converged = !broke)

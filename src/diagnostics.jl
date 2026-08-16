@@ -258,20 +258,16 @@ function compute_fixed_point_distance(eigen_result::EigenDecompositionResult, gi
 end
 
 """
-    compute_anti_hermitian_defect(L::Matrix{ComplexF64}, gibbs::Hermitian; eps_trunc::Float64=1e-12) -> DefectResult
+    compute_anti_hermitian_defect(L::Matrix{ComplexF64}, gibbs::Hermitian) -> DefectResult
 
 Compute the anti-Hermitian defect of the KMS quantum discriminant.
-
-# Keywords
-- `eps_trunc`: Eigenvalue floor in Gibbs fractional powers.
 
 # Returns
 A `DefectResult` with ratio `norm(A) / gap(H)` and an advisory warning flag.
 """
-function compute_anti_hermitian_defect(L::Matrix{ComplexF64}, gibbs::Hermitian;
-                                        eps_trunc::Float64=1e-12)
+function compute_anti_hermitian_defect(L::Matrix{ComplexF64}, gibbs::Hermitian)
     # Math: $D = H + A$, where $H = (D + D^dagger)/2$ and $A = (D-D^dagger)/2$.
-    D_matrix = materialize_discriminant(L, gibbs; eps_trunc=eps_trunc)
+    D_matrix = materialize_discriminant(L, gibbs)
     H_part, A_part = hermitian_antihermitian_split(D_matrix)
 
     A_norm = opnorm(A_part)
@@ -470,7 +466,6 @@ Run the complete dense diagnostic bundle.
 - `observables`, `observable_names`: Optional observable set and labels.
 - `initial_states`, `initial_state_names`: Optional initial states and labels.
 - `n_modes`: Maximum number of modes.
-- `eps_trunc`: Gibbs fractional-power floor.
 
 # Returns
 An `ExactDiagnosticsResult`.
@@ -485,7 +480,6 @@ function run_exact_diagnostics(
     initial_states::Union{Nothing, Vector{<:Matrix{<:Complex}}}=nothing,
     initial_state_names::Union{Nothing, Vector{String}}=nothing,
     n_modes::Int=20,
-    eps_trunc::Float64=1e-12,
 )
     dim = size(hamiltonian.data, 1)
     n = Int(log2(dim))
@@ -496,7 +490,22 @@ function run_exact_diagnostics(
 
     fp_result = compute_fixed_point_distance(eigen_result, gibbs)
 
-    defect_result = compute_anti_hermitian_defect(L, gibbs; eps_trunc=eps_trunc)
+    defect_result = if basis_eigvecs === nothing
+        compute_anti_hermitian_defect(L, gibbs)
+    else
+        # The discriminant implementation requires its Gibbs state to be
+        # diagonal in the declared working basis. Rotate only this diagnostic
+        # into the Hamiltonian eigenbasis; eigendata and overlaps remain in V.
+        L_ham = _change_dense_superoperator_basis(
+            L, V, Matrix{ComplexF64}(hamiltonian.eigvecs))
+        gibbs_work_expected = Hermitian(
+            V' * hamiltonian.eigvecs * Matrix(hamiltonian.gibbs) *
+            hamiltonian.eigvecs' * V)
+        isapprox(gibbs, gibbs_work_expected; atol = 1e-12, rtol = 0) ||
+            throw(ArgumentError(
+                "gibbs is inconsistent with hamiltonian.gibbs in basis_eigvecs."))
+        compute_anti_hermitian_defect(L_ham, hamiltonian.gibbs)
+    end
 
     # Build default observables if not provided
     if observables === nothing

@@ -469,10 +469,12 @@ end
     end
 
     # -------------------------------------------------------------------
-    # DIAG-03/04: Anti-Hermitian defect with Trotter-basis Gibbs
+    # DIAG-03/04: Anti-Hermitian defect in the Hamiltonian eigenbasis
     # -------------------------------------------------------------------
     @testset "DIAG-03/04: TrotterDomain anti-Hermitian defect" begin
-        defect = compute_anti_hermitian_defect(L_trott, gibbs_trott)
+        L_trott_ham = QuantumFurnace._change_dense_superoperator_basis(
+            L_trott, N3_TROTTER.eigvecs, N3_HAM.eigvecs)
+        defect = compute_anti_hermitian_defect(L_trott_ham, N3_GIBBS)
 
         @test defect isa DefectResult
 

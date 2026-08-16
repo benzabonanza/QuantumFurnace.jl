@@ -2,8 +2,10 @@
 #
 # Math: $inner(X,Y)_KMS = tr(X^dagger sigma^(1/2) Y sigma^(1/2))$.
 # The Hermitian part of the quantum discriminant determines the Dirichlet
-# rates; the coherent commutator contributes only to its anti-Hermitian part.
-# These dense diagnostics require a Gibbs state diagonal in the working basis.
+# rates. A coherent commutator can contribute to both discriminant parts after
+# the Gibbs similarity transform unless its Hamiltonian commutes with `sigma`.
+# The discriminant-based diagnostics require a Gibbs state diagonal in the
+# working basis.
 
 """
     kms_inner_product(X, Y, sigma; sigma_sqrt=nothing) -> Complex
@@ -48,9 +50,12 @@ function kms_variance(
     sigma_sqrt::Union{Nothing, AbstractMatrix} = nothing,
 )
     s12 = sigma_sqrt === nothing ? sqrt(Hermitian(sigma)) : sigma_sqrt
-    # Math: $mean(X) = tr(sigma X)$ for Hermitian `X`.
-    mean_X = real(tr(sigma * X))
-    Y = X .- mean_X .* I(size(X, 1))
+    # Math: $mean(X) = tr(sigma X)$, which can be complex for a general `X`.
+    mean_X = tr(sigma * X)
+    Y = Matrix(X)
+    @inbounds for i in axes(Y, 1)
+        Y[i, i] -= mean_X
+    end
     return real(tr(Y' * s12 * Y * s12))
 end
 
@@ -71,6 +76,7 @@ Materialise a column-stacked `d^2 × d^2` superoperator.
 The dense column-stacked superoperator.
 """
 function build_dense_superoperator(L_apply!::F, d::Integer; T = ComplexF64) where {F}
+    d > 0 || throw(ArgumentError("d must be > 0."))
     out = zeros(T, d * d, d * d)
     in_buf  = zeros(T, d, d)
     out_buf = zeros(T, d, d)
@@ -83,6 +89,28 @@ function build_dense_superoperator(L_apply!::F, d::Integer; T = ComplexF64) wher
     return out
 end
 
+# Change a column-stacked superoperator from `from_basis` coordinates to
+# `to_basis` coordinates. Both basis matrices contain vectors in a common basis.
+function _change_dense_superoperator_basis(
+    L::AbstractMatrix{<:Complex},
+    from_basis::AbstractMatrix{<:Complex},
+    to_basis::AbstractMatrix{<:Complex},
+)
+    d = size(from_basis, 1)
+    size(from_basis) == (d, d) || throw(ArgumentError("from_basis must be square."))
+    size(to_basis) == (d, d) || throw(ArgumentError(
+        "to_basis must have size ($d, $d), got $(size(to_basis))."))
+    d2 = Base.checked_mul(d, d)
+    size(L) == (d2, d2) || throw(ArgumentError(
+        "L must have size ($d2, $d2), got $(size(L))."))
+
+    # If X_from = W X_to W^dagger, column stacking gives
+    # vec(X_from) = (conj(W) tensor W) vec(X_to).
+    W = from_basis' * to_basis
+    rotation = kron(conj(W), W)
+    return rotation' * L * rotation
+end
+
 """
     _kms_discriminant_with_sym(L_super, sigma) -> (D_super, D_sym)
 
@@ -92,7 +120,7 @@ function _kms_discriminant_with_sym(
     L_super::AbstractMatrix{<:Complex},
     sigma::AbstractMatrix,
 )
-    D_super = materialize_discriminant(L_super, Hermitian(Matrix(sigma)))
+    D_super = materialize_discriminant(L_super, sigma)
     D_sym   = Hermitian((D_super .+ D_super') ./ 2)
     return D_super, D_sym
 end
@@ -124,7 +152,8 @@ end
 
 Return the real eigenvalues of the negative Hermitian discriminant part.
 
-`project_constants=true` removes the stationary `sigma^(1/2)` direction.
+The stationary mode is always excluded. `project_constants=true` first projects
+out its known `sigma^(1/2)` direction before diagonalisation.
 """
 function _kms_dirichlet_eigvals(
     L_super::AbstractMatrix{<:Complex},
@@ -133,19 +162,33 @@ function _kms_dirichlet_eigvals(
 )
     _, D_sym = _kms_discriminant_with_sym(L_super, sigma)
     M = -Matrix(D_sym)
-    if project_constants
-        # Math: the zero direction is $vec(sigma^(1/2))$.
-        s12 = sqrt(Hermitian(Matrix(sigma)))
-        v = vec(s12) ./ norm(vec(s12))
+    powers = gibbs_fractional_powers(sigma)
+    d = length(powers.sigma_half)
+    v = zeros(eltype(M), d * d)
+    @inbounds for i in 1:d
+        v[(i - 1) * d + i] = powers.sigma_half[i]
+    end
+    v ./= norm(v)
+
+    F = if project_constants
+        # Math: the stationary direction is $v = vec(sigma^(1/2))$.
         # Math: project with $P = I - v v^dagger$.
         Mp = M .- v * (v' * M) .- (M * v) * v' .+ v * (v' * (M * v)) * v'
         Mp = Hermitian((Mp .+ Mp') ./ 2)
-        ev = eigvals(Mp)
-        ev_sorted = sort(real.(ev); by = abs)
-        return ev_sorted[2:end]
+        eigen(Mp)
     else
-        return sort(real.(eigvals(Hermitian((M .+ M') ./ 2))); by = abs)
+        eigen(Hermitian((M .+ M') ./ 2))
     end
+
+    length(F.values) >= 2 || throw(ArgumentError(
+        "KMS spectral diagnostics require at least one non-stationary mode."))
+    # Remove the mode that best overlaps the known stationary witness. Choosing
+    # the eigenvalue nearest zero can instead discard a smaller physical rate
+    # when the numerical stationarity residual exceeds the true gap.
+    stationary_index = argmax(abs.(F.vectors' * v))
+    rates = real.(F.values)
+    deleteat!(rates, stationary_index)
+    return sort!(rates; by = abs)
 end
 
 """
@@ -154,7 +197,8 @@ end
 Return the dense KMS–Poincaré gap and all nonconstant Dirichlet rates.
 
 # Keywords
-- `project_constants`: Remove the stationary direction before diagonalisation.
+- `project_constants`: Project the known stationary direction before
+  diagonalisation. The stationary eigenvalue is excluded in either mode.
 
 # Returns
 `(; gap, eigvals)`, sorted from slowest to fastest rate. The dense calculation
@@ -234,6 +278,7 @@ function hs_operator_norm_krylov(
     maxiter::Int = 100,
     max_retries::Int = 3,
 ) where {F1, F2}
+    d > 0 || throw(ArgumentError("d must be > 0."))
     in_buf  = Matrix{T}(undef, d, d)
     out_buf = Matrix{T}(undef, d, d)
     fwd = function (v::AbstractVector)
@@ -248,12 +293,6 @@ function hs_operator_norm_krylov(
     end
     x0 = randn(T, d * d)
 
-    # Near the matvec noise floor, return a one-shot lower-bound estimate
-    # because GKL's forward/adjoint compatibility check loses significance.
-    β₀ = norm(x0)
-    v₀ = adj(x0)
-    α_lb = norm(v₀) / β₀
-
     current_kdim = krylovdim
     local vals, info
     for attempt in 1:(max_retries + 1)
@@ -264,10 +303,11 @@ function hs_operator_norm_krylov(
             )
         catch e
             if e isa ArgumentError && occursin("not compatible", e.msg)
-                @warn "hs_operator_norm_krylov: GKL self-consistency failed " *
-                      "(operator at noise floor: ‖A*u₀‖/‖u₀‖ = $α_lb). " *
-                      "Returning the lower-bound estimate."
-                return α_lb
+                throw(ArgumentError(
+                    "hs_operator_norm_krylov requires Hilbert--Schmidt-adjoint " *
+                    "forward and adjoint actions; GKL rejected the supplied pair as " *
+                    "incompatible, so no certified operator norm can be returned. " *
+                    "Original error: $(sprint(showerror, e))"))
             else
                 rethrow(e)
             end

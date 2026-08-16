@@ -261,6 +261,36 @@ using QuantumFurnace: _jumps_in_basis, build_dense_superoperator, trace_distance
             @info "(h) robust fixed point" dense_resid=fpd.residual krylov_vs_dense=trace_distance_nh(fpk.sigma, fpd.sigma) gibbs_dist=gd.distance idealL=gdL.distance auto_method=fpa.method min_eig=fpd.min_eigval
         end
 
+        @testset "(h8) dense fallback threshold uses superoperator dimension" begin
+            local_d = 3
+            rates = reshape(ComplexF64.(1:local_d^2), local_d, local_d)
+            no_stationary! = (out, X) -> (out .= -rates .* X; out)
+            threshold_arm = PropagatorArm(
+                no_stationary!;
+                kind = :lindbladian,
+                basis = Matrix{ComplexF64}(I, local_d, local_d),
+                label = "dense-threshold regression",
+            )
+            seed = Matrix{ComplexF64}(I, local_d, local_d) ./ local_d
+
+            # d fits the threshold while d^2 does not. A zero residual gate
+            # forces the fallback decision without materialising the dense map.
+            local threshold_result
+            @test_logs (:warn, r"superoperator dimension") begin
+                threshold_result = arm_fixed_point(
+                    threshold_arm;
+                    seed = seed,
+                    method = :auto,
+                    krylovdim = 6,
+                    tol = 1e-12,
+                    residual_gate = 0.0,
+                    dense_max_dim = local_d,
+                )
+            end
+            @test threshold_result.method === :krylov_ungated
+            @test threshold_result.residual > 0
+        end
+
         @testset "(i) anti-Hermitian discriminant norm: channel KMS-DB violation (qf-e4z.50)" begin
             ws_C = Workspace(cfg_C, ham, jumps_C; trotter = trotter)
             fwd_c!(out, X) = (apply_delta_channel!(ws_C, Matrix{ComplexF64}(X), cfg_C, ham; hermitize = false);
@@ -309,12 +339,17 @@ using QuantumFurnace: _jumps_in_basis, build_dense_superoperator, trace_distance
             gd_diag = real.(diag(Matrix(ham.gibbs)))
             @test mfC.conditioning ≈ sqrt(maximum(gd_diag) / minimum(gd_diag)) rtol = 1e-9
 
-            # (i6) ideal-𝓛 baseline is at the KMS-DB noise floor (≪ channel value).
-            mfL = lindbladian_discriminant_antiherm_norm(cfg_L, ham, jumps_L; krylovdim = 30)
-            @test mfL.antiherm_norm < 1e-6
-            @test mfC.antiherm_norm > 1e3 * mfL.antiherm_norm
+            # (i6) The ideal-𝓛 baseline is at the KMS-DB noise floor. Materialise
+            # this small fixture for a certified norm: the matrix-free GKL pair
+            # can lose its adjoint-compatibility check when cancellation drives A
+            # down to matvec roundoff, and now correctly throws in that regime.
+            Lsup = build_dense_superoperator(armL.apply!, d)
+            DL = QuantumFurnace.materialize_discriminant(Lsup, ham.gibbs)
+            aL_dense = opnorm(Matrix((DL .- DL') ./ 2))
+            @test aL_dense < 1e-6
+            @test mfC.antiherm_norm > 1e3 * aL_dense
 
-            @info "(i) channel KMS-DB violation" mf=mfC.antiherm_norm dense=aG_dense floor=mfL.antiherm_norm κ_σ=mfC.conditioning
+            @info "(i) channel KMS-DB violation" mf=mfC.antiherm_norm dense=aG_dense floor=aL_dense κ_σ=mfC.conditioning
         end
 
         @testset "(d) cross-domain L-vs-L controllability (EnergyDomain vs BohrDomain)" begin

@@ -186,6 +186,8 @@ end
 
         # Identity-variance: Var_KMS(I) = 0.
         @test isapprox(kms_variance(Matrix{ComplexF64}(I, 2, 2), sigma; sigma_sqrt = s12), 0.0; atol = 1e-12)
+        @test isapprox(kms_variance(im .* Matrix{ComplexF64}(I, 2, 2), sigma;
+                                   sigma_sqrt = s12), 0.0; atol = 1e-12, rtol = 0)
 
         # Cauchy–Schwarz: |⟨X, Y⟩| ≤ ‖X‖ ‖Y‖.
         cs_lhs = abs(kms_inner_product(X, Y, sigma; sigma_sqrt = s12))
@@ -480,10 +482,9 @@ end
     #   (b) the actual Lindbladian via `apply_lindbladian!` matvec,
     #   (c) the BohrDomain−TimeDomain *difference* superoperator at small
     #       enough r_D that ‖ΔL‖ is well above the matvec noise floor.
-    # When the operator approaches the noise floor (≲ 1e-9), the GKL
-    # initialiser's self-consistency check `α² ≈ α*α` fails (sqrt(eps)
-    # tolerance); the wrapper then returns a single-shot lower-bound
-    # estimate.  This is the regime above which the assertion below holds.
+    # Operators near the matvec noise floor are excluded here: if numerical
+    # cancellation makes the supplied actions fail GKL's adjoint-compatibility
+    # check, the wrapper throws rather than returning an uncertified estimate.
     @testset "(8) hs_operator_norm_krylov parity (qf-7xt)" begin
         Random.seed!(20260506)
 

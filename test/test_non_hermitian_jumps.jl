@@ -219,20 +219,6 @@
         @info "non-Hermitian Energy→Bohr refinement" w0=(0.4, 0.2, 0.1) errors
     end
 
-    """
-        _trotter_kms_db_target(ham, trotter) -> Hermitian{ComplexF64}
-
-    Gibbs of the **original H** in `trotter.eigvecs` basis — the natural
-    KMS-DB target for a TrotterDomain Lindbladian. The TrotterDomain
-    construction is designed to drive toward gibbs(H) (with Trotter error
-    affecting only the unitary evolution, not the fixed point), so a
-    diagonal H_T-Gibbs is the wrong reference.
-    """
-    function _trotter_kms_db_target(ham::HamHam, trotter::AbstractTrotter)
-        gibbs_comp = ham.eigvecs * ham.gibbs * ham.eigvecs'
-        return Hermitian(trotter.eigvecs' * gibbs_comp * trotter.eigvecs)
-    end
-
     # =====================================================================
     # Test 1: KMS-DB at quadrature precision across all four domains for
     # paired (σ⁺, σ⁻).
@@ -275,13 +261,16 @@
                 res = verify_detailed_balance(L, ham.gibbs)
                 @test res.relative_norm < tol_quad
 
-                # TrotterDomain — gibbs of H expressed in trotter.eigvecs basis.
+                # TrotterDomain. Rotate the generator back to the Hamiltonian
+                # eigenbasis before applying the diagonal-Gibbs discriminant.
                 cfg = _nh_config(TrotterDomain(); beta=β)
                 trotter = make_trotter_for_config(ham, cfg)
                 jumps = nh_pair_jumps(ham; basis=trotter.eigvecs)
-                L = Matrix{ComplexF64}(construct_lindbladian(jumps, cfg, ham; trotter=trotter))
-                gibbs_T = _trotter_kms_db_target(ham, trotter)
-                res = verify_detailed_balance(L, gibbs_T)
+                L_trotter = Matrix{ComplexF64}(
+                    construct_lindbladian(jumps, cfg, ham; trotter=trotter))
+                L_ham = QuantumFurnace._change_dense_superoperator_basis(
+                    L_trotter, trotter.eigvecs, ham.eigvecs)
+                res = verify_detailed_balance(L_ham, ham.gibbs)
                 @test res.relative_norm < tol_trotter
             end
         end
