@@ -159,8 +159,7 @@ function B_time(jumps::AbstractVector{<:JumpOp}, hamiltonian::HamHam,
     CT = Complex{eltype(hamiltonian.eigvals)}
     eigvals = hamiltonian.eigvals
 
-    # Thread tasks own their partial matrices; BLAS stays single-threaded to
-    # avoid nested parallelism.
+    # Thread tasks own their partial matrices; the caller owns BLAS policy.
     tau_keys = collect(keys(b_plus))
     n_jumps  = length(jumps)
     n_inner_work = length(tau_keys) * n_jumps
@@ -214,16 +213,10 @@ function _b_time_inner_threaded(jumps, eigvals, b_plus, tau_keys, beta, d, ::Typ
 
     partials = [zeros(CT, d, d) for _ in 1:n_chunks]
 
-    old_blas = BLAS.get_num_threads()
-    BLAS.set_num_threads(1)
-    try
-        @sync for (idx, chunk) in enumerate(chunks)
-            Threads.@spawn _b_time_inner_chunk!(
-                partials[idx], jumps, eigvals, b_plus, tau_keys,
-                beta, d, n_jumps, chunk, CT)
-        end
-    finally
-        BLAS.set_num_threads(old_blas)
+    @sync for (idx, chunk) in enumerate(chunks)
+        Threads.@spawn _b_time_inner_chunk!(
+            partials[idx], jumps, eigvals, b_plus, tau_keys,
+            beta, d, n_jumps, chunk, CT)
     end
 
     summand = zeros(CT, d, d)
@@ -275,16 +268,10 @@ function _b_time_outer_threaded(eigvals, b_plus_summand, b_minus, t_keys,
 
     partials = [zeros(CT, d, d) for _ in 1:n_chunks]
 
-    old_blas = BLAS.get_num_threads()
-    BLAS.set_num_threads(1)
-    try
-        @sync for (idx, chunk) in enumerate(chunks)
-            Threads.@spawn _b_time_outer_chunk!(
-                partials[idx], eigvals, b_plus_summand, b_minus,
-                t_keys, sigma, d, chunk, CT)
-        end
-    finally
-        BLAS.set_num_threads(old_blas)
+    @sync for (idx, chunk) in enumerate(chunks)
+        Threads.@spawn _b_time_outer_chunk!(
+            partials[idx], eigvals, b_plus_summand, b_minus,
+            t_keys, sigma, d, chunk, CT)
     end
 
     B = zeros(CT, d, d)
@@ -388,16 +375,10 @@ function _b_trotter_inner_threaded(jumps, eigvals_inner, b_plus, tau_keys,
 
     partials = [zeros(CT, d, d) for _ in 1:n_chunks]
 
-    old_blas = BLAS.get_num_threads()
-    BLAS.set_num_threads(1)
-    try
-        @sync for (idx, chunk) in enumerate(chunks)
-            Threads.@spawn _b_trotter_inner_chunk!(
-                partials[idx], jumps, eigvals_inner, b_plus, tau_keys,
-                beta, t0_step_inner, d, n_jumps, chunk, CT)
-        end
-    finally
-        BLAS.set_num_threads(old_blas)
+    @sync for (idx, chunk) in enumerate(chunks)
+        Threads.@spawn _b_trotter_inner_chunk!(
+            partials[idx], jumps, eigvals_inner, b_plus, tau_keys,
+            beta, t0_step_inner, d, n_jumps, chunk, CT)
     end
 
     summand = zeros(CT, d, d)
@@ -447,16 +428,10 @@ function _b_trotter_outer_threaded(eigvals_outer, b_plus_summand, b_minus, t_key
 
     partials = [zeros(CT, d, d) for _ in 1:n_chunks]
 
-    old_blas = BLAS.get_num_threads()
-    BLAS.set_num_threads(1)
-    try
-        @sync for (idx, chunk) in enumerate(chunks)
-            Threads.@spawn _b_trotter_outer_chunk!(
-                partials[idx], eigvals_outer, b_plus_summand, b_minus,
-                t_keys, sigma, t0_step_outer, d, chunk, CT)
-        end
-    finally
-        BLAS.set_num_threads(old_blas)
+    @sync for (idx, chunk) in enumerate(chunks)
+        Threads.@spawn _b_trotter_outer_chunk!(
+            partials[idx], eigvals_outer, b_plus_summand, b_minus,
+            t_keys, sigma, t0_step_outer, d, chunk, CT)
     end
 
     B = zeros(CT, d, d)

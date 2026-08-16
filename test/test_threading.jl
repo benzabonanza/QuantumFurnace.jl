@@ -377,6 +377,67 @@ end
 using LinearAlgebra
 using Random
 
+@testset "Library source does not mutate BLAS policy" begin
+    src_dir = dirname(pathof(QuantumFurnace))
+    source_files = sort(filter(name -> endswith(name, ".jl"), readdir(src_dir)))
+    @test !isempty(source_files)
+    for filename in source_files
+        source = read(joinpath(src_dir, filename), String)
+        @test !occursin("BLAS.set_num_threads", source)
+    end
+end
+
+@testset "Constructors preserve caller BLAS policy" begin
+    if Threads.nthreads() > 1
+        saved_blas = BLAS.get_num_threads()
+        try
+            BLAS.set_num_threads(2)
+            caller_blas = BLAS.get_num_threads()
+            @test caller_blas == 2
+
+            for (domain, jumps, trotter, name) in (
+                (EnergyDomain(), TEST_JUMPS, nothing, "Energy"),
+                (TimeDomain(), TEST_JUMPS, nothing, "Time"),
+                (TrotterDomain(), TEST_TROTTER_JUMPS, TEST_TROTTER, "Trotter"),
+                (BohrDomain(), TEST_JUMPS, nothing, "Bohr"),
+            )
+                lind_cfg = make_config(Lindbladian(), domain; construction=KMS())
+                Workspace(lind_cfg, TEST_HAM, jumps; trotter=trotter)
+                @test BLAS.get_num_threads() == caller_blas
+
+                channel_cfg = make_config(Thermalize(), domain; construction=KMS())
+                Workspace(channel_cfg, TEST_HAM, jumps; trotter=trotter)
+                @test BLAS.get_num_threads() == caller_blas
+                @info "Constructor BLAS policy preserved" path=name blas=caller_blas
+            end
+
+            dll_cfg = Config(;
+                sim=Lindbladian(),
+                domain=BohrDomain(),
+                construction=DLL(),
+                num_qubits=NUM_QUBITS,
+                with_linear_combination=true,
+                beta=BETA,
+                sigma=SIGMA,
+                a=BETA / 30.0,
+                s=0.4,
+                num_energy_bits=NUM_ENERGY_BITS,
+                t0=T0,
+                num_trotter_steps_per_t0=NUM_TROTTER_STEPS_PER_T0,
+                filter=DLLGaussianFilter(BETA),
+            )
+            Workspace(dll_cfg, TEST_HAM, TEST_JUMPS)
+            @test BLAS.get_num_threads() == caller_blas
+            @info "Constructor BLAS policy preserved" path="DLL Bohr" blas=caller_blas
+        finally
+            BLAS.set_num_threads(saved_blas)
+        end
+    else
+        @info "Skipping constructor BLAS policy test (nthreads=$(Threads.nthreads()))"
+        @test_skip Threads.nthreads() > 1
+    end
+end
+
 @testset "qf-6af construction-time threading" begin
     # ------------------------------------------------------------
     # (a) R_total accumulation — EnergyDomain (Hermitian + non-Hermitian)

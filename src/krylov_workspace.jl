@@ -297,17 +297,11 @@ function _accumulate_R_total_threaded_energy!(
     jump_ofts  = [Matrix{T}(undef, dim, dim) for _ in 1:n_chunks]
     LdagLs     = [Matrix{T}(undef, dim, dim) for _ in 1:n_chunks]
 
-    old_blas = BLAS.get_num_threads()
-    BLAS.set_num_threads(1)
-    try
-        @sync for (idx, chunk) in enumerate(chunks)
-            Threads.@spawn _accumulate_R_total_chunk_energy!(
-                R_partials[idx], jump_ofts[idx], LdagLs[idx],
-                ws_eigenbases, ws_hermitian, bohr_freqs, energy_labels,
-                work, chunk, transition, prefactor, inv_4sigma2)
-        end
-    finally
-        BLAS.set_num_threads(old_blas)
+    @sync for (idx, chunk) in enumerate(chunks)
+        Threads.@spawn _accumulate_R_total_chunk_energy!(
+            R_partials[idx], jump_ofts[idx], LdagLs[idx],
+            ws_eigenbases, ws_hermitian, bohr_freqs, energy_labels,
+            work, chunk, transition, prefactor, inv_4sigma2)
     end
 
     @inbounds for idx in 1:n_chunks
@@ -374,17 +368,11 @@ function _accumulate_R_total_threaded_timetrot!(
     jump_ofts  = [Matrix{T}(undef, dim, dim) for _ in 1:n_chunks]
     LdagLs     = [Matrix{T}(undef, dim, dim) for _ in 1:n_chunks]
 
-    old_blas = BLAS.get_num_threads()
-    BLAS.set_num_threads(1)
-    try
-        @sync for (idx, chunk) in enumerate(chunks)
-            Threads.@spawn _accumulate_R_total_chunk_timetrot!(
-                R_partials[idx], jump_ofts[idx], LdagLs[idx],
-                ws_eigenbases, ws_hermitian, oft_nufft_prefactors,
-                energy_labels, work, chunk, transition, prefactor)
-        end
-    finally
-        BLAS.set_num_threads(old_blas)
+    @sync for (idx, chunk) in enumerate(chunks)
+        Threads.@spawn _accumulate_R_total_chunk_timetrot!(
+            R_partials[idx], jump_ofts[idx], LdagLs[idx],
+            ws_eigenbases, ws_hermitian, oft_nufft_prefactors,
+            energy_labels, work, chunk, transition, prefactor)
     end
 
     @inbounds for idx in 1:n_chunks
@@ -456,17 +444,11 @@ function _accumulate_R_total_threaded_bohr!(
     jump_ofts   = [Matrix{T}(undef, dim, dim) for _ in 1:n_chunks]
     A_nu2_dags  = [zeros(T, dim, dim) for _ in 1:n_chunks]
 
-    old_blas = BLAS.get_num_threads()
-    BLAS.set_num_threads(1)
-    try
-        @sync for (idx, chunk) in enumerate(chunks)
-            Threads.@spawn _accumulate_R_total_chunk_bohr!(
-                R_partials[idx], jump_ofts[idx], A_nu2_dags[idx],
-                ws_eigenbases, alpha, gamma_norm_factor,
-                bohr_freqs, bohr_dict, bohr_keys, n_keys, chunk)
-        end
-    finally
-        BLAS.set_num_threads(old_blas)
+    @sync for (idx, chunk) in enumerate(chunks)
+        Threads.@spawn _accumulate_R_total_chunk_bohr!(
+            R_partials[idx], jump_ofts[idx], A_nu2_dags[idx],
+            ws_eigenbases, alpha, gamma_norm_factor,
+            bohr_freqs, bohr_dict, bohr_keys, n_keys, chunk)
     end
 
     @inbounds for idx in 1:n_chunks
@@ -539,16 +521,10 @@ function _accumulate_R_total_dll!(
         R_partials = [zeros(T, dim, dim) for _ in 1:n_chunks]
         per_jump_ops = Vector{Vector{Matrix{T}}}(undef, n_jumps)
 
-        old_blas = BLAS.get_num_threads()
-        BLAS.set_num_threads(1)
-        try
-            @sync for (idx, chunk) in enumerate(chunks)
-                Threads.@spawn _accumulate_R_total_dll_chunk!(
-                    R_partials[idx], per_jump_ops, jumps, hamiltonian,
-                    filter, chunk)
-            end
-        finally
-            BLAS.set_num_threads(old_blas)
+        @sync for (idx, chunk) in enumerate(chunks)
+            Threads.@spawn _accumulate_R_total_dll_chunk!(
+                R_partials[idx], per_jump_ops, jumps, hamiltonian,
+                filter, chunk)
         end
 
         @inbounds for idx in 1:n_chunks

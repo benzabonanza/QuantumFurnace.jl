@@ -75,16 +75,10 @@ function _B_bohr_threaded(
 
     B_partials = [zeros(CT, dim, dim) for _ in 1:n_chunks]
 
-    old_blas = BLAS.get_num_threads()
-    BLAS.set_num_threads(1)
-    try
-        @sync for (cidx, chunk) in enumerate(chunks)
-            Threads.@spawn _B_bohr_chunk!(
-                B_partials[cidx], hamiltonian, in_ebs, f, unique_freqs,
-                bohr_freqs, dim, n_jumps, chunk, CT)
-        end
-    finally
-        BLAS.set_num_threads(old_blas)
+    @sync for (cidx, chunk) in enumerate(chunks)
+        Threads.@spawn _B_bohr_chunk!(
+            B_partials[cidx], hamiltonian, in_ebs, f, unique_freqs,
+            bohr_freqs, dim, n_jumps, chunk, CT)
     end
 
     B = zeros(CT, dim, dim)

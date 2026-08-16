@@ -236,17 +236,11 @@ function _precompute_R_threaded_energy!(
 
         task_scratches = [ThermalizeScratch(CT, dim) for _ in 1:length(chunks)]
 
-        old_blas = BLAS.get_num_threads()
-        BLAS.set_num_threads(1)
-        try
-            @sync for (idx, chunk) in enumerate(chunks)
-                Threads.@spawn _precompute_R_chunk_energy!(
-                    task_scratches[idx], jump, hamiltonian, precomputed_data,
-                    half_indices[chunk];
-                    base_prefactor=base_prefactor, inv_4sigma2=inv_4sigma2)
-            end
-        finally
-            BLAS.set_num_threads(old_blas)
+        @sync for (idx, chunk) in enumerate(chunks)
+            Threads.@spawn _precompute_R_chunk_energy!(
+                task_scratches[idx], jump, hamiltonian, precomputed_data,
+                half_indices[chunk];
+                base_prefactor=base_prefactor, inv_4sigma2=inv_4sigma2)
         end
 
         # Reduce: sum per-task R into scratch.R (additive across jumps)
@@ -319,17 +313,11 @@ function _precompute_R_threaded_timetrot!(
 
         task_scratches = [ThermalizeScratch(CT, dim) for _ in 1:length(chunks)]
 
-        old_blas = BLAS.get_num_threads()
-        BLAS.set_num_threads(1)
-        try
-            @sync for (idx, chunk) in enumerate(chunks)
-                Threads.@spawn _precompute_R_chunk_timetrot!(
-                    task_scratches[idx], jump, precomputed_data,
-                    half_indices[chunk];
-                    base_prefactor=base_prefactor)
-            end
-        finally
-            BLAS.set_num_threads(old_blas)
+        @sync for (idx, chunk) in enumerate(chunks)
+            Threads.@spawn _precompute_R_chunk_timetrot!(
+                task_scratches[idx], jump, precomputed_data,
+                half_indices[chunk];
+                base_prefactor=base_prefactor)
         end
 
         for ts in task_scratches
@@ -396,17 +384,11 @@ function _precompute_R_threaded_bohr!(
 
         task_scratches = [ThermalizeScratch(CT, dim) for _ in 1:length(chunks)]
 
-        old_blas = BLAS.get_num_threads()
-        BLAS.set_num_threads(1)
-        try
-            @sync for (idx, chunk) in enumerate(chunks)
-                Threads.@spawn _precompute_R_chunk_bohr!(
-                    task_scratches[idx], jump, hamiltonian, precomputed_data,
-                    bohr_keys, bohr_is, bohr_js, chunk;
-                    gamma_norm_factor=gamma_norm_factor)
-            end
-        finally
-            BLAS.set_num_threads(old_blas)
+        @sync for (idx, chunk) in enumerate(chunks)
+            Threads.@spawn _precompute_R_chunk_bohr!(
+                task_scratches[idx], jump, hamiltonian, precomputed_data,
+                bohr_keys, bohr_is, bohr_js, chunk;
+                gamma_norm_factor=gamma_norm_factor)
         end
 
         for ts in task_scratches
