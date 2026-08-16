@@ -156,6 +156,28 @@ using QuantumFurnace
         @test !decomp.trace_preserving_assumed
     end
 
+    @testset "Arnoldi basis views are isolated from forward-operator mutation" begin
+        # `_arnoldi_factorize` passes a basis-column view into `fwd_vec`, which
+        # copies it into a private matrix buffer before invoking the operator.
+        # Deliberately destroying that buffer must therefore leave Q intact.
+        D = Diagonal(ComplexF64[1.02, 0.99, 0.8im, 0.5])
+        function apply_destructive_diagonal!(out, X)
+            copyto!(out, reshape(D * vec(X), 2, 2))
+            fill!(X, ComplexF64(NaN, NaN))
+            return out
+        end
+        rho_seed = ComplexF64[1 2 + im; 3 - im 4]
+        rho_before = copy(rho_seed)
+        decomp = QuantumFurnace._krylov_spectral_decomposition(
+            apply_destructive_diagonal!, rho_seed, 2;
+            krylovdim=4, sort_mode=:channel,
+            assume_trace_preserving=false)
+
+        @test rho_seed == rho_before
+        @test isapprox(decomp.eigenvalues, diag(D); atol=1e-12, rtol=1e-12)
+        @test decomp.matvec_count == 4
+    end
+
     @testset "Periodic CPTP channel pins the stationary mode" begin
         # Unitary bit-flip conjugation Phi(rho) = X*rho*X is CPTP and has a
         # period-two mode mu=-1. Its orbit from this diagonal state spans the

@@ -18,7 +18,7 @@ function _arnoldi_factorize(f, x0::AbstractVector{T}, m::Int) where {T}
     Q[:, 1] .= x0 ./ norm(x0)
     broke_at = m
     @inbounds for j in 1:m
-        w = f(Q[:, j])
+        w = f(view(Q, :, j))
         # Modified Gram–Schmidt
         for i in 1:j
             H[i, j] = dot(view(Q, :, i), w)
@@ -377,10 +377,9 @@ function predict_channel_trajectory(
     # Forward channel matvec: applies one full Φ_δ step on `x`, writes to `out`.
     fwd! = let ws = ws, config = config, ham = hamiltonian
         (out::AbstractMatrix, x::AbstractMatrix) -> begin
-            rho_in = Matrix{CT}(x)
             # The spectral operator must remain complex-linear. Physical
             # reconstructions are Hermitianised only after applying mu^k.
-            apply_delta_channel!(ws, rho_in, config, ham; hermitize=false)
+            apply_delta_channel!(ws, x, config, ham; hermitize=false)
             copyto!(out, ws.scratch.rho_next)
             return out
         end

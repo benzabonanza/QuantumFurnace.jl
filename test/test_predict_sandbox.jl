@@ -22,6 +22,19 @@ using Test
 using QuantumFurnace
 
 
+# Measure in hard function scope after repeated warm-up. This avoids soft-scope
+# boxing and exercises the production workspace-reuse path at fixed matvec cost.
+function _measure_channel_predictor_allocs(cfg, ham, jumps, rho_0, k_grid, ws)
+    warm1 = predict_channel_trajectory(
+        cfg, ham, jumps, rho_0, k_grid; krylovdim=20, workspace=ws)
+    warm2 = predict_channel_trajectory(
+        cfg, ham, jumps, rho_0, k_grid; krylovdim=20, workspace=ws)
+    allocs = @allocated predict_channel_trajectory(
+        cfg, ham, jumps, rho_0, k_grid; krylovdim=20, workspace=ws)
+    return allocs, warm1.total_matvecs, warm2.total_matvecs
+end
+
+
 @testset "Predictor sandbox shadows (qf-x56.3)" begin
 
     # -----------------------------------------------------------------------
@@ -249,6 +262,19 @@ using QuantumFurnace
         @test fresh_C.distances == reuse_C1.distances == reuse_C2.distances
         @test fresh_C.spectral_gap == reuse_C1.spectral_gap == reuse_C2.spectral_gap
         @test fresh_C.eigenvalues == reuse_C1.eigenvalues
+
+        rho_before = copy(rho_0)
+        predictor_allocs, warm1_matvecs, warm2_matvecs =
+            _measure_channel_predictor_allocs(
+                cfg_C, N3_HAM, N3_JUMPS, rho_0, k_grid, ws_C)
+        # Pre-edit baseline: 2,720,568 bytes. Passing an Arnoldi column view and
+        # reusing `rho_buf` in the channel closure remove 46,080 bytes. The
+        # 8,512-byte margin is smaller than either 23,040-byte copy regression.
+        predictor_budget = 2_683_000
+        @test predictor_allocs <= predictor_budget
+        @test warm1_matvecs == warm2_matvecs == 20
+        @test rho_0 == rho_before
+        @info "Warmed n=3 channel predictor allocations" allocs_bytes=predictor_allocs threshold=predictor_budget matvecs=warm2_matvecs
 
         # Inject a visible anti-Hermitian perturbation at k=t=0. The predictor
         # reconstruction must use the unbiased pairwise projection, not a
