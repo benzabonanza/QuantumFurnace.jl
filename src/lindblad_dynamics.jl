@@ -81,9 +81,7 @@ function lindblad_action_integrate(
         # Davies preserves Hermiticity and trace exactly in the continuum, but
         # Krylov truncation introduces O(tol)-level violations.
         copyto!(rho, reshape(v_rho, d, d))
-        @inbounds for j in 1:d, k in 1:d
-            rho[k, j] = (rho[k, j] + conj(rho[j, k])) / 2
-        end
+        hermitianize!(rho)
         # rho is now Hermitian; re-vec and renormalise trace (only the real diagonal).
         tr_now = real(tr(rho))
         if tr_now != 0
@@ -174,9 +172,7 @@ function discriminant_action_integrate(
 
         # KMS-DB preserves Hermiticity and $<psi_eq,psi>_F = tr(rho) = 1$;
         # correct accumulated Krylov round-off in both invariants.
-        @inbounds for j in 1:d, k in 1:d
-            psi[k, j] = (psi[k, j] + conj(psi[j, k])) / 2
-        end
+        hermitianize!(psi)
         c_now = real(dot(psi_eq, psi))
         if c_now != 0
             psi ./= c_now

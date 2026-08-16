@@ -418,9 +418,7 @@ function eigenmode_mixing_time(
             rho_t .+= (c[i] * phase) .* R_modes[i]
         end
         # Defensive Hermitisation (mirrors predict_*_trajectory loop).
-        @inbounds for j in 1:d, k in 1:d
-            rho_t[k, j] = (rho_t[k, j] + conj(rho_t[j, k])) / 2
-        end
+        hermitianize!(rho_t)
         eval_count[] += 1
         return sum(svdvals(rho_t)) / 2
     end

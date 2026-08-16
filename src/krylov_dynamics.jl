@@ -128,16 +128,15 @@ function _krylov_spectral_decomposition(
     L_modes = [reshape(QV[:, i], dim, dim) for i in 1:m]
 
     rho_inf, c = if assume_trace_preserving
-        # Steady state: hermitise R_modes[1], trace-normalise.
-        rho_stationary = (R_modes[1] .+ R_modes[1]') ./ 2
-        tr_inf = real(tr(rho_stationary))
-        if tr_inf == 0
-            error("steady-state mode has zero trace; cannot normalise")
-        end
-        rho_stationary ./= tr_inf
+        # Fix the arbitrary modal phase before Hermitian projection and trace
+        # normalisation; otherwise a mode near `im * rho` can collapse.
+        rho_stationary = _normalize_stationary_mode!(R_modes[1])
         R_modes[1] = rho_stationary
         steady_overlap = dot(L_modes[1], R_modes[1])
-        abs(steady_overlap) > eps(real(zero(T))) ||
+        overlap_scale = norm(L_modes[1]) * norm(R_modes[1])
+        overlap_tol = sqrt(eps(real(float(one(T))))) * overlap_scale
+        isfinite(abs(steady_overlap)) && isfinite(overlap_scale) &&
+            abs(steady_overlap) > overlap_tol ||
             error("normalised steady-state mode is orthogonal to its left eigenvector")
         L_modes[1] ./= conj(steady_overlap)
 
@@ -248,9 +247,7 @@ function predict_lindbladian_trajectory(
             rho_t .+= (decomp.c[i] * phase) .* decomp.R_modes[i]
         end
         # Defensive Hermitisation (mirrors lindblad_action_integrate).
-        @inbounds for j in 1:d, kc in 1:d
-            rho_t[kc, j] = (rho_t[kc, j] + conj(rho_t[j, kc])) / 2
-        end
+        hermitianize!(rho_t)
         distances[k] = sum(svdvals(rho_t .- sigma_beta)) / 2
         save_states && (states[k] = copy(rho_t))
     end
@@ -426,9 +423,7 @@ function predict_channel_trajectory(
             rho_k .+= (decomp.c[i] * mu_pow) .* decomp.R_modes[i]
         end
         # Defensive Hermitisation.
-        @inbounds for jj in 1:d, kc in 1:d
-            rho_k[kc, jj] = (rho_k[kc, jj] + conj(rho_k[jj, kc])) / 2
-        end
+        hermitianize!(rho_k)
         trace_values[j] = tr(rho_k)
         trace_drift[j] = trace_values[j] - one(CT)
         distances[j] = sum(svdvals(rho_k .- sigma_beta)) / 2

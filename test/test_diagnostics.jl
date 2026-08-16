@@ -103,6 +103,21 @@
         min_eigval = minimum(fp_eigvals)
         @test all(v -> v >= -1e-12, fp_eigvals)
         @info "DIAG-02: fixed point positivity" min_eigenvalue=min_eigval threshold=-1e-12
+
+        # Eigenvectors carry an arbitrary global phase. A stationary mode equal
+        # to `im * rho` must be phase-aligned before Hermitian projection.
+        phase_rotated_right = copy(eigen_result.right_eigenvectors)
+        phase_rotated_right[:, 1] .= vec(im .* Matrix(N3_GIBBS))
+        phase_rotated_result = EigenDecompositionResult(
+            copy(eigen_result.eigenvalues),
+            phase_rotated_right,
+            copy(eigen_result.left_eigenvectors),
+            eigen_result.spectral_gap,
+            copy(eigen_result.im_re_ratios),
+        )
+        fp_phase = compute_fixed_point_distance(phase_rotated_result, N3_GIBBS)
+        @test fp_phase.trace_distance < 1e-14
+        @test norm(fp_phase.fixed_point - Matrix(N3_GIBBS)) < 1e-14
     end
 
     # -----------------------------------------------------------------------

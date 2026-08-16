@@ -18,6 +18,37 @@ using QuantumFurnace
 
 @testset "Lindbladian-action integrator [sandbox shadow] (qf-x56.2)" begin
 
+    @testset "pairwise Hermitian correction under asymmetric Krylov drift" begin
+        rates = ComplexF64[0 log(2); log(4) 0]
+        asymmetric_action! = function (out, X)
+            @. out = rates * X
+            return out
+        end
+        rho_0 = ComplexF64[0.6 0.1 + 0.05im; 0.1 - 0.05im 0.4]
+        t_grid = [0.0, 1.0]
+        raw_final = exp.(rates) .* rho_0
+        expected_rho = (raw_final + raw_final') / 2
+
+        res_L = lindblad_action_integrate(
+            asymmetric_action!, rho_0, zeros(ComplexF64, 2, 2), t_grid;
+            krylovdim=4, tol=1e-12, save_states=true,
+        )
+        @test res_L.all_converged
+        @test norm(res_L.rho_final - expected_rho) < 1e-12
+        @test norm(res_L.rho_final - res_L.rho_final') < 1e-14
+
+        psi_eq = Matrix{ComplexF64}(I, 2, 2) / sqrt(2)
+        psi_0 = sqrt(2) .* rho_0
+        expected_psi = sqrt(2) .* expected_rho
+        res_K = discriminant_action_integrate(
+            asymmetric_action!, psi_0, psi_eq, t_grid;
+            krylovdim=4, tol=1e-12, save_states=true,
+        )
+        @test res_K.all_converged
+        @test norm(res_K.psi_final - expected_psi) < 1e-12
+        @test norm(res_K.psi_final - res_K.psi_final') < 1e-14
+    end
+
     # -----------------------------------------------------------------------
     # (q0) Energy ↔ Bohr dense Liouvillian agreement at 1e-9 (n=3 only).
     #

@@ -422,10 +422,9 @@ function krylov_spectral_gap(
     eigenvalues_sorted = vals[perm]
     vecs_sorted = vecs[perm]
 
-    # Extract fixed_point (eigenvector 1): reshape, hermitianize, trace-normalize
+    # Extract fixed point after fixing the arbitrary stationary-mode phase.
     fixed_point = reshape(vecs_sorted[1], dim, dim)
-    hermitianize!(fixed_point)
-    fixed_point ./= tr(fixed_point)
+    _normalize_stationary_mode!(fixed_point)
 
     # Extract gap_mode (eigenvector 2): reshape only
     gap_mode = reshape(vecs_sorted[2], dim, dim)
@@ -548,10 +547,9 @@ function krylov_spectral_gap(
     vecs_sorted = vecs[perm]
     channel_eigenvalues_sorted = channel_eigenvalues_raw[perm]
 
-    # Extract fixed_point (eigenvector 1): reshape, hermitianize, trace-normalize
+    # Extract fixed point after fixing the arbitrary stationary-mode phase.
     fixed_point = reshape(vecs_sorted[1], dim, dim)
-    hermitianize!(fixed_point)
-    fixed_point ./= tr(fixed_point)
+    _normalize_stationary_mode!(fixed_point)
 
     # Extract gap_mode (eigenvector 2): reshape only
     gap_mode = reshape(vecs_sorted[2], dim, dim)

@@ -9,8 +9,51 @@ using Printf
 Replace `A` by its Hermitian part and return it.
 """
 function hermitianize!(A::AbstractMatrix)
-    # Math: $A <- (A + A^dagger) / 2$.
-    A .= 0.5 .* (A .+ A')
+    axes(A, 1) == axes(A, 2) ||
+        throw(DimensionMismatch("Hermitian projection requires a square matrix."))
+
+    # Read each off-diagonal pair before writing either member. Besides avoiding
+    # a temporary matrix, this prevents the second triangle from averaging
+    # against a value that has already been projected.
+    inds = axes(A, 1)
+    @inbounds for j in inds
+        A[j, j] = real(A[j, j])
+        for i in first(inds):(j - 1)
+            a_ij = A[i, j]
+            a_ji = A[j, i]
+            projected = (a_ij + conj(a_ji)) / 2
+            A[i, j] = projected
+            A[j, i] = conj(projected)
+        end
+    end
+    return A
+end
+
+# Fix the arbitrary global phase of a stationary eigenmode by making its trace
+# positive real. Hermitianising first can annihilate a valid mode proportional
+# to `im * rho`.
+function _phase_align_trace!(A::AbstractMatrix)
+    trace_value = tr(A)
+    trace_magnitude = abs(trace_value)
+    matrix_norm = norm(A)
+    roundoff_scale = sqrt(eps(float(one(trace_magnitude)))) *
+        sqrt(float(size(A, 1))) * matrix_norm
+    isfinite(trace_magnitude) && isfinite(matrix_norm) && matrix_norm > 0 &&
+        trace_magnitude > roundoff_scale ||
+        throw(ArgumentError(
+            "stationary eigenmode trace is zero or too small for stable normalisation."))
+    A .*= conj(trace_value) / trace_magnitude
+    return A
+end
+
+function _normalize_stationary_mode!(A::AbstractMatrix)
+    _phase_align_trace!(A)
+    hermitianize!(A)
+    trace_value = real(tr(A))
+    isfinite(trace_value) && trace_value > zero(trace_value) ||
+        throw(ArgumentError(
+            "phase-aligned stationary eigenmode must have positive finite trace."))
+    A ./= trace_value
     return A
 end
 

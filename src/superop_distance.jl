@@ -72,9 +72,7 @@ function _iterate_channel_states(apply!::F, rho_0_work::Matrix{ComplexF64},
         matvecs += 1
         copyto!(rho, out)
         if hermitize
-            for j in 1:d, i in 1:d
-                rho[i, j] = (rho[i, j] + conj(rho[j, i])) / 2
-            end
+            hermitianize!(rho)
         end
         if renormalize
             tr_now = real(tr(rho))
@@ -276,10 +274,14 @@ function _dense_arm_fixed_point(arm::PropagatorArm, d::Integer)
     eval1 = F.values[i1]
     steady_gap = length(order) >= 2 ? abs(F.values[order[2]] - target) : Inf
     R = reshape(Vector{ComplexF64}(F.vectors[:, i1]), Int(d), Int(d))
+    _phase_align_trace!(R)
     nR = norm(R)
     antiherm = nR == 0 ? 0.0 : norm((R .- R') ./ 2) / nR
-    R = (R .+ R') ./ 2
-    trR = real(tr(R)); trR != 0 && (R ./= trR)
+    hermitianize!(R)
+    trR = real(tr(R))
+    isfinite(trR) && trR > 0 || throw(ArgumentError(
+        "phase-aligned dense fixed point must have positive finite trace."))
+    R ./= trR
     return Matrix{ComplexF64}(_rotate_out(arm, R)), eval1, antiherm, steady_gap
 end
 

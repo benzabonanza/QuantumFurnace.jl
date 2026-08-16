@@ -8,12 +8,41 @@ Always runs as part of Pkg.test() (fast: load BSON + recompute + compare).
 """
 
 using BSON
+using LinearAlgebra: Diagonal, adjoint, norm
 
 # Path resolution for Pkg.test() compatibility
 source_root = dirname(@__DIR__)
 ref_dir = joinpath(source_root, "test", "reference")
 
 @testset "TINF-02: Regression tests" begin
+
+    @testset "pairwise Hermitian projection and stationary phase" begin
+        raw = ComplexF64[
+            1 + 2im   2 + 3im
+            5 - 7im   4 - 6im
+        ]
+        expected = (raw + adjoint(raw)) / 2
+        projected = copy(raw)
+        hermitianize!(projected)
+
+        @test norm(projected - expected) < 1e-14
+        @test norm(projected - adjoint(projected)) < 1e-14
+
+        # The canonical projection is used in hot reconstruction loops.
+        hermitianize!(projected) # compile before measuring
+        allocations = @allocated hermitianize!(projected)
+        @test allocations == 0
+        @test_throws DimensionMismatch hermitianize!(zeros(ComplexF64, 2, 3))
+
+        rho = ComplexF64[0.7 0.1im; -0.1im 0.3]
+        phase_rotated = im .* rho
+        QuantumFurnace._normalize_stationary_mode!(phase_rotated)
+        @test norm(phase_rotated - rho) < 1e-14
+        @test_throws ArgumentError QuantumFurnace._normalize_stationary_mode!(
+            zeros(ComplexF64, 2, 2))
+        @test_throws ArgumentError QuantumFurnace._normalize_stationary_mode!(
+            Matrix(Diagonal(ComplexF64[1, -1 + 1e-15])))
+    end
 
     # Shared initial state for all regression tests
     psi0 = fill(ComplexF64(1.0), N3_DIM) / sqrt(N3_DIM)

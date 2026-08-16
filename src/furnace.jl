@@ -122,8 +122,7 @@ function run_lindblad(
 
     steady_state_vec = eigvecs_near_zero[:, ss_index]
     steady_state_dm = reshape(steady_state_vec, size(hamiltonian.data))
-    hermitianize!(steady_state_dm)
-    steady_state_dm ./= tr(steady_state_dm)
+    _normalize_stationary_mode!(steady_state_dm)
 
     gap_vec = eigvecs_near_zero[:, gap_index]
     gap_mode_op = reshape(gap_vec, size(hamiltonian.data))

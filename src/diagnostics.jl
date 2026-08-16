@@ -249,9 +249,8 @@ function compute_fixed_point_distance(eigen_result::EigenDecompositionResult, gi
     dim = isqrt(length(fp_vec))
     fp_dm = reshape(copy(fp_vec), dim, dim)
 
-    # Math: $rho_infinity <- herm(R_1) / tr(herm(R_1))$.
-    hermitianize!(fp_dm)
-    fp_dm ./= tr(fp_dm)
+    # Fix the arbitrary eigenvector phase before Hermitian projection.
+    _normalize_stationary_mode!(fp_dm)
 
     dist = trace_distance_h(Hermitian(fp_dm), gibbs)
     return FixedPointResult(fp_dm, dist)

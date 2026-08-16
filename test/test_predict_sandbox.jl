@@ -250,6 +250,23 @@ using QuantumFurnace
         @test fresh_C.spectral_gap == reuse_C1.spectral_gap == reuse_C2.spectral_gap
         @test fresh_C.eigenvalues == reuse_C1.eigenvalues
 
+        # Inject a visible anti-Hermitian perturbation at k=t=0. The predictor
+        # reconstruction must use the unbiased pairwise projection, not a
+        # sequential overwrite whose second triangle reads modified data.
+        rho_asymmetric = copy(rho_0)
+        rho_asymmetric[1, 2] += 0.2 + 0.3im
+        expected_projection = (rho_asymmetric + rho_asymmetric') / 2
+        asymmetric_L = predict_lindbladian_trajectory(
+            cfg_L, N3_HAM, N3_JUMPS, rho_asymmetric, [0.0];
+            krylovdim=20, workspace=ws_L)
+        asymmetric_C = predict_channel_trajectory(
+            cfg_C, N3_HAM, N3_JUMPS, rho_asymmetric, [0];
+            krylovdim=20, workspace=ws_C)
+        @test norm(asymmetric_L.rho_final - expected_projection) < 1e-10
+        @test norm(asymmetric_C.rho_final - expected_projection) < 1e-10
+        @test norm(asymmetric_L.rho_final - asymmetric_L.rho_final') < 1e-14
+        @test norm(asymmetric_C.rho_final - asymmetric_C.rho_final') < 1e-14
+
         cfg_C_mismatch = make_config(
             Thermalize(), EnergyDomain(); num_qubits=3, delta=2 * TEST_DELTA)
         cfg_C_random = make_config(
