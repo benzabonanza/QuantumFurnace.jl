@@ -182,7 +182,7 @@ function apply_adjoint_lindbladian!(
 end
 
 """
-    _accumulate_sandwich_2op!(out, A, B_dag, rho, scalar, ws) -> nothing
+    _accumulate_sandwich_2op!(out, A, B_dag, rho, scalar, sc) -> nothing
 
 Accumulate `scalar * A * rho * B_dag` into `out`. BohrDomain two-operator sandwich.
 """
@@ -192,9 +192,8 @@ function _accumulate_sandwich_2op!(
     B_dag::Matrix{T},
     rho::Matrix{T},
     scalar::Real,
-    ws::Workspace{KrylovSpectrum},
+    sc::KrylovScratch{T},
 ) where {T<:Complex}
-    sc = ws.scratch::KrylovScratch{T}
     CT = one(T)
     ZT = zero(T)
     BLAS.gemm!('N', 'N', CT, A, rho, ZT, sc.sandwich_tmp)
@@ -204,7 +203,7 @@ function _accumulate_sandwich_2op!(
 end
 
 """
-    _accumulate_adjoint_sandwich_2op!(out, A, B_dag, rho, scalar, ws) -> nothing
+    _accumulate_adjoint_sandwich_2op!(out, A, B_dag, rho, scalar, sc) -> nothing
 
 Accumulate `scalar * A' * rho * B_dag'` into `out`. BohrDomain adjoint two-operator sandwich.
 """
@@ -214,15 +213,52 @@ function _accumulate_adjoint_sandwich_2op!(
     B_dag::Matrix{T},
     rho::Matrix{T},
     scalar::Real,
-    ws::Workspace{KrylovSpectrum},
+    sc::KrylovScratch{T},
 ) where {T<:Complex}
-    sc = ws.scratch::KrylovScratch{T}
     CT = one(T)
     ZT = zero(T)
     BLAS.gemm!('C', 'N', CT, A, rho, ZT, sc.sandwich_tmp)
     BLAS.gemm!('N', 'C', CT, sc.sandwich_tmp, B_dag, ZT, sc.sandwich_out)
     BLAS.axpy!(T(scalar), sc.sandwich_out, out)
     return nothing
+end
+
+function _apply_bohr_dissipator!(
+    sc::KrylovScratch{T},
+    rho::Matrix{T},
+    jump_eigenbases::Vector{Matrix{T}},
+    bohr_freqs::Matrix{R},
+    bohr_dict::Dict{R, Vector{CartesianIndex{2}}},
+    alpha::F,
+    gamma_norm_factor::Float64,
+    ::Val{ADJOINT},
+) where {T<:Complex, R<:AbstractFloat, F, ADJOINT}
+    A_nu2_dag = sc.bohr_component_dag
+
+    @inbounds for eigenbasis in jump_eigenbases
+        for (nu_2, indices) in bohr_dict
+            @. sc.jump_oft = alpha(bohr_freqs, nu_2) * eigenbasis
+
+            fill!(A_nu2_dag, 0)
+            for idx in indices
+                i = idx[1]
+                j = idx[2]
+                A_nu2_dag[j, i] = conj(eigenbasis[i, j])
+            end
+
+            if ADJOINT
+                _accumulate_adjoint_sandwich_2op!(
+                    sc.rho_out, sc.jump_oft, A_nu2_dag, rho,
+                    gamma_norm_factor, sc)
+            else
+                _accumulate_sandwich_2op!(
+                    sc.rho_out, sc.jump_oft, A_nu2_dag, rho,
+                    gamma_norm_factor, sc)
+            end
+        end
+    end
+
+    return sc.rho_out
 end
 
 """
@@ -238,41 +274,29 @@ function apply_lindbladian!(
     include_coherent::Bool = true,
 ) where {T<:Complex}
     sc = ws.scratch::KrylovScratch{T}
-    gamma_norm_factor = ws.gamma_norm_factor
-    dim = size(rho, 1)
+    gamma_norm_factor = ws.gamma_norm_factor::Float64
+    G_left = ws.G_left::Matrix{T}
+    G_right = ws.G_right::Matrix{T}
+    jump_eigenbases = ws.jump_eigenbases::Vector{Matrix{T}}
+    alpha = ws.bohr_alpha::Function
 
     CT = one(T)
     ZT = zero(T)
 
     if include_coherent
-        BLAS.gemm!('N', 'N', CT, ws.G_left, rho, ZT, sc.rho_out)
-        BLAS.gemm!('N', 'N', CT, rho, ws.G_right, CT, sc.rho_out)
+        BLAS.gemm!('N', 'N', CT, G_left, rho, ZT, sc.rho_out)
+        BLAS.gemm!('N', 'N', CT, rho, G_right, CT, sc.rho_out)
     else
         neg_R = sc.sandwich_tmp
-        @. neg_R = ws.G_left + ws.G_right
+        @. neg_R = G_left + G_right
         half = T(0.5)
         BLAS.gemm!('N', 'N', half, neg_R, rho, ZT, sc.rho_out)
         BLAS.gemm!('N', 'N', half, rho, neg_R, CT, sc.rho_out)
     end
 
-    A_nu2_dag = zeros(T, dim, dim)
-
-    for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
-        for nu_2 in keys(hamiltonian.bohr_dict)
-            @. sc.jump_oft = _pick_alpha($Ref(config), hamiltonian.bohr_freqs, nu_2) * eigenbasis
-
-            fill!(A_nu2_dag, 0)
-            indices = hamiltonian.bohr_dict[nu_2]
-            @inbounds for idx in indices
-                i = idx[1]; j = idx[2]
-                A_nu2_dag[j, i] = conj(eigenbasis[i, j])
-            end
-
-            _accumulate_sandwich_2op!(sc.rho_out, sc.jump_oft, A_nu2_dag, rho, gamma_norm_factor, ws)
-        end
-    end
-
-    return sc.rho_out
+    return _apply_bohr_dissipator!(
+        sc, rho, jump_eigenbases, hamiltonian.bohr_freqs,
+        hamiltonian.bohr_dict, alpha, gamma_norm_factor, Val(false))
 end
 
 """
@@ -288,41 +312,29 @@ function apply_adjoint_lindbladian!(
     include_coherent::Bool = true,
 ) where {T<:Complex}
     sc = ws.scratch::KrylovScratch{T}
-    gamma_norm_factor = ws.gamma_norm_factor
-    dim = size(rho, 1)
+    gamma_norm_factor = ws.gamma_norm_factor::Float64
+    G_left_adj = ws.G_right::Matrix{T}
+    G_right_adj = ws.G_left::Matrix{T}
+    jump_eigenbases = ws.jump_eigenbases::Vector{Matrix{T}}
+    alpha = ws.bohr_alpha::Function
 
     CT = one(T)
     ZT = zero(T)
 
     if include_coherent
-        BLAS.gemm!('N', 'N', CT, ws.G_right, rho, ZT, sc.rho_out)
-        BLAS.gemm!('N', 'N', CT, rho, ws.G_left, CT, sc.rho_out)
+        BLAS.gemm!('N', 'N', CT, G_left_adj, rho, ZT, sc.rho_out)
+        BLAS.gemm!('N', 'N', CT, rho, G_right_adj, CT, sc.rho_out)
     else
         neg_R = sc.sandwich_tmp
-        @. neg_R = ws.G_right + ws.G_left
+        @. neg_R = G_left_adj + G_right_adj
         half = T(0.5)
         BLAS.gemm!('N', 'N', half, neg_R, rho, ZT, sc.rho_out)
         BLAS.gemm!('N', 'N', half, rho, neg_R, CT, sc.rho_out)
     end
 
-    A_nu2_dag = zeros(T, dim, dim)
-
-    for (k, eigenbasis) in enumerate(ws.jump_eigenbases)
-        for nu_2 in keys(hamiltonian.bohr_dict)
-            @. sc.jump_oft = _pick_alpha($Ref(config), hamiltonian.bohr_freqs, nu_2) * eigenbasis
-
-            fill!(A_nu2_dag, 0)
-            indices = hamiltonian.bohr_dict[nu_2]
-            @inbounds for idx in indices
-                i = idx[1]; j = idx[2]
-                A_nu2_dag[j, i] = conj(eigenbasis[i, j])
-            end
-
-            _accumulate_adjoint_sandwich_2op!(sc.rho_out, sc.jump_oft, A_nu2_dag, rho, gamma_norm_factor, ws)
-        end
-    end
-
-    return sc.rho_out
+    return _apply_bohr_dissipator!(
+        sc, rho, jump_eigenbases, hamiltonian.bohr_freqs,
+        hamiltonian.bohr_dict, alpha, gamma_norm_factor, Val(true))
 end
 
 # DLL uses one Lindblad matrix per coupling or channel.

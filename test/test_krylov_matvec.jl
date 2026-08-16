@@ -105,6 +105,7 @@ end
         @test size(ws.scratch.sandwich_out) == (DIM, DIM)
         @test size(ws.scratch.rho_out) == (DIM, DIM)
         @test size(ws.scratch.jump_oft) == (DIM, DIM)
+        @test size(ws.scratch.bohr_component_dag) == (DIM, DIM)
 
         config_gns = make_config(Lindbladian(), EnergyDomain(); construction=GNS())
         ws_gns = Workspace(config_gns, TEST_HAM, TEST_JUMPS)
@@ -524,6 +525,52 @@ end
             max_err = max(max_err, err)
         end
         @info "Adjoint duality (BohrDomain KMS)" max_error=max_err n_samples=5 threshold=1e-11
+    end
+
+    @testset "Zero allocations and inferred hot loop (BohrDomain KMS/GNS)" begin
+        system = make_dll_n3_system(BETA_ALG)
+        rho = Matrix(random_density_matrix(3))
+
+        for construction in (KMS(), GNS())
+            config = make_config(
+                Lindbladian(), BohrDomain(); num_qubits=3,
+                construction=construction)
+            ws = Workspace(config, system.ham, system.jumps)
+            sc = ws.scratch
+            alpha = ws.bohr_alpha
+
+            @test length(system.jumps) == 9
+            @test alpha !== nothing
+            @test isapprox(
+                alpha(system.ham.bohr_freqs[2, 3], system.ham.bohr_freqs[4, 5]),
+                QuantumFurnace._pick_alpha(
+                    config, system.ham.bohr_freqs[2, 3], system.ham.bohr_freqs[4, 5]);
+                rtol=eps(Float64), atol=0.0)
+            @test all(child -> size(child.bohr_component_dag) == (8, 8),
+                      sc.task_scratches)
+
+            for adjoint in (false, true)
+                hot_loop_args = Tuple{
+                    typeof(sc),
+                    typeof(rho),
+                    typeof(ws.jump_eigenbases),
+                    typeof(system.ham.bohr_freqs),
+                    typeof(system.ham.bohr_dict),
+                    typeof(alpha),
+                    Float64,
+                    Val{adjoint},
+                }
+                hot_loop_return = Core.Compiler.return_type(
+                    QuantumFurnace._apply_bohr_dissipator!, hot_loop_args)
+                @test hot_loop_return === Matrix{ComplexF64}
+            end
+
+            allocs, allocs_adj = _measure_matvec_allocs(
+                ws, rho, config, system.ham)
+            @test allocs == 0
+            @test allocs_adj == 0
+            @info "BohrDomain $(typeof(construction)) matvec allocations" forward_bytes=allocs adjoint_bytes=allocs_adj
+        end
     end
 
     # ========================================================================

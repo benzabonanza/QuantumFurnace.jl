@@ -189,16 +189,24 @@ function _pick_alpha(config::Config{<:Any, <:Any, GNS}, nu_1::Real, nu_2::Real)
 end
 
 function _pick_alpha_kms(config::Config{<:Any, <:Any, KMS})
-
-    sigma = config.sigma
     if config.with_linear_combination
-        beta = config.beta
-        a = config.a
-        s = config.s
-        return (nu_1, nu_2) -> create_alpha(nu_1, nu_2, beta, sigma, a, s)
+        return BohrAlphaKernel{KMS, typeof(config.beta)}(
+            true, config.beta, config.sigma,
+            config.a::typeof(config.beta), config.s::typeof(config.beta),
+            (zero(config.beta), zero(config.beta)))
     else
-        gaussian_parameters = config.gaussian_parameters
-        return (nu_1, nu_2) -> create_alpha_gauss(nu_1, nu_2, sigma, gaussian_parameters)
+        gaussian_parameters = config.gaussian_parameters::Tuple{typeof(config.beta), typeof(config.beta)}
+        return BohrAlphaKernel{KMS, typeof(config.beta)}(
+            false, config.beta, config.sigma,
+            zero(config.beta), zero(config.beta), gaussian_parameters)
+    end
+end
+
+@inline function (alpha::BohrAlphaKernel{KMS})(nu_1::Real, nu_2::Real)
+    if alpha.with_linear_combination
+        return create_alpha(nu_1, nu_2, alpha.beta, alpha.sigma, alpha.a, alpha.s)
+    else
+        return create_alpha_gauss(nu_1, nu_2, alpha.sigma, alpha.gaussian_parameters)
     end
 end
 
@@ -249,16 +257,25 @@ const SMOOTH_S_REF_WIDTH = 0.05
 default_smooth_s(beta::Real, sigma::Real) = (SMOOTH_S_REF_WIDTH / sigma)^2
 
 function _pick_alpha_gns(config::Config{<:Any, <:Any, GNS})
-
-    sigma = config.sigma
     if config.with_linear_combination
-        beta = config.beta
-        a = config.a
-        s = config.s
-        return (nu_1, nu_2) -> create_alpha_gns(nu_1, nu_2, beta, sigma, a, s)
+        return BohrAlphaKernel{GNS, typeof(config.beta)}(
+            true, config.beta, config.sigma,
+            config.a::typeof(config.beta), config.s::typeof(config.beta),
+            (zero(config.beta), zero(config.beta)))
     else
-        gaussian_parameters = config.gaussian_parameters  # but now β = 2ω_γ / σ_γ^2
-        return (nu_1, nu_2) -> create_alpha_gauss(nu_1, nu_2, sigma, gaussian_parameters)
+        gaussian_parameters = config.gaussian_parameters::Tuple{typeof(config.beta), typeof(config.beta)}
+        return BohrAlphaKernel{GNS, typeof(config.beta)}(
+            false, config.beta, config.sigma,
+            zero(config.beta), zero(config.beta), gaussian_parameters)
+    end
+end
+
+@inline function (alpha::BohrAlphaKernel{GNS})(nu_1::Real, nu_2::Real)
+    if alpha.with_linear_combination
+        return create_alpha_gns(
+            nu_1, nu_2, alpha.beta, alpha.sigma, alpha.a, alpha.s)
+    else
+        return create_alpha_gauss(nu_1, nu_2, alpha.sigma, alpha.gaussian_parameters)
     end
 end
 

@@ -28,6 +28,16 @@ struct GNS <: AbstractConstruction end
 """Ding–Li–Lin construction with a coherent correction."""
 struct DLL <: AbstractConstruction end
 
+# Concrete cached callable used by Bohr-domain KMS/GNS workspaces.
+struct BohrAlphaKernel{C<:AbstractConstruction, T<:AbstractFloat} <: Function
+    with_linear_combination::Bool
+    beta::T
+    sigma::T
+    a::T
+    s::T
+    gaussian_parameters::Tuple{T, T}
+end
+
 """Return whether a detailed-balance construction includes the coherent term."""
 with_coherent(::KMS) = true
 with_coherent(::GNS) = false
@@ -278,6 +288,7 @@ Reusable matrices and thread-local state for Krylov operator actions.
 """
 struct KrylovScratch{T<:Complex}
     jump_oft::Matrix{T}
+    bohr_component_dag::Matrix{T}
     sandwich_tmp::Matrix{T}
     sandwich_out::Matrix{T}
     rho_out::Matrix{T}
@@ -294,7 +305,7 @@ function KrylovScratch(::Type{CT}, dim::Int;
 
     # Child scratches own empty pools to prevent aliasing and recursion.
     task_pool = if num_threads > 1
-        [KrylovScratch{CT}(Zm(), Zm(), Zm(), Zm(),
+        [KrylovScratch{CT}(Zm(), Zm(), Zm(), Zm(), Zm(),
                            with_channel_rho_jump ? Zm() : nothing,
                            KrylovScratch{CT}[],
                            Tuple{Int, Int}[]) for _ in 1:num_threads]
@@ -302,7 +313,8 @@ function KrylovScratch(::Type{CT}, dim::Int;
         KrylovScratch{CT}[]
     end
 
-    return KrylovScratch{CT}(Zm(), Zm(), Zm(), Zm(), crj, task_pool, Tuple{Int, Int}[])
+    return KrylovScratch{CT}(Zm(), Zm(), Zm(), Zm(), Zm(), crj,
+                             task_pool, Tuple{Int, Int}[])
 end
 
 """
@@ -332,7 +344,7 @@ struct Workspace{S<:AbstractSimulation, D<:AbstractDomain, C<:AbstractConstructi
     energy_labels::Union{Nothing, Vector{Float64}}
     oft_domain_prefactor::Union{Nothing, Float64}
     oft_nufft_prefactors::Union{Nothing, NUFFTPrefactors{T}}
-    bohr_alpha::Union{Nothing, Function}
+    bohr_alpha::Union{Nothing, BohrAlphaKernel{C, T}}
     bohr_keys::Union{Nothing, Vector{T}}
     bohr_is::Union{Nothing, Vector{Vector{Int}}}
     bohr_js::Union{Nothing, Vector{Vector{Int}}}
