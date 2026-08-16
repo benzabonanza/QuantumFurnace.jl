@@ -34,13 +34,17 @@ struct MixingTimeEstimate
 end
 
 """
-    _check_fit_quality(fit::FitResult, target_epsilon)
+    _check_fit_quality(fit, target_epsilon; model_label="Fit")
 
 Issue `@warn` messages for quality gate violations. Does not throw.
 """
-function _check_fit_quality(fit::FitResult, target_epsilon::Union{Nothing, Float64})
+function _check_fit_quality(
+    fit::Union{FitResult, BiexpFitResult},
+    target_epsilon::Union{Nothing, Float64};
+    model_label::AbstractString="Fit",
+)
     if fit.r_squared < 0.95
-        @warn "Fit R-squared = $(fit.r_squared) < 0.95. Single-exponential model may not describe the data well."
+        @warn "$model_label R-squared = $(fit.r_squared) < 0.95. The fitted decay model may not describe the data well."
     end
     if target_epsilon !== nothing && fit.offset > 0.1 * target_epsilon
         @warn "Fit offset C = $(fit.offset) is large relative to target epsilon = $(target_epsilon). Extrapolation may be unreliable."
@@ -100,14 +104,27 @@ Solve the bi-exponential fit for a target crossing by bisection.
 """
 function _extrapolate_mixing_time_biexp(bifit::BiexpFitResult, target_epsilon::Union{Nothing, Float64})
     target_epsilon === nothing && return nothing
-    bifit.gap <= 0.0 && return nothing
+    isfinite(target_epsilon) && target_epsilon > 0.0 || return nothing
 
-    # Check: f(0) = A1 + A2 + C; need f(0) > target for a crossing to exist
+    parameters = (
+        bifit.amplitude_fast,
+        bifit.gap_fast,
+        bifit.amplitude,
+        bifit.gap,
+        bifit.offset,
+    )
+    all(isfinite, parameters) || return nothing
+    all(>=(0.0), parameters) || return nothing
+
+    # A strict positive-to-negative bracket is required below.
     f0 = bifit.amplitude_fast + bifit.amplitude + bifit.offset
-    f0 <= target_epsilon && return nothing  # already below target at t=0
+    residual_lo = f0 - target_epsilon
+    isfinite(residual_lo) && residual_lo > 0.0 || return nothing
 
-    # Check: asymptotic value C must be below target
-    bifit.offset >= target_epsilon && return nothing
+    asymptotic_floor = bifit.offset +
+        (iszero(bifit.gap_fast) ? bifit.amplitude_fast : 0.0) +
+        (iszero(bifit.gap) ? bifit.amplitude : 0.0)
+    isfinite(asymptotic_floor) && asymptotic_floor < target_epsilon || return nothing
 
     # Define the function to find root of: f(t) - epsilon = 0
     function biexp_residual(t)
@@ -116,28 +133,24 @@ function _extrapolate_mixing_time_biexp(bifit::BiexpFitResult, target_epsilon::U
                bifit.offset - target_epsilon
     end
 
-    # Upper bracket: use slow-mode estimate with 3x safety margin
-    # From slow mode alone: t_slow = -ln((eps - C) / A_slow) / gap_slow
-    eff = target_epsilon - bifit.offset
-    if eff <= 0.0
-        return nothing
-    end
-    t_slow_est = if bifit.amplitude > 0.0 && eff < bifit.amplitude
-        -log(eff / bifit.amplitude) / bifit.gap
-    else
-        # Fallback: use a large upper bracket
-        100.0 / bifit.gap
-    end
-    t_upper = max(t_slow_est * 3.0, 10.0 / bifit.gap)
+    positive_rates = Float64[]
+    bifit.amplitude_fast > 0.0 && bifit.gap_fast > 0.0 &&
+        push!(positive_rates, bifit.gap_fast)
+    bifit.amplitude > 0.0 && bifit.gap > 0.0 &&
+        push!(positive_rates, bifit.gap)
+    isempty(positive_rates) && return nothing
 
-    # Ensure f(t_upper) < target (bracket is valid)
-    if biexp_residual(t_upper) > 0.0
-        # Expand bracket
-        t_upper *= 3.0
-        if biexp_residual(t_upper) > 0.0
-            return nothing  # cannot bracket
-        end
+    t_upper = 10.0 / minimum(positive_rates)
+    isfinite(t_upper) && t_upper > 0.0 || return nothing
+    residual_hi = biexp_residual(t_upper)
+    for _ in 1:8
+        isfinite(residual_hi) || return nothing
+        residual_hi < 0.0 && break
+        t_upper *= 2.0
+        isfinite(t_upper) || return nothing
+        residual_hi = biexp_residual(t_upper)
     end
+    isfinite(residual_hi) && residual_hi < 0.0 || return nothing
 
     try
         t_mix = Roots.find_zero(biexp_residual, (0.0, t_upper), Roots.Bisection())
@@ -199,6 +212,13 @@ function estimate_mixing_time(
         "times and distances must have the same length (got $(length(times)) and $(length(distances)))"))
     length(times) >= 10 || throw(ArgumentError(
         "Need at least 10 data points for mixing time estimation (got $(length(times)))"))
+    all(value -> value isa Real && isfinite(value), times) || throw(ArgumentError(
+        "times must contain only finite real values"))
+    all(>=(0), times) || throw(ArgumentError("times must be nonnegative"))
+    all(value -> value isa Real && isfinite(value) && value >= 0, distances) ||
+        throw(ArgumentError("distances must contain only finite nonnegative real values"))
+    all(diff(times) .> 0) || throw(ArgumentError(
+        "times must be strictly increasing"))
 
     if extrapolate && target_epsilon === nothing
         throw(ArgumentError("target_epsilon required when extrapolate=true"))
@@ -210,6 +230,8 @@ function estimate_mixing_time(
     skip_initial_f = Float64(skip_initial)
     level_f        = Float64(level)
     target_eps_f   = target_epsilon === nothing ? nothing : Float64(target_epsilon)
+    target_eps_f === nothing || (isfinite(target_eps_f) && target_eps_f > 0.0) ||
+        throw(ArgumentError("target_epsilon must be finite and > 0"))
 
     t_mix_actual = _find_actual_mixing_time(times, distances, target_eps_f)
 
@@ -239,6 +261,8 @@ function estimate_mixing_time(
     else  # model == :biexp
         bifit = fit_biexponential_decay(Float64.(times), Float64.(distances);
             skip_initial=skip_initial_f, level=level_f)
+
+        _check_fit_quality(bifit, target_eps_f; model_label="Bi-exponential fit")
 
         t_mix_extrap = extrapolate ? _extrapolate_mixing_time_biexp(bifit, target_eps_f) : nothing
 

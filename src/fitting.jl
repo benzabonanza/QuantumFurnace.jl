@@ -205,9 +205,10 @@ function _biexp_initial_guess(
     single_fit::FitResult,
 )
     # Slow mode from single-exp fit
-    A2_guess = single_fit.amplitude
-    g2_guess = single_fit.gap
-    C_guess  = single_fit.offset
+    value_scale = max(maximum(values), eps(Float64))
+    C_guess = max(single_fit.offset, 0.0)
+    A2_guess = max(single_fit.amplitude, values[1] - C_guess, 0.1 * value_scale)
+    g2_guess = max(single_fit.gap, 1e-6)
 
     # Residuals of single-exp fit
     resids = single_fit.residuals
@@ -218,9 +219,7 @@ function _biexp_initial_guess(
     n_early = max(3, div(length(resids), 4))
     early_resids = resids[1:n_early]
     A1_guess = maximum(abs.(early_resids))
-    if A1_guess < 1e-12
-        A1_guess = 0.1 * abs(A2_guess)
-    end
+    A1_guess = max(A1_guess, 0.1 * A2_guess, eps(value_scale))
 
     # Estimate fast gap from residual decay rate
     # Expect fast mode ~ 3-10x the slow gap
@@ -260,6 +259,13 @@ function fit_biexponential_decay(
         throw(ArgumentError("need at least 8 data points for 5-parameter bi-exponential fit (got $(length(times)))"))
     0.0 <= skip_initial < 1.0 ||
         throw(ArgumentError("skip_initial must be in [0, 1) (got $skip_initial)"))
+    all(isfinite, times) || throw(ArgumentError("times must contain only finite values"))
+    all(>=(0), times) || throw(ArgumentError("times must be nonnegative"))
+    all(isfinite, values) || throw(ArgumentError("values must contain only finite values"))
+    all(>=(0), values) || throw(ArgumentError(
+        "bi-exponential distance values must be nonnegative"))
+    all(diff(times) .> 0) || throw(ArgumentError(
+        "times must be strictly increasing for a decay fit"))
 
     # --- Apply skip_initial ---
     start_idx = max(1, floor(Int, skip_initial * length(times)) + 1)
@@ -268,7 +274,6 @@ function fit_biexponential_decay(
 
     length(times_fit) >= 8 ||
         throw(ArgumentError("fewer than 8 data points remain after skip_initial=$skip_initial (got $(length(times_fit)))"))
-
     # --- Generate initial guess ---
     p0_used = if p0 !== nothing
         Float64.(p0)
@@ -277,9 +282,15 @@ function fit_biexponential_decay(
         single_fit = fit_exponential_decay(times_fit, values_fit; skip_initial=0.0, level=level)
         _biexp_initial_guess(times_fit, values_fit, single_fit)
     end
+    length(p0_used) == 5 || throw(ArgumentError(
+        "p0 must contain [A1, g1, A2, g2, C]"))
+    all(isfinite, p0_used) || throw(ArgumentError("p0 must contain only finite values"))
+    all(>=(0.0), p0_used) || throw(ArgumentError(
+        "p0 amplitudes, rates, and offset must be nonnegative"))
 
-    # --- Set bounds: both gaps >= 0, amplitudes unconstrained, offset unconstrained ---
-    lower = [-Inf, 0.0, -Inf, 0.0, -Inf]
+    # Nonnegative amplitudes, rates, and offset make the fitted distance
+    # nonnegative and nonincreasing for all t >= 0.
+    lower = zeros(5)
     upper = [Inf, Inf, Inf, Inf, Inf]
 
     # --- Fit using LsqFit.jl ---

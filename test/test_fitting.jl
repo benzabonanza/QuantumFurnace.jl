@@ -243,6 +243,40 @@ using StableRNGs
         @test isapprox(r2.gap_fast, g1_true; rtol=1e-7)
     end
 
+    @testset "BIEXP-04: fitted distance is nonnegative and nonincreasing" begin
+        times = collect(range(0.0, 10.0; length=101))
+        increasing_data = 0.2 .+ 0.03 .* times
+        result = fit_biexponential_decay(
+            times, increasing_data; p0=[0.1, 1.0, 0.1, 0.2, 0.2])
+
+        @test result.amplitude >= 0.0
+        @test result.amplitude_fast >= 0.0
+        @test result.gap >= 0.0
+        @test result.gap_fast >= 0.0
+        @test result.offset >= 0.0
+
+        fitted = result.amplitude_fast .* exp.(-result.gap_fast .* times) .+
+                 result.amplitude .* exp.(-result.gap .* times) .+ result.offset
+        @test all(fitted .>= 0.0)
+        @test all(diff(fitted) .<= 10eps(Float64))
+    end
+
+    @testset "BIEXP-05: physical input and initial-guess validation" begin
+        times = collect(range(0.0, 5.0; length=21))
+        values = exp.(-times)
+
+        @test_throws ArgumentError fit_biexponential_decay(
+            times, values; p0=[-0.1, 1.0, 0.1, 0.2, 0.0])
+        @test_throws ArgumentError fit_biexponential_decay(
+            times, values; p0=[0.1, 1.0, 0.1, 0.2])
+        @test_throws ArgumentError fit_biexponential_decay(
+            times, [values[1:end-1]; -0.1])
+        @test_throws ArgumentError fit_biexponential_decay(
+            [times[1:end-1]; times[end-1]], values)
+        @test_throws ArgumentError fit_biexponential_decay(
+            [-1.0; times[2:end]], values)
+    end
+
     # -----------------------------------------------------------------------
     # BIEXP edge case: too few data points
     # -----------------------------------------------------------------------

@@ -162,6 +162,14 @@ using StableRNGs
         @test_warn "offset" estimate_mixing_time(result; skip_initial=0.1, target_epsilon=0.5)
     end
 
+    @testset "MIX-07: quality warnings also apply to bi-exponential fits" begin
+        times = collect(0.0:0.1:20.0)
+        dists = abs.(sin.(times)) .+ 0.01
+
+        @test_warn "Bi-exponential fit R-squared" estimate_mixing_time(
+            times, dists; model=:biexp, skip_initial=0.0)
+    end
+
     # -----------------------------------------------------------------------
     # Edge cases
     # -----------------------------------------------------------------------
@@ -179,6 +187,18 @@ using StableRNGs
 
         result = _make_synthetic_result(times, dists; mixing_time=5.0)
         @test_throws ArgumentError estimate_mixing_time(result)
+    end
+
+    @testset "Edge: physical distance-grid validation" begin
+        times = collect(0.0:0.1:2.0)
+        dists = exp.(-times)
+
+        @test_throws ArgumentError estimate_mixing_time(
+            times, [dists[1:end-1]; -0.1])
+        @test_throws ArgumentError estimate_mixing_time(
+            [times[1:end-1]; times[end-1]], dists)
+        @test_throws ArgumentError estimate_mixing_time(
+            times, dists; target_epsilon=0.0)
     end
 
     @testset "Edge: target not reached in data" begin
@@ -277,6 +297,26 @@ using StableRNGs
 
         result = _make_synthetic_result(times, dists; mixing_time=50.0)
         @test_throws ArgumentError estimate_mixing_time(result; model=:invalid)
+    end
+
+    @testset "BIEXP-MIX edge: crossing requires a strict finite bracket" begin
+        base = BiexpFitResult(
+            0.3, 2.0, 0.5, 1.0, 0.001,
+            (0.2, 0.4), 0.01, 1.0, true,
+            Float64[], Float64[], Float64[],
+        )
+        crossing = QuantumFurnace._extrapolate_mixing_time_biexp(base, 0.01)
+        @test crossing !== nothing
+        @test isfinite(crossing)
+
+        nonfinite = BiexpFitResult(
+            base.gap, base.gap_fast, NaN, base.amplitude_fast, base.offset,
+            base.gap_ci, base.gap_se, base.r_squared, base.converged,
+            base.residuals, base.times_used, base.values_used,
+        )
+        @test QuantumFurnace._extrapolate_mixing_time_biexp(nonfinite, 0.01) === nothing
+        @test QuantumFurnace._extrapolate_mixing_time_biexp(base, NaN) === nothing
+        @test QuantumFurnace._extrapolate_mixing_time_biexp(base, base.offset) === nothing
     end
 
     # ====================================================================
