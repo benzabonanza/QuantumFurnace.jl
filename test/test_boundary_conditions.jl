@@ -297,7 +297,7 @@ end
     # ------------------------------------------------------------------
     @testset "(k) 1D Trotter convergence for OBC and PBC" begin
         # Build fixtures at n ∈ {3, 4, 5} for both BCs; sign convention in
-        # _trotterize2 is U ≈ exp(+i δ H), see misc_tools docstrings.
+        # _trotterize2 is U ≈ exp(+i δ H), see pauli_tools docstrings.
         for n in (3, 4, 5)
             Random.seed!(91)
             raw_pbc = build_heis_1d(n, HEIS_COEFFS; seed=91, 
