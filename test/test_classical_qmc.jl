@@ -77,6 +77,67 @@ using Test
         end
     end
 
+    @testset "seeded TFIM update traces remain exact" begin
+        qmc = QuantumFurnace.ClassicalQMC
+
+        function opstring_signature(ops)
+            signature = UInt64(0xcbf29ce484222325)
+            @inbounds for op in ops
+                for value in (UInt64(op.kind), UInt64(op.idx), UInt64(op.offdiag))
+                    signature = (signature ⊻ value) * UInt64(0x00000100000001b3)
+                end
+            end
+            return signature
+        end
+
+        function trace_updates(update!)
+            model = build_sse_tfim_model(
+                2, 2; seed=17, h=1.0, disorder_strength=0.2, J=1.0,
+                periodic_x=true, periodic_y=true)
+            rng = MersenneTwister(314159)
+            state = qmc.SSEState(
+                model.n,
+                rand(rng, (-1, 1), model.n),
+                qmc.Op[qmc.IDOP for _ in 1:20],
+                20,
+                0,
+            )
+            menu = qmc.tfim_menu(model)
+            trace = NamedTuple[]
+            for _ in 1:6
+                qmc.tfim_diagonal_update!(state, model, menu, 0.7, rng)
+                counts = update!(state, model, rng)
+                push!(trace, (
+                    spins=Tuple(state.spins),
+                    n_op=state.n_op,
+                    counts=counts,
+                    signature=opstring_signature(state.opstring),
+                ))
+            end
+            return trace
+        end
+
+        expected_cluster = [
+            (spins=(-1, -1, -1, -1), n_op=12, counts=(3, 1), signature=0x2fc7e6c087551901),
+            (spins=(-1, -1, -1, -1), n_op=14, counts=(3, 1), signature=0x8c4593ec9e3a03e9),
+            (spins=(-1, -1, -1, -1), n_op=14, counts=(2, 1), signature=0xf5c33c54df8af1af),
+            (spins=(-1, -1, -1, -1), n_op=14, counts=(2, 0), signature=0x7f4e0fac874d009a),
+            (spins=(-1, -1, -1, -1), n_op=12, counts=(2, 1), signature=0x8d443d5f87911d78),
+            (spins=(1, 1, 1, 1), n_op=8, counts=(1, 1), signature=0x721238b319cd3d88),
+        ]
+        expected_local = [
+            (spins=(-1, -1, -1, -1), n_op=12, counts=(5, 1), signature=0x2fc7e6c087551901),
+            (spins=(-1, -1, -1, -1), n_op=14, counts=(6, 1), signature=0x7414c1b143af1510),
+            (spins=(-1, -1, -1, -1), n_op=12, counts=(5, 0), signature=0x4ba94f165c487d24),
+            (spins=(-1, -1, -1, -1), n_op=11, counts=(5, 1), signature=0x24db771a5be21be2),
+            (spins=(-1, -1, -1, -1), n_op=9, counts=(5, 1), signature=0x0540f654b7ff8389),
+            (spins=(-1, -1, -1, -1), n_op=10, counts=(4, 0), signature=0x13579ae0e16226d3),
+        ]
+
+        @test trace_updates(qmc.tfim_cluster_update!) == expected_cluster
+        @test trace_updates(qmc.tfim_local_update!) == expected_local
+    end
+
     # --- Reconstruction: H_phys matches the fixture un-rescaled Hamiltonian to ~1e-10 -----------
     @testset "model reconstruction vs fixture" begin
         for n in (3, 4), ds in (0.0, 0.1)
