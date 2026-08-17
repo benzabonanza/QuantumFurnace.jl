@@ -577,30 +577,6 @@ end
 # Threaded frequency loops use a flat `(jump_idx, label_idx)` work list and
 # private output matrices before the final deterministic reduction.
 
-# Build flat (k, li) work list honoring the hermitian-fold convention:
-# Hermitian: only li with w_raw <= 1e-12 are queued (non-positive labels).
-# Non-Hermitian: all li are queued.
-function _populate_lindblad_work_list!(
-    work::Vector{Tuple{Int, Int}},
-    jump_hermitian::Vector{Bool},
-    energy_labels::AbstractVector{<:Real},
-)
-    n_jumps = length(jump_hermitian)
-    n_labels = length(energy_labels)
-    empty!(work)
-    sizehint!(work, n_jumps * n_labels)
-    @inbounds for k in 1:n_jumps
-        is_herm = jump_hermitian[k]
-        for li in 1:n_labels
-            if is_herm && energy_labels[li] > 1e-12
-                continue
-            end
-            push!(work, (k, li))
-        end
-    end
-    return work
-end
-
 function _apply_lindbladian_threaded_energy!(
     sc::KrylovScratch{T},
     rho::Matrix{T},
@@ -613,11 +589,11 @@ function _apply_lindbladian_threaded_energy!(
     inv_4sigma2::Float64;
     adjoint::Bool,
 ) where {T<:Complex}
-    # `work` is the scratch's pre-allocated buffer; `_populate_…!` does
+    # `work` is the scratch's pre-allocated buffer; the population helper does
     # `empty!` + `push!` which is zero-alloc when the buffer is large enough
     # (the Workspace constructor sized it for the production label set).
     work = sc.work_list
-    _populate_lindblad_work_list!(work, jump_hermitian, energy_labels)
+    _populate_jump_frequency_work_list!(work, jump_hermitian, energy_labels)
     n_work = length(work)
     n_work == 0 && return sc.rho_out
 
@@ -775,7 +751,7 @@ function _apply_lindbladian_threaded_timetrot!(
     adjoint::Bool,
 ) where {T<:Complex, D<:Union{TimeDomain, TrotterDomain}}
     work = sc.work_list
-    _populate_lindblad_work_list!(work, jump_hermitian, energy_labels)
+    _populate_jump_frequency_work_list!(work, jump_hermitian, energy_labels)
     n_work = length(work)
     n_work == 0 && return sc.rho_out
 

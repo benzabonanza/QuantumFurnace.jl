@@ -136,6 +136,7 @@ export ScalingFit, fit_scaling, predict_scaling, aicc_weights, compare_models,
        formula_string, scaling_fit_grid
 # --- Internal Implementation ---
 include("constants.jl")
+include("jump_threading.jl")
 include("hamiltonian.jl")
 include("trotter_domain.jl")
 include("filters.jl")

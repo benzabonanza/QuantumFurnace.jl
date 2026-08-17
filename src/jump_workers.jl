@@ -248,30 +248,6 @@ end
 end
 
 
-# Minimum number of frequency labels to enable omega-loop parallelism.
-# Benchmarks on four Julia threads place the task-overhead crossover at ten.
-const OMEGA_THREAD_THRESHOLD = 10
-
-"""
-    _partition_range(range, n_chunks) -> Vector{UnitRange{Int}}
-
-Partition a range into approximately equal chunks for parallel execution.
-"""
-function _partition_range(range::UnitRange{Int}, n_chunks::Int)
-    len = length(range)
-    n_chunks = min(n_chunks, len)
-    base = div(len, n_chunks)
-    remainder = rem(len, n_chunks)
-    chunks = Vector{UnitRange{Int}}(undef, n_chunks)
-    start = first(range)
-    for i in 1:n_chunks
-        chunk_size = base + (i <= remainder ? 1 : 0)
-        chunks[i] = start:(start + chunk_size - 1)
-        start += chunk_size
-    end
-    return chunks
-end
-
 """
     _accumulate_rho_jump!(scratch, evolving_dm, jump, hamiltonian, config::Config{Thermalize, EnergyDomain},
                           precomputed_data; jump_weight_scaling)

@@ -72,7 +72,7 @@ function Workspace(
     # ω-loop dispatch in apply_lindbladian! (EnergyDomain / TimeDomain /
     # TrotterDomain). BohrDomain leaves the list empty.
     if pd_el !== nothing
-        _populate_lindblad_work_list!(sc.work_list, jump_hermitian, pd_el)
+        _populate_jump_frequency_work_list!(sc.work_list, jump_hermitian, pd_el)
     end
 
     D = typeof(config.domain)
@@ -251,29 +251,6 @@ end
 # `R` after `@sync`.
 # ---------------------------------------------------------------------------
 
-# Build a flat (k, li) work list with the same Hermitian-fold convention as
-# `_populate_lindblad_work_list!` in krylov_matvec.jl. Returns a fresh vector
-# (no scratch reuse — this fires only at Workspace construction).
-function _build_R_total_work_list(
-    jump_hermitian::Vector{Bool},
-    energy_labels::AbstractVector{<:Real},
-)
-    n_jumps  = length(jump_hermitian)
-    n_labels = length(energy_labels)
-    work = Tuple{Int, Int}[]
-    sizehint!(work, n_jumps * n_labels)
-    @inbounds for k in 1:n_jumps
-        is_herm = jump_hermitian[k]
-        for li in 1:n_labels
-            if is_herm && energy_labels[li] > 1e-12
-                continue
-            end
-            push!(work, (k, li))
-        end
-    end
-    return work
-end
-
 function _accumulate_R_total_threaded_energy!(
     R::Matrix{T},
     ws_eigenbases::Vector{Matrix{T}},
@@ -284,7 +261,8 @@ function _accumulate_R_total_threaded_energy!(
     prefactor::Float64,
     inv_4sigma2::Float64,
 ) where {T<:Complex}
-    work = _build_R_total_work_list(ws_hermitian, energy_labels)
+    work = Tuple{Int, Int}[]
+    _populate_jump_frequency_work_list!(work, ws_hermitian, energy_labels)
     n_work = length(work)
     n_work == 0 && return nothing
 
@@ -355,7 +333,8 @@ function _accumulate_R_total_threaded_timetrot!(
     transition,
     prefactor::Float64,
 ) where {T<:Complex}
-    work = _build_R_total_work_list(ws_hermitian, energy_labels)
+    work = Tuple{Int, Int}[]
+    _populate_jump_frequency_work_list!(work, ws_hermitian, energy_labels)
     n_work = length(work)
     n_work == 0 && return nothing
 

@@ -407,6 +407,19 @@ using Random
     end
 end
 
+@testset "Shared jump-frequency work-list ordering" begin
+    labels = [-1.0, 0.0, 1e-12, nextfloat(1e-12), 1.0]
+    work = Tuple{Int, Int}[(99, 99)]
+    returned = QuantumFurnace._populate_jump_frequency_work_list!(
+        work, [true, false], labels)
+
+    @test returned === work
+    @test work == [
+        (1, 1), (1, 2), (1, 3),
+        (2, 1), (2, 2), (2, 3), (2, 4), (2, 5),
+    ]
+end
+
 @testset "Constructors preserve caller BLAS policy" begin
     if Threads.nthreads() > 1
         saved_blas = BLAS.get_num_threads()
