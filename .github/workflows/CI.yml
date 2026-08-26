@@ -1,0 +1,38 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Julia ${{ matrix.julia-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ['1.10', '1.12']
+    env:
+      JULIA_NUM_THREADS: 4
+      OPENBLAS_NUM_THREADS: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v2
+      - name: Instantiate package
+        run: julia --project --startup-file=no -e 'using Pkg; Pkg.instantiate()'
+      - name: Run default test tier
+        run: >-
+          julia --project --startup-file=no -e
+          'using Pkg; Pkg.test(julia_args=["--heap-size-hint=1500M"])'

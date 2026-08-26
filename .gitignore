@@ -27,9 +27,8 @@
 /CLAUDE.md
 /AGENTS.md
 
-# --- Editor / CI (dot-folders) ---
+# --- Editor configuration (local only) ---
 /.vscode/
-/.github/
 
 # --- Thesis material & research notes (not part of the package) ---
 /drafts
