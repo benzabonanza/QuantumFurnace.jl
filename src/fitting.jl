@@ -134,15 +134,19 @@ function fit_exponential_decay(
     A       = params[_IDX_A]
     C       = params[_IDX_C]
 
-    # Standard errors and confidence intervals may fail with SingularException
-    # when the Jacobian is rank-deficient (e.g., flat time series after skip_initial).
-    # In that case, report Inf/NaN to signal unreliable uncertainty estimates.
+    # Standard errors and confidence intervals may fail when the Jacobian is
+    # rank-deficient (e.g., flat time series after skip_initial).  Julia 1.10's
+    # LAPACK reports this as LAPACKException(info > 0), while newer versions
+    # normally surface SingularException.  In either case the fit parameters
+    # remain usable, but their uncertainty estimates are unavailable.
     gap_se, gap_ci = try
         se = stderror(fit)
         ci = confint(fit; level=level)
         se[_IDX_GAP], (ci[_IDX_GAP][1], ci[_IDX_GAP][2])
     catch e
-        e isa LinearAlgebra.SingularException || rethrow(e)
+        covariance_singular = e isa LinearAlgebra.SingularException ||
+            (e isa LinearAlgebra.LAPACKException && e.info > 0)
+        covariance_singular || rethrow(e)
         Inf, (-Inf, Inf)
     end
 
@@ -329,7 +333,9 @@ function fit_biexponential_decay(
         ci = confint(fit; level=level)
         se[slow_gap_raw_idx], (ci[slow_gap_raw_idx][1], ci[slow_gap_raw_idx][2])
     catch e
-        e isa LinearAlgebra.SingularException || rethrow(e)
+        covariance_singular = e isa LinearAlgebra.SingularException ||
+            (e isa LinearAlgebra.LAPACKException && e.info > 0)
+        covariance_singular || rethrow(e)
         Inf, (-Inf, Inf)
     end
 
