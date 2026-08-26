@@ -1,133 +1,107 @@
 # QuantumFurnace.jl
 
-## 🚧 Under Construction: Firing up the Furnace... 🚧
+QuantumFurnace.jl is a Julia package for constructing and simulating quantum
+Gibbs samplers based on detailed-balance Lindbladians. It supports dense
+reference calculations, matrix-free Krylov methods, and full-density-matrix
+channel simulations across Bohr, energy, time, and Trotter domains.
 
-**This package is currently under active development and should be considered pre-alpha software.**
-
-## Overview
-A high-performance Julia package for simulating open quantum systems that prepare quantum Gibbs states. `QuantumFurnace` is a framework in which the user can both learn about the details of quantum Gibbs sampling, and also research the topic further with the efficient implementations provided here. This project serves as a complementary resource to the recent papers [[CKBG23](#references), [CKG23](#references)] that achieved a breakthrough in the theory of quantum Gibbs sampling. 
-
-### References
-    [CKBG23]   Chen, C.F., Kastoryano, M.J., Brandão, F.G. and Gilyén, A., 2023. Quantum thermal state preparation. arXiv:2303.18224.
-
-    [CKG23]    Chen, C.F., Kastoryano, M.J. and Gilyén, A., 2023. An efficient and exact noncommutative quantum Gibbs sampler. arXiv:2311.09207.
+The package is under active development and should currently be treated as
+pre-alpha research software.
 
 ## Features
-- Construct approximate and exact detailed balanced Liouvillians.
-- Efficiently simulate the algorithm step-by-step to reach the quantum Gibbs state, either on a single node or  distributed over multiple nodes.
-- Analyse the errors due to approximations with the separately provided `BOHR`, `ENERGY`, `TIME` and `TROTTER` domains (see exmaples).
-- Input Hamitlonians and jump operators of your choice, and choose or come up with the required functions that can make or break the thermalization process.
 
-Upcoming:
-- Generate the corresponding quantum circuits to see the incurring costs, e.g. number of qubits, gates, runtime etc.
+- Construct KMS, GNS, and Ding--Li--Lin (DLL) Gibbs-sampling Lindbladians.
+- Compare exact Bohr-domain constructions with energy-, time-, and
+  Trotter-domain approximations.
+- Compute fixed points and spectral gaps with dense or matrix-free methods.
+- Simulate retained weak-measurement channels and track convergence to the
+  Gibbs state.
+- Build reproducible Heisenberg and transverse-field Ising Hamiltonians.
 
 ## Installation
 
-The package can be installed using the Julia package manager. From the Julia REPL, type `]` to enter `Pkg` mode and run:
+QuantumFurnace.jl is not yet registered in Julia's General registry. Install
+the development version directly from GitHub:
 
 ```julia
-pkg> add QuantumFurnace
+import Pkg
+Pkg.add(url="https://github.com/benzabonanza/QuantumFurnace.jl")
 ```
-## Quick Start: Finding the Thermal State
-This example demonstrates one of the core workflows of `QuantumFurnace.jl`. We will prepare the quantum Gibbs state 
-$$\sigma_\beta = \frac{e^{-\beta H}}{\text{tr}e^{-\beta H}},$$
-at some inverse temperature $\beta$, for a system that is defined by the Hamiltonian $H$ of the 1D Heisenberg model with an external field. The algorithm then drives the system to the thermal state by applying carefully constructed jump operators.
 
-The process involves four main steps:
-
-1.  **Configure the algorithm parameters:** Set the number of system qubits $n$, inverse temperature $\beta$, timestep size $\delta$, etc.
-2. **Define the system:** Provide the Hamiltonian.
-3. **Define the environment:** Provide the set of jump operators $\{A^a\}$.
-4. **Solve:** Use the `run_thermalization` function to find the resulting thermal state up to $\mathcal{O}(\delta^2)$ errors.
-
+Then load it with:
 
 ```julia
 using QuantumFurnace
-
-# --- 1. Configure the algorithm parameters ---
-num_qubits = 4
-dim = 2^num_qubits
-num_energy_bits = 11
-beta = 10.0
-w0 = 0.05                            # energy estimating precision
-t0 = 2pi / (2^num_energy_bits * w0)  # time estimating precision
-
-# Choose the domain to work in:
-domain = TimeDomain()
-
-# Add coherent term to the evolution for exact detailed balance
-# or omit for approx. detailed balance:
-with_coherent = true
-
-# Linear combination parameters
-with_linear_combination = false
-a = 0.0
-b = 0.0
-eta = 0.0
-
-mixing_time_bound = 10.0
-delta = 0.1
-
-config = ThermalizeConfig(
-    num_qubits = num_qubits, 
-    with_coherent = with_coherent,
-    with_linear_combination = with_linear_combination, 
-    domain = domain,
-    beta = beta,
-    a = a,
-    b = b,
-    num_energy_bits = num_energy_bits,
-    w0 = w0,
-    t0 = t0,
-    mixing_time = mixing_time_bound,
-    delta = delta,
-)
-
-# --- 2. Define the system Hamiltonian ---
-X::Matrix{ComplexF64} = [0 1; 1 0]
-Y::Matrix{ComplexF64} = [0.0 -im; im 0.0]
-Z::Matrix{ComplexF64} = [1 0; 0 -1]
-
-hamiltonian_terms = [[X, X], [Y, Y], [Z, Z]]
-hamiltonian_coeffs = fill(1.0, length(hamiltonian_terms))
-disordering_term = [Z]
-disordering_coeffs = rand(num_qubits)
-# Generate a 4-qubit chain Heisenberg Hamiltonian
-hamiltonian = HamHam(hamiltonian_terms, hamiltonian_coeffs, 
-    disordering_term, disordering_coeffs, num_qubits)
-
-# --- 3. Define the jump operators for the evolution ---
-jump_set = [[X], [Y], [Z]]
-
-# 1-site Pauli jumps over each system site
-jumps::Vector{JumpOp} = []
-jump_normalization = sqrt(length(jump_paulis) * num_qubits)
-for jump_A in jump_set
-    for site in 1:num_qubits
-        jump_op = Matrix(pad_term(jump_A, num_qubits, site)) / jump_normalization
-        jump_op_in_eigenbasis = hamiltonian.eigvecs' * jump_op * hamiltonian.eigvecs
-        orthogonal = (jump_op == transpose(jump_op))
-        jump = JumpOp(jump_op, jump_op_in_eigenbasis, orthogonal) 
-        push!(jumps, jump)
-    end
-end
-
-# --- 4. Find the thermal state ---
-# Start from some initial state, here, the maximally mixed state:
-initial_dm = Matrix{ComplexF64}(I(dim) / dim)
-
-# Evolve the system:
-results = run_thermalization(jumps, config, initial_dm, hamiltonian)
-
-@printf("\n Last distance to Gibbs: %s\n", results.distances_to_gibbs[end])
 ```
 
+## Quick start
+
+The following example loads a packaged three-qubit Hamiltonian, constructs
+single-site Pauli jump operators, and runs a short KMS thermalisation
+trajectory. The packaged Hamiltonian is rescaled, so `beta_alg` denotes the
+algorithm-side inverse temperature.
+
+```julia
+using QuantumFurnace
+using LinearAlgebra
+
+n = 3
+beta_alg = 10.0
+ham = load_hamiltonian("heis", n; beta=beta_alg)
+
+local_jumps = ([X], [Y], [Z])
+jump_norm = sqrt(length(local_jumps) * n)
+jumps = JumpOp[]
+
+for local_jump in local_jumps, site in 1:n
+    op = Matrix(pad_term(local_jump, n, site)) / jump_norm
+    op_eig = ham.eigvecs' * op * ham.eigvecs
+    push!(jumps, JumpOp(op, op_eig, op == transpose(op), ishermitian(op)))
+end
+
+config = Config(;
+    sim=Thermalize(),
+    domain=EnergyDomain(),
+    construction=KMS(),
+    num_qubits=n,
+    with_linear_combination=true,
+    beta=beta_alg,
+    sigma=1 / beta_alg,
+    a=beta_alg / 30,
+    s=0.4,
+    num_energy_bits_D=7,
+    w0_D=0.05,
+    mixing_time=0.1,
+    delta=0.01,
+    jump_selection=:sweep,
+)
+
+result = run_thermalize(jumps, config, ham; save_every=5)
+result.trace_distances
+```
+
+`KMS()` includes its coherent correction by construction. Use
+`beta_phys(ham, beta_alg)` to convert the example's inverse temperature back to
+the un-rescaled physical Hamiltonian convention.
+
 ## Documentation
-For detailed tutorials, background theory, and the full API reference, please see our **[documentation website](https://tembence.github.io/QuantumFurnace.jl/)**.
+
+Tutorials, background material, and the API reference are available at
+[benzabonanza.github.io/QuantumFurnace.jl](https://benzabonanza.github.io/QuantumFurnace.jl/).
+
+## References
+
+- C.-F. Chen, M. J. Kastoryano, F. G. S. L. Brandao, and A. Gilyen,
+  "Quantum thermal state preparation," arXiv:2303.18224 (2023).
+- C.-F. Chen, M. J. Kastoryano, and A. Gilyen, "An efficient and exact
+  noncommutative quantum Gibbs sampler," arXiv:2311.09207 (2023).
 
 ## Citing
-Paper on this work is still in progress but if you use `QuantumFurnace.jl` in your research, please cite the Zenodo DOI of the software package for now. You can find it in the badge at the top the page.
+
+A formal software citation will accompany the first release. Until then,
+please cite the repository URL together with the exact commit used in your
+work.
 
 ## License
 
-This project is licensed under the MIT License.
+QuantumFurnace.jl is available under the MIT License.

@@ -1,15 +1,16 @@
 # QuantumFurnace.jl
 
-Welcome to the documentation for `QuantumFurnace.jl`.
+QuantumFurnace.jl constructs and simulates detailed-balance Lindbladians for
+quantum Gibbs sampling. It provides dense reference implementations,
+matrix-free Krylov methods, and full-density-matrix channel simulations.
 
-A high-performance Julia package for simulating open quantum systems that prepare quantum Gibbs states. `QuantumFurnace` is a framework in which the user can both learn about the details of quantum Gibbs sampling, and also research the topic further with the efficient implementations provided here. This project serves as a complementary resource to the recent papers [[CKBG23](#references), [CKG23](#references)] that achieved a breakthrough in the theory of quantum Gibbs sampling. 
+The package is under active development and is not yet registered in Julia's
+General registry. Install it directly from GitHub:
 
-### References
-    [CKBG23]   Chen, C.F., Kastoryano, M.J., Brandão, F.G. and Gilyén, A., 2023. Quantum thermal state preparation. arXiv:2303.18224.
+```julia
+import Pkg
+Pkg.add(url="https://github.com/benzabonanza/QuantumFurnace.jl")
+```
 
-    [CKG23]    Chen, C.F., Kastoryano, M.J. and Gilyén, A., 2023. An efficient and exact noncommutative quantum Gibbs sampler. arXiv:2311.09207.
-
-
-## Getting Started
-
-If you are new, we recommend starting with the **[Tutorials](generated/tutorial.md)** to see how to solve common problems. For a detailed breakdown of all available functions, please see the **[API Reference](api.md)**.
+Start with [Finding a thermal state](generated/tutorial_thermalize.md), then
+consult the [API reference](api.md) for the current public interfaces.

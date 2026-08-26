@@ -50,7 +50,7 @@ in which case the Gibbs state is the unique stationary state of the generator:
 ```
 or
 ```math
-e^{\mathcal{Lt}(\sigma_\beta)} = \sigma_\beta.
+e^{\mathcal{Lt}}(\sigma_\beta) = \sigma_\beta.
 ```
 The quantum algorithms used and analysed in `QuantumFurnace` (see [Weak Measurement](theory_weak_measurement.md))
 evolve the system not by the above full form, but rather by a sequence of discrete time steps of duration $\delta$.

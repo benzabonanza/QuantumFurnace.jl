@@ -11,10 +11,10 @@ const generated_dir = joinpath(@__DIR__, "src/generated")
 if isdir(generated_dir)
     rm(generated_dir, recursive=true)
 end
-mkdir(generated_dir)
+mkpath(generated_dir)
 
 # Process each .jl file in the literate directory
-for filename in readdir(literate_dir)
+for filename in sort(readdir(literate_dir))
     if endswith(filename, ".jl")
         input_file = joinpath(literate_dir, filename)
         output_file_stem = first(splitext(filename))
@@ -31,9 +31,13 @@ end
 # --- 2. Configure Documenter.jl to build the site ---
 makedocs(
     sitename = "QuantumFurnace.jl",
+    checkdocs = :none,
+    remotes = nothing,
     format = Documenter.HTML(
-        prettyurls=get(ENV, "CI", "false") == "true",
-        canonical="https://tembence.github.io/QuantumFurnace.jl/stable/",
+        prettyurls = get(ENV, "CI", "false") == "true",
+        canonical = "https://benzabonanza.github.io/QuantumFurnace.jl/dev/",
+        repolink = "https://github.com/benzabonanza/QuantumFurnace.jl",
+        edit_link = "main",
         assets=String[],
     ),
     modules = [QuantumFurnace],
@@ -56,6 +60,6 @@ makedocs(
 
 # --- 3. Deploy the documentation to GitHub Pages ---
 deploydocs(
-    repo = "github.com/tembence/QuantumFurnace.jl.git",
+    repo = "github.com/benzabonanza/QuantumFurnace.jl.git",
     devbranch = "main",
 )

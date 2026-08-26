@@ -1,9 +1,3 @@
-"""
-    load_hamiltonian(type, num_qubits; beta) -> HamHam{Float64}
-
-Load a packaged Hamiltonian fixture and initialise its temperature-dependent
-Bohr data and Gibbs state at algorithmic inverse temperature `beta`.
-"""
 const _PACKAGE_DATA_DIR = normpath(joinpath(@__DIR__, "..", "data"))
 const _PACKAGED_HAMILTONIAN_DIR = joinpath(_PACKAGE_DATA_DIR, "hamiltonians")
 
@@ -21,6 +15,12 @@ function _packaged_hamiltonian_path(type::AbstractString, num_qubits::Integer)
     return path
 end
 
+"""
+    load_hamiltonian(type, num_qubits; beta) -> HamHam{Float64}
+
+Load a packaged Hamiltonian fixture and initialise its temperature-dependent
+Bohr data and Gibbs state at algorithmic inverse temperature `beta`.
+"""
 function load_hamiltonian(type::AbstractString, num_qubits::Integer; beta::Real)
     return _load_hamiltonian_bson(
         _packaged_hamiltonian_path(type, num_qubits), Float64(beta))
