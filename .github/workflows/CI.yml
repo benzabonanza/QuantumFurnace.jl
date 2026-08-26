@@ -23,6 +23,7 @@ jobs:
         julia-version: ['1.10', '1.12']
     env:
       JULIA_NUM_THREADS: 4
+      JULIA_NUM_PRECOMPILE_TASKS: 1
       OPENBLAS_NUM_THREADS: 1
     steps:
       - uses: actions/checkout@v4
@@ -30,6 +31,8 @@ jobs:
         with:
           version: ${{ matrix.julia-version }}
       - uses: julia-actions/cache@v2
+      - name: Select dependencies for this Julia version
+        run: rm -f Manifest.toml
       - name: Instantiate package
         run: julia --project --startup-file=no -e 'using Pkg; Pkg.instantiate()'
       - name: Run default test tier
