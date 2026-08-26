@@ -267,10 +267,12 @@ end
         predictor_allocs, warm1_matvecs, warm2_matvecs =
             _measure_channel_predictor_allocs(
                 cfg_C, N3_HAM, N3_JUMPS, rho_0, k_grid, ws_C)
-        # Pre-edit baseline: 2,720,568 bytes. Passing an Arnoldi column view and
-        # reusing `rho_buf` in the channel closure remove 46,080 bytes. The
-        # 8,512-byte margin is smaller than either 23,040-byte copy regression.
-        predictor_budget = 2_683_000
+        # Pre-edit Julia 1.12 baseline: 2,720,568 bytes. Passing an Arnoldi
+        # column view and reusing `rho_buf` remove 46,080 bytes. Julia 1.10's
+        # baseline ranges up to 2,935,056 bytes across the Pkg.test and focused
+        # clean environments; both margins remain smaller than either
+        # 23,040-byte copy regression.
+        predictor_budget = VERSION < v"1.11" ? 2_950_000 : 2_683_000
         @test predictor_allocs <= predictor_budget
         @test warm1_matvecs == warm2_matvecs == 20
         @test rho_0 == rho_before
