@@ -12,6 +12,7 @@
 
 using QuantumFurnace
 using Random
+using StableRNGs
 using Test
 
 @testset "classical_qmc module (SSE quantum Monte Carlo)" begin
@@ -94,7 +95,13 @@ using Test
             model = build_sse_tfim_model(
                 2, 2; seed=17, h=1.0, disorder_strength=0.2, J=1.0,
                 periodic_x=true, periodic_y=true)
-            rng = MersenneTwister(314159)
+            # Pin both disorder weights and the update stream: Base RNG streams
+            # are intentionally allowed to change between Julia versions.  The
+            # trace helper exercises only the update kernels, so H_phys and
+            # C_shift from the builder are not consulted below.
+            model.zdis .= (0.02, 0.06, 0.10, 0.14)
+            model.zz .= range(0.01, 0.08; length=length(model.zz))
+            rng = StableRNG(314159)
             state = qmc.SSEState(
                 model.n,
                 rand(rng, (-1, 1), model.n),
@@ -118,20 +125,20 @@ using Test
         end
 
         expected_cluster = [
-            (spins=(-1, -1, -1, -1), n_op=12, counts=(3, 1), signature=0x2fc7e6c087551901),
-            (spins=(-1, -1, -1, -1), n_op=14, counts=(3, 1), signature=0x8c4593ec9e3a03e9),
-            (spins=(-1, -1, -1, -1), n_op=14, counts=(2, 1), signature=0xf5c33c54df8af1af),
-            (spins=(-1, -1, -1, -1), n_op=14, counts=(2, 0), signature=0x7f4e0fac874d009a),
-            (spins=(-1, -1, -1, -1), n_op=12, counts=(2, 1), signature=0x8d443d5f87911d78),
-            (spins=(1, 1, 1, 1), n_op=8, counts=(1, 1), signature=0x721238b319cd3d88),
+            (spins=(-1, -1, -1, -1), n_op=11, counts=(1, 0), signature=0x901bb5fd6b85ba60),
+            (spins=(-1, -1, -1, -1), n_op=11, counts=(1, 0), signature=0xffbfe308cea58c35),
+            (spins=(-1, -1, -1, -1), n_op=16, counts=(1, 0), signature=0x5a7483384d6a7f12),
+            (spins=(-1, -1, -1, -1), n_op=14, counts=(1, 0), signature=0x0f5369f4bbf513bb),
+            (spins=(-1, -1, -1, -1), n_op=16, counts=(1, 0), signature=0x18ca1080b11d84a6),
+            (spins=(-1, -1, -1, -1), n_op=17, counts=(1, 0), signature=0x806ee6429b07d95e),
         ]
         expected_local = [
-            (spins=(-1, -1, -1, -1), n_op=12, counts=(5, 1), signature=0x2fc7e6c087551901),
-            (spins=(-1, -1, -1, -1), n_op=14, counts=(6, 1), signature=0x7414c1b143af1510),
-            (spins=(-1, -1, -1, -1), n_op=12, counts=(5, 0), signature=0x4ba94f165c487d24),
-            (spins=(-1, -1, -1, -1), n_op=11, counts=(5, 1), signature=0x24db771a5be21be2),
-            (spins=(-1, -1, -1, -1), n_op=9, counts=(5, 1), signature=0x0540f654b7ff8389),
-            (spins=(-1, -1, -1, -1), n_op=10, counts=(4, 0), signature=0x13579ae0e16226d3),
+            (spins=(-1, -1, -1, -1), n_op=11, counts=(4, 0), signature=0x901bb5fd6b85ba60),
+            (spins=(-1, -1, -1, -1), n_op=10, counts=(4, 0), signature=0xc88b49acc0ee3986),
+            (spins=(-1, -1, -1, -1), n_op=13, counts=(6, 0), signature=0x07092981e3bf38c1),
+            (spins=(-1, -1, -1, -1), n_op=12, counts=(5, 1), signature=0xfbe2cdd02e9cfa65),
+            (spins=(-1, -1, -1, -1), n_op=11, counts=(6, 1), signature=0x44208962f11d11ab),
+            (spins=(-1, -1, -1, -1), n_op=8, counts=(4, 0), signature=0x225016ba13c5e897),
         ]
 
         @test trace_updates(qmc.tfim_cluster_update!) == expected_cluster
