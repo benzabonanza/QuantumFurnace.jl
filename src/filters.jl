@@ -23,7 +23,14 @@ Math: `\$f(t) = exp(-sigma^2 t^2)\$` and
 """
 struct GaussianFilter{T<:AbstractFloat} <: AbstractFilter
     sigma::T
+    function GaussianFilter{T}(sigma::T) where {T<:AbstractFloat}
+        isfinite(sigma) && sigma > zero(T) || throw(ArgumentError(
+            "GaussianFilter.sigma must be finite and > 0."))
+        return new{T}(sigma)
+    end
 end
+
+GaussianFilter(sigma::T) where {T<:AbstractFloat} = GaussianFilter{T}(sigma)
 
 """
     DLLGaussianFilter{T<:AbstractFloat}(beta::T)
@@ -37,7 +44,14 @@ Paley–Wiener bound.
 """
 struct DLLGaussianFilter{T<:AbstractFloat} <: AbstractFilter
     beta::T
+    function DLLGaussianFilter{T}(beta::T) where {T<:AbstractFloat}
+        isfinite(beta) && beta > zero(T) || throw(ArgumentError(
+            "DLLGaussianFilter.beta must be finite and > 0."))
+        return new{T}(beta)
+    end
 end
+
+DLLGaussianFilter(beta::T) where {T<:AbstractFloat} = DLLGaussianFilter{T}(beta)
 
 @inline _is_admissible_dll_filter(::DLLGaussianFilter) = true
 
@@ -192,6 +206,13 @@ should see the Metropolis plateau.
 struct DLLMetropolisFilter{T<:AbstractFloat} <: AbstractFilter
     beta::T
     S::T
+    function DLLMetropolisFilter{T}(beta::T, S::T) where {T<:AbstractFloat}
+        isfinite(beta) && beta > zero(T) || throw(ArgumentError(
+            "DLLMetropolisFilter.beta must be finite and > 0."))
+        isfinite(S) && S > zero(T) || throw(ArgumentError(
+            "DLLMetropolisFilter.S must be finite and > 0."))
+        return new{T}(beta, S)
+    end
 end
 
 DLLMetropolisFilter(beta::T; S::Real = T(2)) where {T<:AbstractFloat} =
@@ -199,6 +220,35 @@ DLLMetropolisFilter(beta::T; S::Real = T(2)) where {T<:AbstractFloat} =
 
 Base.eltype(::DLLMetropolisFilter{T}) where {T} = Complex{T}
 @inline _is_admissible_dll_filter(::DLLMetropolisFilter) = true
+
+"""Reject filters that do not implement an admissible DLL balance kernel."""
+function _require_admissible_dll_filter(
+    filter::AbstractFilter;
+    beta::Union{Nothing, Real}=nothing,
+)
+    _is_admissible_dll_filter(filter) || throw(ArgumentError(
+        "$(nameof(typeof(filter))) is not an admissible DLL filter. Use " *
+        "DLLGaussianFilter, DLLMetropolisFilter, ShiftedSymmetricFilter, " *
+        "or DLLMultiChannelFilter."))
+
+    hasproperty(filter, :beta) || throw(ArgumentError(
+        "$(nameof(typeof(filter))) must expose its DLL inverse temperature as `beta`."))
+    filter_beta = getproperty(filter, :beta)
+    isfinite(filter_beta) && filter_beta > 0 || throw(ArgumentError(
+        "$(nameof(typeof(filter))).beta must be finite and > 0."))
+
+    if beta !== nothing
+        beta_value = float(beta)
+        isfinite(beta_value) && beta_value > 0 || throw(ArgumentError(
+            "DLL helper beta must be finite and > 0."))
+        R = promote_type(typeof(float(filter_beta)), typeof(beta_value))
+        beta_rtol = R(10) * eps(R)
+        isapprox(R(filter_beta), R(beta_value); atol=zero(R), rtol=beta_rtol) ||
+            throw(ArgumentError(
+                "$(nameof(typeof(filter))).beta=$(filter_beta) must match beta=$(beta_value)."))
+    end
+    return filter
+end
 
 """
     q_weight(filter::DLLMetropolisFilter, ν)

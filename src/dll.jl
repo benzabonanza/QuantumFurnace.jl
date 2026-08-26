@@ -19,6 +19,7 @@ function dll_lindblad_op_bohr(
     hamiltonian::HamHam{T},
     filter::AbstractFilter,
 ) where {T<:AbstractFloat}
+    _require_admissible_dll_filter(filter)
     eigvals = hamiltonian.eigvals
     A_eb = jump.in_eigenbasis
     n = length(eigvals)
@@ -54,6 +55,7 @@ function dll_lindblad_op_time(
     filter::AbstractFilter,
     t0::Real,
 ) where {T<:AbstractFloat}
+    _require_admissible_dll_filter(filter)
     eigvals = hamiltonian.eigvals
     A_eb = jump.in_eigenbasis
     n = length(eigvals)
@@ -113,6 +115,7 @@ function dll_coherent_op_bohr(
     filter::AbstractFilter,
     beta::Real,
 ) where {T<:AbstractFloat}
+    _require_admissible_dll_filter(filter; beta=beta)
     eigvals = hamiltonian.eigvals
     n = length(eigvals)
     CT = Complex{T}
@@ -201,6 +204,7 @@ function dll_coherent_op_time(
     beta::Real,
     τ::Real,
 ) where {T<:AbstractFloat}
+    _require_admissible_dll_filter(filter; beta=beta)
     Nt = length(time_labels)
     CT = Complex{T}
     βT = T(beta)
@@ -241,6 +245,7 @@ function _dll_coherent_op_time_frequency_grid(
     nu_max::Real,
     nu_grid_size::Int = 256,
 ) where {T<:AbstractFloat}
+    _require_admissible_dll_filter(filter; beta=beta)
     nu_grid_size >= 2 || throw(ArgumentError("nu_grid_size must be >= 2."))
     nu_lo = T(nu_min)
     nu_hi = T(nu_max)
@@ -322,6 +327,7 @@ function dll_coherent_op_time(
     τ::Real;
     nu_grid_size::Int = 256,
 ) where {T<:AbstractFloat}
+    _require_admissible_dll_filter(filter; beta=beta)
     return _dll_coherent_op_time_frequency_grid(
         jumps, hamiltonian, time_labels, filter, beta, τ;
         nu_min = -filter.S,
@@ -412,6 +418,7 @@ function dll_coherent_op_time_legacy(
     τ::Real;
     nu_grid::Union{Nothing, AbstractVector{<:Real}} = nothing,
 ) where {T<:AbstractFloat}
+    _require_admissible_dll_filter(filter; beta=beta)
     eigvals = hamiltonian.eigvals
     n = length(eigvals)
     CT = Complex{T}
@@ -503,6 +510,7 @@ function dll_kossakowski_bohr(
     filter::AbstractFilter,
     bohr_freqs::AbstractVector{<:Real},
 )
+    _require_admissible_dll_filter(filter)
     K = length(bohr_freqs)
     v = [freq_kernel(filter, ν) for ν in bohr_freqs]
     α = Matrix{eltype(v)}(undef, K, K)

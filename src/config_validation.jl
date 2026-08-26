@@ -295,14 +295,24 @@ function validate_config!(
         push!(errors, "jump_selection must be :sweep or :random (got $(config.jump_selection)).")
     end
 
-    # Every DLL frequency kernel contains `e^{-beta*nu/4}` and therefore must
-    # use the simulator temperature. A DLL construction additionally rejects
-    # ordinary CKG filters, whose kernels do not satisfy the DLL symmetry.
-    if config.filter !== nothing &&
-       (config.construction isa DLL ||
-        config.filter isa Union{DLLGaussianFilter, DLLMetropolisFilter,
-                                ShiftedSymmetricFilter, DLLMultiChannelFilter})
-        _collect_dll_filter_errors!(errors, config.filter, config.beta)
+    # Filter families are part of the physical construction, not interchangeable
+    # numerical windows. KMS/GNS use the CKG Gaussian at exactly `config.sigma`;
+    # DLL uses a balance-weighted DLL filter at exactly `config.beta`.
+    if config.filter !== nothing
+        if config.construction isa DLL
+            _collect_dll_filter_errors!(errors, config.filter, config.beta)
+        elseif !(config.filter isa GaussianFilter)
+            push!(errors,
+                "$(nameof(typeof(config.construction))) construction requires " *
+                "GaussianFilter(config.sigma); $(nameof(typeof(config.filter))) is " *
+                "not supported for this construction.")
+        else
+            sigma_rtol = 10eps(typeof(config.sigma))
+            if !isapprox(config.filter.sigma, config.sigma;
+                         atol=zero(config.sigma), rtol=sigma_rtol)
+                push!(errors, "GaussianFilter.sigma must match Config.sigma.")
+            end
+        end
     end
 
     # --- DLL construction validation (DLL-2) ---

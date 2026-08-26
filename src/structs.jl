@@ -63,7 +63,8 @@ presence is determined by `with_coherent(C())`.
 - `mixing_time`, `delta`: Channel duration and step size.
 - `with_gqsp`, `gqsp_degree`: Coherent polynomial approximation controls.
 - `jump_selection`: `:sweep` or `:random` for full-DM channel evolution.
-- `filter`: Optional DLL filter; `nothing` selects the CKG Gaussian.
+- `filter`: Construction-specific filter. KMS/GNS accept `nothing` or a
+  `GaussianFilter` matching `sigma`; DLL requires an explicit DLL filter.
 
 Each register obeys `\$w0_X t0_X = 2 pi / 2^r_X\$`. Unsuffixed register fields
 are compatibility fallbacks promoted by `validate_config!`.
@@ -120,7 +121,8 @@ are compatibility fallbacks promoted by `validate_config!`.
     # Full-DM jump rule: deterministic sweep or rate-rescaled random choice.
     jump_selection::Symbol = :sweep
 
-    # `nothing` selects the CKG Gaussian with width `sigma`.
+    # `nothing` selects the CKG Gaussian with width `sigma` for KMS/GNS.
+    # DLL constructions require an explicit DLL filter.
     filter::Union{Nothing, AbstractFilter} = nothing
 end
 

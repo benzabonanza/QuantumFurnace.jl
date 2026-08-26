@@ -24,8 +24,14 @@ struct DLLMultiChannelFilter{T<:AbstractFloat, F<:AbstractFilter} <: AbstractFil
         if isempty(channels)
             throw(ArgumentError("DLLMultiChannelFilter requires at least one channel."))
         end
+        isfinite(beta) && beta > zero(T) || throw(ArgumentError(
+            "DLLMultiChannelFilter.beta must be finite and > 0."))
         beta_rtol = T(10) * eps(T)
         for (ℓ, c) in enumerate(channels)
+            if !_is_admissible_dll_filter(c)
+                throw(ArgumentError("DLLMultiChannelFilter channel $ℓ ($(typeof(c))) " *
+                                    "is not an admissible DLL filter."))
+            end
             if !hasproperty(c, :beta)
                 throw(ArgumentError("DLLMultiChannelFilter channel $ℓ ($(typeof(c))) " *
                                     "lacks a `beta` field — only DLL-style filters supported."))
@@ -47,7 +53,11 @@ DLLMultiChannelFilter(channels::Vector{F}, beta::T) where
 # `Complex{T}` is the right element type regardless of which sub-filters appear.
 Base.eltype(::DLLMultiChannelFilter{T}) where {T} = Complex{T}
 @inline _is_admissible_dll_filter(f::DLLMultiChannelFilter) =
-    !isempty(f.channels) && all(_is_admissible_dll_filter, f.channels)
+    isfinite(f.beta) && f.beta > zero(f.beta) && !isempty(f.channels) &&
+    all(c -> _is_admissible_dll_filter(c) && hasproperty(c, :beta) &&
+             isfinite(c.beta) && c.beta > 0 &&
+             isapprox(c.beta, f.beta; atol=zero(f.beta), rtol=10eps(typeof(f.beta))),
+        f.channels)
 
 """
     q_weight(filter::DLLMultiChannelFilter, nu) -> Real
@@ -116,6 +126,7 @@ function dll_kossakowski_bohr(
     filter::DLLMultiChannelFilter,
     bohr_freqs::AbstractVector{<:Real},
 )
+    _require_admissible_dll_filter(filter)
     alpha = dll_kossakowski_bohr(filter.channels[1], bohr_freqs)
     @inbounds for channel_index in 2:length(filter.channels)
         alpha .+= dll_kossakowski_bohr(filter.channels[channel_index], bohr_freqs)
@@ -142,6 +153,26 @@ struct ShiftedSymmetricFilter{T<:AbstractFloat, F<:AbstractFilter} <: AbstractFi
     shift::T
     weight::T
     beta::T
+    function ShiftedSymmetricFilter{T, F}(
+        base::F,
+        shift::T,
+        weight::T,
+        beta::T,
+    ) where {T<:AbstractFloat, F<:AbstractFilter}
+        base isa Union{DLLGaussianFilter, DLLMetropolisFilter} || throw(ArgumentError(
+            "ShiftedSymmetricFilter base $(typeof(base)) is not an admissible DLL filter."))
+        _is_admissible_dll_filter(base) || throw(ArgumentError(
+            "ShiftedSymmetricFilter base $(typeof(base)) is not an admissible DLL filter."))
+        isfinite(beta) && beta > zero(T) || throw(ArgumentError(
+            "ShiftedSymmetricFilter beta must be finite and > 0."))
+        isapprox(beta, base.beta; atol=zero(T), rtol=10eps(T)) || throw(ArgumentError(
+            "ShiftedSymmetricFilter beta=$beta must match base beta=$(base.beta)."))
+        isfinite(shift) || throw(ArgumentError(
+            "ShiftedSymmetricFilter shift must be finite."))
+        isfinite(weight) && weight > zero(T) || throw(ArgumentError(
+            "ShiftedSymmetricFilter weight must be finite and > 0."))
+        return new{T, F}(base, shift, weight, beta)
+    end
 end
 
 function ShiftedSymmetricFilter(base::F, shift::T, weight::T) where
@@ -159,7 +190,11 @@ end
 
 Base.eltype(::ShiftedSymmetricFilter{T}) where {T} = Complex{T}
 @inline _is_admissible_dll_filter(f::ShiftedSymmetricFilter) =
-    f.base isa Union{DLLGaussianFilter, DLLMetropolisFilter}
+    f.base isa Union{DLLGaussianFilter, DLLMetropolisFilter} &&
+    _is_admissible_dll_filter(f.base) &&
+    isfinite(f.beta) && f.beta > zero(f.beta) &&
+    isapprox(f.beta, f.base.beta; atol=zero(f.beta), rtol=10eps(typeof(f.beta))) &&
+    isfinite(f.shift) && isfinite(f.weight) && f.weight > zero(f.weight)
 
 """
     q_weight(filter::ShiftedSymmetricFilter, ν) -> Real
@@ -276,6 +311,7 @@ function dll_coherent_op_time(
     tau::Real;
     nu_grid_size::Int = 256,
 ) where {T<:AbstractFloat}
+    _require_admissible_dll_filter(filter; beta=beta)
     nu_min, nu_max = _shifted_frequency_window(filter)
     return _dll_coherent_op_time_frequency_grid(
         jumps, hamiltonian, time_labels, filter, beta, tau;
@@ -372,6 +408,7 @@ function dll_lindblad_op_bohr(
     hamiltonian::HamHam{T},
     filter::DLLMultiChannelFilter{T},
 ) where {T<:AbstractFloat}
+    _require_admissible_dll_filter(filter)
     return [dll_lindblad_op_bohr(jump, hamiltonian, c) for c in filter.channels]
 end
 
@@ -391,6 +428,7 @@ function dll_lindblad_op_time(
     filter::DLLMultiChannelFilter{T},
     t0::Real,
 ) where {T<:AbstractFloat}
+    _require_admissible_dll_filter(filter)
     return [dll_lindblad_op_time(jump, hamiltonian, time_labels, c, t0)
             for c in filter.channels]
 end
@@ -406,6 +444,7 @@ function dll_coherent_op_bohr(
     filter::DLLMultiChannelFilter{T},
     beta::Real,
 ) where {T<:AbstractFloat}
+    _require_admissible_dll_filter(filter; beta=beta)
     G = dll_coherent_op_bohr(jumps, hamiltonian, filter.channels[1], beta)
     @inbounds for ℓ in 2:length(filter.channels)
         G .+= dll_coherent_op_bohr(jumps, hamiltonian, filter.channels[ℓ], beta)
@@ -428,6 +467,7 @@ function dll_coherent_op_time(
     τ::Real;
     kwargs...,
 ) where {T<:AbstractFloat}
+    _require_admissible_dll_filter(filter; beta=beta)
     G = dll_coherent_op_time(jumps, hamiltonian, time_labels,
                               filter.channels[1], beta, τ; kwargs...)
     @inbounds for ℓ in 2:length(filter.channels)

@@ -149,6 +149,75 @@ using QuadGK
     end
 
     # -----------------------------------------------------------------------
+    # (f2) Filter families are construction-specific. Mixing a DLL kernel into
+    #      KMS/GNS, or changing the CKG Gaussian width independently of sigma,
+    #      breaks detailed balance rather than merely changing accuracy.
+    # -----------------------------------------------------------------------
+    @testset "(f2) construction-specific filter validation" begin
+        common = (;
+            sim = Lindbladian(), domain = BohrDomain(), num_qubits = NUM_QUBITS,
+            with_linear_combination = true, beta = BETA, sigma = SIGMA,
+            a = BETA / 30.0, s = 0.4,
+        )
+
+        kms_dll = Config(; common..., construction = KMS(),
+                         filter = DLLGaussianFilter(BETA))
+        gns_dll = Config(; common..., construction = GNS(),
+                         filter = DLLMetropolisFilter(BETA))
+        kms_wrong_width = Config(; common..., construction = KMS(),
+                                 filter = GaussianFilter(2SIGMA))
+        dll_ckg = Config(; common..., construction = DLL(),
+                         filter = GaussianFilter(SIGMA))
+
+        @test_throws ArgumentError validate_config!(kms_dll)
+        @test_throws ArgumentError validate_config!(gns_dll)
+        @test_throws ArgumentError validate_config!(kms_wrong_width)
+        @test_throws ArgumentError validate_config!(dll_ckg)
+        @test validate_config!(Config(; common..., construction = KMS(),
+                                     filter = GaussianFilter(SIGMA))) === nothing
+        @test validate_config!(Config(; common..., construction = GNS(),
+                                     filter = GaussianFilter(SIGMA))) === nothing
+        @test validate_config!(Config(; common..., construction = KMS(),
+                                     filter = GaussianFilter(nextfloat(SIGMA)))) === nothing
+
+        for bad in (0.0, -1.0, Inf, NaN)
+            @test_throws ArgumentError GaussianFilter(bad)
+            @test_throws ArgumentError DLLGaussianFilter(bad)
+            @test_throws ArgumentError DLLMetropolisFilter(bad)
+        end
+        @test_throws ArgumentError DLLMetropolisFilter(BETA; S = 0.0)
+        @test_throws ArgumentError DLLMetropolisFilter(BETA; S = -1.0)
+        @test_throws ArgumentError DLLMetropolisFilter(BETA; S = Inf)
+        @test_throws ArgumentError DLLMetropolisFilter(BETA; S = NaN)
+    end
+
+    @testset "(f3) exported DLL helpers reject incompatible filters" begin
+        ckg_filter = GaussianFilter(SIGMA)
+        dll_filter = DLLGaussianFilter(BETA)
+        jump = TEST_JUMPS[1]
+        times = [-0.1, 0.0, 0.1]
+        bohr_grid = [-0.2, 0.0, 0.2]
+
+        @test_throws ArgumentError dll_lindblad_op_bohr(jump, TEST_HAM, ckg_filter)
+        @test_throws ArgumentError dll_lindblad_op_time(
+            jump, TEST_HAM, times, ckg_filter, 0.1)
+        @test_throws ArgumentError dll_coherent_op_bohr(
+            TEST_JUMPS, TEST_HAM, ckg_filter, BETA)
+        @test_throws ArgumentError dll_kossakowski_bohr(ckg_filter, bohr_grid)
+        @test_throws ArgumentError dll_coherent_op_bohr(
+            TEST_JUMPS, TEST_HAM, dll_filter, 2BETA)
+        @test_throws ArgumentError dll_coherent_op_time(
+            TEST_JUMPS, TEST_HAM, times, dll_filter, 2BETA, 0.1)
+
+        shifted = ShiftedSymmetricFilter(dll_filter, 0.1, 1.0)
+        multi = DLLMultiChannelFilter([shifted], BETA)
+        @test_throws ArgumentError dll_coherent_op_bohr(
+            TEST_JUMPS, TEST_HAM, shifted, 2BETA)
+        @test_throws ArgumentError dll_coherent_op_bohr(
+            TEST_JUMPS, TEST_HAM, multi, 2BETA)
+    end
+
+    # -----------------------------------------------------------------------
     # (g) DLL NUFFT prefactor spot check: the (i,j,k) entry equals the direct
     #     quadrature ∫ time_kernel(filter, t) cis(-ω·t) cis(bohr_freq[i,j]·t) dt.
     #     We pick BETA as both the DLL filter parameter and the Config beta so
@@ -159,7 +228,7 @@ using QuadGK
         config_dll = Config(;
             sim = Lindbladian(),
             domain = TimeDomain(),
-            construction = KMS(),
+            construction = DLL(),
             num_qubits = NUM_QUBITS,
             with_linear_combination = true,
             beta = BETA,
@@ -176,9 +245,6 @@ using QuadGK
         # Sanity: validate_config! must accept this configuration.
         @test_nowarn validate_config!(config_dll)
 
-        pd = QuantumFurnace._precompute_data(config_dll, TEST_HAM)
-        prefs = pd.oft_nufft_prefactors
-
         # Build a quadrature ground truth for one (i,j) Bohr index and one ω.
         # The NUFFT computes:
         #     P[i,j,k] = ∑_t time_kernel(filter, t) * cis(-ω_k * t) * cis(bohr[i,j] * t)
@@ -192,15 +258,16 @@ using QuadGK
         f = DLLGaussianFilter(BETA)
         i, j = 2, 5
         bohr_ij = TEST_HAM.bohr_freqs[i, j]
-        k = prefs.energy_to_index[energy_labels[length(energy_labels) ÷ 2 + 4]]
         ω = energy_labels[length(energy_labels) ÷ 2 + 4]
+        prefs = QuantumFurnace._prepare_oft_nufft_prefactors(
+            TEST_HAM.bohr_freqs, oft_time_labels, [ω], f; eps=1e-12)
 
         ref = ComplexF64(0)
         for t in oft_time_labels
             ref += time_kernel(f, t) * cis(-ω * t) * cis(bohr_ij * t)
         end
 
-        nufft_val = ComplexF64(prefs.data[i, j, k])
+        nufft_val = ComplexF64(prefs.data[i, j, 1])
         @test isapprox(nufft_val, ref; atol=1e-8, rtol=1e-8)
     end
 
@@ -212,7 +279,7 @@ using QuadGK
         config_bad = Config(;
             sim = Lindbladian(),
             domain = TimeDomain(),
-            construction = KMS(),
+            construction = DLL(),
             num_qubits = NUM_QUBITS,
             with_linear_combination = true,
             beta = 1.0,
@@ -237,7 +304,7 @@ using QuadGK
         config_good = Config(;
             sim = Lindbladian(),
             domain = TimeDomain(),
-            construction = KMS(),
+            construction = DLL(),
             num_qubits = NUM_QUBITS,
             with_linear_combination = true,
             beta = 2.0,
@@ -261,7 +328,7 @@ using QuadGK
         config_bad_beta = Config(;
             sim = Lindbladian(),
             domain = TimeDomain(),
-            construction = KMS(),
+            construction = DLL(),
             num_qubits = NUM_QUBITS,
             with_linear_combination = true,
             beta = 1.0,
@@ -282,37 +349,11 @@ using QuadGK
             @test occursin("DLLMetropolisFilter.beta must match Config.beta", e.msg)
         end
 
-        # Negative S → should throw. Construct directly to bypass the kwarg check.
-        bad_S_filter = QuantumFurnace.DLLMetropolisFilter{Float64}(2.0, -1.0)
-        config_bad_S = Config(;
-            sim = Lindbladian(),
-            domain = TimeDomain(),
-            construction = KMS(),
-            num_qubits = NUM_QUBITS,
-            with_linear_combination = true,
-            beta = 2.0,
-            sigma = SIGMA,
-            a = 2.0 / 30.0,
-            s = 0.4,
-            num_energy_bits = NUM_ENERGY_BITS,
-            w0 = W0,
-            t0 = T0,
-            num_trotter_steps_per_t0 = NUM_TROTTER_STEPS_PER_T0,
-            filter = bad_S_filter,
-        )
-        try
-            validate_config!(config_bad_S)
-            @test false  # should have thrown
-        catch e
-            @test e isa ArgumentError
-            @test occursin("DLLMetropolisFilter.S must be > 0", e.msg)
-        end
-
         # Matching beta + positive S → no throw.
         config_good = Config(;
             sim = Lindbladian(),
             domain = TimeDomain(),
-            construction = KMS(),
+            construction = DLL(),
             num_qubits = NUM_QUBITS,
             with_linear_combination = true,
             beta = 2.0,
