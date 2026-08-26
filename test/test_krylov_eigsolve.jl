@@ -331,8 +331,7 @@ using QuantumFurnace
             # Same dimension/config is insufficient: cached physics must come
             # from the exact Hamiltonian and jump vector supplied at the call.
             ham_other = QuantumFurnace._load_hamiltonian_bson(
-                joinpath(dirname(@__DIR__), "hamiltonians",
-                         "heis_xxx_disordered_periodic_n3_seed46.bson"), BETA)
+                test_hamiltonian_path(3), BETA)
             @test_throws ArgumentError krylov_spectral_gap(
                 cfg, ham_other, N3_JUMPS; krylovdim=30, howmany=4, workspace=ws_L)
 

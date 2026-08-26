@@ -181,8 +181,7 @@
     # 2.06e-12 worst cell is ~5×.
     # ---------------------------------------------------------------------
     @testset "(h) NUFFT slice == explicit Riemann sum (n=3, FINUFFT floor)" begin
-        source_root = dirname(@__DIR__)
-        ham_path = joinpath(source_root, "hamiltonians", "heis_xxx_disordered_periodic_n3_seed46.bson")
+        ham_path = test_hamiltonian_path(3)
         for beta in _DLL_BETAS
             ham = _load_test_hamiltonian(ham_path, Float64(beta))
             jump_paulis = [[X], [Y], [Z]]

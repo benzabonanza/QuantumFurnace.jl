@@ -10,11 +10,11 @@ using Test: @test
 using BSON
 
 # ---------------------------------------------------------------------------
-# BSON legacy loader (test-only) — wraps the package-internal loader so that
-# fixtures can pass an explicit path (Pkg.test() runs from a temp project dir
-# where load_hamiltonian's Pkg.project() lookup misses the source-tree files).
+# Packaged BSON fixture access shared by the test suite.
 # ---------------------------------------------------------------------------
 const _load_test_hamiltonian = QuantumFurnace._load_hamiltonian_bson
+test_hamiltonian_path(num_qubits::Integer) =
+    QuantumFurnace._packaged_hamiltonian_path("heis", num_qubits)
 
 # ---------------------------------------------------------------------------
 # Shared physics fixtures (test-only)
@@ -31,8 +31,7 @@ need to sweep β ∈ {1, 5, 10}.
 Returns the same shape as `make_test_system`.
 """
 function make_dll_n3_system(beta_alg::Real)
-    source_root = dirname(@__DIR__)
-    ham_path = joinpath(source_root, "hamiltonians", "heis_xxx_disordered_periodic_n3_seed46.bson")
+    ham_path = test_hamiltonian_path(3)
     ham = _load_test_hamiltonian(ham_path, Float64(beta_alg))
     jump_paulis = [[X], [Y], [Z]]
     num_jumps = length(jump_paulis) * 3
@@ -199,10 +198,7 @@ Returns a named tuple with:
 - `gibbs`: the Gibbs state matrix (Hermitian, trace 1)
 """
 function make_test_system(; num_qubits::Int=NUM_QUBITS, trotter::Union{Nothing, TrottTrott}=nothing)
-    # Load Hamiltonian directly using the source tree path
-    # (load_hamiltonian uses Pkg.project().path which points to a temp dir during Pkg.test())
-    source_root = dirname(@__DIR__)
-    ham_path = joinpath(source_root, "hamiltonians", "heis_xxx_disordered_periodic_n$(num_qubits)_seed46.bson")
+    ham_path = test_hamiltonian_path(num_qubits)
     hamiltonian = _load_test_hamiltonian(ham_path, BETA)
 
     # Create jump operators: single-site Paulis (X, Y, Z) on each site

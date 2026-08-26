@@ -39,7 +39,7 @@ using QuantumFurnace: _jumps_in_basis, build_dense_superoperator, trace_distance
     n = 3
     d = 2^n
     β_phys = 0.5
-    ham_path = joinpath(dirname(@__DIR__), "hamiltonians", "heis_xxx_disordered_periodic_n3_seed46.bson")
+    ham_path = test_hamiltonian_path(3)
 
     resc = _load_hamiltonian_bson(ham_path, 1.0).rescaling_factor
     β_alg = β_phys * resc

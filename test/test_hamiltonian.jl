@@ -476,4 +476,24 @@ using Statistics: median
         @test abs(real(tr(H_chain * ZZ_34)) / 2^n) > 0.1
         @test abs(real(tr(H_2d * ZZ_34)) / 2^n) < 1e-12
     end
+
+    @testset "load_hamiltonian uses packaged data" begin
+        path = test_hamiltonian_path(3)
+        @test isfile(path)
+        @test startswith(path, QuantumFurnace._PACKAGE_DATA_DIR)
+
+        loaded = mktempdir() do tmp
+            cd(tmp) do
+                load_hamiltonian("heis", 3; beta=10)
+            end
+        end
+        direct = QuantumFurnace._load_hamiltonian_bson(path, 10.0)
+        @test loaded.data == direct.data
+        @test loaded.eigvals == direct.eigvals
+        @test loaded.gibbs == direct.gibbs
+
+        @test_throws ArgumentError load_hamiltonian("tfim", 3; beta=10.0)
+        @test_throws ArgumentError load_hamiltonian("heis", 2; beta=10.0)
+        @test_throws ArgumentError load_hamiltonian("heis", 3; beta=0.0)
+    end
 end

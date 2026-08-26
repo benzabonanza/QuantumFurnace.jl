@@ -30,7 +30,7 @@ using QuantumFurnace: _jumps_in_basis, build_dense_superoperator, trace_distance
 
 @testset "superop_distance (qf-72g)" begin
     rho_plus(m) = (psi = ones(ComplexF64, 2^m) ./ sqrt(2.0^m); psi * psi')
-    param_table = joinpath(dirname(@__DIR__), "scripts", "output", "channel_param_table.bson")
+    param_table = QuantumFurnace._package_data_path("channel_param_table.bson")
 
     isfile(param_table) || error("missing required channel parameter table: $param_table")
         n = 3

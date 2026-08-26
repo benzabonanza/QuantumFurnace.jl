@@ -1,17 +1,29 @@
 """
     load_hamiltonian(type, num_qubits; beta) -> HamHam{Float64}
 
-Load a supported precomputed Hamiltonian and initialise its temperature-dependent
+Load a packaged Hamiltonian fixture and initialise its temperature-dependent
 Bohr data and Gibbs state at algorithmic inverse temperature `beta`.
 """
-function load_hamiltonian(type::String, num_qubits::Int; beta::Float64)
-    type == "heis" || error("load_hamiltonian: only type=\"heis\" is supported " *
-                            "(maps to heis_xxx_disordered_periodic_n*_seed46.bson). Got: $type")
-    project_root = Pkg.project().path |> dirname
-    data_dir = joinpath(project_root, "hamiltonians")
-    output_filename = "heis_xxx_disordered_periodic_n$(num_qubits)_seed46.bson"
-    ham_path = joinpath(data_dir, output_filename)
-    return _load_hamiltonian_bson(ham_path, beta)
+const _PACKAGE_DATA_DIR = normpath(joinpath(@__DIR__, "..", "data"))
+const _PACKAGED_HAMILTONIAN_DIR = joinpath(_PACKAGE_DATA_DIR, "hamiltonians")
+
+@inline _package_data_path(parts::AbstractString...) = joinpath(_PACKAGE_DATA_DIR, parts...)
+
+function _packaged_hamiltonian_path(type::AbstractString, num_qubits::Integer)
+    type == "heis" || throw(ArgumentError(
+        "load_hamiltonian supports type=\"heis\" (the disordered periodic XXX fixture), got \"$type\"."))
+    num_qubits > 0 || throw(ArgumentError("num_qubits must be > 0."))
+    filename = "heis_xxx_disordered_periodic_n$(num_qubits)_seed46.bson"
+    path = joinpath(_PACKAGED_HAMILTONIAN_DIR, filename)
+    isfile(path) || throw(ArgumentError(
+        "No packaged heis fixture is available for num_qubits=$num_qubits. " *
+        "Use build_heis_1d to construct another system."))
+    return path
+end
+
+function load_hamiltonian(type::AbstractString, num_qubits::Integer; beta::Real)
+    return _load_hamiltonian_bson(
+        _packaged_hamiltonian_path(type, num_qubits), Float64(beta))
 end
 
 """
@@ -19,7 +31,7 @@ end
 
 Load a NamedTuple-schema Hamiltonian BSON and construct `HamHam` at `beta`.
 """
-function _load_hamiltonian_bson(path::String, beta::Float64)
+function _load_hamiltonian_bson(path::AbstractString, beta::Real)
     return HamHam(_parse_hamiltonian_bson(path), beta)
 end
 
@@ -30,7 +42,7 @@ Parse a supported Hamiltonian BSON into the canonical raw NamedTuple without
 constructing `HamHam`. The result retains `rescaling_factor` for physical-to-
 algorithmic temperature conversion and drops trailing metadata fields.
 """
-function _parse_hamiltonian_bson(path::String)
+function _parse_hamiltonian_bson(path::AbstractString)
     raw = open(path) do io
         BSON.parse(io)
     end
@@ -42,7 +54,7 @@ function _parse_hamiltonian_bson(path::String)
     is_namedtuple ||
         error("Unrecognised Hamiltonian BSON schema (expected NamedTuple, got " *
               "type=$type_name). The older `HamHam`-typed schema is no longer " *
-              "supported; regenerate via `hamiltonians/generate_hamiltonians.jl`.")
+              "supported; regenerate it with `build_heis_1d`.")
     return _namedtuple_schema_to_raw(ham_raw)
 end
 

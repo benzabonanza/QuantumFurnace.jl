@@ -6,9 +6,7 @@ using LinearAlgebra
 # We re-load via the public NamedTuple-keyword constructor to exercise the
 # new `HamHam(raw; beta_phys=...)` path against the legacy positional
 # `HamHam(raw, beta)` form.
-const _BPC_SRC_ROOT = dirname(@__DIR__)
-const _BPC_HAM_PATH = joinpath(_BPC_SRC_ROOT, "hamiltonians",
-                               "heis_xxx_disordered_periodic_n3_seed46.bson")
+const _BPC_HAM_PATH = test_hamiltonian_path(3)
 
 # Reuse the test-helpers loader (parses the NamedTuple-typed BSON into the
 # raw shape needed by HamHam(raw; beta_phys=...)).

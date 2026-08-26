@@ -7,9 +7,7 @@ using BSON
 # β_alg-first mode. We exercise `sweep_mixing_times` (KMS BohrDomain, dense)
 # at the smallest cell (n=3) so the test finishes in a few seconds.
 
-const _BPS_SRC_ROOT = dirname(@__DIR__)
-const _BPS_HAM_PATH = joinpath(_BPS_SRC_ROOT, "hamiltonians",
-                               "heis_xxx_disordered_periodic_n3_seed46.bson")
+const _BPS_HAM_PATH = test_hamiltonian_path(3)
 
 # Read the rescaling_factor once so we can predict the derived β_alg.
 const _BPS_HAM = QuantumFurnace._load_hamiltonian_bson(_BPS_HAM_PATH, 10.0)

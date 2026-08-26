@@ -619,12 +619,11 @@ end
         # rather than the legacy hardcoded (12, 0.05). Smooth-Metro saturates at
         # machine precision by r_D = 6, so τ_mix at r_D = 7 (recipe) and r_D = 12
         # (legacy) must agree to many digits.
-        project_root = dirname(@__DIR__)
-        param_table  = joinpath(project_root, "scripts", "output",
-                                 "ideal_lindbladian_param_table.bson")
+        param_table = QuantumFurnace._package_data_path(
+            "ideal_lindbladian_param_table.bson")
         ham_file     = (n) -> "heis_xxx_disordered_periodic_n$(n)_seed46.bson"
 
-        ham_path = joinpath(project_root, "hamiltonians", ham_file(3))
+        ham_path = test_hamiltonian_path(3)
         isfile(param_table) || error(
             "missing required ideal-Lindbladian parameter table: $param_table")
         isfile(ham_path) || error("missing required Hamiltonian fixture: $ham_path")

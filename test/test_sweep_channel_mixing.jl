@@ -9,10 +9,8 @@
     # The smoke cell for P0b: n=3, β=10, ε=1e-3, smooth-Metro KMS, TimeDomain.
     # Downstream sweeps may pick TrotterDomain (canonical KMS coherent uses the
     # qf-e4z.20 TrotterTriple — three independent per-leg Strang caches).
-    project_root = dirname(@__DIR__)
-    param_table  = joinpath(project_root, "scripts", "output", "channel_param_table.bson")
-    ham_path     = joinpath(project_root, "hamiltonians",
-                            "heis_xxx_disordered_periodic_n3_seed46.bson")
+    param_table = QuantumFurnace._package_data_path("channel_param_table.bson")
+    ham_path = test_hamiltonian_path(3)
 
     isfile(param_table) || error("missing required channel parameter table: $param_table")
     isfile(ham_path) || error("missing required Hamiltonian fixture: $ham_path")

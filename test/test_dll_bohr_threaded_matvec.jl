@@ -58,9 +58,7 @@ function _dll_bohr_cfg(n, ham, beta_phys; filter=nothing)
 end
 
 function _load_heis(n, beta_phys)
-    source_root = dirname(@__DIR__)
-    path = joinpath(source_root, "hamiltonians",
-                    "heis_xxx_disordered_periodic_n$(n)_seed46.bson")
+    path = test_hamiltonian_path(n)
     isfile(path) || error("missing 1D fixture $path")
     return HamHam(_parse_hamiltonian_bson(path); beta_phys = beta_phys)
 end

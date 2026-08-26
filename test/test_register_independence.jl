@@ -18,8 +18,7 @@ const _NUM_QUBITS_REG_INDEP = 3
 
 # Need a fresh n=3 fixture at β = 5 (test_helpers's TEST_HAM is at β=BETA=10).
 function _make_reg_indep_fixture()
-    src_root = dirname(@__DIR__)
-    ham_path = joinpath(src_root, "hamiltonians", "heis_xxx_disordered_periodic_n3_seed46.bson")
+    ham_path = test_hamiltonian_path(3)
     ham = QuantumFurnace._load_hamiltonian_bson(ham_path, _BETA_REG_INDEP)
     jump_paulis = [[X], [Y], [Z]]
     num_jumps = length(jump_paulis) * _NUM_QUBITS_REG_INDEP

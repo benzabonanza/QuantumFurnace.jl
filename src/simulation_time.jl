@@ -596,9 +596,9 @@ qubit count. Entries contain the affine fit, control overheads, geometry, and
 Qiskit version. Nine-column tables map their single control factor to
 `f_ctrl1` and leave `f_ctrl2=NaN`.
 """
-function load_rxx_table(path::AbstractString = joinpath(
-        dirname(@__DIR__), "scripts", "output", "qf_5hg", "rxx_per_step.tsv"))
-    isfile(path) || throw(ArgumentError("RXX table not found at $path — run scripts/qf_5hg_rxx_per_step.py"))
+function load_rxx_table(path::AbstractString = _package_data_path("rxx_per_step.tsv"))
+    isfile(path) || throw(ArgumentError(
+        "RXX table not found at $path — pass a measured table explicitly."))
     table = Dict{Tuple{String, Int}, NamedTuple}()
     for (i, line) in enumerate(eachline(path))
         i == 1 && continue  # header

@@ -121,10 +121,8 @@ end
     # (e) PBC fixture is bit-identical after the fix (no regression).
     # ------------------------------------------------------------------
     @testset "(e) PBC reconstruction is bit-identical to stored fixture" begin
-        source_root = dirname(@__DIR__)
         for n in (3, 4, 5)
-            ham_path = joinpath(source_root, "hamiltonians",
-                "heis_xxx_disordered_periodic_n$(n)_seed46.bson")
+            ham_path = test_hamiltonian_path(n)
             isfile(ham_path) || error("missing required Hamiltonian fixture: $ham_path")
             raw = BSON.load(ham_path)[:hamiltonian]
             @test raw.periodic === true

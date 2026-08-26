@@ -171,7 +171,7 @@ function sweep_mixing_times(
     spectral_krylovdim::Integer = 60,
     tol::Real = 1e-10,
     output_dir::Union{Nothing, AbstractString} = nothing,
-    hamiltonian_dir::AbstractString = joinpath(dirname(@__DIR__), "hamiltonians"),
+    hamiltonian_dir::AbstractString = _PACKAGED_HAMILTONIAN_DIR,
     hamiltonian_filename::Function = n -> "heis_xxx_disordered_periodic_n$(n)_seed46.bson",
     use_threads::Bool = true,
     skip_existing::Bool = true,
@@ -656,8 +656,7 @@ function sweep_channel_mixing(
     filter_kinds::AbstractVector{Symbol} = [:smooth_metro],
     domain::AbstractDomain = TrotterDomain(),
     construction::AbstractConstruction = KMS(),
-    param_table_bson::AbstractString = joinpath(dirname(@__DIR__),
-        "scripts", "output", "channel_param_table.bson"),
+    param_table_bson::AbstractString = _package_data_path("channel_param_table.bson"),
     family::Symbol = :xxx_disordered,
     seeds::AbstractVector{<:Integer} = [42],
     init_state::Symbol = :maximally_mixed,
@@ -667,7 +666,7 @@ function sweep_channel_mixing(
     mixing_step_horizon::Integer = 100_000,
     output_dir::Union{Nothing, AbstractString} = nothing,
     skip_existing::Bool = true,
-    hamiltonian_dir::AbstractString = joinpath(dirname(@__DIR__), "hamiltonians"),
+    hamiltonian_dir::AbstractString = _PACKAGED_HAMILTONIAN_DIR,
 )::Vector{NamedTuple}
     domain isa Union{TimeDomain, TrotterDomain} || throw(ArgumentError(
         "sweep_channel_mixing supports TimeDomain or TrotterDomain (got $(typeof(domain)))"))

@@ -32,8 +32,7 @@
     # Metropolis filter and Gibbs reference both track β. Reuses
     # `make_dll_n3_system`-style loader.
     function _load_n3_ham(beta::Real)
-        source_root = dirname(@__DIR__)
-        ham_path = joinpath(source_root, "hamiltonians", "heis_xxx_disordered_periodic_n3_seed46.bson")
+        ham_path = test_hamiltonian_path(3)
         return QuantumFurnace._load_hamiltonian_bson(ham_path, Float64(beta))
     end
 
