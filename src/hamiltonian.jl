@@ -131,11 +131,18 @@ function _validate_raw_hamiltonian(
         "raw.eigvals length $(length(eigvals)) does not match matrix dimension $dim."))
     size(eigvecs) == (dim, dim) || throw(ArgumentError(
         "raw.eigvecs must have size ($dim, $dim), got $(size(eigvecs))."))
+    use_default_unitarity_tolerance = isnothing(atol) && isnothing(rtol)
     default_tolerance = T(10 * dim) * eps(T)
+    # LAPACK orthogonality error scales with matrix dimension and varies by
+    # implementation, especially for clustered eigenvalues.  Keep this
+    # allowance separate so the eigenpair and other cache checks stay strict.
+    default_unitarity_tolerance = min(T(64 * dim) * eps(T), sqrt(eps(T)))
     atol = isnothing(atol) ? default_tolerance : T(atol)
     rtol = isnothing(rtol) ? default_tolerance : T(rtol)
     isfinite(atol) && atol >= 0 || throw(ArgumentError("atol must be finite and >= 0."))
     isfinite(rtol) && rtol >= 0 || throw(ArgumentError("rtol must be finite and >= 0."))
+    unitarity_tolerance = use_default_unitarity_tolerance ?
+        default_unitarity_tolerance : max(atol, rtol)
 
     all(isfinite, matrix) || throw(ArgumentError("raw.matrix must contain only finite values."))
     all(isfinite, eigvals) || throw(ArgumentError("raw.eigvals must contain only finite values."))
@@ -239,7 +246,7 @@ function _validate_raw_hamiltonian(
     if use_full_spectral_validation
         gram = adjoint(eigvecs) * eigvecs
         unitarity_error = norm(gram - I, Inf)
-        unitarity_error <= max(atol, rtol) ||
+        unitarity_error <= unitarity_tolerance ||
             throw(ArgumentError("raw.eigvecs must be unitary."))
         residual = matrix * eigvecs - eigvecs * Diagonal(eigvals)
         eigenpair_error = maximum(j -> norm(@view(residual[:, j])), axes(residual, 2))
@@ -255,7 +262,7 @@ function _validate_raw_hamiltonian(
         )
         for probe in probes
             unitary_residual = adjoint(eigvecs) * (eigvecs * probe) - probe
-            norm(unitary_residual) / norm(probe) <= max(atol, rtol) ||
+            norm(unitary_residual) / norm(probe) <= unitarity_tolerance ||
                 throw(ArgumentError("raw.eigvecs failed the large-fixture unitarity probe."))
 
             lhs = matrix * (eigvecs * probe)
